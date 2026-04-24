@@ -1,0 +1,9 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {"type": "Feature", "properties": {"name": "西南→华东", "origin": "西南地区", "destination": "华东地区", "migrants": 320}, "geometry": {"type": "LineString", "coordinates": [[102.0, 28.0], [121.0, 30.5]]}},
+    {"type": "Feature", "properties": {"name": "华中→华东", "origin": "华中地区", "destination": "华东地区", "migrants": 280}, "geometry": {"type": "LineString", "coordinates": [[112.0, 30.5], [121.0, 30.5]]}},
+    {"type": "Feature", "properties": {"name": "东北→华南", "origin": "东北地区", "destination": "华南地区", "migrants": 210}, "geometry": {"type": "LineString", "coordinates": [[126.5, 45.0], [113.5, 23.5]]}},
+    {"type": "Feature", "properties": {"name": "西北→华北", "origin": "西北地区", "destination": "华北地区", "migrants": 160}, "geometry": {"type": "LineString", "coordinates": [[94.0, 40.5], [116.5, 39.2]]}}
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {"type": "Feature", "properties": {"name": "东北地区", "population": 9850, "density": 150}, "geometry": {"type": "Point", "coordinates": [126.5, 45.0]}},
+    {"type": "Feature", "properties": {"name": "华北地区", "population": 15600, "density": 280}, "geometry": {"type": "Point", "coordinates": [116.5, 39.2]}},
+    {"type": "Feature", "properties": {"name": "华东地区", "population": 23000, "density": 620}, "geometry": {"type": "Point", "coordinates": [121.0, 30.5]}},
+    {"type": "Feature", "properties": {"name": "华中地区", "population": 18200, "density": 410}, "geometry": {"type": "Point", "coordinates": [112.0, 30.5]}},
+    {"type": "Feature", "properties": {"name": "华南地区", "population": 17400, "density": 350}, "geometry": {"type": "Point", "coordinates": [113.5, 23.5]}},
+    {"type": "Feature", "properties": {"name": "西北地区", "population": 9800, "density": 40}, "geometry": {"type": "Point", "coordinates": [94.0, 40.5]}},
+    {"type": "Feature", "properties": {"name": "西南地区", "population": 12600, "density": 120}, "geometry": {"type": "Point", "coordinates": [102.0, 28.0]}}
+  ]
+}
+

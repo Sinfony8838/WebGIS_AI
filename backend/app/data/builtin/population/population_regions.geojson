@@ -1,0 +1,41 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {"name": "东北地区", "population": 9850, "density": 150, "migration_net": -42},
+      "geometry": {"type": "Polygon", "coordinates": [[[120.0, 41.0], [134.0, 41.0], [134.0, 49.0], [120.0, 49.0], [120.0, 41.0]]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "华北地区", "population": 15600, "density": 280, "migration_net": 18},
+      "geometry": {"type": "Polygon", "coordinates": [[[112.0, 36.0], [121.0, 36.0], [121.0, 42.5], [112.0, 42.5], [112.0, 36.0]]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "华东地区", "population": 23000, "density": 620, "migration_net": 65},
+      "geometry": {"type": "Polygon", "coordinates": [[[118.0, 26.0], [123.5, 26.0], [123.5, 34.5], [118.0, 34.5], [118.0, 26.0]]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "华中地区", "population": 18200, "density": 410, "migration_net": 24},
+      "geometry": {"type": "Polygon", "coordinates": [[[108.0, 27.0], [115.5, 27.0], [115.5, 34.0], [108.0, 34.0], [108.0, 27.0]]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "华南地区", "population": 17400, "density": 350, "migration_net": 47},
+      "geometry": {"type": "Polygon", "coordinates": [[[108.0, 20.0], [118.5, 20.0], [118.5, 27.0], [108.0, 27.0], [108.0, 20.0]]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "西北地区", "population": 9800, "density": 40, "migration_net": -28},
+      "geometry": {"type": "Polygon", "coordinates": [[[80.0, 35.0], [110.0, 35.0], [110.0, 46.0], [80.0, 46.0], [80.0, 35.0]]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"name": "西南地区", "population": 12600, "density": 120, "migration_net": -8},
+      "geometry": {"type": "Polygon", "coordinates": [[[96.0, 22.0], [108.0, 22.0], [108.0, 33.5], [96.0, 33.5], [96.0, 22.0]]]}
+    }
+  ]
+}
+

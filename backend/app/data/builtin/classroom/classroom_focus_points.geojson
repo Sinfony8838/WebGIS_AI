@@ -1,0 +1,60 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "鹿特丹",
+        "theme": "港口节点"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [4.48, 51.92]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "伊斯坦布尔",
+        "theme": "海峡通道"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [28.97, 41.01]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "霍尔木兹海峡",
+        "theme": "战略位置"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [56.28, 26.56]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "上海",
+        "theme": "沿海核心"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [121.47, 31.23]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "新加坡",
+        "theme": "航运枢纽"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [103.82, 1.35]
+      }
+    }
+  ]
+}
