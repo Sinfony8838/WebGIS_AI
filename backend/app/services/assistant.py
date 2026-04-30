@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from ..config import AppConfig
+from ..config import AppConfig, WEATHER_BASEMAP_ID
 from ..models import ProjectRecord
 
 
@@ -54,9 +55,69 @@ BASEMAP_MAP = {
 }
 
 
+BASEMAP_KEYWORDS = {
+    "amap_vector": ("\u6807\u51c6", "\u666e\u901a"),
+    "amap_light": ("\u6d45\u7070", "\u6d45\u8272", "\u7070\u8272"),
+    "amap_imagery": ("\u5f71\u50cf", "\u536b\u661f", "\u9065\u611f"),
+    "weather_clouds": ("\u4e91\u56fe", "\u4e91\u91cf", "\u4e91\u5c42"),
+    "weather_temperature": ("\u6e29\u5ea6", "\u6c14\u6e29"),
+    "weather_wind": ("\u98ce\u901f", "\u98ce\u573a", "\u5927\u98ce"),
+    "weather_pressure": ("\u6c14\u538b", "\u6d77\u5e73\u9762\u6c14\u538b"),
+    WEATHER_BASEMAP_ID: (
+        "\u5929\u6c14",
+        "\u5929\u6c14\u56fe",
+        "\u5929\u6c14\u5730\u56fe",
+        "\u6c14\u8c61",
+        "\u964d\u6c34",
+        "\u964d\u96e8",
+        "\u96e8\u56fe",
+    ),
+}
+
+
+TEMPLATE_KEYWORDS = [
+    ("generic_classroom_pack", ["通用课堂", "区域框架", "欧亚", "generic"], "我先加载通用地理课堂包。"),
+]
+
+
+VOICE_VIEW_KEYWORDS = ("转向", "转到", "定位到", "定位", "聚焦", "飞到", "看看", "看下", "看一下", "目光转向")
+VOICE_QUESTION_KEYWORDS = ("为什么", "为何", "怎么", "怎样", "解释", "分析", "讲解", "读图", "说明")
+VOICE_TEMPLATE_KEYWORDS = ("来看", "显示", "叠加", "切到", "切换到")
+VOICE_FILLER_TOKENS = (
+    "我们把目光",
+    "把目光",
+    "目光",
+    "转向",
+    "转到",
+    "定位到",
+    "定位",
+    "聚焦到",
+    "聚焦",
+    "飞到",
+    "看一下",
+    "看下",
+    "看看",
+    "我们",
+    "一下",
+    "区域",
+    "地区",
+    "视图",
+    "周边",
+    "附近",
+    "那里",
+    "那边",
+)
+VOICE_SHOW_KEYWORDS = ("显示", "打开", "叠加")
+VOICE_HIDE_KEYWORDS = ("隐藏", "关闭")
+
+Coordinate = Tuple[float, float]
+Extent = Tuple[float, float, float, float]
+
+
 class AssistantService:
     def __init__(self, config: AppConfig):
         self.config = config
+        self.focus_points = self._load_focus_points()
 
     def plan_actions(
         self,
@@ -163,6 +224,60 @@ class AssistantService:
 
         return {"assistant_message": "".join(narrative_parts), "actions": actions}
 
+    def plan_voice_actions(
+        self,
+        message: str,
+        project: ProjectRecord,
+        map_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        map_context = map_context or {}
+        normalized_message = self._normalize_voice_text(message)
+        lowered = normalized_message.lower()
+        actions: List[Dict[str, Any]] = []
+        narrative_parts: List[str] = []
+
+        template_action = self._resolve_voice_template_action(lowered)
+        if template_action:
+            actions.append({"tool_name": template_action["tool_name"], "tool_params": dict(template_action["tool_params"])})
+            narrative_parts.append(template_action["narrative"])
+
+        basemap_id = self._extract_basemap_id(normalized_message)
+        if basemap_id:
+            actions.append({"tool_name": "switch_basemap", "tool_params": {"basemap_id": basemap_id}})
+            narrative_parts.append("已按语音指令切换课堂底图。")
+
+        target_layer = self._resolve_target_layer(normalized_message, project, include_active_fallback=False)
+        if not template_action and target_layer:
+            if any(keyword in lowered for keyword in VOICE_HIDE_KEYWORDS):
+                actions.append({"tool_name": "toggle_layer", "tool_params": {"layer_id": target_layer["layer_id"], "visible": False}})
+                narrative_parts.append(f"已按语音指令隐藏图层“{target_layer['name']}”。")
+            elif any(keyword in lowered for keyword in VOICE_SHOW_KEYWORDS):
+                actions.append({"tool_name": "toggle_layer", "tool_params": {"layer_id": target_layer["layer_id"], "visible": True}})
+                narrative_parts.append(f"已按语音指令显示图层“{target_layer['name']}”。")
+
+        place_target = self._resolve_voice_place(normalized_message, project)
+        if place_target and self._is_voice_view_command(lowered):
+            tool_params: Dict[str, Any] = {
+                "center": list(place_target["center"]),
+                "zoom": int(place_target["zoom"]),
+            }
+            if place_target.get("extent"):
+                tool_params["extent"] = list(place_target["extent"])
+            actions.append({"tool_name": "set_view", "tool_params": tool_params})
+            narrative_parts.append(f"已按语音指令聚焦到“{place_target['name']}”。")
+
+        if self._is_voice_question(normalized_message):
+            actions.append({"tool_name": "explain_current_view", "tool_params": {"focus": message.strip()}})
+            narrative_parts.append("我会结合当前画面给出文字讲解。")
+
+        if actions:
+            return {"assistant_message": " ".join(part for part in narrative_parts if part).strip(), "actions": actions}
+
+        return {
+            "assistant_message": "我暂时没听清具体操作，请换一种说法，例如“转到上海”或“来看人口分布图”。",
+            "actions": [],
+        }
+
     def compose_explanation(
         self,
         project: ProjectRecord,
@@ -214,7 +329,7 @@ class AssistantService:
                     key_values.append(f"{key}={properties[key]}")
             row = f"- {name}"
             if key_values:
-                row += f"（{'，'.join(key_values)}）"
+                row += f"（{', '.join(key_values)}）"
             rows.append(row)
         return f"图层“{target.name}”当前要素摘要：\n" + "\n".join(rows)
 
@@ -227,7 +342,7 @@ class AssistantService:
         mid_latitude = (north + south) / 2.0
         approximate_width_km = width_degrees * 111.32 * max(0.1, math.cos(math.radians(mid_latitude)))
         approximate_height_km = height_degrees * 111.32
-        return "当前视域的近似尺度为：" f"东西约 {approximate_width_km:.0f} 千米，南北约 {approximate_height_km:.0f} 千米。"
+        return f"当前视域的近似尺度为：东西约 {approximate_width_km:.0f} 千米，南北约 {approximate_height_km:.0f} 千米。"
 
     def build_export_hint(self) -> str:
         return "当前任务包含导出意图。请点击顶部“导出截图”，系统会把当前课堂画面保存为本地成果。"
@@ -237,31 +352,40 @@ class AssistantService:
             return f"当前范围内没有检索到“{keyword}”相关结果。"
         return f"当前范围内已找到 {count} 条“{keyword}”相关结果，结果已经同步到左侧检索面板和地图点位。"
 
-    def _resolve_target_layer(self, message: str, project: ProjectRecord) -> Optional[Dict[str, Any]]:
+    def _resolve_target_layer(
+        self,
+        message: str,
+        project: ProjectRecord,
+        include_active_fallback: bool = True,
+    ) -> Optional[Dict[str, Any]]:
         lowered = (message or "").lower()
         for layer in project.layers:
             if layer.name.lower() in lowered:
                 return layer.to_dict()
-        if project.active_layer_id:
+        if include_active_fallback and project.active_layer_id:
             for layer in project.layers:
                 if layer.layer_id == project.active_layer_id:
                     return layer.to_dict()
         return None
 
     def _resolve_template_action(self, lowered: str) -> Optional[Dict[str, Any]]:
-        if any(keyword in lowered for keyword in ["人口专题", "人口包", "population pack"]):
-            return {"tool_name": "apply_template", "tool_params": {"template_id": "population_classroom_pack"}, "narrative": "我先切到人口专题课堂包。"}
-        if any(keyword in lowered for keyword in ["通用课堂", "区域框架", "欧亚", "generic"]):
-            return {"tool_name": "apply_template", "tool_params": {"template_id": "generic_classroom_pack"}, "narrative": "我先加载通用地理课堂包。"}
-        if any(keyword in lowered for keyword in ["人口分布", "分布图"]):
-            return {"tool_name": "apply_template", "tool_params": {"template_id": "population_distribution"}, "narrative": "我先切到人口分布模板。"}
-        if any(keyword in lowered for keyword in ["人口密度", "密度图", "热力"]):
-            return {"tool_name": "apply_template", "tool_params": {"template_id": "population_density"}, "narrative": "我先切到人口密度模板。"}
-        if any(keyword in lowered for keyword in ["人口迁移", "迁移图", "迁移"]):
-            return {"tool_name": "apply_template", "tool_params": {"template_id": "population_migration"}, "narrative": "我先切到人口迁移模板。"}
-        if any(keyword in lowered for keyword in ["胡焕庸", "hu line"]):
-            return {"tool_name": "apply_template", "tool_params": {"template_id": "hu_line_comparison"}, "narrative": "我先叠加胡焕庸线对比模板。"}
+        template_keywords = [
+            ("population_classroom_pack", ["\u4eba\u53e3\u4e13\u9898", "\u4eba\u53e3\u5305", "population pack"], "\u6211\u5148\u5207\u5230\u4eba\u53e3\u4e13\u9898\u8bfe\u5802\u5305\u3002"),
+            ("population_distribution", ["\u4eba\u53e3\u5206\u5e03", "\u5206\u5e03\u56fe"], "\u6211\u5148\u5207\u5230\u4eba\u53e3\u5206\u5e03\u6a21\u677f\u3002"),
+            ("population_density", ["\u4eba\u53e3\u5bc6\u5ea6", "\u5bc6\u5ea6\u56fe", "\u70ed\u529b"], "\u6211\u5148\u5207\u5230\u4eba\u53e3\u5bc6\u5ea6\u6a21\u677f\u3002"),
+            ("population_migration", ["\u4eba\u53e3\u8fc1\u79fb", "\u8fc1\u79fb\u56fe", "\u8fc1\u79fb"], "\u6211\u5148\u5207\u5230\u4eba\u53e3\u8fc1\u79fb\u6a21\u677f\u3002"),
+            ("hu_line_comparison", ["\u80e1\u7115\u5eb8", "hu line"], "\u6211\u5148\u53e0\u52a0\u80e1\u7115\u5eb8\u7ebf\u5bf9\u6bd4\u6a21\u677f\u3002"),
+            *TEMPLATE_KEYWORDS,
+        ]
+        for template_id, keywords, narrative in template_keywords:
+            if any(keyword in lowered for keyword in keywords):
+                return {"tool_name": "apply_template", "tool_params": {"template_id": template_id}, "narrative": narrative}
         return None
+
+    def _resolve_voice_template_action(self, lowered: str) -> Optional[Dict[str, Any]]:
+        if not any(keyword in lowered for keyword in VOICE_TEMPLATE_KEYWORDS):
+            return None
+        return self._resolve_template_action(lowered)
 
     def _extract_requested_color(self, message: str) -> str:
         lowered = (message or "").lower()
@@ -279,13 +403,16 @@ class AssistantService:
 
     def _extract_basemap_id(self, message: str) -> str:
         lowered = (message or "").lower()
-        for key, basemap_id in BASEMAP_MAP.items():
-            if key in lowered:
+        available_ids = {item["id"] for item in self.config.basemap_catalog()["items"]}
+        for basemap_id, keywords in BASEMAP_KEYWORDS.items():
+            if basemap_id not in available_ids:
+                continue
+            if any(keyword in lowered for keyword in keywords):
                 return basemap_id
         return ""
 
     def _resolve_poi_action(self, message: str, lowered: str, map_context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if not any(keyword in lowered for keyword in ["搜索", "查找", "poi", "附近", "找一下", "查一下"]):
+        if not any(keyword in lowered for keyword in ["搜索", "查找", "poi", "附近", "找一个", "查一个"]):
             return None
         keyword = self._extract_poi_keyword(message)
         if not keyword:
@@ -315,7 +442,7 @@ class AssistantService:
             "搜索",
             "帮我找",
             "帮我搜索",
-            "一下",
+            "一个",
             "附近的",
             "当前区域内",
             "当前范围内",
@@ -324,7 +451,7 @@ class AssistantService:
         ]
         for token in replacements:
             cleaned = cleaned.replace(token, "")
-        return cleaned.strip("：:，,。. ")
+        return cleaned.strip("（）()。 ")
 
     def _resolve_search_result(self, message: str, project: ProjectRecord) -> Optional[Dict[str, Any]]:
         lowered = (message or "").lower()
@@ -340,6 +467,209 @@ class AssistantService:
                     return {"name": name, "coordinates": [float(coordinates[0]), float(coordinates[1])]}
         return None
 
+    def _load_focus_points(self) -> List[Dict[str, Any]]:
+        path = self.config.builtin_dir / "classroom" / "classroom_focus_points.geojson"
+        if not path.exists():
+            return []
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
 
+        features = payload.get("features", [])
+        focus_points = []
+        for feature in features:
+            properties = feature.get("properties", {})
+            geometry = feature.get("geometry", {})
+            coordinates = geometry.get("coordinates", [])
+            if not isinstance(properties.get("name"), str) or len(coordinates) < 2:
+                continue
+            focus_points.append(
+                {
+                    "name": properties["name"].strip(),
+                    "center": (float(coordinates[0]), float(coordinates[1])),
+                    "zoom": 8,
+                }
+            )
+        return focus_points
+
+    def _normalize_voice_text(self, message: str) -> str:
+        normalized = (message or "").strip()
+        for source, target in (
+            ("，", " "),
+            ("。", " "),
+            ("！", " "),
+            ("？", " "),
+            ("、", " "),
+            ("\n", " "),
+            ("\t", " "),
+        ):
+            normalized = normalized.replace(source, target)
+        return " ".join(part for part in normalized.split() if part)
+
+    def _normalize_voice_place_text(self, message: str) -> str:
+        normalized = self._normalize_voice_text(message)
+        for token in sorted(VOICE_FILLER_TOKENS, key=len, reverse=True):
+            normalized = normalized.replace(token, "")
+        return "".join(normalized.split()).strip()
+
+    def _is_voice_view_command(self, lowered: str) -> bool:
+        return any(keyword in lowered for keyword in VOICE_VIEW_KEYWORDS)
+
+    def _is_voice_question(self, message: str) -> bool:
+        lowered = (message or "").lower()
+        if any(keyword in lowered for keyword in VOICE_QUESTION_KEYWORDS):
+            return True
+        return lowered.endswith("?") or lowered.endswith("？")
+
+    def _resolve_voice_place(self, message: str, project: ProjectRecord) -> Optional[Dict[str, Any]]:
+        normalized_message = self._normalize_voice_text(message)
+        normalized_place = self._normalize_voice_place_text(message)
+
+        for focus_point in self.focus_points:
+            name = str(focus_point["name"])
+            if name and (name in normalized_place or name in normalized_message):
+                return {
+                    "name": name,
+                    "center": focus_point["center"],
+                    "zoom": focus_point["zoom"],
+                }
+
+        for candidate in self._iter_named_feature_candidates(project):
+            name = str(candidate["name"])
+            if not name:
+                continue
+            if name not in normalized_place and name not in normalized_message:
+                continue
+            return candidate
+        return None
+
+    def _iter_named_feature_candidates(self, project: ProjectRecord) -> Iterable[Dict[str, Any]]:
+        for layer in project.layers:
+            if not layer.visible:
+                continue
+            features = layer.data.get("features", [])
+            for feature in features:
+                properties = feature.get("properties", {})
+                name = str(properties.get("name") or "").strip()
+                if not name:
+                    continue
+                geometry = feature.get("geometry", {})
+                geometry_type = str(geometry.get("type") or layer.geometry_type or "")
+                extent = self._geometry_extent(geometry)
+                if extent is None:
+                    continue
+                center = self._extent_center(extent)
+                if geometry_type.endswith("Point") or geometry_type == "Point":
+                    zoom = 10 if layer.layer_id == "poi_search_results" else 8
+                    yield {"name": name, "center": center, "zoom": zoom}
+                    continue
+                yield {
+                    "name": name,
+                    "center": center,
+                    "zoom": self._zoom_for_extent(extent),
+                    "extent": extent,
+                }
+
+    def _geometry_extent(self, geometry: Dict[str, Any]) -> Optional[Extent]:
+        coordinates = list(self._iter_coordinates(geometry.get("coordinates")))
+        if not coordinates:
+            return None
+        xs = [point[0] for point in coordinates]
+        ys = [point[1] for point in coordinates]
+        return (min(xs), min(ys), max(xs), max(ys))
+
+    def _iter_coordinates(self, value: Any) -> Iterable[Coordinate]:
+        if isinstance(value, (list, tuple)):
+            if len(value) >= 2 and all(isinstance(item, (int, float)) for item in value[:2]):
+                yield (float(value[0]), float(value[1]))
+                return
+            for item in value:
+                yield from self._iter_coordinates(item)
+
+    def _extent_center(self, extent: Extent) -> Coordinate:
+        west, south, east, north = extent
+        return ((west + east) / 2.0, (south + north) / 2.0)
+
+    def _zoom_for_extent(self, extent: Extent) -> int:
+        west, south, east, north = extent
+        span = max(abs(east - west), abs(north - south))
+        if span <= 0.8:
+            return 10
+        if span <= 2.0:
+            return 8
+        if span <= 5.0:
+            return 7
+        if span <= 10.0:
+            return 6
+        return 5
+
+
+def _compose_contextual_explanation(
+    self: AssistantService,
+    project: ProjectRecord,
+    map_context: Optional[Dict[str, Any]] = None,
+    focus: str = "",
+) -> str:
+    map_context = map_context or {}
+    visible_layers = [layer for layer in project.layers if layer.visible]
+    layer_names = "、".join(layer.name for layer in visible_layers[:5]) or "当前底图"
+    center = map_context.get("center") or project.view.get("center") or []
+    zoom = map_context.get("zoom") or project.view.get("zoom") or ""
+    extent = map_context.get("extent") or project.view.get("extent") or []
+    basemap_id = map_context.get("basemap_id") or project.base_map.get("id") or ""
+
+    center_text = ""
+    if isinstance(center, list) and len(center) >= 2:
+        lon = float(center[0])
+        lat = float(center[1])
+        center_text = f"中心约为经度 {lon:.3f}、纬度 {lat:.3f}"
+        if 120.7 <= lon <= 122.2 and 30.6 <= lat <= 31.9:
+            center_text += "，当前视域落在上海及周边"
+
+    lines = [
+        "画面事实：",
+        f"- 当前底图为 {basemap_id or '默认底图'}，可见图层包括 {layer_names}。",
+        f"- 当前缩放级别约为 {zoom}。{center_text}",
+    ]
+    if isinstance(extent, list) and len(extent) == 4:
+        lines.append(f"- 当前视域范围约为 {float(extent[0]):.2f}, {float(extent[1]):.2f}, {float(extent[2]):.2f}, {float(extent[3]):.2f}。")
+
+    lines.extend(["", "空间关系："])
+    if visible_layers:
+        lines.append("- 先看底图中的城市、道路、水系和海岸线，再看叠加图层与这些地理要素的对应关系。")
+    else:
+        lines.append("- 当前没有额外业务图层，读图应主要依赖底图中的城市、道路、水系、地形或海岸线信息。")
+
+    lines.extend(["", "地理解释："])
+    explained = False
+    enabled = set(project.enabled_templates)
+    if "population_distribution" in enabled or any("人口" in layer.name for layer in visible_layers):
+        lines.append("- 人口主题读图应关注人口是否沿城市群、交通走廊和平原地区集聚。")
+        explained = True
+    if "population_migration" in enabled:
+        lines.append("- 迁移读图要把流向与就业机会、产业基础和交通可达性联系起来。")
+        explained = True
+    if "hu_line_comparison" in enabled:
+        lines.append("- 胡焕庸线可作为人口地理差异的参照线，但解释时还要落到自然环境和社会经济条件。")
+        explained = True
+    if any("Koppen" in layer.name or "柯本" in layer.name or "World_Koppen" in layer.name for layer in visible_layers):
+        lines.append("- 当前叠加了柯本气候分区影像层，适合从纬度、海陆位置、洋流和地形解释气候带分异。")
+        explained = True
+    poi_layer = next((layer for layer in visible_layers if layer.layer_id == "poi_search_results"), None)
+    if poi_layer:
+        keyword = poi_layer.metadata.get("keyword") or "课堂检索结果"
+        lines.append(f"- 当前叠加了“{keyword}”相关 POI 结果，适合结合区位条件做即时读图分析。")
+        explained = True
+    if not explained:
+        lines.append("- 可从位置、联系、差异和原因四个角度组织讲解。")
+
+    lines.extend(["", "课堂提问：", "- 这个区域的核心地理要素是什么？它们为什么在这里集聚或分散？", "- 如果切换图层或放大一级，哪些结论会更可靠？"])
+    if focus:
+        lines.extend(["", f"注意事项：本次讲解重点是：{focus.strip()}。"])
+    return "\n".join(lines)
+
+
+AssistantService.compose_explanation = _compose_contextual_explanation
 class RuleBasedPlanner(AssistantService):
     pass

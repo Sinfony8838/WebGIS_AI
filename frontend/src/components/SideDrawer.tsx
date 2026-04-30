@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { getApiBase } from "../api";
-import type { ArtifactRecord, LayerRecord, LayersResponse, PoiSearchItem, TemplateItem } from "../types";
+import type { ArtifactRecord, KnowledgeTopicSummary, LayerRecord, LayersResponse, PoiSearchItem, ResourceSearchResult } from "../types";
+import { LiveResourceSearchPanel } from "./LiveResourceSearchPanel";
 
-export type DrawerTab = "units" | "layers" | "search" | "outputs";
+export type DrawerTab = "resources" | "resource-search" | "layers" | "search" | "outputs";
 
 type StatusSummary = {
   currentMode: string;
@@ -14,86 +15,39 @@ type StatusSummary = {
   enabledTemplates: number;
 };
 
-type TemplateUnitGroup = {
-  unitId: string;
-  unitTitle: string;
-  unitOrder: number;
-  templates: TemplateItem[];
-};
-
-type TemplateChapterGroup = {
-  chapterId: string;
-  chapterTitle: string;
-  chapterOrder: number;
-  units: TemplateUnitGroup[];
-};
-
 type Props = {
   open: boolean;
   activeTab: DrawerTab;
-  templates: TemplateItem[];
+  topics: KnowledgeTopicSummary[];
   layerState: LayersResponse | null;
   outputs: ArtifactRecord[];
   searchResults: PoiSearchItem[];
   searchSummary: string;
+  resourceQuery: string;
+  resourceScope: "all" | "kb" | "web" | "materials";
+  resourceLoading: boolean;
+  resourceResults: ResourceSearchResult[];
   statusSummary: StatusSummary;
   onToggleOpen: () => void;
   onChangeTab: (tab: DrawerTab) => void;
   onToggleLayer: (layerId: string, visible: boolean) => void;
   onSelectLayer: (layerId: string) => void;
   onFocusResult: (item: PoiSearchItem) => void;
-  onRunTemplate: (templateId: string) => void;
+  onOpenKnowledgeTopic: (topic: string) => void;
+  onResourceQueryChange: (value: string) => void;
+  onResourceScopeChange: (value: "all" | "kb" | "web" | "materials") => void;
+  onOpenResourceResult: (item: ResourceSearchResult) => void;
+  onImportResourceResult: (item: ResourceSearchResult) => void;
 };
 
-export function groupTemplatesByChapter(templates: TemplateItem[]): TemplateChapterGroup[] {
-  const chapterMap = new Map<string, TemplateChapterGroup>();
-
-  templates.forEach((template) => {
-    const chapterId = template.chapter_id || "default_chapter";
-    const unitId = template.unit_id || "default_unit";
-    const chapterTitle = template.chapter_title || "课堂模板";
-    const unitTitle = template.unit_title || "默认单元";
-
-    if (!chapterMap.has(chapterId)) {
-      chapterMap.set(chapterId, {
-        chapterId,
-        chapterTitle,
-        chapterOrder: template.chapter_order ?? 999,
-        units: []
-      });
-    }
-
-    const chapter = chapterMap.get(chapterId)!;
-    let unit = chapter.units.find((item) => item.unitId === unitId);
-    if (!unit) {
-      unit = {
-        unitId,
-        unitTitle,
-        unitOrder: template.unit_order ?? 999,
-        templates: []
-      };
-      chapter.units.push(unit);
-    }
-
-    unit.templates.push(template);
-  });
-
-  return Array.from(chapterMap.values())
-    .sort((left, right) => left.chapterOrder - right.chapterOrder || left.chapterTitle.localeCompare(right.chapterTitle))
-    .map((chapter) => ({
-      ...chapter,
-      units: chapter.units
-        .map((unit) => ({
-          ...unit,
-          templates: unit.templates
-            .slice()
-            .sort(
-              (left, right) =>
-                (left.template_order ?? 999) - (right.template_order ?? 999) || left.title.localeCompare(right.title)
-            )
-        }))
-        .sort((left, right) => left.unitOrder - right.unitOrder || left.unitTitle.localeCompare(right.unitTitle))
-    }));
+function statusLabel(status?: string): string {
+  if (status === "renderable_layer") {
+    return "可显示";
+  }
+  if (status === "stored_only") {
+    return "仅存档";
+  }
+  return "知识";
 }
 
 function renderLayerRow(
@@ -102,13 +56,14 @@ function renderLayerRow(
   onToggleLayer: Props["onToggleLayer"],
   onSelectLayer: Props["onSelectLayer"]
 ) {
+  const status = String(layer.metadata?.kb_status || layer.metadata?.status || "");
   return (
     <label key={layer.layer_id} className={`drawer-layer-row ${isActive ? "active" : ""}`}>
       <input type="checkbox" checked={layer.visible} onChange={() => onToggleLayer(layer.layer_id, !layer.visible)} />
       <button type="button" className="drawer-layer-button" onClick={() => onSelectLayer(layer.layer_id)}>
         <span>{layer.name}</span>
         <small>
-          {layer.geometry_type} · {layer.source}
+          {layer.geometry_type} · {layer.source} · {statusLabel(status)}
         </small>
       </button>
     </label>
@@ -118,56 +73,34 @@ function renderLayerRow(
 export function SideDrawer({
   open,
   activeTab,
-  templates,
+  topics,
   layerState,
   outputs,
   searchResults,
   searchSummary,
+  resourceQuery,
+  resourceScope,
+  resourceLoading,
+  resourceResults,
   statusSummary,
   onToggleOpen,
   onChangeTab,
   onToggleLayer,
   onSelectLayer,
   onFocusResult,
-  onRunTemplate
+  onOpenKnowledgeTopic,
+  onResourceQueryChange,
+  onResourceScopeChange,
+  onOpenResourceResult,
+  onImportResourceResult
 }: Props) {
   const apiBase = getApiBase();
-  const templateGroups = useMemo(() => groupTemplatesByChapter(templates), [templates]);
-  const enabledTemplateSet = useMemo(() => new Set(layerState?.enabled_templates || []), [layerState?.enabled_templates]);
-  const [openChapters, setOpenChapters] = useState<Record<string, boolean>>({});
-  const [openUnits, setOpenUnits] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    if (!templateGroups.length) {
-      return;
-    }
-    setOpenChapters((previous) => {
-      if (Object.keys(previous).length) {
-        return previous;
-      }
-      return { [templateGroups[0].chapterId]: true };
-    });
-    setOpenUnits((previous) => {
-      if (Object.keys(previous).length) {
-        return previous;
-      }
-      const firstUnit = templateGroups[0].units[0];
-      return firstUnit ? { [firstUnit.unitId]: true } : previous;
-    });
-  }, [templateGroups]);
-
-  const enabledTemplateTitles = templates
-    .filter((item) => enabledTemplateSet.has(item.template_id))
-    .map((item) => item.title);
+  const visibleLayers = useMemo(() => (layerState?.items || []).filter((item) => item.visible), [layerState?.items]);
+  const hiddenLayers = useMemo(() => (layerState?.items || []).filter((item) => !item.visible), [layerState?.items]);
 
   return (
     <div className={`side-drawer ${open ? "open" : "closed"}`}>
-      <button
-        type="button"
-        className="drawer-toggle"
-        onClick={onToggleOpen}
-        aria-label={open ? "收起课堂控制台" : "展开课堂控制台"}
-      >
+      <button type="button" className="drawer-toggle" onClick={onToggleOpen} aria-label={open ? "收起课堂控制台" : "展开课堂控制台"}>
         {open ? "<" : ">"}
       </button>
 
@@ -175,7 +108,7 @@ export function SideDrawer({
         <div className="drawer-header">
           <p className="panel-tag">Class Console</p>
           <strong>课堂控制台</strong>
-          <span className="drawer-subtitle">章节导航、图层控制、检索记录与课堂产物</span>
+          <span className="drawer-subtitle">资料专题、图层控制、检索记录与课堂产物</span>
         </div>
 
         <section className="drawer-status-card">
@@ -199,16 +132,19 @@ export function SideDrawer({
               </strong>
             </div>
             <div>
-              <span>已启用模板</span>
-              <strong>{statusSummary.enabledTemplates}</strong>
+              <span>资料专题</span>
+              <strong>{topics.length}</strong>
             </div>
           </div>
           <p>{statusSummary.latest}</p>
         </section>
 
         <div className="drawer-tabs">
-          <button type="button" className={activeTab === "units" ? "active" : ""} onClick={() => onChangeTab("units")}>
-            单元
+          <button type="button" className={activeTab === "resources" ? "active" : ""} onClick={() => onChangeTab("resources")}>
+            资料
+          </button>
+          <button type="button" className={activeTab === "resource-search" ? "active" : ""} onClick={() => onChangeTab("resource-search")}>
+            资料搜索
           </button>
           <button type="button" className={activeTab === "layers" ? "active" : ""} onClick={() => onChangeTab("layers")}>
             图层
@@ -222,128 +158,78 @@ export function SideDrawer({
         </div>
 
         <div className="drawer-body">
-          {activeTab === "units" ? (
-            <section className="drawer-section" data-testid="drawer-units">
+          {activeTab === "resources" ? (
+            <section className="drawer-section" data-testid="drawer-resources">
               <div className="drawer-section-header">
-                <span>课堂单元</span>
-                <small>{templates.length} 个模板</small>
+                <span>资料专题</span>
+                <small>{topics.length} 类</small>
               </div>
-              <p className="drawer-summary">按章节展开单元后加载对应课堂包或专题模板。</p>
-
-              <div className="drawer-book-card">
-                <div className="drawer-book-cover">
-                  <span>地理</span>
-                </div>
-                <div className="drawer-book-meta">
-                  <strong>课堂包目录</strong>
-                  <span>{enabledTemplateTitles[0] || "请选择单元模板"}</span>
-                  <small>目录结构参照教材章节，点击条目后加载对应课堂内容。</small>
-                </div>
+              <p className="drawer-summary">这里来自知识库，不再是硬编码教材目录。专题条目可以用于检索、读图讲解和后续教案设计。</p>
+              <div className="resource-topic-list">
+                {topics.length ? (
+                  topics.map((topic) => (
+                    <button key={topic.topic} type="button" className="resource-topic-card" onClick={() => onOpenKnowledgeTopic(topic.topic)}>
+                      <div>
+                        <strong>{topic.title}</strong>
+                        <span>{topic.topic}</span>
+                      </div>
+                      <p>
+                        共 {topic.item_count} 条，{topic.renderable_count} 条可显示，{topic.stored_only_count} 条仅存档。
+                      </p>
+                      {topic.sample_titles.length ? <small>{topic.sample_titles.join(" / ")}</small> : null}
+                    </button>
+                  ))
+                ) : (
+                  <div className="drawer-empty-state">暂无资料专题</div>
+                )}
               </div>
+            </section>
+          ) : null}
 
-              <div className="unit-tree">
-                {templateGroups.map((chapter, chapterIndex) => {
-                  const chapterOpen = openChapters[chapter.chapterId] ?? false;
-                  return (
-                    <div key={chapter.chapterId} className={`chapter-card ${chapterOpen ? "open" : ""}`}>
-                      <button
-                        type="button"
-                        className={`chapter-toggle ${chapterOpen ? "open" : ""}`}
-                        onClick={() =>
-                          setOpenChapters((previous) => ({
-                            ...previous,
-                            [chapter.chapterId]: !chapterOpen
-                          }))
-                        }
-                      >
-                        <span className="chapter-index">{String(chapterIndex + 1).padStart(2, "0")}</span>
-                        <div className="chapter-copy">
-                          <strong>{chapter.chapterTitle}</strong>
-                          <small>{chapter.units.length} 个单元</small>
-                        </div>
-                        <span className="chapter-arrow">{chapterOpen ? "收起" : "展开"}</span>
-                      </button>
-
-                      {chapterOpen ? (
-                        <div className="chapter-units">
-                          {chapter.units.map((unit) => {
-                            const unitOpen = openUnits[unit.unitId] ?? false;
-                            return (
-                              <div key={unit.unitId} className={`unit-card ${unitOpen ? "open" : ""}`}>
-                                <button
-                                  type="button"
-                                  className="unit-toggle"
-                                  onClick={() =>
-                                    setOpenUnits((previous) => ({
-                                      ...previous,
-                                      [unit.unitId]: !unitOpen
-                                    }))
-                                  }
-                                >
-                                  <div className="unit-toggle-main">
-                                    <span className="unit-dot" />
-                                    <div>
-                                      <strong>{unit.unitTitle}</strong>
-                                      <small>{unit.templates.length} 个模板</small>
-                                    </div>
-                                  </div>
-                                  <span className="unit-state">{unitOpen ? "收起" : "展开"}</span>
-                                </button>
-
-                                {unitOpen ? (
-                                  <div className="unit-template-list">
-                                    {unit.templates.map((template) => {
-                                      const enabled = enabledTemplateSet.has(template.template_id);
-                                      return (
-                                        <button
-                                          key={template.template_id}
-                                          type="button"
-                                          className={`template-card ${enabled ? "active" : ""}`}
-                                          onClick={() => onRunTemplate(template.template_id)}
-                                        >
-                                          <span className="template-card-marker" />
-                                          <div className="template-card-copy">
-                                            <div className="template-card-header">
-                                              <strong>{template.title}</strong>
-                                              <span>{enabled ? "当前" : "加载"}</span>
-                                            </div>
-                                            <p>{template.description}</p>
-                                          </div>
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                ) : null}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
+          {activeTab === "resource-search" ? (
+            <section className="drawer-section" data-testid="drawer-resource-search">
+              <LiveResourceSearchPanel
+                query={resourceQuery}
+                scope={resourceScope}
+                loading={resourceLoading}
+                results={resourceResults}
+                onQueryChange={onResourceQueryChange}
+                onScopeChange={onResourceScopeChange}
+                onOpenResult={onOpenResourceResult}
+                onImportResult={onImportResourceResult}
+              />
             </section>
           ) : null}
 
           {activeTab === "layers" ? (
             <section className="drawer-section" data-testid="drawer-layers">
               <div className="drawer-section-header">
-                <span>课堂图层</span>
-                <small>{layerState?.items.length || 0} 个</small>
+                <span>可见图层</span>
+                <small>{visibleLayers.length} 个</small>
               </div>
               <div className="drawer-layer-list">
-                {(layerState?.items || [])
-                  .slice()
-                  .sort((left, right) => right.z_index - left.z_index)
-                  .map((layer) => renderLayerRow(layer, layerState?.active_layer_id === layer.layer_id, onToggleLayer, onSelectLayer))}
+                {visibleLayers.length ? (
+                  visibleLayers
+                    .slice()
+                    .sort((left, right) => right.z_index - left.z_index)
+                    .map((layer) => renderLayerRow(layer, layerState?.active_layer_id === layer.layer_id, onToggleLayer, onSelectLayer))
+                ) : (
+                  <div className="drawer-empty-state">当前没有可见业务图层</div>
+                )}
               </div>
-
               <div className="drawer-section-header compact">
-                <span>已启用模板</span>
+                <span>隐藏/可启用图层</span>
+                <small>{hiddenLayers.length} 个</small>
               </div>
-              <div className="drawer-badges">
-                {enabledTemplateTitles.length ? enabledTemplateTitles.map((item) => <span key={item}>{item}</span>) : <small>暂无</small>}
+              <div className="drawer-layer-list">
+                {hiddenLayers.length ? (
+                  hiddenLayers
+                    .slice()
+                    .sort((left, right) => right.z_index - left.z_index)
+                    .map((layer) => renderLayerRow(layer, layerState?.active_layer_id === layer.layer_id, onToggleLayer, onSelectLayer))
+                ) : (
+                  <div className="drawer-empty-state">暂无隐藏图层</div>
+                )}
               </div>
             </section>
           ) : null}
@@ -354,9 +240,7 @@ export function SideDrawer({
                 <span>POI 检索结果</span>
                 <small>{searchResults.length} 条</small>
               </div>
-              <p className="drawer-summary">
-                {searchSummary || "在搜索栏输入关键词后，可按当前视域或手绘区域发起检索。"}
-              </p>
+              <p className="drawer-summary">{searchSummary || "在顶部搜索栏输入关键词后，可按当前视域或手绘区域发起检索。"}</p>
               <div className="drawer-result-list">
                 {searchResults.length ? (
                   searchResults.map((item) => (
@@ -379,18 +263,13 @@ export function SideDrawer({
                 <span>课堂产物</span>
                 <small>{outputs.length} 项</small>
               </div>
+              <p className="drawer-summary">只显示教师可直接使用的截图、讲解稿和查询摘要，系统内部模板 JSON 不再展示。</p>
               <div className="drawer-output-list">
                 {outputs.length ? (
                   outputs.map((artifact) => {
                     const publicUrl = String(artifact.metadata?.public_url || "");
                     return (
-                      <a
-                        key={artifact.artifact_id}
-                        className="drawer-output-card"
-                        href={publicUrl ? `${apiBase}${publicUrl}` : undefined}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
+                      <a key={artifact.artifact_id} className="drawer-output-card" href={publicUrl ? `${apiBase}${publicUrl}` : undefined} target="_blank" rel="noreferrer">
                         <strong>{artifact.title}</strong>
                         <span>{artifact.artifact_type}</span>
                       </a>

@@ -8,6 +8,7 @@ import {
   focusQgis
 } from "../api";
 import type {
+  AssistantMode,
   AssistantTarget,
   ChatMessage,
   JobRecord,
@@ -24,11 +25,14 @@ type QgisLayerItem = {
 
 type Props = {
   projectId: string;
+  assistantMode: AssistantMode;
   chatLog: ChatMessage[];
   currentJob: JobRecord | null;
   assistantInput: string;
   onAssistantInputChange: (value: string) => void;
+  onAssistantModeChange: (mode: AssistantMode) => void;
   onSubmitAssistant: (message: string, target: AssistantTarget) => void;
+  onConfirm: (confirmationId: string, decision?: "approve" | "reject") => void;
   onBackToClassroom: () => void;
   busy: boolean;
 };
@@ -108,11 +112,14 @@ function extractExportPath(result: unknown, fallbackPath: string): string {
 
 export function QgisProfessionalPage({
   projectId,
+  assistantMode = "tool",
   chatLog,
   currentJob,
   assistantInput,
   onAssistantInputChange,
+  onAssistantModeChange = () => undefined,
   onSubmitAssistant,
+  onConfirm = () => undefined,
   onBackToClassroom,
   busy
 }: Props) {
@@ -133,6 +140,9 @@ export function QgisProfessionalPage({
   const toolDisabledByConnection = !qgisConnected;
   const toolDisabledByLayer = !qgisConnected || !selectedLayer;
   const previewUrl = useMemo(() => buildQgisPreviewUrl(projectedPath, previewStamp), [projectedPath, previewStamp]);
+  const citations = currentJob?.result?.citations || currentJob?.result?.knowledge?.citations || [];
+  const confirmationId = String(currentJob?.result?.confirmation_id || "");
+  const requiresConfirmation = Boolean(currentJob?.result?.requires_confirmation && confirmationId);
 
   const refreshStatus = useCallback(async () => {
     const [llm, qgis] = await Promise.allSettled([fetchLlmStatus(), fetchQgisStatus()]);
@@ -409,6 +419,36 @@ export function QgisProfessionalPage({
 
         <section className="qgis-panel qgis-card qgis-panel-assistant">
           <h3>专业助教（目标：QGIS）</h3>
+          <div className="assistant-mode-switch qgis-mode-switch" role="tablist" aria-label="assistant mode">
+            <button
+              type="button"
+              className={`toolbar-button compact ${assistantMode === "knowledge" ? "active" : ""}`}
+              onClick={() => onAssistantModeChange("knowledge")}
+            >
+              知识助手
+            </button>
+            <button
+              type="button"
+              className={`toolbar-button compact ${assistantMode === "tool" ? "active" : ""}`}
+              onClick={() => onAssistantModeChange("tool")}
+            >
+              工具助手
+            </button>
+          </div>
+          {requiresConfirmation ? (
+            <div className="copilot-confirm-card">
+              <strong>高风险操作待确认</strong>
+              <span>该 QGIS 计划未确认前不会执行。</span>
+              <div className="copilot-confirm-actions">
+                <button type="button" onClick={() => onConfirm(confirmationId, "approve")} disabled={busy}>
+                  确认执行
+                </button>
+                <button type="button" className="secondary" onClick={() => onConfirm(confirmationId, "reject")} disabled={busy}>
+                  拒绝计划
+                </button>
+              </div>
+            </div>
+          ) : null}
           <div className="qgis-chat-log">
             {chatLog.slice(-8).map((message) => (
               <article key={`${message.timestamp}_${message.role}`} className={`qgis-chat-item ${message.role}`}>
@@ -431,12 +471,22 @@ export function QgisProfessionalPage({
                 if (!text) {
                   return;
                 }
-                onSubmitAssistant(text, "qgis");
+                onSubmitAssistant(text, assistantMode === "tool" ? "qgis" : "auto");
               }}
             >
               发送到 QGIS 助教
             </button>
           </div>
+          {citations.length ? (
+            <div className="copilot-citation-list">
+              <strong>引用</strong>
+              {citations.map((item) => (
+                <a key={`${item.title}_${item.url}`} href={item.url} target="_blank" rel="noreferrer">
+                  {item.title}
+                </a>
+              ))}
+            </div>
+          ) : null}
           {currentJob ? (
             <p className="qgis-job-hint">
               当前任务：{currentJob.title} / {currentJob.status}

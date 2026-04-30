@@ -1,0 +1,195 @@
+{
+  "version": "1.1",
+  "updated_at": "2026-04-28T12:00:00+08:00",
+  "items": [
+    {
+      "id": "sample_population_distribution_cn",
+      "title": "中国人口分布读图示例",
+      "topic": "population_distribution",
+      "region": "china",
+      "time": "2020",
+      "status": "knowledge_only",
+      "source": "builtin_sample",
+      "license": "teaching_only",
+      "grade_level": "middle_school",
+      "keywords": ["人口分布", "胡焕庸线", "东密西疏"],
+      "tags": ["人口", "区域差异", "读图"],
+      "crs": "EPSG:4326",
+      "summary": "用于课堂读图示范：说明中国人口分布总体呈现东南密集、西北稀疏的空间格局，并可引出自然条件、经济发展和交通可达性等影响因素。",
+      "canonical_answer": "中国人口分布并非均匀铺开，而是明显集中在东部沿海、平原和城市群地区。胡焕庸线可作为解释人口地理差异的经典参照，但课堂讲解时应继续追问自然环境、产业机会、交通通达度和历史开发基础。",
+      "teaching_points": ["先描述人口分布格局。", "再解释自然与社会经济因素。", "最后联系区域协调与人口政策。"],
+      "citations": [{"title": "国家统计局", "url": "https://www.stats.gov.cn/"}],
+      "dataset_refs": [],
+      "related_templates": [],
+      "updated_at": "2026-04-28T12:00:00+08:00"
+    },
+    {
+      "id": "project_349d85af43884d3cb1b5904ce6bd0a94_upload",
+      "title": "中国第六次人口普查资料",
+      "topic": "population_census",
+      "region": "china",
+      "time": "2010",
+      "status": "stored_only",
+      "source": "C:\\Users\\zcyxn\\Desktop\\地理教学数据\\11_人口普查相关资料\\Shp数据\\六普.zip",
+      "license": "unknown",
+      "grade_level": "general",
+      "keywords": ["人口普查", "六普", "人口分布"],
+      "tags": ["人口", "普查", "资料"],
+      "crs": "EPSG:4326",
+      "summary": "第六次全国人口普查相关空间数据资料，当前先作为知识库资料保存，暂不在课堂地图中直接渲染。",
+      "canonical_answer": "六普资料适合用于对比 2000 年和 2020 年人口格局变化，重点观察人口向城市群、沿海地区和交通走廊集聚的趋势。",
+      "teaching_points": ["用于人口格局阶段对比。", "关注城市群和沿海集聚。", "暂作为资料素材，不直接显示为地图图层。"],
+      "citations": [],
+      "dataset_refs": [
+        {
+          "project_id": "project_349d85af43884d3cb1b5904ce6bd0a94",
+          "layer_id": "upload__",
+          "layer_name": "六普",
+          "source_file": "六普.zip"
+        }
+      ],
+      "related_templates": [],
+      "updated_at": "2026-04-28T12:00:00+08:00"
+    },
+    {
+      "id": "project_349d85af43884d3cb1b5904ce6bd0a94_upload___a1f9b3d2",
+      "title": "中国第五次人口普查资料",
+      "topic": "population_census",
+      "region": "china",
+      "time": "2000",
+      "status": "stored_only",
+      "source": "C:\\Users\\zcyxn\\Desktop\\地理教学数据\\11_人口普查相关资料\\Shp数据\\五普.zip",
+      "license": "unknown",
+      "grade_level": "general",
+      "keywords": ["人口普查", "五普", "人口分布"],
+      "tags": ["人口", "普查", "资料"],
+      "crs": "EPSG:4326",
+      "summary": "第五次全国人口普查相关空间数据资料，适合与六普、七普进行时间序列对比。",
+      "canonical_answer": "五普资料可作为人口变化的起点参照，帮助学生观察 21 世纪以来人口分布重心、城市化和区域差异的演变。",
+      "teaching_points": ["作为时间序列起点。", "与六普、七普对比变化。", "关注人口集聚与城市化过程。"],
+      "citations": [],
+      "dataset_refs": [
+        {
+          "project_id": "project_349d85af43884d3cb1b5904ce6bd0a94",
+          "layer_id": "upload___a1f9b3d2",
+          "layer_name": "五普",
+          "source_file": "五普.zip"
+        }
+      ],
+      "related_templates": [],
+      "updated_at": "2026-04-28T12:00:00+08:00"
+    },
+    {
+      "id": "project_349d85af43884d3cb1b5904ce6bd0a94_upload___fffdbf28",
+      "title": "中国第七次人口普查资料",
+      "topic": "population_census",
+      "region": "china",
+      "time": "2020",
+      "status": "stored_only",
+      "source": "C:\\Users\\zcyxn\\Desktop\\地理教学数据\\11_人口普查相关资料\\Shp数据\\七普.zip",
+      "license": "unknown",
+      "grade_level": "general",
+      "keywords": ["人口普查", "七普", "人口迁移", "城市群"],
+      "tags": ["人口", "普查", "资料"],
+      "crs": "EPSG:4326",
+      "summary": "第七次全国人口普查相关空间数据资料，可用于解释近年来人口向核心城市群和沿海地区集聚的现象。",
+      "canonical_answer": "七普资料适合支撑人口迁移和区域发展差异的课堂讨论，重点观察长三角、珠三角、京津冀、成渝等地区的人口吸引力。",
+      "teaching_points": ["观察人口向城市群集聚。", "联系就业、产业和公共服务。", "与五普、六普形成动态对比。"],
+      "citations": [],
+      "dataset_refs": [
+        {
+          "project_id": "project_349d85af43884d3cb1b5904ce6bd0a94",
+          "layer_id": "upload___fffdbf28",
+          "layer_name": "七普",
+          "source_file": "七普.zip"
+        }
+      ],
+      "related_templates": [],
+      "updated_at": "2026-04-28T12:00:00+08:00"
+    },
+    {
+      "id": "project_349d85af43884d3cb1b5904ce6bd0a94_upload___4aa48126",
+      "title": "中国气候类型分布资料",
+      "topic": "climate_zoning",
+      "region": "china",
+      "time": "",
+      "status": "stored_only",
+      "source": "C:\\Users\\zcyxn\\Desktop\\地理教学数据\\1849d-main\\中国气候类型分布.zip",
+      "license": "unknown",
+      "grade_level": "general",
+      "keywords": ["气候区划", "中国气候", "区域差异"],
+      "tags": ["气候", "区划", "资料"],
+      "crs": "EPSG:4326",
+      "summary": "中国气候类型分布资料，当前作为知识库资料保存，可用于后续设计气候区划专题课。",
+      "canonical_answer": "中国气候类型分布受纬度位置、海陆位置、地形地势和季风环流共同影响，课堂上可从东部季风区、西北干旱半干旱区、青藏高寒区三类区域切入。",
+      "teaching_points": ["先识别主要气候区域。", "再解释纬度、海陆和地形因素。", "最后联系农业、人口和城市分布。"],
+      "citations": [],
+      "dataset_refs": [
+        {
+          "project_id": "project_349d85af43884d3cb1b5904ce6bd0a94",
+          "layer_id": "upload___4aa48126",
+          "layer_name": "中国气候类型分布",
+          "source_file": "中国气候类型分布.zip"
+        }
+      ],
+      "related_templates": [],
+      "updated_at": "2026-04-28T12:00:00+08:00"
+    },
+    {
+      "id": "project_349d85af43884d3cb1b5904ce6bd0a94_upload_world_koppen_map_3892928b",
+      "title": "世界柯本气候分区图（高清）",
+      "topic": "climate_zoning",
+      "region": "global",
+      "time": "",
+      "status": "renderable_layer",
+      "source": "C:\\Users\\zcyxn\\Desktop\\地理教学数据\\气候\\World_Koppen_Map.jpg",
+      "license": "unknown",
+      "grade_level": "general",
+      "keywords": ["柯本气候", "世界气候", "气候分区"],
+      "tags": ["气候", "可显示图层", "影像"],
+      "crs": "EPSG:4326",
+      "summary": "世界柯本气候分区图高清影像，已经作为可渲染影像层保留在课堂项目中，可叠加到底图上进行全球气候分区讲解。",
+      "canonical_answer": "柯本气候分区图适合用于解释热带、干旱、温带、寒带和高山气候的空间分布，并联系纬度、海陆位置、洋流和地形因素。",
+      "teaching_points": ["叠加图层后观察全球气候带。", "用纬度和海陆位置解释宏观格局。", "结合典型区域提出课堂问题。"],
+      "citations": [],
+      "dataset_refs": [
+        {
+          "project_id": "project_349d85af43884d3cb1b5904ce6bd0a94",
+          "layer_id": "upload_World_Koppen_Map_3892928b",
+          "layer_name": "World_Koppen_Map",
+          "source_file": "World_Koppen_Map_3892928b.jpg"
+        }
+      ],
+      "related_templates": [],
+      "updated_at": "2026-04-28T12:00:00+08:00"
+    },
+    {
+      "id": "project_349d85af43884d3cb1b5904ce6bd0a94_upload_world_koppen_map_small_b7d4a859",
+      "title": "世界柯本气候分区图（轻量）",
+      "topic": "climate_zoning",
+      "region": "global",
+      "time": "",
+      "status": "renderable_layer",
+      "source": "C:\\Users\\zcyxn\\Desktop\\地理教学数据\\气候\\World_Koppen_Map_Small.jpg",
+      "license": "unknown",
+      "grade_level": "general",
+      "keywords": ["柯本气候", "世界气候", "轻量图层"],
+      "tags": ["气候", "可显示图层", "影像"],
+      "crs": "EPSG:4326",
+      "summary": "世界柯本气候分区图轻量影像，适合课堂大屏快速叠加和读图讲解。",
+      "canonical_answer": "轻量版柯本气候图可用于快速展示全球气候分区总体格局，重点不是精确边界，而是帮助学生建立热量、水分和空间分异的整体认识。",
+      "teaching_points": ["用于快速课堂演示。", "强调气候带空间格局。", "可与人口、农业和城市分布做关联分析。"],
+      "citations": [],
+      "dataset_refs": [
+        {
+          "project_id": "project_349d85af43884d3cb1b5904ce6bd0a94",
+          "layer_id": "upload_World_Koppen_Map_Small_b7d4a859",
+          "layer_name": "World_Koppen_Map_Small",
+          "source_file": "World_Koppen_Map_Small_b7d4a859.jpg"
+        }
+      ],
+      "related_templates": [],
+      "updated_at": "2026-04-28T12:00:00+08:00"
+    }
+  ]
+}

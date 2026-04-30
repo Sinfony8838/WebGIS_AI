@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .config import AppConfig
@@ -41,7 +41,17 @@ class AssistantMessageRequest(BaseModel):
     project_id: str
     message: str
     map_context: Dict[str, Any] = Field(default_factory=dict)
+    assistant_mode: str = ""
+    conversation_id: str = ""
+    history: list[Dict[str, Any]] = Field(default_factory=list)
     target: str = "webgis"
+    input_mode: str = "text"
+    screen_snapshot: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AssistantConfirmRequest(BaseModel):
+    confirmation_id: str
+    decision: str = "approve"
 
 
 class TemplateRunRequest(BaseModel):
@@ -70,6 +80,34 @@ class ExportSnapshotRequest(BaseModel):
 
 class QgisToolRequest(BaseModel):
     tool_params: Dict[str, Any] = Field(default_factory=dict)
+
+
+class KnowledgeItemRequest(BaseModel):
+    item: Dict[str, Any] = Field(default_factory=dict)
+
+
+class KnowledgeLayerRegisterRequest(BaseModel):
+    project_id: str
+    layer_id: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class KnowledgeMaterialLinkRequest(BaseModel):
+    kb_item_id: str
+    url: str
+    title: str = ""
+    description: str = ""
+    material_type: str = "link"
+    thumbnail_url: str = ""
+    region_binding: Dict[str, Any] = Field(default_factory=dict)
+
+
+class LessonResourceSetRequest(BaseModel):
+    item: Dict[str, Any] = Field(default_factory=dict)
+
+
+class LessonResourceSetPatchRequest(BaseModel):
+    patch: Dict[str, Any] = Field(default_factory=dict)
 
 
 @app.get("/health")
@@ -145,9 +183,118 @@ def get_public_file(file_path: str) -> FileResponse:
     return FileResponse(resolved)
 
 
+@app.get("/kb/manifest")
+def get_kb_manifest() -> Dict[str, Any]:
+    return runtime.kb_manifest()
+
+
+@app.get("/kb/search")
+def search_kb(
+    query: str = Query(""),
+    topic: str = Query(""),
+    region: str = Query(""),
+    tag: str = Query(""),
+    limit: int = Query(20),
+) -> Dict[str, Any]:
+    return runtime.kb_search(query=query, topic=topic, region=region, tag=tag, limit=limit)
+
+
+@app.get("/kb/topics")
+def get_kb_topics() -> Dict[str, Any]:
+    return runtime.kb_topics()
+
+
+@app.post("/kb/items")
+def upsert_kb_item(request: KnowledgeItemRequest) -> Dict[str, Any]:
+    try:
+        return runtime.kb_upsert_item(request.item)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/kb/layers/register")
+def register_kb_layer(request: KnowledgeLayerRegisterRequest) -> Dict[str, Any]:
+    try:
+        return runtime.kb_register_layer(request.project_id, request.layer_id, request.metadata)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/kb/materials/upload")
+async def upload_kb_material(
+    kb_item_id: str = Form(...),
+    file: UploadFile = File(...),
+    title: str = Form(""),
+    description: str = Form(""),
+    material_type: str = Form(""),
+    region_binding: str = Form("{}"),
+) -> Dict[str, Any]:
+    try:
+        raw_binding = json.loads(region_binding or "{}")
+        if not isinstance(raw_binding, dict):
+            raise ValueError("region_binding must be an object")
+        raw = await file.read()
+        return runtime.kb_upload_material(
+            kb_item_id=kb_item_id,
+            filename=file.filename or "material.dat",
+            raw_bytes=raw,
+            title=title,
+            description=description,
+            material_type=material_type,
+            region_binding=raw_binding,
+        )
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="region_binding must be valid JSON") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/kb/materials/link")
+def link_kb_material(request: KnowledgeMaterialLinkRequest) -> Dict[str, Any]:
+    try:
+        return runtime.kb_link_material(
+            kb_item_id=request.kb_item_id,
+            url=request.url,
+            title=request.title,
+            description=request.description,
+            material_type=request.material_type,
+            thumbnail_url=request.thumbnail_url,
+            region_binding=request.region_binding,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/resources/search")
+def search_resources(
+    query: str = Query(""),
+    scope: str = Query("all"),
+    limit: int = Query(12),
+) -> Dict[str, Any]:
+    return runtime.resource_search(query=query, scope=scope, limit=limit)
+
+
 @app.get("/basemaps")
 def list_basemaps() -> Dict[str, Any]:
     return runtime.list_basemaps()
+
+
+@app.get("/tiles/weather/{layer}/{z}/{x}/{y}.png")
+def get_weather_tile(layer: str, z: int, x: int, y: int) -> Response:
+    try:
+        content, content_type = runtime.fetch_weather_tile(layer, z, x, y)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ConnectionError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return Response(content=content, media_type=content_type, headers={"Cache-Control": "public, max-age=300"})
+
+
+@app.get("/tiles/weather/{z}/{x}/{y}.png")
+def get_default_weather_tile(z: int, x: int, y: int) -> Response:
+    return get_weather_tile("precipitation_new", z, x, y)
 
 
 @app.post("/projects")
@@ -159,6 +306,30 @@ def create_project(request: CreateProjectRequest) -> Dict[str, Any]:
 def get_project(project_id: str) -> Dict[str, Any]:
     try:
         return runtime.get_project(project_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/projects/{project_id}/lesson-resources")
+def list_lesson_resources(project_id: str) -> Dict[str, Any]:
+    try:
+        return runtime.list_lesson_resources(project_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/projects/{project_id}/lesson-resources")
+def save_lesson_resource_set(project_id: str, request: LessonResourceSetRequest) -> Dict[str, Any]:
+    try:
+        return runtime.save_lesson_resource_set(project_id, request.item)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.patch("/projects/{project_id}/lesson-resources/{set_id}")
+def patch_lesson_resource_set(project_id: str, set_id: str, request: LessonResourceSetPatchRequest) -> Dict[str, Any]:
+    try:
+        return runtime.activate_lesson_resource_set(project_id, set_id, request.patch)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -194,7 +365,35 @@ def patch_layer(request: LayerPatchRequest) -> Dict[str, Any]:
 @app.post("/assistant/messages")
 def submit_assistant_message(request: AssistantMessageRequest) -> Dict[str, Any]:
     try:
-        return runtime.submit_assistant_message(request.project_id, request.message, request.map_context, request.target)
+        return runtime.submit_assistant_message(
+            request.project_id,
+            request.message,
+            request.map_context,
+            request.assistant_mode,
+            request.conversation_id,
+            request.history,
+            request.target,
+            request.input_mode,
+            request.screen_snapshot,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/assistant/confirm")
+def confirm_assistant_action(request: AssistantConfirmRequest) -> Dict[str, Any]:
+    try:
+        return runtime.confirm_assistant_action(request.confirmation_id, decision=request.decision)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/assistant/conversations/{conversation_id}")
+def get_assistant_conversation(conversation_id: str) -> Dict[str, Any]:
+    try:
+        return runtime.get_conversation(conversation_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

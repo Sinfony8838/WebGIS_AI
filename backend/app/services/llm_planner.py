@@ -26,8 +26,21 @@ class LLMPlanner:
         project: ProjectRecord,
         map_context: Optional[Dict[str, Any]] = None,
         target: str = "webgis",
+        input_mode: str = "text",
     ) -> Dict[str, Any]:
         normalized_target = target if target in {"webgis", "qgis", "auto"} else "webgis"
+        normalized_input_mode = input_mode if input_mode in {"text", "voice"} else "text"
+        if normalized_input_mode == "voice" and normalized_target == "webgis":
+            plan = self.fallback_planner.plan_voice_actions(message, project, map_context=map_context or {})
+            plan["target"] = "webgis"
+            plan["planner"] = "voice_rule"
+            return plan
+        if normalized_target == "webgis":
+            rule_plan = self.fallback_planner.plan_actions(message, project, map_context=map_context or {})
+            if self._should_use_rule_preflight(rule_plan):
+                rule_plan["target"] = "webgis"
+                rule_plan["planner"] = "rule_preflight"
+                return rule_plan
         try:
             raw_content = self.minimax_client.chat_completion(
                 self._messages(message, project, map_context or {}, normalized_target),
@@ -160,6 +173,21 @@ class LLMPlanner:
         fallback["target"] = "webgis"
         fallback["planner"] = "rule_fallback"
         return fallback
+
+    def _should_use_rule_preflight(self, plan: Dict[str, Any]) -> bool:
+        deterministic_tools = {
+            "switch_basemap",
+            "apply_template",
+            "toggle_layer",
+            "reorder_layer",
+            "style_layer",
+            "draw_annotation",
+            "measure",
+            "export_snapshot",
+            "search_poi",
+        }
+        actions = plan.get("actions") or []
+        return any(str(action.get("tool_name") or "") in deterministic_tools for action in actions if isinstance(action, dict))
 
 
 def allowed_tool_names(target: str) -> Iterable[str]:
