@@ -253,7 +253,7 @@ describe("CopilotWidget", () => {
     });
 
     expect(screen.getByText("回答类型：regional_geography")).toBeInTheDocument();
-    expect(screen.getByText("引用")).toBeInTheDocument();
+    expect(screen.getByText("引用来源")).toBeInTheDocument();
     fireEvent.click(screen.getByText("知识助手"));
     fireEvent.click(screen.getByText("确认执行"));
     expect(onAssistantModeChange).toHaveBeenCalledWith("knowledge");

@@ -42,6 +42,19 @@ TOOL_ACTION_HINTS = (
     "标注",
     "测量",
     "搜索",
+    "制作",
+    "生成",
+    "创建",
+    "绘制",
+    "建立",
+    "添加",
+    "删除",
+    "移除",
+    "裁剪",
+    "合并",
+    "计算",
+    "统计",
+    "渲染",
     "apply",
     "switch",
     "hide",
@@ -49,6 +62,16 @@ TOOL_ACTION_HINTS = (
     "export",
     "zoom",
     "load",
+    "create",
+    "generate",
+    "render",
+    "draw",
+    "add",
+    "remove",
+    "delete",
+    "clip",
+    "merge",
+    "calculate",
 )
 
 EXPLANATION_HINTS = ("解释", "讲解", "分析", "为什么", "说明", "读图", "原因", "explain", "analysis", "why")
@@ -166,7 +189,8 @@ class PromptRegistry:
         }
         parts = {
             "super_geo_base": "You are Super Geo Assistant. Stay inside geography and GIS scope.",
-            "knowledge_mode": "Answer geography questions with authoritative citations and concise teaching points."
+            "knowledge_mode": "Answer geography questions using AI general knowledge first, supplemented by local KB and online search. "
+            "Provide authoritative citations and concise teaching points suitable for classroom use."
             if mode == "knowledge"
             else "",
             "tool_mode": "Plan and execute only safe, validated GIS actions."
@@ -326,8 +350,15 @@ class AssistantRouter:
 
 
 class KnowledgeEngine:
-    def __init__(self, config: AppConfig):
+    def __init__(
+        self,
+        config: AppConfig,
+        minimax_client: Any = None,
+        resource_search: Any = None,
+    ):
         self.config = config
+        self.minimax_client = minimax_client
+        self.resource_search = resource_search
         self.knowledge_units = self._load_units()
 
     def answer(self, question: str, map_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -335,31 +366,76 @@ class KnowledgeEngine:
         answer_type = self._classify(question)
         if answer_type in {"assistant_identity", "assistant_model", "assistant_capability"}:
             return self._meta_answer(answer_type)
+
+        # --- Phase 1: local KB lookup (fast, free) ---
         entry = self._match_entry(question)
         citations = list(entry.get("citations", [])) if entry else []
-        retrieval_trace = []
+        retrieval_trace: List[Dict[str, Any]] = []
         if citations:
             retrieval_trace.extend(self._score_sources(citations, source_type="local_kb", timely=answer_type == "timely_fact"))
-        else:
+
+        # --- Phase 2: online search for supplementary context ---
+        web_context = ""
+        if self.resource_search is not None:
+            try:
+                web_results = self.resource_search.search(query=question, scope="web", limit=5)
+                web_items = web_results.get("items", [])
+                if web_items:
+                    for item in web_items[:3]:
+                        title = str(item.get("title") or "").strip()
+                        url = str(item.get("url") or "").strip()
+                        summary = str(item.get("summary") or "").strip()
+                        if title and url:
+                            citations.append({"title": title, "url": url})
+                            retrieval_trace.append({
+                                "source": "web_search",
+                                "title": title,
+                                "url": url,
+                                "authority_score": float(item.get("confidence") or 0.6),
+                                "freshness_score": 0.85,
+                            })
+                        if summary:
+                            web_context += f"- {title}: {summary}\n"
+            except Exception:
+                retrieval_trace.append({"source": "web_search", "status": "error"})
+
+        if not citations:
             citations = self._default_citations(answer_type)
             retrieval_trace.extend(self._score_sources(citations, source_type="authority_fallback", timely=answer_type == "timely_fact"))
 
-        direct_answer = (
-            entry.get("canonical_answer")
-            if entry
-            else "这个问题属于地理相关范围，但本地知识库里还没有完全对应的现成条目。"
-            "我可以先按地理学的一般分析框架给出解释。"
-        )
-        if answer_type == "timely_fact":
-            direct_answer = (
-                "这个问题具有时效性。系统应先核对权威实时来源，再给出最终结论。"
-                "下面列出优先参考的权威来源。"
-            )
+        # --- Phase 3: LLM-powered answer (primary path) ---
+        llm_used = False
+        if self.minimax_client is not None and self.config.minimax_enabled():
+            try:
+                llm_answer = self._llm_answer(question, entry, answer_type, map_context, web_context)
+                llm_used = True
+                retrieval_trace.append({"source": "llm_generation", "status": "success"})
+                direct_answer = llm_answer["direct_answer"]
+                mechanism_explanation = llm_answer.get("mechanism_explanation", "")
+                teaching_points = llm_answer.get("teaching_points", [])
+                confidence = 0.88 if entry else 0.78
+            except Exception as exc:
+                retrieval_trace.append({"source": "llm_generation", "status": "error", "detail": str(exc)})
+                llm_used = False
 
-        mechanism_explanation = self._mechanism_text(question, entry, answer_type)
+        if not llm_used:
+            # Fallback to the original template-based answer
+            direct_answer = (
+                entry.get("canonical_answer")
+                if entry
+                else "这个问题属于地理相关范围，但本地知识库里还没有完全对应的现成条目。"
+                "我可以先按地理学的一般分析框架给出解释。"
+            )
+            if answer_type == "timely_fact":
+                direct_answer = (
+                    "这个问题具有时效性。系统应先核对权威实时来源，再给出最终结论。"
+                    "下面列出优先参考的权威来源。"
+                )
+            mechanism_explanation = self._mechanism_text(question, entry, answer_type)
+            teaching_points = list(entry.get("teaching_points", [])) if entry else self._default_teaching_points(answer_type)
+            confidence = 0.92 if entry else (0.45 if answer_type == "timely_fact" else 0.68)
+
         map_grounding = self._map_grounding(map_context)
-        teaching_points = list(entry.get("teaching_points", [])) if entry else self._default_teaching_points(answer_type)
-        confidence = 0.92 if entry else (0.45 if answer_type == "timely_fact" else 0.68)
         return {
             "direct_answer": direct_answer,
             "mechanism_explanation": mechanism_explanation,
@@ -370,6 +446,154 @@ class KnowledgeEngine:
             "answer_type": answer_type,
             "retrieval_trace": retrieval_trace,
             "presentation": self._presentation_policy(answer_type),
+            "llm_used": llm_used,
+        }
+
+    # ------------------------------------------------------------------
+    # LLM-powered knowledge answer
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _strip_think_tags(text: str) -> str:
+        """Remove <think>...</think> blocks that some models emit."""
+        import re as _re
+        return _re.sub(r"<think>[\s\S]*?</think>", "", text, flags=_re.IGNORECASE).strip()
+
+    @staticmethod
+    def _strip_code_fences(text: str) -> str:
+        """Remove ```json ... ``` wrappers."""
+        import re as _re
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            cleaned = _re.sub(r"^```(?:json)?", "", cleaned, flags=_re.IGNORECASE).strip()
+            cleaned = _re.sub(r"```\s*$", "", cleaned).strip()
+        return cleaned
+
+    def _llm_answer(
+        self,
+        question: str,
+        entry: Optional[Dict[str, Any]],
+        answer_type: str,
+        map_context: Dict[str, Any],
+        web_context: str = "",
+    ) -> Dict[str, Any]:
+        """Call MiniMax LLM to generate a geography knowledge answer.
+
+        The prompt asks for *plain readable Chinese text* — NOT JSON — so that
+        the response can be displayed directly to the teacher in the classroom
+        copilot panel.  We post-process the text to extract an optional
+        "原理分析" section and "课堂要点" bullet list.
+        """
+        system_prompt = (
+            "你是一位专业的高中地理教师助手，具有丰富的地理学科知识。\n"
+            "老师会向你提问地理相关问题，请用准确、权威、适合课堂讲解的方式直接回答。\n\n"
+            "格式要求（非常重要）：\n"
+            "- 直接用自然语言回答，不要输出 JSON、代码块或任何标记语言\n"
+            "- 不要输出 <think> 或任何 XML 标签\n"
+            "- 回答分为三部分，用空行分隔：\n"
+            "  第一部分：直接回答问题（1-3 段）\n"
+            "  第二部分：以\"原理分析：\"开头，解释核心地理机制（1-2 段）\n"
+            "  第三部分：以\"课堂要点：\"开头，列出 2-4 个要点，每个要点以\"- \"开头换行书写\n"
+            "- 语言简洁专业，适合课堂直接朗读\n"
+            "- 用中文回答\n"
+        )
+
+        # Build context from local KB entry and web search
+        context_parts: List[str] = []
+        if entry:
+            context_parts.append(f"本地知识库参考：{entry.get('canonical_answer', '')}")
+            kb_points = entry.get("teaching_points", [])
+            if kb_points:
+                context_parts.append(f"知识库要点：{'；'.join(kb_points)}")
+        if web_context:
+            context_parts.append(f"在线参考资料：\n{web_context}")
+
+        visible_layers = map_context.get("visible_layers", [])
+        if visible_layers:
+            layer_names = ", ".join(str(item.get("name", "")) for item in visible_layers[:4] if item)
+            context_parts.append(f"当前地图可见图层：{layer_names}")
+
+        user_content = question
+        if context_parts:
+            user_content = f"问题：{question}\n\n参考上下文：\n" + "\n".join(context_parts)
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+
+        raw = self.minimax_client.chat_completion(messages, temperature=0.3)
+
+        # --- Post-process: strip think tags, code fences, JSON wrappers ---
+        cleaned = self._strip_think_tags(raw)
+        cleaned = self._strip_code_fences(cleaned)
+
+        # If the model still returned JSON despite the prompt, extract text from it
+        if cleaned.startswith("{"):
+            try:
+                parsed = json.loads(cleaned)
+                return {
+                    "direct_answer": str(parsed.get("direct_answer") or ""),
+                    "mechanism_explanation": str(parsed.get("mechanism_explanation") or ""),
+                    "teaching_points": list(parsed.get("teaching_points") or []),
+                }
+            except json.JSONDecodeError:
+                pass
+
+        # --- Split plain-text answer into structured parts ---
+        return self._parse_plain_answer(cleaned)
+
+    @staticmethod
+    def _parse_plain_answer(text: str) -> Dict[str, Any]:
+        """Split a plain-text LLM answer into direct_answer, mechanism, and
+        teaching points by looking for section markers."""
+        import re as _re
+
+        direct_parts: List[str] = []
+        mechanism = ""
+        teaching_points: List[str] = []
+
+        # Try to split on known section headers
+        mechanism_match = _re.search(
+            r"\n\s*(?:原理分析|原理机制|机制解释|原理解释)[：:]\s*",
+            text,
+        )
+        teaching_match = _re.search(
+            r"\n\s*(?:课堂要点|教学要点|要点总结|要点)[：:]\s*",
+            text,
+        )
+
+        # Determine the boundary positions
+        mech_start = mechanism_match.start() if mechanism_match else len(text)
+        teach_start = teaching_match.start() if teaching_match else len(text)
+
+        # Direct answer = everything before both section markers
+        direct_end = min(mech_start, teach_start)
+        direct_parts.append(text[:direct_end].strip())
+
+        # Mechanism = text between mechanism marker and teaching marker (or end)
+        if mechanism_match:
+            mech_content_start = mechanism_match.end()
+            mech_content_end = teach_start if teach_start > mech_start else len(text)
+            mechanism = text[mech_content_start:mech_content_end].strip()
+
+        # Teaching points = bullet lines after the teaching marker
+        if teaching_match:
+            points_text = text[teaching_match.end():].strip()
+            for line in points_text.split("\n"):
+                line = line.strip()
+                if not line:
+                    continue
+                # Strip leading bullet markers
+                line = _re.sub(r"^[-•·*]\s*", "", line)
+                line = _re.sub(r"^\d+[.、)\]]\s*", "", line)
+                if line:
+                    teaching_points.append(line)
+
+        return {
+            "direct_answer": "\n\n".join(p for p in direct_parts if p),
+            "mechanism_explanation": mechanism,
+            "teaching_points": teaching_points[:6],
         }
 
     def _meta_answer(self, answer_type: str) -> Dict[str, Any]:
@@ -589,6 +813,14 @@ class ToolPlanner:
         target: str,
         input_mode: str,
     ) -> Dict[str, Any]:
+        if input_mode == "voice" and target == "webgis":
+            return self.llm_planner.plan_actions(
+                message,
+                project,
+                map_context=map_context,
+                target=target,
+                input_mode=input_mode,
+            )
         if not _contains_any(message, TOOL_ACTION_HINTS) and not _contains_any(message, EXPLANATION_HINTS):
             return {
                 "assistant_message": "Tool mode needs a concrete action. Please specify the operation or switch to knowledge mode.",
@@ -701,6 +933,8 @@ class ToolExecutor:
             "explain_current_view": {"target": "webgis", "category": "explain", "risk_level": "low", "reversible": True, "requires_confirmation": False, "requires_map_context": True},
             "switch_basemap": {"target": "webgis", "category": "view", "risk_level": "low", "reversible": True, "requires_confirmation": False},
             "search_poi": {"target": "webgis", "category": "search", "risk_level": "low", "reversible": True, "requires_confirmation": False, "requires_map_context": True},
+            "toggle_teaching_map": {"target": "webgis", "category": "teaching_map", "risk_level": "low", "reversible": True, "requires_confirmation": False},
+            "open_material": {"target": "webgis", "category": "material", "risk_level": "low", "reversible": True, "requires_confirmation": False},
         }
         for tool_name in QGIS_ALLOWED_TOOLS:
             registry.setdefault(
@@ -790,10 +1024,18 @@ class AssistantSessionEngine:
         self.store = store
         self.prompt_registry = PromptRegistry()
         self.router = AssistantRouter()
-        self.knowledge = KnowledgeEngine(config)
+        self.knowledge = KnowledgeEngine(
+            config,
+            minimax_client=llm_planner.minimax_client,
+            resource_search=None,  # wired later via set_resource_search()
+        )
         self.tool_planner = ToolPlanner(llm_planner, assistant_service)
         self.tool_executor = ToolExecutor(store, execute_webgis, execute_qgis)
         self.memory = ConversationMemory(store)
+
+    def set_resource_search(self, resource_search: Any) -> None:
+        """Wire the resource search service into the knowledge engine for online search."""
+        self.knowledge.resource_search = resource_search
 
     def handle(
         self,
@@ -1231,9 +1473,13 @@ class AssistantSessionEngine:
         map_context: Dict[str, Any],
         stage_callback: Callable[[str, str, str, str], None],
     ) -> Dict[str, Any]:
-        stage_callback("retrieval", "running", "Retrieving authoritative knowledge", "")
+        llm_available = self.knowledge.minimax_client is not None and self.config.minimax_enabled()
+        stage_label = "AI 通用知识 + 在线检索" if llm_available else "本地知识库检索"
+        stage_callback("retrieval", "running", stage_label, "")
         knowledge = self.knowledge.answer(message, map_context=map_context)
-        stage_callback("retrieval", "success", f"Answer type: {knowledge['answer_type']}", "")
+        llm_used = knowledge.get("llm_used", False)
+        source_label = "AI 回答" if llm_used else "本地知识库"
+        stage_callback("retrieval", "success", f"{source_label} · {knowledge['answer_type']}", "")
         stage_callback("grounding", "running", "Composing grounded answer", "")
         assistant_message = self.knowledge.render_public_answer(knowledge, include_teaching_points=True)
         stage_callback("grounding", "success", "Knowledge answer completed", "")
@@ -1242,7 +1488,7 @@ class AssistantSessionEngine:
             "assistant",
             assistant_message,
             conversation.assistant_mode,
-            metadata={"intent": "knowledge", "answer_type": knowledge["answer_type"]},
+            metadata={"intent": "knowledge", "answer_type": knowledge["answer_type"], "llm_used": llm_used},
         )
         self.memory.update_task_memory(
             conversation,
@@ -1250,6 +1496,7 @@ class AssistantSessionEngine:
             map_context,
             pinned_state_updates={"last_answer_type": knowledge["answer_type"]},
         )
+        planner_label = "knowledge_llm" if llm_used else "knowledge_engine"
         return {
             "intent": "knowledge",
             "assistant_message": assistant_message,
@@ -1259,7 +1506,7 @@ class AssistantSessionEngine:
             "actions_executed": [],
             "requires_confirmation": False,
             "confirmation_id": "",
-            "planner": "knowledge_engine",
+            "planner": planner_label,
             "retrieval_trace": knowledge["retrieval_trace"],
             "conversation_id": conversation.conversation_id,
             "prompt_parts": self.prompt_registry.build(

@@ -11,6 +11,33 @@ from backend.app.models import LayerRecord, ProjectRecord
 from backend.app.services.assistant import ASSISTANT_TOOL_SCHEMA, AssistantService
 
 
+class FakeTeachingMapService:
+    maps = {
+        "china_population_hu_line": {"id": "china_population_hu_line", "name": "中国人口分布图（胡焕庸线）"},
+        "china_precipitation": {"id": "china_precipitation", "name": "中国年降水量分布图"},
+        "china_jan_temperature": {"id": "china_jan_temperature", "name": "中国1月平均气温分布图"},
+        "china_topography": {"id": "china_topography", "name": "中国地形图"},
+        "shanghai_population_density": {"id": "shanghai_population_density", "name": "上海人口密度分布图"},
+    }
+
+    def get_map(self, map_id: str) -> dict | None:
+        return self.maps.get(map_id)
+
+    def find_by_keyword(self, keyword: str) -> dict | None:
+        lowered = keyword.lower()
+        if "降水" in lowered:
+            return self.maps["china_precipitation"]
+        if "气温" in lowered:
+            return self.maps["china_jan_temperature"]
+        if "地形" in lowered:
+            return self.maps["china_topography"]
+        if "上海" in lowered:
+            return self.maps["shanghai_population_density"]
+        if "人口" in lowered or "胡焕庸" in lowered:
+            return self.maps["china_population_hu_line"]
+        return None
+
+
 class AssistantServiceTest(unittest.TestCase):
     def build_project(self, config: AppConfig | None = None) -> ProjectRecord:
         project = ProjectRecord.create(base_map=(config or AppConfig()).default_basemap())
@@ -53,6 +80,7 @@ class AssistantServiceTest(unittest.TestCase):
         self.assertIn("explain_current_view", tool_names)
         self.assertIn("switch_basemap", tool_names)
         self.assertIn("search_poi", tool_names)
+        self.assertIn("open_material", tool_names)
 
     def test_plan_actions_prefers_template_and_explanation(self) -> None:
         service = AssistantService(AppConfig())
@@ -139,6 +167,44 @@ class AssistantServiceTest(unittest.TestCase):
         plan = service.plan_voice_actions("嗯这个那个", project)
         self.assertEqual(plan["actions"], [])
         self.assertIn("没听清", plan["assistant_message"])
+
+    def test_plan_actions_can_open_registered_china_population_teaching_map(self) -> None:
+        service = AssistantService(AppConfig())
+        service.teaching_map_service = FakeTeachingMapService()
+        project = self.build_project()
+        plan = service.plan_actions("打开中国人口密度分布图", project)
+        teaching_actions = [item for item in plan["actions"] if item["tool_name"] == "toggle_teaching_map"]
+        self.assertEqual(teaching_actions[0]["tool_params"]["map_id"], "china_population_hu_line")
+
+    def test_plan_actions_can_overlay_climate_and_topography_maps(self) -> None:
+        service = AssistantService(AppConfig())
+        service.teaching_map_service = FakeTeachingMapService()
+        project = self.build_project()
+        plan = service.plan_actions("依次叠加中国年平均降水量图、中国1月平均气温图、中国地形图，并进行答案汇总", project)
+        map_ids = [item["tool_params"]["map_id"] for item in plan["actions"] if item["tool_name"] == "toggle_teaching_map"]
+        self.assertEqual(map_ids, ["china_precipitation", "china_jan_temperature", "china_topography"])
+        self.assertIn("explain_current_view", [item["tool_name"] for item in plan["actions"]])
+
+    def test_plan_actions_can_open_hu_huanyong_video_material(self) -> None:
+        service = AssistantService(AppConfig())
+        project = self.build_project()
+        plan = service.plan_actions("打开胡焕庸线的科普视频", project)
+        self.assertEqual(plan["actions"][0]["tool_name"], "open_material")
+        self.assertEqual(plan["actions"][0]["tool_params"]["material_id"], "hu_huanyong_bilibili_video")
+
+    def test_compose_explanation_summarizes_population_with_climate_and_terrain(self) -> None:
+        service = AssistantService(AppConfig())
+        project = self.build_project()
+        project.layers.extend(
+            [
+                LayerRecord.create(layer_id="teaching_map_china_precipitation", name="中国年降水量分布图", kind="raster", source="teaching_map", geometry_type="Image"),
+                LayerRecord.create(layer_id="teaching_map_china_jan_temperature", name="中国1月平均气温分布图", kind="raster", source="teaching_map", geometry_type="Image"),
+                LayerRecord.create(layer_id="teaching_map_china_topography", name="中国地形图", kind="raster", source="teaching_map", geometry_type="Image"),
+            ]
+        )
+        content = service.compose_explanation(project, focus="答案汇总")
+        self.assertIn("东南密集、西北稀疏", content)
+        self.assertIn("降水", content)
 
     def test_compose_measurement_scales_width_by_latitude(self) -> None:
         service = AssistantService(AppConfig())

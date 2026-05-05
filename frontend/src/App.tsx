@@ -15,6 +15,7 @@ import XYZ from "ol/source/XYZ";
 import { fromLonLat, toLonLat, transformExtent } from "ol/proj";
 import { getDistance } from "ol/sphere";
 import { Circle as CircleStyle, Fill, Stroke, Style, Text } from "ol/style";
+import { easeOut } from "ol/easing";
 import { getCenter } from "ol/extent";
 import {
   activateLessonResourceSet,
@@ -41,7 +42,11 @@ import {
   switchBasemap,
   upsertKbItem,
   uploadDataset,
-  uploadKbMaterial
+  uploadKbMaterial,
+  fetchTeachingMaps,
+  toggleTeachingMap,
+  fetchActiveTeachingMaps,
+  type TeachingMapItem,
 } from "./api";
 import { BasemapMenu } from "./components/BasemapMenu";
 import { CopilotWidget } from "./components/CopilotWidget";
@@ -49,6 +54,7 @@ import { type KnowledgeQuery } from "./components/KnowledgePanel";
 import { QgisProfessionalPage } from "./components/QgisProfessionalPage";
 import { RegionFocusOverlay } from "./components/RegionFocusOverlay";
 import { SideDrawer, type DrawerTab } from "./components/SideDrawer";
+import { TeachingMapPanel } from "./components/TeachingMapPanel";
 import { TeachingMaterialViewer } from "./components/TeachingMaterialViewer";
 import { ToastStack, type ToastItem } from "./components/ToastStack";
 import { UploadDialog } from "./components/UploadDialog";
@@ -389,6 +395,8 @@ export default function App() {
     const [materialViewerOpen, setMaterialViewerOpen] = useState(false);
     const [materialViewerTitle, setMaterialViewerTitle] = useState("");
     const [materialViewerItems, setMaterialViewerItems] = useState<TeachingMaterial[]>([]);
+    const [teachingMaps, setTeachingMaps] = useState<TeachingMapItem[]>([]);
+    const [activeTeachingMapIds, setActiveTeachingMapIds] = useState<Set<string>>(new Set());
     const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [initAttempt, setInitAttempt] = useState(0);
   const [initError, setInitError] = useState("");
@@ -465,17 +473,19 @@ export default function App() {
   }, []);
 
   const refreshProjectState = useCallback(async (projectId: string) => {
-      const [projectPayload, layerPayload, outputsPayload, lessonPayload] = await Promise.all([
+      const [projectPayload, layerPayload, outputsPayload, lessonPayload, activeTeachingPayload] = await Promise.all([
         fetchProject(projectId),
         fetchLayers(projectId),
         fetchOutputs(projectId),
-        fetchLessonResources(projectId)
+        fetchLessonResources(projectId),
+        fetchActiveTeachingMaps(projectId)
       ]);
       setProject(projectPayload);
       setLayerState(layerPayload);
       setOutputs(outputsPayload.items);
       setLessonResourceSets(lessonPayload.items);
       setActiveLessonResourceSetId(lessonPayload.active_lesson_resource_set_id);
+      setActiveTeachingMapIds(new Set(activeTeachingPayload.active));
     }, []);
 
   const runKbSearch = useCallback(
@@ -863,6 +873,25 @@ export default function App() {
     return wasTracked;
   }, []);
 
+  const handleAssistantUiActions = useCallback((payload: JobRecord) => {
+    const executed = payload.result?.actions_executed || [];
+    const openMaterialActions = executed.flatMap((entry) => {
+      const result = entry.result || {};
+      const uiActions = Array.isArray(result.ui_actions) ? result.ui_actions : [];
+      return uiActions.filter((item): item is { type: string; title?: string; materials?: TeachingMaterial[] } => {
+        return Boolean(item && typeof item === "object" && (item as { type?: string }).type === "open_material");
+      });
+    });
+    const latest = openMaterialActions.at(-1);
+    const materials = latest?.materials || [];
+    if (!latest || !materials.length) {
+      return;
+    }
+    setMaterialViewerTitle(latest.title || materials[0]?.title || "课堂资料");
+    setMaterialViewerItems(materials);
+    setMaterialViewerOpen(true);
+  }, []);
+
   const subscribeToJob = useCallback(
     (jobId: string, mode: AssistantMode) => {
       const source = new EventSource(`${getApiBase()}/jobs/${jobId}/stream`);
@@ -885,6 +914,7 @@ export default function App() {
             return;
           }
           await refreshProjectState(payload.project_id);
+          handleAssistantUiActions(payload);
           const message = payload.result?.assistant_message || payload.result?.summary || payload.error || "";
           const nextConversationId = String(payload.result?.conversation_id || "");
           if (nextConversationId) {
@@ -904,7 +934,7 @@ export default function App() {
         }
       });
     },
-    [appendChat, closeJobStream, pushToast, refreshProjectState]
+    [appendChat, closeJobStream, handleAssistantUiActions, pushToast, refreshProjectState]
   );
 
   useEffect(() => {
@@ -1095,13 +1125,50 @@ export default function App() {
     pushToast("info", "已清除当前操作", "检索区、测距结果和高亮要素已重置。");
   }, [layerState?.items, project, pushToast, refreshProjectState]);
 
+  const handleToggleTeachingMap = useCallback(async (mapId: string, visible: boolean) => {
+    if (!project) {
+      return;
+    }
+    try {
+      const result = await toggleTeachingMap(project.project_id, mapId, visible);
+      setActiveTeachingMapIds((prev) => {
+        const next = new Set(prev);
+        if (visible) {
+          next.add(mapId);
+        } else {
+          next.delete(mapId);
+        }
+        return next;
+      });
+      // Refresh layers so the new raster layer appears on the map
+      await refreshProjectState(project.project_id);
+      // Optionally fly to the map's recommended view
+      if (visible && result.view?.center && result.view?.zoom) {
+        const map = mapRef.current;
+        if (map) {
+          map.getView().animate({
+            center: fromLonLat(result.view.center),
+            zoom: result.view.zoom,
+            duration: 600,
+          });
+        }
+      }
+    } catch (error: unknown) {
+      pushToast("error", "教学地图切换失败", String(error));
+    }
+  }, [project, pushToast, refreshProjectState]);
+
   const handleResetView = useCallback(() => {
     const map = mapRef.current;
     if (!map) {
       return;
     }
-    map.getView().setCenter(fromLonLat([104, 35]));
-    map.getView().setZoom(4);
+    map.getView().animate({
+      center: fromLonLat([104, 35]),
+      zoom: 4,
+      duration: 1000,
+      easing: easeOut,
+    });
   }, []);
 
   useEffect(() => {
@@ -1272,6 +1339,19 @@ export default function App() {
       setProject(created);
       await refreshProjectState(created.project_id);
       await loadKnowledgeBase();
+      // Load teaching maps catalog
+      try {
+        const tmaps = await fetchTeachingMaps();
+        if (!cancelled) {
+          setTeachingMaps(tmaps.items);
+        }
+        const active = await fetchActiveTeachingMaps(created.project_id);
+        if (!cancelled) {
+          setActiveTeachingMapIds(new Set(active.active));
+        }
+      } catch {
+        // teaching maps are optional – do not block init
+      }
       pushToast("success", "课堂项目已创建", "已初始化课堂地图环境。");
     })().catch((error: Error) => {
       setInitError(error.message);
@@ -1416,8 +1496,11 @@ export default function App() {
 
     const serverViewSignature = JSON.stringify(layerState.view || {});
     if (serverViewSignature !== lastAppliedViewRef.current) {
-      map.getView().setCenter(fromLonLat(layerState.view.center || [104, 35]));
-      map.getView().setZoom(layerState.view.zoom || 4);
+      const targetCenter = fromLonLat(layerState.view.center || [104, 35]);
+      const targetZoom = layerState.view.zoom || 4;
+      map.getView().animate(
+        { center: targetCenter, zoom: targetZoom, duration: 1200, easing: easeOut },
+      );
       lastAppliedViewRef.current = serverViewSignature;
     }
 
@@ -1740,7 +1823,7 @@ export default function App() {
                 if (!map) {
                   return;
                 }
-                map.getView().setZoom((map.getView().getZoom() || 4) + 1);
+                map.getView().animate({ zoom: (map.getView().getZoom() || 4) + 1, duration: 300 });
               }}
             >
               放大
@@ -1753,12 +1836,19 @@ export default function App() {
                 if (!map) {
                   return;
                 }
-                map.getView().setZoom((map.getView().getZoom() || 4) - 1);
+                map.getView().animate({ zoom: (map.getView().getZoom() || 4) - 1, duration: 300 });
               }}
             >
               缩小
             </button>
           </section>
+
+          <TeachingMapPanel
+            items={teachingMaps}
+            activeIds={activeTeachingMapIds}
+            busy={busy}
+            onToggle={handleToggleTeachingMap}
+          />
 
         </aside>
         </main>

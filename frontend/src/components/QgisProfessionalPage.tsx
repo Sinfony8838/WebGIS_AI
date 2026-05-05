@@ -227,6 +227,27 @@ export function QgisProfessionalPage({
     void refreshLayers();
   }, [refreshLayers, refreshStatus]);
 
+  useEffect(() => {
+    if (!currentJob || currentJob.status !== "completed") {
+      return;
+    }
+    const executed = currentJob.result?.actions_executed || [];
+    const exportAction = executed.find((item) => item.action?.tool_name === "export_map");
+    if (exportAction?.result && typeof exportAction.result === "object") {
+      const actionResult = exportAction.result as Record<string, unknown>;
+      const qgisResponse =
+        actionResult.qgis_response && typeof actionResult.qgis_response === "object"
+          ? (actionResult.qgis_response as Record<string, unknown>)
+          : undefined;
+      const resolvedPath = extractExportPath(qgisResponse || actionResult, projectedPath);
+      if (resolvedPath) {
+        setProjectedPath(resolvedPath);
+      }
+    }
+    setPreviewStamp(Date.now());
+    void refreshLayers();
+  }, [currentJob, projectedPath, refreshLayers]);
+
   return (
     <section className="qgis-page">
       <header className="qgis-page-header qgis-card">

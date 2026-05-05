@@ -706,9 +706,21 @@ export function CopilotWidget({
 
         {assistantMode === "knowledge" && knowledge ? (
           <div className="copilot-knowledge-card">
-            <strong>回答类型：{knowledge.answer_type}</strong>
+            <strong>回答来源：{knowledge.llm_used ? "AI 通用知识" : "本地知识库"}</strong>
+            <span>回答类型：{knowledge.answer_type}</span>
             <span>置信度：{Math.round((knowledge.confidence || 0) * 100)}%</span>
             {knowledge.map_grounding ? <span>基于当前地图：是</span> : null}
+          </div>
+        ) : null}
+
+        {citations.length ? (
+          <div className="copilot-citation-list">
+            <strong>引用来源</strong>
+            {citations.map((item) => (
+              <a key={`${item.title}_${item.url}`} href={item.url} target="_blank" rel="noreferrer">
+                {item.title}
+              </a>
+            ))}
           </div>
         ) : null}
 
@@ -722,17 +734,6 @@ export function CopilotWidget({
             </article>
           ))}
         </div>
-
-        {citations.length ? (
-          <div className="copilot-citation-list">
-            <strong>引用</strong>
-            {citations.map((item) => (
-              <a key={`${item.title}_${item.url}`} href={item.url} target="_blank" rel="noreferrer">
-                {item.title}
-              </a>
-            ))}
-          </div>
-        ) : null}
 
         </div>
         <form

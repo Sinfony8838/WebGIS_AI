@@ -1,60 +1,60 @@
 {
   "type": "FeatureCollection",
   "features": [
-    {
-      "type": "Feature",
-      "properties": {
-        "name": "鹿特丹",
-        "theme": "港口节点"
-      },
-      "geometry": {
-        "type": "Point",
-        "coordinates": [4.48, 51.92]
-      }
-    },
-    {
-      "type": "Feature",
-      "properties": {
-        "name": "伊斯坦布尔",
-        "theme": "海峡通道"
-      },
-      "geometry": {
-        "type": "Point",
-        "coordinates": [28.97, 41.01]
-      }
-    },
-    {
-      "type": "Feature",
-      "properties": {
-        "name": "霍尔木兹海峡",
-        "theme": "战略位置"
-      },
-      "geometry": {
-        "type": "Point",
-        "coordinates": [56.28, 26.56]
-      }
-    },
-    {
-      "type": "Feature",
-      "properties": {
-        "name": "上海",
-        "theme": "沿海核心"
-      },
-      "geometry": {
-        "type": "Point",
-        "coordinates": [121.47, 31.23]
-      }
-    },
-    {
-      "type": "Feature",
-      "properties": {
-        "name": "新加坡",
-        "theme": "航运枢纽"
-      },
-      "geometry": {
-        "type": "Point",
-        "coordinates": [103.82, 1.35]
-      }
-    }
+    {"type": "Feature", "properties": {"name": "北京", "theme": "首都"}, "geometry": {"type": "Point", "coordinates": [116.40, 39.90]}},
+    {"type": "Feature", "properties": {"name": "上海", "theme": "沿海核心"}, "geometry": {"type": "Point", "coordinates": [121.47, 31.23]}},
+    {"type": "Feature", "properties": {"name": "广州", "theme": "华南中心"}, "geometry": {"type": "Point", "coordinates": [113.26, 23.13]}},
+    {"type": "Feature", "properties": {"name": "深圳", "theme": "经济特区"}, "geometry": {"type": "Point", "coordinates": [114.06, 22.54]}},
+    {"type": "Feature", "properties": {"name": "天津", "theme": "北方港口"}, "geometry": {"type": "Point", "coordinates": [117.19, 39.13]}},
+    {"type": "Feature", "properties": {"name": "重庆", "theme": "西南核心"}, "geometry": {"type": "Point", "coordinates": [106.55, 29.56]}},
+    {"type": "Feature", "properties": {"name": "成都", "theme": "天府之国"}, "geometry": {"type": "Point", "coordinates": [104.07, 30.67]}},
+    {"type": "Feature", "properties": {"name": "武汉", "theme": "中部枢纽"}, "geometry": {"type": "Point", "coordinates": [114.30, 30.59]}},
+    {"type": "Feature", "properties": {"name": "南京", "theme": "六朝古都"}, "geometry": {"type": "Point", "coordinates": [118.80, 32.06]}},
+    {"type": "Feature", "properties": {"name": "杭州", "theme": "数字经济"}, "geometry": {"type": "Point", "coordinates": [120.15, 30.29]}},
+    {"type": "Feature", "properties": {"name": "西安", "theme": "丝路起点"}, "geometry": {"type": "Point", "coordinates": [108.94, 34.26]}},
+    {"type": "Feature", "properties": {"name": "哈尔滨", "theme": "东北冰城"}, "geometry": {"type": "Point", "coordinates": [126.63, 45.75]}},
+    {"type": "Feature", "properties": {"name": "沈阳", "theme": "东北中心"}, "geometry": {"type": "Point", "coordinates": [123.43, 41.80]}},
+    {"type": "Feature", "properties": {"name": "大连", "theme": "北方港口"}, "geometry": {"type": "Point", "coordinates": [121.61, 38.91]}},
+    {"type": "Feature", "properties": {"name": "长春", "theme": "东北工业"}, "geometry": {"type": "Point", "coordinates": [125.32, 43.88]}},
+    {"type": "Feature", "properties": {"name": "济南", "theme": "山东省会"}, "geometry": {"type": "Point", "coordinates": [117.00, 36.67]}},
+    {"type": "Feature", "properties": {"name": "青岛", "theme": "山东港口"}, "geometry": {"type": "Point", "coordinates": [120.38, 36.07]}},
+    {"type": "Feature", "properties": {"name": "郑州", "theme": "交通枢纽"}, "geometry": {"type": "Point", "coordinates": [113.65, 34.76]}},
+    {"type": "Feature", "properties": {"name": "长沙", "theme": "中部崛起"}, "geometry": {"type": "Point", "coordinates": [112.97, 28.23]}},
+    {"type": "Feature", "properties": {"name": "福州", "theme": "福建省会"}, "geometry": {"type": "Point", "coordinates": [119.30, 26.08]}},
+    {"type": "Feature", "properties": {"name": "厦门", "theme": "对台前沿"}, "geometry": {"type": "Point", "coordinates": [118.09, 24.48]}},
+    {"type": "Feature", "properties": {"name": "昆明", "theme": "春城"}, "geometry": {"type": "Point", "coordinates": [102.83, 25.02]}},
+    {"type": "Feature", "properties": {"name": "贵阳", "theme": "大数据中心"}, "geometry": {"type": "Point", "coordinates": [106.71, 26.65]}},
+    {"type": "Feature", "properties": {"name": "南宁", "theme": "东盟门户"}, "geometry": {"type": "Point", "coordinates": [108.37, 22.82]}},
+    {"type": "Feature", "properties": {"name": "兰州", "theme": "黄河穿城"}, "geometry": {"type": "Point", "coordinates": [103.83, 36.06]}},
+    {"type": "Feature", "properties": {"name": "乌鲁木齐", "theme": "西北重镇"}, "geometry": {"type": "Point", "coordinates": [87.62, 43.83]}},
+    {"type": "Feature", "properties": {"name": "拉萨", "theme": "雪域高原"}, "geometry": {"type": "Point", "coordinates": [91.13, 29.65]}},
+    {"type": "Feature", "properties": {"name": "呼和浩特", "theme": "草原城市"}, "geometry": {"type": "Point", "coordinates": [111.75, 40.84]}},
+    {"type": "Feature", "properties": {"name": "银川", "theme": "塞上江南"}, "geometry": {"type": "Point", "coordinates": [106.23, 38.49]}},
+    {"type": "Feature", "properties": {"name": "西宁", "theme": "青藏门户"}, "geometry": {"type": "Point", "coordinates": [101.78, 36.62]}},
+    {"type": "Feature", "properties": {"name": "太原", "theme": "煤都"}, "geometry": {"type": "Point", "coordinates": [112.55, 37.87]}},
+    {"type": "Feature", "properties": {"name": "合肥", "theme": "科教基地"}, "geometry": {"type": "Point", "coordinates": [117.28, 31.86]}},
+    {"type": "Feature", "properties": {"name": "南昌", "theme": "赣江之滨"}, "geometry": {"type": "Point", "coordinates": [115.86, 28.68]}},
+    {"type": "Feature", "properties": {"name": "石家庄", "theme": "河北省会"}, "geometry": {"type": "Point", "coordinates": [114.51, 38.04]}},
+    {"type": "Feature", "properties": {"name": "海口", "theme": "自贸港"}, "geometry": {"type": "Point", "coordinates": [110.35, 20.02]}},
+    {"type": "Feature", "properties": {"name": "三亚", "theme": "热带旅游"}, "geometry": {"type": "Point", "coordinates": [109.51, 18.25]}},
+    {"type": "Feature", "properties": {"name": "香港", "theme": "国际金融"}, "geometry": {"type": "Point", "coordinates": [114.17, 22.28]}},
+    {"type": "Feature", "properties": {"name": "澳门", "theme": "特别行政区"}, "geometry": {"type": "Point", "coordinates": [113.54, 22.20]}},
+    {"type": "Feature", "properties": {"name": "台北", "theme": "宝岛城市"}, "geometry": {"type": "Point", "coordinates": [121.57, 25.04]}},
+
+    {"type": "Feature", "properties": {"name": "鹿特丹", "theme": "港口节点"}, "geometry": {"type": "Point", "coordinates": [4.48, 51.92]}},
+    {"type": "Feature", "properties": {"name": "伊斯坦布尔", "theme": "海峡通道"}, "geometry": {"type": "Point", "coordinates": [28.97, 41.01]}},
+    {"type": "Feature", "properties": {"name": "霍尔木兹海峡", "theme": "战略位置"}, "geometry": {"type": "Point", "coordinates": [56.28, 26.56]}},
+    {"type": "Feature", "properties": {"name": "新加坡", "theme": "航运枢纽"}, "geometry": {"type": "Point", "coordinates": [103.82, 1.35]}},
+    {"type": "Feature", "properties": {"name": "东京", "theme": "亚洲都市"}, "geometry": {"type": "Point", "coordinates": [139.69, 35.69]}},
+    {"type": "Feature", "properties": {"name": "首尔", "theme": "韩国首都"}, "geometry": {"type": "Point", "coordinates": [126.98, 37.57]}},
+    {"type": "Feature", "properties": {"name": "莫斯科", "theme": "俄罗斯首都"}, "geometry": {"type": "Point", "coordinates": [37.62, 55.76]}},
+    {"type": "Feature", "properties": {"name": "纽约", "theme": "世界金融中心"}, "geometry": {"type": "Point", "coordinates": [-74.01, 40.71]}},
+    {"type": "Feature", "properties": {"name": "伦敦", "theme": "欧洲金融中心"}, "geometry": {"type": "Point", "coordinates": [-0.12, 51.51]}},
+    {"type": "Feature", "properties": {"name": "巴黎", "theme": "文化之都"}, "geometry": {"type": "Point", "coordinates": [2.35, 48.86]}},
+    {"type": "Feature", "properties": {"name": "开罗", "theme": "非洲门户"}, "geometry": {"type": "Point", "coordinates": [31.24, 30.04]}},
+    {"type": "Feature", "properties": {"name": "悉尼", "theme": "大洋洲中心"}, "geometry": {"type": "Point", "coordinates": [151.21, -33.87]}},
+    {"type": "Feature", "properties": {"name": "孟买", "theme": "南亚门户"}, "geometry": {"type": "Point", "coordinates": [72.88, 19.08]}},
+    {"type": "Feature", "properties": {"name": "雅加达", "theme": "东南亚大都市"}, "geometry": {"type": "Point", "coordinates": [106.85, -6.21]}},
+    {"type": "Feature", "properties": {"name": "曼谷", "theme": "中南半岛"}, "geometry": {"type": "Point", "coordinates": [100.50, 13.76]}}
   ]
 }

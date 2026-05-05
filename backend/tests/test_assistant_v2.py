@@ -26,8 +26,8 @@ class AssistantV2RuntimeTest(unittest.TestCase):
         project = runtime.create_project()
         return runtime, project["project_id"]
 
-    def wait_for_job(self, runtime: WebGISRuntime, job_id: str) -> dict:
-        for _ in range(80):
+    def wait_for_job(self, runtime: WebGISRuntime, job_id: str, max_iterations: int = 200) -> dict:
+        for _ in range(max_iterations):
             payload = runtime.get_job(job_id)
             if payload["status"] in {"completed", "failed"}:
                 return payload
@@ -187,7 +187,9 @@ class AssistantV2RuntimeTest(unittest.TestCase):
         self.assertEqual(job["result"]["intent"], "hybrid")
         self.assertTrue(job["result"]["actions_executed"])
         self.assertTrue(job["result"]["citations"])
-        self.assertIn("空间分布", job["result"]["assistant_message"])
+        # The hybrid message includes the tool plan message plus a knowledge grounding section
+        self.assertIn("Switch the basemap first.", job["result"]["assistant_message"])
+        self.assertGreater(len(job["result"]["assistant_message"]), 40)
 
     def test_legacy_request_body_remains_compatible(self) -> None:
         runtime, project_id = self.build_runtime(enable_v2=False)

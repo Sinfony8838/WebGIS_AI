@@ -21,6 +21,7 @@ from .services.poi import PoiService
 from .services.qgis_bridge import QGIS_ALLOWED_TOOLS, QgisBridgeClient
 from .services.resource_search import ResourceSearchService
 from .services.session_engine import AssistantSessionEngine
+from .services.teaching_maps import TeachingMapService
 from .services.templates import DISABLED_TEMPLATE_IDS, TemplateService
 from .services.vision import MapVisionService
 from .store import RuntimeStore
@@ -45,6 +46,9 @@ class WebGISRuntime:
         self.vision_service = MapVisionService(self.config)
         self.minimax_client = MiniMaxClient(self.config)
         self.qgis_bridge = QgisBridgeClient(self.config)
+        self.teaching_map_service = TeachingMapService(self.config, self.store)
+        self.assistant_service.teaching_map_service = self.teaching_map_service
+        self.assistant_service.minimax_client = self.minimax_client
         self.llm_planner = LLMPlanner(self.minimax_client, self.assistant_service, self.qgis_bridge)
         self.session_engine = AssistantSessionEngine(
             self.config,
@@ -54,6 +58,7 @@ class WebGISRuntime:
             self._execute_assistant_action,
             self._execute_qgis_action,
         )
+        self.session_engine.set_resource_search(self.resource_search_service)
         self._normalize_loaded_projects()
 
     def health(self) -> Dict[str, Any]:
@@ -84,6 +89,17 @@ class WebGISRuntime:
                 "item_count": len(self.knowledge_base_service.get_manifest().get("items", [])),
             },
         }
+
+    def list_teaching_maps(self) -> Dict[str, Any]:
+        return self.teaching_map_service.list_maps()
+
+    def toggle_teaching_map(self, project_id: str, map_id: str, visible: bool = True) -> Dict[str, Any]:
+        self._require_project(project_id)
+        return self.teaching_map_service.toggle_overlay(project_id, map_id, visible)
+
+    def get_active_teaching_maps(self, project_id: str) -> Dict[str, Any]:
+        self._require_project(project_id)
+        return {"status": "success", "active": self.teaching_map_service.get_active_overlays(project_id)}
 
     def kb_manifest(self) -> Dict[str, Any]:
         return self.knowledge_base_service.get_manifest()
@@ -792,7 +808,14 @@ class WebGISRuntime:
         response = self.qgis_bridge.execute(tool_name, params)
         status = str(response.get("status") or "")
         if status and status not in {"success", "ok"}:
-            raise ValueError(str(response.get("message") or f"QGIS tool failed: {tool_name}"))
+            error_message = str(response.get("message") or f"QGIS tool failed: {tool_name}")
+            if tool_name == "set_style" and "dedicated tools" in error_message.lower():
+                return {
+                    "assistant_message": "QGIS 插件已拒绝通用 set_style（复杂专题样式需专用工具），该步骤已跳过并继续执行。",
+                    "qgis_response": response,
+                    "artifacts": [],
+                }
+            raise ValueError(error_message)
         message = str(response.get("message") or f"QGIS 工具 {tool_name} 已执行。")
         return {"assistant_message": message, "qgis_response": response, "artifacts": []}
 
@@ -905,6 +928,33 @@ class WebGISRuntime:
                 "assistant_message": self.assistant_service.build_poi_hint(result["keyword"], len(result["items"])),
                 "artifacts": [{"artifact_type": "assistant_note", "title": "POI 检索结果", "path": str(note), "metadata": {"public_url": self.config.public_url_for_path(note)}}],
             }
+        if tool_name == "toggle_teaching_map":
+            result = self.toggle_teaching_map(project_id, params["map_id"], params.get("visible", True))
+            layer = result.get("layer")
+            name = layer["name"] if layer else params["map_id"]
+            visible = params.get("visible", True)
+            state_text = "叠加" if visible else "隐藏"
+            # Also set view to the recommended area when showing a teaching map
+            view = result.get("view", {})
+            if visible and view.get("center") and view.get("zoom"):
+                self.store.set_view(project_id, view)
+            return {
+                "assistant_message": f'教学地图"{name}"已{state_text}。',
+                "view": view,
+                "artifacts": [],
+            }
+        if tool_name == "open_material":
+            material = params.get("material") if isinstance(params.get("material"), dict) else {}
+            if not material:
+                material = self._find_kb_material(str(params.get("material_id") or ""))
+            if not material:
+                raise KeyError(f"Unknown teaching material: {params.get('material_id') or ''}")
+            title = str(material.get("title") or "课堂资料")
+            return {
+                "assistant_message": f"已打开课堂资料“{title}”。",
+                "ui_actions": [{"type": "open_material", "title": title, "materials": [material]}],
+                "artifacts": [],
+            }
         raise ValueError(f"Unsupported assistant tool: {tool_name}")
 
     def _register_artifacts(self, project_id: str, job_id: str, artifacts: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -928,6 +978,16 @@ class WebGISRuntime:
 
     def _safe_output_stub(self, value: str) -> str:
         return "".join(ch if ch.isalnum() else "_" for ch in str(value or "note"))
+
+    def _find_kb_material(self, material_id: str) -> Dict[str, Any]:
+        if not material_id:
+            return {}
+        manifest = self.knowledge_base_service.get_manifest()
+        for item in manifest.get("items", []):
+            for material in item.get("materials", []):
+                if str(material.get("id") or "") == material_id:
+                    return material
+        return {}
 
     def _safe_upload_filename(self, filename: str) -> str:
         name = Path(filename or "material.dat").name

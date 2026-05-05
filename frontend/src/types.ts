@@ -156,6 +156,7 @@ export type KnowledgeAnswer = {
   citations: CitationRecord[];
   confidence: number;
   answer_type: string;
+  llm_used?: boolean;
 };
 
 export type AssistantMode = "knowledge" | "tool";

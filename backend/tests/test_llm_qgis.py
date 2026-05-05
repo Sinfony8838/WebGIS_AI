@@ -28,12 +28,22 @@ class _SuccessMiniMaxClient:
 
 
 class _StubQgisBridge:
-    def fallback_plan(self, message: str):  # noqa: ANN001, ANN201
+    def fallback_plan(self, message: str, qgis_layers=None):  # noqa: ANN001, ANN201
         return {
             "assistant_message": "qgis fallback",
             "target": "qgis",
             "actions": [{"tool_name": "get_layers", "tool_params": {}}],
         }
+
+    def layers(self):  # noqa: ANN201
+        return {"status": "error", "message": "stub"}
+
+
+class _StyleRejectingBridge:
+    def execute(self, tool_name: str, tool_params=None):  # noqa: ANN001, ANN201
+        if tool_name == "set_style":
+            return {"status": "error", "message": "Complex thematic styling should use dedicated tools"}
+        return {"status": "success", "message": "ok"}
 
 
 class LlmAndQgisIntegrationTest(unittest.TestCase):
@@ -85,18 +95,18 @@ class LlmAndQgisIntegrationTest(unittest.TestCase):
         self.assertEqual(plan["actions"][0]["tool_params"]["basemap_id"], "amap_imagery")
 
     def test_llm_valid_json_for_qgis_is_accepted(self) -> None:
-        payload = '{"assistant_message":"执行 QGIS 检查","target":"qgis","actions":[{"tool_name":"get_layers","tool_params":{}}]}'
+        payload = '{"assistant_message":"执行 QGIS 检查","target":"qgis","actions":[{"tool_name":"set_active_layer","tool_params":{"layer_name":"china_population_sample"}}]}'
         planner = LLMPlanner(_SuccessMiniMaxClient(payload), self.rule_planner, _StubQgisBridge())
         plan = planner.plan_actions("读取 QGIS 图层", self.project, target="qgis")
         self.assertEqual(plan["planner"], "minimax")
         self.assertEqual(plan["target"], "qgis")
-        self.assertEqual(plan["actions"][0]["tool_name"], "get_layers")
+        self.assertEqual(plan["actions"][0]["tool_name"], "set_active_layer")
 
     def test_llm_json_embedded_in_text_is_extracted(self) -> None:
         payload = (
             "Execution plan:\n"
             "```json\n"
-            '{"assistant_message":"执行 QGIS 检查","target":"qgis","actions":[{"tool_name":"get_layers","tool_params":{}}]}\n'
+            '{"assistant_message":"执行 QGIS 检查","target":"qgis","actions":[{"tool_name":"zoom_to_layer","tool_params":{"layer_name":"china_population_sample"}}]}\n'
             "```\n"
             "End."
         )
@@ -104,10 +114,10 @@ class LlmAndQgisIntegrationTest(unittest.TestCase):
         plan = planner.plan_actions("读取 QGIS 图层", self.project, target="qgis")
         self.assertEqual(plan["planner"], "minimax")
         self.assertEqual(plan["target"], "qgis")
-        self.assertEqual(plan["actions"][0]["tool_name"], "get_layers")
+        self.assertEqual(plan["actions"][0]["tool_name"], "zoom_to_layer")
 
     def test_llm_action_count_is_capped(self) -> None:
-        actions = ",".join(['{"tool_name":"get_layers","tool_params":{}}' for _ in range(25)])
+        actions = ",".join(['{"tool_name":"set_active_layer","tool_params":{"layer_name":"china_population_sample"}}' for _ in range(25)])
         payload = '{"assistant_message":"批量动作","target":"qgis","actions":[' + actions + "]}"
         planner = LLMPlanner(_SuccessMiniMaxClient(payload), self.rule_planner, _StubQgisBridge())
         plan = planner.plan_actions("读取 QGIS 图层", self.project, target="qgis")
@@ -209,6 +219,139 @@ class LlmAndQgisIntegrationTest(unittest.TestCase):
         self.assertIsNotNone(current)
         self.assertEqual(current.result.get("planner"), "rule_fallback")
         self.assertIn("minimax unavailable", current.result.get("llm_fallback_reason", ""))
+
+
+class QgisFallbackPlanTest(unittest.TestCase):
+    """Tests for the expanded fallback_plan in QgisBridgeClient."""
+
+    def setUp(self) -> None:
+        self.config = AppConfig()
+        self.bridge = QgisBridgeClient(self.config)
+        self.sample_qgis_layers = [
+            {"id": "province_population_2020_id", "name": "province_population_2020", "type": 0, "geometry_type": "polygon"},
+            {"id": "china_population_sample_id", "name": "china_population_sample", "type": 0, "geometry_type": "point"},
+            {"id": "china_migration_sample_id", "name": "china_migration_sample", "type": 0, "geometry_type": "point"},
+            {"id": "china_provinces_id", "name": "china_provinces", "type": 0, "geometry_type": "polygon"},
+            {"id": "chn_pd_2010_1km_UNadj_id", "name": "chn_pd_2010_1km_UNadj", "type": 1, "geometry_type": "raster"},
+            {"id": "chn_ppp_2000_1km_Aggregated_UNadj_id", "name": "chn_ppp_2000_1km_Aggregated_UNadj", "type": 1, "geometry_type": "raster"},
+        ]
+
+    def test_fallback_plan_create_china_population_map(self) -> None:
+        plan = self.bridge.fallback_plan("制作中国人口分布图", qgis_layers=self.sample_qgis_layers)
+        self.assertEqual(plan["target"], "qgis")
+        # Should have visualization actions, not just get_layers
+        self.assertGreater(len(plan["actions"]), 1, "fallback should plan more than just get_layers")
+        tool_names = [a["tool_name"] for a in plan["actions"]]
+        self.assertNotIn("set_style", tool_names, "population fallback should avoid rejected generic set_style")
+
+    def test_fallback_plan_create_heatmap(self) -> None:
+        plan = self.bridge.fallback_plan("生成热力图")
+        tool_names = [a["tool_name"] for a in plan["actions"]]
+        self.assertIn("create_heatmap", tool_names)
+
+    def test_fallback_plan_create_flow_arrows(self) -> None:
+        plan = self.bridge.fallback_plan("绘制流向图")
+        tool_names = [a["tool_name"] for a in plan["actions"]]
+        self.assertIn("create_flow_arrows", tool_names)
+
+    def test_fallback_plan_shanghai_specific(self) -> None:
+        plan = self.bridge.fallback_plan("制作上海人口密度图")
+        tool_names = [a["tool_name"] for a in plan["actions"]]
+        self.assertIn("create_heatmap", tool_names)
+        self.assertIn("export_map", tool_names)
+
+    def test_fallback_plan_extract_layer_hint(self) -> None:
+        hint = QgisBridgeClient._extract_layer_hint("制作中国人口分布图")
+        self.assertIn("中国人口", hint)
+
+    def test_fallback_plan_matches_actual_qgis_layer(self) -> None:
+        """When QGIS layers are available, fallback should pick the best matching layer."""
+        plan = self.bridge.fallback_plan("制作中国人口分布图", qgis_layers=self.sample_qgis_layers)
+        self.assertEqual(plan["target"], "qgis")
+        # Should reference an actual layer name or id from QGIS
+        all_params = [a.get("tool_params", {}) for a in plan["actions"]]
+        layer_names_used = [str(p.get("layer_name")) for p in all_params if p.get("layer_name")]
+        layer_ids_used = [str(p.get("layer_id")) for p in all_params if p.get("layer_id")]
+        self.assertTrue(layer_names_used or layer_ids_used, "should reference a QGIS layer name or id")
+        # The matched layer should be one from the actual QGIS layers (name or id)
+        qgis_names = {layer["name"] for layer in self.sample_qgis_layers}
+        qgis_ids = {layer["id"] for layer in self.sample_qgis_layers}
+        self.assertTrue(
+            any(name in qgis_names for name in layer_names_used) or any(layer_id in qgis_ids for layer_id in layer_ids_used),
+            f"layer refs names={layer_names_used}, ids={layer_ids_used} should include actual QGIS layers",
+        )
+
+    def test_match_qgis_layer_picks_population_layer(self) -> None:
+        matched = QgisBridgeClient._match_qgis_layer("制作中国人口分布图", self.sample_qgis_layers)
+        self.assertIn("population", matched.lower())
+
+    def test_match_qgis_layer_picks_migration_layer(self) -> None:
+        matched = QgisBridgeClient._match_qgis_layer("绘制人口迁移流向图", self.sample_qgis_layers)
+        self.assertIn("migration", matched.lower())
+
+    def test_llm_get_layers_only_is_enriched(self) -> None:
+        """When MiniMax returns only get_layers, the plan should be enriched with fallback actions."""
+        payload = '{"assistant_message":"先查看图层","target":"qgis","actions":[{"tool_name":"get_layers","tool_params":{}}]}'
+        planner = LLMPlanner(_SuccessMiniMaxClient(payload), AssistantService(self.config), self.bridge)
+        plan = planner.plan_actions("读取QGIS图层", ProjectRecord.create(base_map=self.config.default_basemap()), target="qgis")
+        # Should NOT be just get_layers; should be enriched
+        tool_names = [a["tool_name"] for a in plan["actions"]]
+        self.assertGreater(len(tool_names), 0, "enriched plan should have actions")
+        self.assertEqual(plan["planner"], "minimax_enriched")
+
+    def test_population_request_uses_qgis_rule_preflight(self) -> None:
+        payload = '{"assistant_message":"先查看图层","target":"qgis","actions":[{"tool_name":"get_layers","tool_params":{}}]}'
+        planner = LLMPlanner(_SuccessMiniMaxClient(payload), AssistantService(self.config), self.bridge)
+        plan = planner.plan_actions("根据QGIS中数据，制作中国人口分布图", ProjectRecord.create(base_map=self.config.default_basemap()), target="qgis")
+        self.assertEqual(plan["planner"], "qgis_rule_preflight")
+        tool_names = [a["tool_name"] for a in plan["actions"]]
+        self.assertNotIn("set_style", tool_names)
+
+
+class QgisExecutionGuardTest(unittest.TestCase):
+    def test_runtime_skips_known_set_style_rejection(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        root_dir = Path(__file__).resolve().parents[2]
+        config = AppConfig(root_dir=root_dir)
+        config.data_dir = Path(temp_dir.name) / "backend" / "data"
+        config.state_dir = config.data_dir / "state"
+        config.uploads_dir = config.data_dir / "uploads"
+        config.outputs_dir = config.data_dir / "outputs"
+        config.state_file = config.state_dir / "runtime.json"
+        config.ensure_dirs()
+        runtime = WebGISRuntime(config=config, store=RuntimeStore(config.state_file))
+        runtime.qgis_bridge = _StyleRejectingBridge()
+        result = runtime._execute_qgis_action(
+            {"tool_name": "set_style", "tool_params": {"layer_name": "province_population_2020", "style_type": "graduated"}}
+        )
+        self.assertIn("已拒绝通用 set_style", result["assistant_message"])
+        self.assertEqual(result["qgis_response"]["status"], "error")
+
+
+class ToolActionHintsTest(unittest.TestCase):
+    """Tests that new action verbs are recognized by ToolPlanner guard."""
+
+    def test_create_verbs_in_hints(self) -> None:
+        from backend.app.services.session_engine import TOOL_ACTION_HINTS, _contains_any
+
+        messages = [
+            "制作中国人口分布图",
+            "生成热力图",
+            "创建一张地图",
+            "绘制流向箭头",
+            "添加一个图层",
+            "删除当前图层",
+            "裁剪栅格数据",
+            "合并图层",
+            "计算面积",
+            "统计人口数据",
+        ]
+        for msg in messages:
+            self.assertTrue(
+                _contains_any(msg, TOOL_ACTION_HINTS),
+                f"'{msg}' should match TOOL_ACTION_HINTS but did not",
+            )
 
 
 if __name__ == "__main__":

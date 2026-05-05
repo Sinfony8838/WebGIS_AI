@@ -110,6 +110,10 @@ class LessonResourceSetPatchRequest(BaseModel):
     patch: Dict[str, Any] = Field(default_factory=dict)
 
 
+class TeachingMapToggleRequest(BaseModel):
+    visible: bool = True
+
+
 @app.get("/health")
 def health() -> Dict[str, Any]:
     return runtime.health()
@@ -181,6 +185,27 @@ def get_public_file(file_path: str) -> FileResponse:
     if not resolved.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(resolved)
+
+
+@app.get("/teaching-maps")
+def list_teaching_maps() -> Dict[str, Any]:
+    return runtime.list_teaching_maps()
+
+
+@app.post("/projects/{project_id}/teaching-maps/{map_id}/toggle")
+def toggle_teaching_map(project_id: str, map_id: str, body: TeachingMapToggleRequest) -> Dict[str, Any]:
+    try:
+        return runtime.toggle_teaching_map(project_id, map_id, body.visible)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/projects/{project_id}/teaching-maps/active")
+def get_active_teaching_maps(project_id: str) -> Dict[str, Any]:
+    try:
+        return runtime.get_active_teaching_maps(project_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/kb/manifest")

@@ -346,3 +346,51 @@ export async function activateLessonResourceSet(
     body: JSON.stringify({ patch })
   });
 }
+
+
+// ── Teaching Maps ──────────────────────────────────────────
+
+export interface TeachingMapItem {
+  id: string;
+  name: string;
+  category: string;
+  category_order: number;
+  bounds: [number, number, number, number];
+  view: { center: [number, number]; zoom: number };
+  opacity: number;
+  keywords: string[];
+  asset_url: string;
+}
+
+export interface TeachingMapsResponse {
+  status: string;
+  items: TeachingMapItem[];
+}
+
+export interface TeachingMapToggleResponse {
+  status: string;
+  layer: Record<string, any> | null;
+  view: { center?: [number, number]; zoom?: number };
+}
+
+export async function fetchTeachingMaps(): Promise<TeachingMapsResponse> {
+  return requestJson<TeachingMapsResponse>("/teaching-maps");
+}
+
+export async function toggleTeachingMap(
+  projectId: string,
+  mapId: string,
+  visible: boolean
+): Promise<TeachingMapToggleResponse> {
+  return requestJson<TeachingMapToggleResponse>(`/projects/${projectId}/teaching-maps/${encodeURIComponent(mapId)}/toggle`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ visible })
+  });
+}
+
+export async function fetchActiveTeachingMaps(
+  projectId: string
+): Promise<{ status: string; active: string[] }> {
+  return requestJson<{ status: string; active: string[] }>(`/projects/${projectId}/teaching-maps/active`);
+}

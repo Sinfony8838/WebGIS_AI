@@ -1,0 +1,169 @@
+{
+  "items": [
+    {
+      "id": "shanghai_population_density",
+      "name": "上海人口密度分布图",
+      "filename": "shanghai_population_density.svg",
+      "category": "人口",
+      "category_order": 1,
+      "bounds": [120.85, 30.65, 122.2, 31.9],
+      "view": {"center": [121.47, 31.23], "zoom": 8},
+      "opacity": 0.88,
+      "keywords": ["上海人口密度", "上海人口密度分布图", "上海人口分布", "课前材料"]
+    },
+    {
+      "id": "china_population_hu_line",
+      "name": "中国人口分布图（胡焕庸线）",
+      "filename": "中国人口分布图（带胡焕庸线）.jpg",
+      "category": "人口",
+      "category_order": 1,
+      "bounds": [76, 8, 137, 53],
+      "view": {"center": [104, 35], "zoom": 4},
+      "opacity": 0.82,
+      "keywords": ["中国人口", "人口分布图", "中国人口密度分布图", "人口密度分布图", "胡焕庸线", "人口密度图"]
+    },
+    {
+      "id": "world_population",
+      "name": "世界人口的分布",
+      "filename": "世界人口的分布.jpg",
+      "category": "人口",
+      "category_order": 1,
+      "bounds": [-180, -62, 180, 76],
+      "view": {"center": [0, 20], "zoom": 2},
+      "opacity": 0.80,
+      "keywords": ["世界人口", "全球人口", "世界人口分布"]
+    },
+    {
+      "id": "northeast_population",
+      "name": "东北地区人口空间分布",
+      "filename": "东北地区人口空间分布.jpg",
+      "category": "人口",
+      "category_order": 1,
+      "bounds": [115, 36, 136, 55],
+      "view": {"center": [126, 45], "zoom": 6},
+      "opacity": 0.82,
+      "keywords": ["东北人口", "东北地区人口"]
+    },
+    {
+      "id": "finland_population",
+      "name": "芬兰人口分布图",
+      "filename": "芬兰人口分布图.jpg",
+      "category": "人口",
+      "category_order": 1,
+      "bounds": [17, 54, 33, 72],
+      "view": {"center": [26, 64], "zoom": 5},
+      "opacity": 0.82,
+      "keywords": ["芬兰人口", "芬兰人口分布"]
+    },
+    {
+      "id": "china_jan_temperature",
+      "name": "中国1月平均气温分布图",
+      "filename": "中国1月平均气温分布图.jpg",
+      "category": "气候",
+      "category_order": 2,
+      "bounds": [72, 10, 136, 55],
+      "view": {"center": [104, 35], "zoom": 4},
+      "opacity": 0.82,
+      "keywords": ["1月气温", "一月气温", "冬季气温", "1月平均气温"]
+    },
+    {
+      "id": "china_jul_temperature",
+      "name": "中国7月平均气温图",
+      "filename": "中国7月平均气温图.jpg",
+      "category": "气候",
+      "category_order": 2,
+      "bounds": [72, 10, 136, 55],
+      "view": {"center": [104, 35], "zoom": 4},
+      "opacity": 0.82,
+      "keywords": ["7月气温", "七月气温", "夏季气温", "7月平均气温"]
+    },
+    {
+      "id": "china_precipitation",
+      "name": "中国年降水量分布图",
+      "filename": "中国年降水量分布图.jpg",
+      "category": "气候",
+      "category_order": 2,
+      "bounds": [72, 10, 136, 55],
+      "view": {"center": [104, 35], "zoom": 4},
+      "opacity": 0.82,
+      "keywords": ["年降水量", "年平均降水量", "中国年平均降水量图", "降水分布", "降水量图", "中国降水"]
+    },
+    {
+      "id": "china_temperature_zones",
+      "name": "中国温度带划分图",
+      "filename": "中国温度带划分图.jpg",
+      "category": "气候",
+      "category_order": 2,
+      "bounds": [72, 10, 136, 55],
+      "view": {"center": [104, 35], "zoom": 4},
+      "opacity": 0.82,
+      "keywords": ["温度带", "温度带划分", "中国温度带"]
+    },
+    {
+      "id": "finland_climate",
+      "name": "芬兰降水气温图",
+      "filename": "芬兰降水气温图.jpg",
+      "category": "气候",
+      "category_order": 2,
+      "bounds": [17, 54, 33, 72],
+      "view": {"center": [26, 64], "zoom": 5},
+      "opacity": 0.82,
+      "keywords": ["芬兰气候", "芬兰降水", "芬兰气温"]
+    },
+    {
+      "id": "china_topography",
+      "name": "中国地形图",
+      "filename": "中国地形图.jpg",
+      "category": "地形",
+      "category_order": 3,
+      "bounds": [72, 12, 136, 55],
+      "view": {"center": [104, 35], "zoom": 4},
+      "opacity": 0.82,
+      "keywords": ["中国地形", "地形图", "地形分布"]
+    },
+    {
+      "id": "finland_topography",
+      "name": "芬兰地形图",
+      "filename": "芬兰地形图.jpg",
+      "category": "地形",
+      "category_order": 3,
+      "bounds": [16, 54, 38, 72],
+      "view": {"center": [26, 64], "zoom": 5},
+      "opacity": 0.82,
+      "keywords": ["芬兰地形", "芬兰地形图"]
+    },
+    {
+      "id": "northeast_soil",
+      "name": "东北地区土壤类型分布",
+      "filename": "东北地区土壤类型分布.jpg",
+      "category": "地形",
+      "category_order": 3,
+      "bounds": [113, 28, 138, 57],
+      "view": {"center": [126, 45], "zoom": 6},
+      "opacity": 0.82,
+      "keywords": ["东北土壤", "土壤类型", "土壤分布"]
+    },
+    {
+      "id": "tarim_basin_oasis",
+      "name": "塔里木盆地绿洲与城镇分布",
+      "filename": "塔里木盆地绿洲与城镇分布.jpg",
+      "category": "区域",
+      "category_order": 4,
+      "bounds": [75, 35, 94, 43],
+      "view": {"center": [84, 39], "zoom": 6},
+      "opacity": 0.82,
+      "keywords": ["塔里木", "塔里木盆地", "绿洲", "城镇分布"]
+    },
+    {
+      "id": "remote_sensing",
+      "name": "遥感影像",
+      "filename": "遥感影像.jpg",
+      "category": "区域",
+      "category_order": 4,
+      "bounds": [-180, -62, 180, 76],
+      "view": {"center": [0, 20], "zoom": 2},
+      "opacity": 0.80,
+      "keywords": ["遥感", "遥感影像", "卫星影像"]
+    }
+  ]
+}
