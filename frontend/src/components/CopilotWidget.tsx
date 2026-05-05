@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import type { ChatMessage, JobRecord } from "../types";
+import { getSpeechRecognitionConstructor, getSpeechRecognitionErrorMessage, type BrowserSpeechRecognition } from "../speechRecognition";
+import type { AssistantMode, ChatMessage, JobRecord } from "../types";
 
 type PanelRect = {
   x: number;
@@ -14,12 +15,19 @@ type Point = {
   y: number;
 };
 
+type VoiceStatus = "idle" | "listening" | "unsupported";
+
 type Props = {
+  assistantMode: AssistantMode;
   chatLog: ChatMessage[];
   currentJob: JobRecord | null;
   inputValue: string;
   onInputChange: (value: string) => void;
+  onAssistantModeChange: (mode: AssistantMode) => void;
   onSubmit: () => void;
+  onConfirm: (confirmationId: string, decision?: "approve" | "reject") => void;
+  onVoiceSubmit: (transcript: string) => void;
+  onVoiceNotice: (tone: "info" | "success" | "error", title: string, detail?: string) => void;
   busy: boolean;
 };
 
@@ -36,6 +44,8 @@ const MIN_HEIGHT = 420;
 const PANEL_STORAGE_KEY = "webgis-ai-copilot-panel";
 const ORB_STORAGE_KEY = "webgis-ai-copilot-orb";
 const STATE_STORAGE_KEY = "webgis-ai-copilot-minimized";
+const VOICE_IDLE_TEXT = "点击麦克风开始语音控制。";
+const VOICE_UNSUPPORTED_TEXT = "当前浏览器不支持语音控制，请使用桌面版 Chrome 或 Edge。";
 
 function safeWindowWidth(): number {
   return typeof window === "undefined" ? 1440 : window.innerWidth;
@@ -184,7 +194,28 @@ function snaplessOrb(point: Point): Point {
   };
 }
 
-export function CopilotWidget({ chatLog, currentJob, inputValue, onInputChange, onSubmit, busy }: Props) {
+function initialVoiceStatus(supported: boolean): VoiceStatus {
+  return supported ? "idle" : "unsupported";
+}
+
+function initialVoiceText(supported: boolean): string {
+  return supported ? VOICE_IDLE_TEXT : VOICE_UNSUPPORTED_TEXT;
+}
+
+export function CopilotWidget({
+  assistantMode = "tool",
+  chatLog,
+  currentJob,
+  inputValue,
+  onInputChange,
+  onAssistantModeChange = () => undefined,
+  onSubmit,
+  onConfirm = () => undefined,
+  onVoiceSubmit,
+  onVoiceNotice,
+  busy
+}: Props) {
+  const speechSupported = useMemo(() => Boolean(getSpeechRecognitionConstructor()), []);
   const [minimized, setMinimized] = useState<boolean>(() => readStorage(STATE_STORAGE_KEY, false));
   const [panelRect, setPanelRect] = useState<PanelRect>(() =>
     normalizePanelRect(readStorage<PanelRect | null>(PANEL_STORAGE_KEY, null))
@@ -193,7 +224,14 @@ export function CopilotWidget({ chatLog, currentJob, inputValue, onInputChange, 
     snapOrb(normalizeOrbPosition(readStorage<Point | null>(ORB_STORAGE_KEY, null)))
   );
   const [unreadCount, setUnreadCount] = useState(0);
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>(() => initialVoiceStatus(speechSupported));
+  const [voiceStatusText, setVoiceStatusText] = useState<string>(() => initialVoiceText(speechSupported));
+  const [lastTranscript, setLastTranscript] = useState("");
   const preventRestoreOnClickRef = useRef(false);
+  const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const manualVoiceStopRef = useRef(false);
+  const voiceTranscriptRef = useRef("");
+  const voiceErrorRef = useRef(false);
   const dragStateRef = useRef<
     | {
         kind: "orb" | "panel" | "resize";
@@ -210,6 +248,13 @@ export function CopilotWidget({ chatLog, currentJob, inputValue, onInputChange, 
   const lastSeenMessages = useRef(chatLog.length);
 
   const jobStages = useMemo(() => (currentJob ? Object.entries(currentJob.stages) : []), [currentJob]);
+  const isListening = voiceStatus === "listening";
+  const citations = currentJob?.result?.citations || currentJob?.result?.knowledge?.citations || [];
+  const knowledge = currentJob?.result?.knowledge || null;
+  const plannedActions = currentJob?.result?.actions_planned || [];
+  const confirmationId = String(currentJob?.result?.confirmation_id || "");
+  const requiresConfirmation = Boolean(currentJob?.result?.requires_confirmation && confirmationId);
+  const compactLayout = panelRect.height < 560 || panelRect.width < 560;
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -243,6 +288,22 @@ export function CopilotWidget({ chatLog, currentJob, inputValue, onInputChange, 
     }
     lastSeenMessages.current = chatLog.length;
   }, [chatLog.length, minimized]);
+
+  useEffect(() => {
+    return () => {
+      recognitionRef.current?.stop();
+      recognitionRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!busy || !recognitionRef.current) {
+      return;
+    }
+    manualVoiceStopRef.current = true;
+    setVoiceStatusText("当前有任务在执行，语音输入已停止。");
+    recognitionRef.current.stop();
+  }, [busy]);
 
   function updateDrag(pointer: Point) {
     const state = dragStateRef.current;
@@ -367,6 +428,105 @@ export function CopilotWidget({ chatLog, currentJob, inputValue, onInputChange, 
     setMinimized(false);
   }
 
+  function stopVoiceRecognition(manualStop = true) {
+    if (!recognitionRef.current) {
+      return;
+    }
+    manualVoiceStopRef.current = manualStop;
+    recognitionRef.current.stop();
+  }
+
+  function handleVoiceToggle() {
+    if (isListening) {
+      setVoiceStatusText("语音输入已停止。");
+      stopVoiceRecognition(true);
+      return;
+    }
+
+    const RecognitionConstructor = getSpeechRecognitionConstructor();
+    if (!RecognitionConstructor) {
+      setVoiceStatus("unsupported");
+      setVoiceStatusText(VOICE_UNSUPPORTED_TEXT);
+      onVoiceNotice("error", "当前浏览器不支持语音控制", "请使用桌面版 Chrome 或 Edge 进行课堂演示。");
+      return;
+    }
+
+    const recognition = new RecognitionConstructor();
+    recognition.lang = "zh-CN";
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    voiceTranscriptRef.current = "";
+    voiceErrorRef.current = false;
+    manualVoiceStopRef.current = false;
+
+    recognition.onresult = (event) => {
+      const results = Array.from(event.results || []);
+      const transcript = results
+        .slice(event.resultIndex || 0)
+        .filter((item) => item?.isFinal)
+        .map((item) => item[0]?.transcript || "")
+        .join("")
+        .trim();
+
+      if (!transcript) {
+        return;
+      }
+
+      voiceTranscriptRef.current = transcript;
+      recognition.stop();
+    };
+
+    recognition.onerror = (event) => {
+      voiceErrorRef.current = true;
+      const { title, detail } = getSpeechRecognitionErrorMessage(event.error);
+      setVoiceStatus(speechSupported ? "idle" : "unsupported");
+      setVoiceStatusText(detail);
+      onVoiceNotice("error", title, detail);
+    };
+
+    recognition.onend = () => {
+      const transcript = voiceTranscriptRef.current.trim();
+      const stoppedManually = manualVoiceStopRef.current;
+      const hadError = voiceErrorRef.current;
+      recognitionRef.current = null;
+      voiceTranscriptRef.current = "";
+      manualVoiceStopRef.current = false;
+      voiceErrorRef.current = false;
+      setVoiceStatus(speechSupported ? "idle" : "unsupported");
+
+      if (transcript) {
+        setLastTranscript(transcript);
+        setVoiceStatusText("语音识别完成，已提交课堂指令。");
+        onVoiceSubmit(transcript);
+        return;
+      }
+
+      if (hadError) {
+        return;
+      }
+
+      if (stoppedManually) {
+        return;
+      }
+
+      const detail = "没有识别到有效语音，请点击麦克风后直接说出课堂指令。";
+      setVoiceStatusText(detail);
+      onVoiceNotice("error", "没有识别到语音", detail);
+    };
+
+    try {
+      recognitionRef.current = recognition;
+      setVoiceStatus("listening");
+      setVoiceStatusText("正在聆听课堂指令，请开始说话。");
+      recognition.start();
+    } catch (error) {
+      recognitionRef.current = null;
+      setVoiceStatus(speechSupported ? "idle" : "unsupported");
+      setVoiceStatusText("浏览器没有成功启动语音识别，请重试一次。");
+      onVoiceNotice("error", "语音识别失败", error instanceof Error ? error.message : "浏览器没有成功启动语音识别。");
+    }
+  }
+
   if (minimized) {
     return (
       <div className="copilot-orb-shell" style={{ left: orbPosition.x, top: orbPosition.y }}>
@@ -432,31 +592,81 @@ export function CopilotWidget({ chatLog, currentJob, inputValue, onInputChange, 
   }
 
   return (
-    <section className="copilot-widget" style={{ left: panelRect.x, top: panelRect.y, width: panelRect.width, height: panelRect.height }}>
+    <section
+      className={`copilot-widget${compactLayout ? " compact" : ""}`}
+      style={{ left: panelRect.x, top: panelRect.y, width: panelRect.width, height: panelRect.height }}
+    >
       <header className="copilot-widget-header" onPointerDown={(event) => startDrag("panel", event, panelRect)}>
-        <div className="copilot-widget-title">
-          <div className="copilot-avatar">
+        <div className="copilot-header-main">
+          <div className="copilot-widget-title">
+            <div className="copilot-avatar" aria-hidden="true">
             <span className="copilot-avatar-ear left" />
             <span className="copilot-avatar-ear right" />
             <span className="copilot-avatar-face">
               <span className="copilot-avatar-mouth" />
             </span>
           </div>
-          <p className="panel-tag">Classroom Copilot</p>
-          <div>
+          <div className="copilot-title-copy">
             <h2>智能助教</h2>
-            <span>{busy ? "正在同步课堂动作与图层状态。" : "地图副驾已就绪，可继续提问或触发任务。"}</span>
+          </div>
+          </div>
+          <div
+            className="assistant-mode-switch assistant-mode-switch-header"
+            role="tablist"
+            aria-label="assistant mode"
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={assistantMode === "knowledge"}
+              className={`assistant-mode-chip ${assistantMode === "knowledge" ? "active" : ""}`}
+              onClick={() => onAssistantModeChange("knowledge")}
+            >
+              知识助手
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={assistantMode === "tool"}
+              className={`assistant-mode-chip ${assistantMode === "tool" ? "active" : ""}`}
+              onClick={() => onAssistantModeChange("tool")}
+            >
+              工具助手
+            </button>
           </div>
         </div>
-        <div className="copilot-widget-actions">
+        <div className="copilot-widget-actions" onPointerDown={(event) => event.stopPropagation()}>
           <span className={`status-pill ${busy ? "busy" : "ready"}`}>{busy ? "执行中" : "在线"}</span>
-          <button type="button" className="mini-control" onClick={() => setMinimized(true)} aria-label="最小化助教">
-            −
+          <button type="button" className="mini-control copilot-collapse" onClick={() => setMinimized(true)} aria-label="最小化助教">
+            －
           </button>
         </div>
       </header>
 
       <div className="copilot-widget-body">
+        <div className="copilot-widget-content">
+          {false && (<>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={assistantMode === "knowledge"}
+            className={`assistant-mode-chip ${assistantMode === "knowledge" ? "active" : ""}`}
+            onClick={() => onAssistantModeChange("knowledge")}
+          >
+            知识助手
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={assistantMode === "tool"}
+            className={`assistant-mode-chip ${assistantMode === "tool" ? "active" : ""}`}
+            onClick={() => onAssistantModeChange("tool")}
+          >
+            工具助手
+          </button>
+          </>)}
+
         {jobStages.length ? (
           <div className="copilot-stage-strip">
             {jobStages.map(([key, stage]) => (
@@ -464,6 +674,52 @@ export function CopilotWidget({ chatLog, currentJob, inputValue, onInputChange, 
                 <strong>{stageLabels[key] || key}</strong>
                 <span>{stage.summary || "等待中"}</span>
               </div>
+            ))}
+          </div>
+        ) : null}
+
+        {requiresConfirmation ? (
+          <div className="copilot-confirm-card">
+            <strong>高风险操作待确认</strong>
+            <span>该计划未确认前不会执行。</span>
+            <div className="copilot-confirm-actions">
+              <button type="button" onClick={() => onConfirm(confirmationId, "approve")} disabled={busy}>
+                确认执行
+              </button>
+              <button type="button" className="secondary" onClick={() => onConfirm(confirmationId, "reject")} disabled={busy}>
+                拒绝计划
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {assistantMode === "tool" && plannedActions.length ? (
+          <div className="copilot-plan-card">
+            <strong>计划摘要</strong>
+            {plannedActions.slice(0, 3).map((item) => (
+              <span key={`${item.name}_${JSON.stringify(item.tool_params)}`}>
+                {item.name} / 风险 {item.risk_level}
+              </span>
+            ))}
+          </div>
+        ) : null}
+
+        {assistantMode === "knowledge" && knowledge ? (
+          <div className="copilot-knowledge-card">
+            <strong>回答来源：{knowledge.llm_used ? "AI 通用知识" : "本地知识库"}</strong>
+            <span>回答类型：{knowledge.answer_type}</span>
+            <span>置信度：{Math.round((knowledge.confidence || 0) * 100)}%</span>
+            {knowledge.map_grounding ? <span>基于当前地图：是</span> : null}
+          </div>
+        ) : null}
+
+        {citations.length ? (
+          <div className="copilot-citation-list">
+            <strong>引用来源</strong>
+            {citations.map((item) => (
+              <a key={`${item.title}_${item.url}`} href={item.url} target="_blank" rel="noreferrer">
+                {item.title}
+              </a>
             ))}
           </div>
         ) : null}
@@ -479,6 +735,7 @@ export function CopilotWidget({ chatLog, currentJob, inputValue, onInputChange, 
           ))}
         </div>
 
+        </div>
         <form
           className="copilot-widget-form"
           onSubmit={(event) => {
@@ -492,9 +749,24 @@ export function CopilotWidget({ chatLog, currentJob, inputValue, onInputChange, 
             placeholder="例如：解释当前视图的空间格局，或说明所选区域的区位特征。"
             onChange={(event) => onInputChange(event.target.value)}
           />
-          <button type="submit" disabled={busy || !inputValue.trim()}>
-            发送给助教
-          </button>
+          <div className="copilot-voice-row">
+            <button
+              type="button"
+              className={`copilot-voice-button ${isListening ? "listening" : ""}`}
+              aria-label={isListening ? "停止语音控制" : "开始语音控制"}
+              onClick={handleVoiceToggle}
+              disabled={busy || (!speechSupported && !isListening)}
+            >
+              {isListening ? "停止语音" : "麦克风"}
+            </button>
+            <button type="submit" disabled={busy || !inputValue.trim()}>
+              发送给助教
+            </button>
+          </div>
+          <p className={`copilot-voice-status ${voiceStatus}`} role="status">
+            {voiceStatusText}
+          </p>
+          {lastTranscript ? <p className="copilot-voice-transcript">最近转写：{lastTranscript}</p> : null}
         </form>
       </div>
 

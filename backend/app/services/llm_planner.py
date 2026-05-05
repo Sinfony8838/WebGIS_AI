@@ -26,27 +26,82 @@ class LLMPlanner:
         project: ProjectRecord,
         map_context: Optional[Dict[str, Any]] = None,
         target: str = "webgis",
+        input_mode: str = "text",
     ) -> Dict[str, Any]:
         normalized_target = target if target in {"webgis", "qgis", "auto"} else "webgis"
+        normalized_input_mode = input_mode if input_mode in {"text", "voice"} else "text"
+        if normalized_input_mode == "voice" and normalized_target == "webgis":
+            plan = self.fallback_planner.plan_voice_actions(message, project, map_context=map_context or {})
+            plan["target"] = "webgis"
+            plan["planner"] = "voice_rule" if plan.get("actions") else "voice_clarification"
+            return plan
+        if normalized_target == "webgis":
+            rule_plan = self.fallback_planner.plan_actions(message, project, map_context=map_context or {})
+            if self._should_use_rule_preflight(rule_plan):
+                rule_plan["target"] = "webgis"
+                rule_plan["planner"] = "rule_preflight"
+                return rule_plan
+
+        # Pre-fetch QGIS layers so the LLM (and fallback) know what data is available
+        qgis_layers: Optional[List[Dict[str, Any]]] = None
+        if normalized_target == "qgis":
+            qgis_layers = self._prefetch_qgis_layers()
+            if self._should_use_qgis_rule_preflight(message):
+                qgis_rule_plan = self._fallback(message, project, map_context or {}, normalized_target, qgis_layers=qgis_layers)
+                qgis_rule_plan["planner"] = "qgis_rule_preflight"
+                return qgis_rule_plan
+
         try:
             raw_content = self.minimax_client.chat_completion(
-                self._messages(message, project, map_context or {}, normalized_target),
+                self._messages(message, project, map_context or {}, normalized_target, qgis_layers=qgis_layers),
                 temperature=0.15,
             )
             parsed = self._parse_json(raw_content)
-            return self._validate_plan(parsed, normalized_target)
+            plan = self._validate_plan(parsed, normalized_target)
+            # Guard: if LLM only planned get_layers for QGIS, enrich with fallback actions
+            if normalized_target == "qgis" and self._is_get_layers_only(plan):
+                enriched = self._fallback(message, project, map_context or {}, normalized_target, qgis_layers=qgis_layers)
+                enriched["planner"] = "minimax_enriched"
+                enriched["assistant_message"] = plan.get("assistant_message") or enriched.get("assistant_message", "")
+                return enriched
+            return plan
         except Exception as exc:
-            fallback = self._fallback(message, project, map_context or {}, normalized_target)
+            fallback = self._fallback(message, project, map_context or {}, normalized_target, qgis_layers=qgis_layers)
             fallback["llm_fallback_reason"] = str(exc)
             return fallback
 
-    def _messages(self, message: str, project: ProjectRecord, map_context: Dict[str, Any], target: str) -> List[Dict[str, str]]:
+    def _prefetch_qgis_layers(self) -> Optional[List[Dict[str, Any]]]:
+        """Pre-fetch current QGIS layers so the LLM can plan with full context."""
+        try:
+            response = self.qgis_bridge.layers()
+            if response.get("status") == "success":
+                layers = response.get("layers") or response.get("data") or []
+                if isinstance(layers, list):
+                    return layers
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _is_get_layers_only(plan: Dict[str, Any]) -> bool:
+        """Check if a plan only contains get_layers with no real actions."""
+        actions = plan.get("actions") or []
+        return all(str(a.get("tool_name") or "") == "get_layers" for a in actions)
+
+    def _messages(
+        self,
+        message: str,
+        project: ProjectRecord,
+        map_context: Dict[str, Any],
+        target: str,
+        qgis_layers: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[Dict[str, str]]:
         visible_layers = [
             {"layer_id": layer.layer_id, "name": layer.name, "kind": layer.kind, "geometry_type": layer.geometry_type}
             for layer in project.layers
             if layer.visible
         ]
-        context = {
+        context: Dict[str, Any] = {
             "target": target,
             "project": {
                 "project_id": project.project_id,
@@ -59,6 +114,26 @@ class LLMPlanner:
             "webgis_tools": ASSISTANT_TOOL_SCHEMA,
             "qgis_tools": QGIS_TOOL_SCHEMA,
         }
+        if qgis_layers is not None:
+            context["qgis_current_layers"] = qgis_layers
+        qgis_layer_instruction = ""
+        if qgis_layers is not None:
+            qgis_layer_instruction = (
+                "\n\nIMPORTANT: The field 'qgis_current_layers' in the context below lists ALL layers "
+                "currently loaded in the QGIS project. You already know what data is available — "
+                "do NOT plan only get_layers. Instead, pick the most relevant layer from qgis_current_layers "
+                "and immediately plan the visualization or analysis actions the user requested. "
+                "Avoid set_style because the connected QGIS plugin rejects generic thematic styling. "
+                "Prefer dedicated operations such as create_heatmap / create_flow_arrows / run_algorithm, "
+                "or use set_active_layer + set_layer_visibility + zoom_to_layer for navigation and presentation. "
+                "Use the actual layer_name or layer_id values from qgis_current_layers."
+            )
+        else:
+            qgis_layer_instruction = (
+                "\n\nFor QGIS target: Plan a COMPLETE action sequence. If you must call get_layers, "
+                "also include the visualization actions the user requested (create_heatmap, create_flow_arrows, run_algorithm, etc.) "
+                "with your best guess at layer_name based on the user's description."
+            )
         system = (
             "You are a geography classroom GIS copilot. Return only valid JSON. "
             "The JSON schema is {\"assistant_message\": string, \"target\": \"webgis\"|\"qgis\", "
@@ -66,6 +141,7 @@ class LLMPlanner:
             "Use only the provided tool names. Do not invent tools. Do not write Python code. "
             "For target=webgis, use only webgis_tools. For target=qgis, use only qgis_tools. "
             "Prefer safe, reversible actions and concise classroom-ready Chinese explanations."
+            + qgis_layer_instruction
         )
         return [
             {"role": "system", "content": system},
@@ -151,15 +227,47 @@ class LLMPlanner:
             start = content.find("{", start + 1)
         return ""
 
-    def _fallback(self, message: str, project: ProjectRecord, map_context: Dict[str, Any], target: str) -> Dict[str, Any]:
+    def _fallback(
+        self,
+        message: str,
+        project: ProjectRecord,
+        map_context: Dict[str, Any],
+        target: str,
+        qgis_layers: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
         if target == "qgis":
-            fallback = self.qgis_bridge.fallback_plan(message)
+            fallback = self.qgis_bridge.fallback_plan(message, qgis_layers=qgis_layers)
             fallback["planner"] = "rule_fallback"
             return fallback
         fallback = self.fallback_planner.plan_actions(message, project, map_context=map_context)
         fallback["target"] = "webgis"
         fallback["planner"] = "rule_fallback"
         return fallback
+
+    def _should_use_rule_preflight(self, plan: Dict[str, Any]) -> bool:
+        deterministic_tools = {
+            "switch_basemap",
+            "apply_template",
+            "toggle_layer",
+            "reorder_layer",
+            "style_layer",
+            "draw_annotation",
+            "measure",
+            "export_snapshot",
+            "search_poi",
+            "toggle_teaching_map",
+            "open_material",
+        }
+        actions = plan.get("actions") or []
+        return any(str(action.get("tool_name") or "") in deterministic_tools for action in actions if isinstance(action, dict))
+
+    @staticmethod
+    def _should_use_qgis_rule_preflight(message: str) -> bool:
+        lowered = (message or "").lower()
+        has_population_topic = any(token in lowered for token in ("人口", "population", "density"))
+        has_distribution_intent = any(token in lowered for token in ("分布", "密度", "分布图", "专题图", "choropleth"))
+        has_map_create_intent = any(token in lowered for token in ("制作", "生成", "创建", "绘制", "渲染", "create", "generate", "draw", "render"))
+        return bool(has_population_topic and (has_distribution_intent or has_map_create_intent))
 
 
 def allowed_tool_names(target: str) -> Iterable[str]:

@@ -33,6 +33,42 @@ class AppConfigTest(unittest.TestCase):
         self.assertEqual(normalized["layers"][0]["urls"][0], "https://example.com/{z}/{x}/{y}.png")
         self.assertTrue(normalized.get("legacy"))
 
+    def test_weather_basemaps_are_visible_without_openweather_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(os.environ, {}, clear=True):
+            config = AppConfig(root_dir=Path(temp_dir))
+            catalog = config.basemap_catalog()
+            ids = {item["id"] for item in catalog["items"]}
+
+            self.assertIn("weather_precipitation", ids)
+            self.assertIn("weather_clouds", ids)
+            self.assertIn("weather_temperature", ids)
+            weather_item = next(item for item in catalog["items"] if item["id"] == "weather_precipitation")
+            self.assertIn("WEBGIS_AI_OPENWEATHERMAP_API_KEY", weather_item["description"])
+            self.assertEqual(catalog["default_id"], "amap_vector")
+
+    def test_weather_basemaps_use_backend_proxy_and_keep_key_server_side(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            os.environ,
+            {
+                "WEBGIS_AI_OPENWEATHERMAP_API_KEY": "demo-weather-key",
+                "WEBGIS_AI_OPENWEATHERMAP_LAYER": "clouds_new",
+            },
+            clear=True,
+        ):
+            config = AppConfig(root_dir=Path(temp_dir))
+            catalog = config.basemap_catalog()
+            weather_item = next(item for item in catalog["items"] if item["id"] == "weather_clouds")
+
+            self.assertEqual(
+                weather_item["layers"][1]["urls"][0],
+                "http://127.0.0.1:18999/tiles/weather/clouds_new/{z}/{x}/{y}.png",
+            )
+            self.assertNotIn("demo-weather-key", weather_item["layers"][1]["urls"][0])
+            self.assertEqual(
+                config.weather_tile_upstream_url("clouds_new", 4, 12, 9),
+                "https://tile.openweathermap.org/map/clouds_new/4/12/9.png?appid=demo-weather-key",
+            )
+
     def test_public_path_round_trip_only_allows_uploads_and_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = AppConfig(root_dir=Path(temp_dir))

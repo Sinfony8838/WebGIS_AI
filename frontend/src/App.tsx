@@ -15,43 +15,79 @@ import XYZ from "ol/source/XYZ";
 import { fromLonLat, toLonLat, transformExtent } from "ol/proj";
 import { getDistance } from "ol/sphere";
 import { Circle as CircleStyle, Fill, Stroke, Style, Text } from "ol/style";
+import { easeOut } from "ol/easing";
+import { getCenter } from "ol/extent";
 import {
+  activateLessonResourceSet,
+  createKbMaterialLink,
+  confirmAssistantAction,
   createProject,
   exportSnapshot,
+  fetchLessonResources,
   fetchHealth,
+  fetchKbManifest,
+  fetchKbTopics,
   fetchLayers,
   fetchOutputs,
   fetchProject,
   getApiBase,
   patchLayer,
+  registerKbLayer,
   runTemplate,
+  searchKb,
   searchPoi,
+  searchResources,
   sendAssistantMessage,
+  saveLessonResourceSet,
   switchBasemap,
-  uploadDataset
+  upsertKbItem,
+  uploadDataset,
+  uploadKbMaterial,
+  fetchTeachingMaps,
+  toggleTeachingMap,
+  fetchActiveTeachingMaps,
+  type TeachingMapItem,
 } from "./api";
 import { BasemapMenu } from "./components/BasemapMenu";
 import { CopilotWidget } from "./components/CopilotWidget";
+import { type KnowledgeQuery } from "./components/KnowledgePanel";
 import { QgisProfessionalPage } from "./components/QgisProfessionalPage";
+import { RegionFocusOverlay } from "./components/RegionFocusOverlay";
 import { SideDrawer, type DrawerTab } from "./components/SideDrawer";
+import { TeachingMapPanel } from "./components/TeachingMapPanel";
+import { TeachingMaterialViewer } from "./components/TeachingMaterialViewer";
 import { ToastStack, type ToastItem } from "./components/ToastStack";
 import { UploadDialog } from "./components/UploadDialog";
 import type {
+  AssistantInputMode,
+  AssistantMode,
   AssistantTarget,
   ArtifactRecord,
   ChatMessage,
   HealthResponse,
   JobRecord,
+  KnowledgeBaseItem,
+  KnowledgeTopicSummary,
+  LessonResourceSet,
   LayerRecord,
   LayersResponse,
   MapContext,
   PoiSearchItem,
-  ProjectRecord
+  ProjectRecord,
+  RegionBinding,
+  ResourceSearchResult,
+  TeachingMaterial
 } from "./types";
 import "./styles.css";
 
 type InteractionMode = "browse" | "annotate" | "measure" | "draw-search";
 type RenderableLayer = TileLayer<XYZ> | ImageLayer<ImageStatic> | VectorLayer<any>;
+type FocusedRegion = {
+  label: string;
+  layerId: string;
+  properties: Record<string, unknown>;
+  pixel: [number, number] | null;
+};
 
 const modeLabelMap: Record<InteractionMode, string> = {
   browse: "选择",
@@ -74,6 +110,44 @@ function withOpacity(color: string, opacity: number): string {
   const green = Number.parseInt(normalized.slice(3, 5), 16);
   const blue = Number.parseInt(normalized.slice(5, 7), 16);
   return `rgba(${red}, ${green}, ${blue}, ${opacity})`;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function regionLabel(properties: Record<string, unknown>): string {
+  for (const key of ["name", "name_cn", "NAME", "Name", "admin_name", "province", "city", "id"]) {
+    const value = properties[key];
+    if (value !== undefined && value !== null && String(value).trim()) {
+      return String(value).trim();
+    }
+  }
+  return "已选地区";
+}
+
+function regionMatchesBinding(region: FocusedRegion, binding: RegionBinding): boolean {
+  if (binding.layer_id && binding.layer_id !== region.layerId) {
+    return false;
+  }
+  const candidates = [
+    region.label,
+    String(region.properties.name || ""),
+    String(region.properties.name_cn || ""),
+    String(region.properties.NAME || ""),
+    String(region.properties.adcode || ""),
+    String(region.properties.admin_code || ""),
+    String(region.properties.id || "")
+  ]
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  const bindingValues = [binding.name, binding.admin_code, binding.feature_id]
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean);
+  if (!bindingValues.length) {
+    return Boolean(binding.layer_id);
+  }
+  return bindingValues.some((value) => candidates.includes(value) || candidates.some((candidate) => candidate.includes(value)));
 }
 
 function currentExtentFromMap(map: Map): [number, number, number, number] {
@@ -182,6 +256,30 @@ function parsePoiResults(layerState: LayersResponse | null): { items: PoiSearchI
   return { items, summary };
 }
 
+function emptyKnowledgeItem(): KnowledgeBaseItem {
+  return {
+    id: "",
+    title: "",
+    topic: "",
+    region: "",
+    time: "",
+    source: "",
+    license: "",
+    grade_level: "",
+    keywords: [],
+    tags: [],
+    crs: "",
+    summary: "",
+    canonical_answer: "",
+    teaching_points: [],
+    citations: [],
+    dataset_refs: [],
+    materials: [],
+    related_templates: [],
+    updated_at: ""
+  };
+}
+
 function layerStyle(record: LayerRecord) {
   return (feature: { getGeometry: () => { getType: () => string } | undefined; get: (key: string) => unknown }) => {
     const geometryType = feature.getGeometry()?.getType() || record.geometry_type;
@@ -224,9 +322,10 @@ function layerStyle(record: LayerRecord) {
 export default function App() {
   const mapElementRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<Map | null>(null);
-  const basemapLayersRef = useRef<RenderableLayer[]>([]);
-  const businessLayersRef = useRef<RenderableLayer[]>([]);
-  const searchAreaSourceRef = useRef<VectorSource | null>(null);
+    const basemapLayersRef = useRef<RenderableLayer[]>([]);
+    const businessLayersRef = useRef<RenderableLayer[]>([]);
+    const vectorLayerByIdRef = useRef<globalThis.Map<string, VectorLayer<any>>>(new globalThis.Map());
+    const searchAreaSourceRef = useRef<VectorSource | null>(null);
   const highlightSourceRef = useRef<VectorSource | null>(null);
   const drawInteractionRef = useRef<Draw | null>(null);
   const pendingMeasureStartRef = useRef<[number, number] | null>(null);
@@ -241,14 +340,31 @@ export default function App() {
   const [project, setProject] = useState<(ProjectRecord & { status: string }) | null>(null);
   const [layerState, setLayerState] = useState<LayersResponse | null>(null);
   const [outputs, setOutputs] = useState<ArtifactRecord[]>([]);
-  const [currentJob, setCurrentJob] = useState<JobRecord | null>(null);
-  const [chatLog, setChatLog] = useState<ChatMessage[]>([
-    {
-      role: "assistant",
-      text: "地图课堂已就绪。你可以切换底图、加载模板、绘制检索区，或直接让我辅助讲解和改图。",
-      timestamp: timestamp()
-    }
-  ]);
+  const [assistantMode, setAssistantMode] = useState<AssistantMode>("tool");
+  const [currentJobByMode, setCurrentJobByMode] = useState<Record<AssistantMode, JobRecord | null>>({
+    knowledge: null,
+    tool: null
+  });
+  const [chatLogByMode, setChatLogByMode] = useState<Record<AssistantMode, ChatMessage[]>>({
+    knowledge: [
+      {
+        role: "assistant",
+        text: "这里是知识助手，可以回答地理概念、区域地理、地图判读与 GIS 方法问题。",
+        timestamp: timestamp()
+      }
+    ],
+    tool: [
+      {
+        role: "assistant",
+        text: "这里是工具助手，可以规划并执行 WebGIS 或 QGIS 操作。",
+        timestamp: timestamp()
+      }
+    ]
+  });
+  const [conversationIds, setConversationIds] = useState<Record<AssistantMode, string>>({
+    knowledge: "",
+    tool: ""
+  });
   const [assistantInput, setAssistantInput] = useState("");
   const [interactionMode, setInteractionMode] = useState<InteractionMode>("browse");
   const [measureText, setMeasureText] = useState("");
@@ -261,10 +377,31 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [workspaceMode, setWorkspaceMode] = useState<"classroom" | "qgis">("classroom");
   const [drawerOpen, setDrawerOpen] = useState(true);
-  const [drawerTab, setDrawerTab] = useState<DrawerTab>("units");
-  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [drawerTab, setDrawerTab] = useState<DrawerTab>("resources");
+  const [kbQuery, setKbQuery] = useState<KnowledgeQuery>({ query: "", topic: "", region: "", tag: "" });
+    const [kbItems, setKbItems] = useState<KnowledgeBaseItem[]>([]);
+    const [kbAllItems, setKbAllItems] = useState<KnowledgeBaseItem[]>([]);
+  const [kbTopics, setKbTopics] = useState<KnowledgeTopicSummary[]>([]);
+  const [kbTotal, setKbTotal] = useState(0);
+    const [kbLoading, setKbLoading] = useState(false);
+    const [kbEditingItem, setKbEditingItem] = useState<KnowledgeBaseItem | null>(null);
+    const [resourceQuery, setResourceQuery] = useState("");
+    const [resourceScope, setResourceScope] = useState<"all" | "kb" | "web" | "materials">("all");
+    const [resourceLoading, setResourceLoading] = useState(false);
+    const [resourceResults, setResourceResults] = useState<ResourceSearchResult[]>([]);
+    const [lessonResourceSets, setLessonResourceSets] = useState<LessonResourceSet[]>([]);
+    const [activeLessonResourceSetId, setActiveLessonResourceSetId] = useState("");
+    const [focusedRegion, setFocusedRegion] = useState<FocusedRegion | null>(null);
+    const [materialViewerOpen, setMaterialViewerOpen] = useState(false);
+    const [materialViewerTitle, setMaterialViewerTitle] = useState("");
+    const [materialViewerItems, setMaterialViewerItems] = useState<TeachingMaterial[]>([]);
+    const [teachingMaps, setTeachingMaps] = useState<TeachingMapItem[]>([]);
+    const [activeTeachingMapIds, setActiveTeachingMapIds] = useState<Set<string>>(new Set());
+    const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [initAttempt, setInitAttempt] = useState(0);
   const [initError, setInitError] = useState("");
+  const currentJob = currentJobByMode[assistantMode];
+  const chatLog = chatLogByMode[assistantMode];
 
   const onlinePoiEnabled = health?.online_services.amap_poi_enabled ?? false;
   const basemapItems = health?.basemaps.items || [];
@@ -279,7 +416,32 @@ export default function App() {
     "可在右侧切换地图工具，或在左侧单元页加载课堂模板。";
   const visibleLayerCount = layerState?.items.filter((item) => item.visible).length ?? 0;
   const totalLayerCount = layerState?.items.length ?? 0;
-  const enabledTemplateCount = layerState?.enabled_templates.length ?? 0;
+    const enabledTemplateCount = layerState?.enabled_templates.length ?? 0;
+    const kbActiveLayerId = layerState?.active_layer_id || "";
+    const kbCanRegister = Boolean(project && kbActiveLayerId && !kbLoading);
+    const activeLessonResourceSet = lessonResourceSets.find((item) => item.id === activeLessonResourceSetId) || lessonResourceSets.find((item) => item.active);
+    const allKnowledgeMaterials = useMemo(
+      () => kbAllItems.flatMap((item) => (item.materials || []).map((material) => ({ material, item }))),
+      [kbAllItems]
+    );
+    const focusedRegionMaterials = useMemo(() => {
+      if (!focusedRegion || !activeLessonResourceSet) {
+        return [];
+      }
+      const allowedMaterialIds = new Set(activeLessonResourceSet.material_ids || []);
+      const allowedItemIds = new Set(activeLessonResourceSet.item_ids || []);
+      return allKnowledgeMaterials
+        .filter(({ material, item }) => {
+          if (allowedMaterialIds.size && !allowedMaterialIds.has(material.id)) {
+            return false;
+          }
+          if (!allowedMaterialIds.size && allowedItemIds.size && !allowedItemIds.has(item.id)) {
+            return false;
+          }
+          return regionMatchesBinding(focusedRegion, material.region_binding || {});
+        })
+        .map(({ material }) => material);
+    }, [activeLessonResourceSet, allKnowledgeMaterials, focusedRegion]);
   const assistantActionPrompt = useMemo(
     () => "请结合当前视图进行课堂读图讲解，突出关键空间关系、层级结构与区位判断。",
     []
@@ -300,23 +462,370 @@ export default function App() {
     [dismissToast]
   );
 
-  const appendChat = useCallback((role: ChatMessage["role"], text: string) => {
+  const appendChat = useCallback((mode: AssistantMode, role: ChatMessage["role"], text: string) => {
     if (!text.trim()) {
       return;
     }
-    setChatLog((previous) => [...previous, { role, text, timestamp: timestamp() }]);
+    setChatLogByMode((previous) => ({
+      ...previous,
+      [mode]: [...previous[mode], { role, text, timestamp: timestamp() }]
+    }));
   }, []);
 
   const refreshProjectState = useCallback(async (projectId: string) => {
-    const [projectPayload, layerPayload, outputsPayload] = await Promise.all([
-      fetchProject(projectId),
-      fetchLayers(projectId),
-      fetchOutputs(projectId)
-    ]);
-    setProject(projectPayload);
-    setLayerState(layerPayload);
-    setOutputs(outputsPayload.items);
+      const [projectPayload, layerPayload, outputsPayload, lessonPayload, activeTeachingPayload] = await Promise.all([
+        fetchProject(projectId),
+        fetchLayers(projectId),
+        fetchOutputs(projectId),
+        fetchLessonResources(projectId),
+        fetchActiveTeachingMaps(projectId)
+      ]);
+      setProject(projectPayload);
+      setLayerState(layerPayload);
+      setOutputs(outputsPayload.items);
+      setLessonResourceSets(lessonPayload.items);
+      setActiveLessonResourceSetId(lessonPayload.active_lesson_resource_set_id);
+      setActiveTeachingMapIds(new Set(activeTeachingPayload.active));
+    }, []);
+
+  const runKbSearch = useCallback(
+    async (queryOverride?: Partial<KnowledgeQuery>) => {
+      const nextQuery: KnowledgeQuery = { ...kbQuery, ...(queryOverride || {}) };
+      setKbLoading(true);
+      try {
+        const response = await searchKb({ ...nextQuery, limit: 20 });
+        setKbItems(response.items);
+        setKbTotal(response.total);
+        setKbEditingItem((previous) => {
+          if (previous) {
+            const matched = response.items.find((item) => item.id === previous.id);
+            return matched || previous;
+          }
+          return response.items[0] || null;
+        });
+      } catch (error) {
+        pushToast("error", "知识库检索失败", error instanceof Error ? error.message : "检索接口调用失败");
+      } finally {
+        setKbLoading(false);
+      }
+    },
+    [kbQuery, pushToast]
+  );
+
+    const loadKnowledgeBase = useCallback(async () => {
+    setKbLoading(true);
+    try {
+        const [manifest, topicsPayload] = await Promise.all([fetchKbManifest(), fetchKbTopics()]);
+        setKbTopics(topicsPayload.items);
+        setKbAllItems(manifest.items);
+        setKbTotal(manifest.items.length);
+      const response = await searchKb({ query: "", topic: "", region: "", tag: "", limit: 20 });
+      setKbItems(response.items);
+      setKbTotal(response.total || manifest.items.length);
+      setKbEditingItem((previous) => previous || response.items[0] || manifest.items[0] || null);
+    } catch (error) {
+      pushToast("error", "知识库加载失败", error instanceof Error ? error.message : "无法读取知识库");
+    } finally {
+      setKbLoading(false);
+    }
+    }, [pushToast]);
+
+    useEffect(() => {
+      const query = resourceQuery.trim();
+      const timer = window.setTimeout(() => {
+        setResourceLoading(true);
+        searchResources({ query, scope: resourceScope, limit: 16 })
+          .then((response) => {
+            setResourceResults(response.items);
+          })
+          .catch((error: Error) => {
+            pushToast("error", "资料搜索失败", error.message);
+          })
+          .finally(() => setResourceLoading(false));
+      }, 320);
+      return () => window.clearTimeout(timer);
+    }, [pushToast, resourceQuery, resourceScope]);
+
+  const handleKbSaveItem = useCallback(async () => {
+    if (!kbEditingItem) {
+      setKbEditingItem(emptyKnowledgeItem());
+      return;
+    }
+    if (!kbEditingItem.title.trim()) {
+      pushToast("error", "保存失败", "请先填写知识条目标题。");
+      return;
+    }
+    setKbLoading(true);
+    try {
+      const response = await upsertKbItem(kbEditingItem);
+      setKbEditingItem(response.item);
+      pushToast("success", "知识条目已保存", response.item.title || response.item.id);
+      const refreshed = await searchKb({ ...kbQuery, limit: 20 });
+      const topicsPayload = await fetchKbTopics();
+      setKbTopics(topicsPayload.items);
+      setKbItems(refreshed.items);
+      setKbTotal(refreshed.total);
+    } catch (error) {
+      pushToast("error", "知识条目保存失败", error instanceof Error ? error.message : "请求未完成");
+    } finally {
+      setKbLoading(false);
+    }
+  }, [kbEditingItem, kbQuery, pushToast]);
+
+  const buildKbRegisterMetadata = useCallback((item: KnowledgeBaseItem | null): Record<string, unknown> => {
+    if (!item) {
+      return {};
+    }
+    const metadata: Record<string, unknown> = {};
+    if (item.id.trim()) {
+      metadata.id = item.id.trim();
+    }
+    if (item.title.trim()) {
+      metadata.title = item.title.trim();
+    }
+    if (item.topic.trim()) {
+      metadata.topic = item.topic.trim();
+    }
+    if (item.region.trim()) {
+      metadata.region = item.region.trim();
+    }
+    if (item.time.trim()) {
+      metadata.time = item.time.trim();
+    }
+    if (item.keywords.length) {
+      metadata.keywords = item.keywords;
+    }
+    if (item.summary.trim()) {
+      metadata.summary = item.summary.trim();
+    }
+    if (item.canonical_answer.trim()) {
+      metadata.canonical_answer = item.canonical_answer.trim();
+    }
+    if (item.teaching_points.length) {
+      metadata.teaching_points = item.teaching_points;
+    }
+    return metadata;
   }, []);
+
+  const handleRegisterActiveLayerToKb = useCallback(async () => {
+    if (!project || !layerState?.active_layer_id) {
+      return;
+    }
+    setKbLoading(true);
+    try {
+      const response = await registerKbLayer(
+        project.project_id,
+        layerState.active_layer_id,
+        buildKbRegisterMetadata(kbEditingItem)
+      );
+      setKbEditingItem(response.item);
+      const refreshed = await searchKb({ ...kbQuery, limit: 20 });
+      const topicsPayload = await fetchKbTopics();
+      setKbTopics(topicsPayload.items);
+      setKbItems(refreshed.items);
+      setKbTotal(refreshed.total);
+      await refreshProjectState(project.project_id);
+      pushToast("success", "已关联当前图层", layerState.active_layer_id);
+    } catch (error) {
+      pushToast("error", "图层关联失败", error instanceof Error ? error.message : "知识库关联请求失败");
+    } finally {
+      setKbLoading(false);
+    }
+  }, [buildKbRegisterMetadata, kbEditingItem, kbQuery, layerState?.active_layer_id, project, pushToast, refreshProjectState]);
+
+    const focusLayerExtent = useCallback((layerId: string) => {
+      const map = mapRef.current;
+      const record = layerState?.items.find((item) => item.layer_id === layerId);
+      if (!map || !record || record.kind !== "vector") {
+        return false;
+      }
+      const format = new GeoJSON();
+      const features = format.readFeatures(record.data, {
+        dataProjection: "EPSG:4326",
+        featureProjection: "EPSG:3857"
+      });
+      if (!features.length) {
+        return false;
+      }
+      const source = new VectorSource({ features });
+      const extent = source.getExtent();
+      const firstFeature = features[0];
+      highlightSourceRef.current?.clear();
+      if (firstFeature) {
+        highlightSourceRef.current?.addFeature(firstFeature.clone());
+      }
+      map.getView().fit(extent, { duration: 620, padding: [90, 360, 90, 360], maxZoom: 8 });
+      const properties = { ...firstFeature.getProperties() } as Record<string, unknown>;
+      delete properties.geometry;
+      setFocusedRegion({
+        label: regionLabel(properties),
+        layerId,
+        properties,
+        pixel: map.getPixelFromCoordinate(getCenter(extent)) as [number, number]
+      });
+      return true;
+    }, [layerState?.items]);
+
+    const handleFocusKnowledgeLayer = useCallback(
+      async (layerId: string) => {
+        if (!project) {
+          return;
+        }
+      try {
+        await patchLayer(project.project_id, layerId, { active: true, visible: true });
+        await refreshProjectState(project.project_id);
+        focusLayerExtent(layerId);
+        pushToast("info", "已定位关联图层", layerId);
+      } catch (error) {
+        pushToast("error", "定位关联图层失败", error instanceof Error ? error.message : "图层状态更新失败");
+      }
+    },
+      [focusLayerExtent, project, pushToast, refreshProjectState]
+    );
+
+    const refreshKnowledgeAfterMaterialWrite = useCallback(
+      async (itemId: string, material: TeachingMaterial) => {
+        const manifest = await fetchKbManifest();
+        setKbAllItems(manifest.items);
+        const refreshed = await searchKb({ ...kbQuery, limit: 20 });
+        setKbItems(refreshed.items);
+        setKbTotal(refreshed.total);
+        setKbEditingItem((previous) => {
+          const fromManifest = manifest.items.find((item) => item.id === itemId);
+          if (fromManifest) {
+            return fromManifest;
+          }
+          return previous ? { ...previous, materials: [...(previous.materials || []), material] } : previous;
+        });
+      },
+      [kbQuery]
+    );
+
+    const handleUploadMaterial = useCallback(
+      async (
+        item: KnowledgeBaseItem,
+        file: File,
+        metadata: { title: string; description: string; material_type: string; region_binding: RegionBinding }
+      ) => {
+        if (!item.id) {
+          pushToast("error", "素材上传失败", "请先保存知识库条目。");
+          return;
+        }
+        setKbLoading(true);
+        try {
+          const formData = new FormData();
+          formData.set("file", file);
+          formData.set("title", metadata.title || file.name);
+          formData.set("description", metadata.description);
+          formData.set("material_type", metadata.material_type);
+          const response = await uploadKbMaterial(item.id, formData, metadata.region_binding);
+          await refreshKnowledgeAfterMaterialWrite(item.id, response.material);
+          pushToast("success", "素材已上传", response.material.title);
+        } catch (error) {
+          pushToast("error", "素材上传失败", error instanceof Error ? error.message : "上传请求失败");
+        } finally {
+          setKbLoading(false);
+        }
+      },
+      [pushToast, refreshKnowledgeAfterMaterialWrite]
+    );
+
+    const handleAddMaterialLink = useCallback(
+      async (
+        item: KnowledgeBaseItem,
+        payload: { url: string; title: string; description: string; material_type: string; region_binding: RegionBinding }
+      ) => {
+        if (!item.id) {
+          pushToast("error", "外链添加失败", "请先保存知识库条目。");
+          return;
+        }
+        setKbLoading(true);
+        try {
+          const response = await createKbMaterialLink({
+            kb_item_id: item.id,
+            url: payload.url,
+            title: payload.title,
+            description: payload.description,
+            material_type: payload.material_type,
+            region_binding: payload.region_binding
+          });
+          await refreshKnowledgeAfterMaterialWrite(item.id, response.material);
+          pushToast("success", "外链已添加", response.material.title);
+        } catch (error) {
+          pushToast("error", "外链添加失败", error instanceof Error ? error.message : "请求失败");
+        } finally {
+          setKbLoading(false);
+        }
+      },
+      [pushToast, refreshKnowledgeAfterMaterialWrite]
+    );
+
+    const importToLesson = useCallback(
+      async (item: KnowledgeBaseItem, material?: TeachingMaterial) => {
+        if (!project || !item.id) {
+          return;
+        }
+        const active = activeLessonResourceSet || {
+          id: "",
+          title: "当前课时资料包",
+          project_id: project.project_id,
+          item_ids: [],
+          material_ids: [],
+          region_bindings: [],
+          active: true,
+          created_at: "",
+          updated_at: ""
+        };
+        const binding = material?.region_binding || {
+          name: item.region,
+          layer_id: String(item.dataset_refs?.[0]?.layer_id || "")
+        };
+        const response = await saveLessonResourceSet(project.project_id, {
+          ...active,
+          item_ids: uniqueStrings([...(active.item_ids || []), item.id]),
+          material_ids: uniqueStrings([...(active.material_ids || []), ...(material ? [material.id] : item.materials.map((entry) => entry.id))]),
+          region_bindings: [...(active.region_bindings || []), binding],
+          active: true
+        });
+        setLessonResourceSets(response.items);
+        setActiveLessonResourceSetId(response.item.id);
+        pushToast("success", "已导入本课时", material?.title || item.title);
+      },
+      [activeLessonResourceSet, project, pushToast]
+    );
+
+    const handleOpenResourceResult = useCallback(
+      (item: ResourceSearchResult) => {
+        if (item.kb_item) {
+          setKbEditingItem(item.kb_item);
+          setWorkspaceMode("classroom");
+          setDrawerOpen(true);
+          setDrawerTab("resources");
+          return;
+        }
+        if (item.material) {
+          setMaterialViewerTitle(item.title);
+          setMaterialViewerItems([item.material]);
+          setMaterialViewerOpen(true);
+          return;
+        }
+        if (item.url) {
+          window.open(item.url, "_blank", "noopener,noreferrer");
+        }
+      },
+      []
+    );
+
+    const handleImportResourceResult = useCallback(
+      (item: ResourceSearchResult) => {
+        if (item.kb_item) {
+          void importToLesson(item.kb_item, item.material);
+          return;
+        }
+        pushToast("info", "暂不能导入", "该结果不是知识库条目或已保存素材。");
+      },
+      [importToLesson, pushToast]
+    );
 
   const buildMapContext = useCallback(
     (overrides?: Partial<MapContext>): MapContext => {
@@ -336,14 +845,23 @@ export default function App() {
         active_layer_id: layerState?.active_layer_id,
         visible_layers: layerState?.items.filter((item) => item.visible).map((item) => ({ layer_id: item.layer_id, name: item.name })) || [],
         recent_actions: layerState?.recent_actions || [],
-        basemap_id: layerState?.base_map.id,
-        search_area_geometry: searchAreaGeometry,
-        selected_feature_summary: selectedFeatureText || undefined,
-        ...overrides
-      };
-    },
-    [layerState, project, searchAreaGeometry, selectedFeatureText]
-  );
+          basemap_id: layerState?.base_map.id,
+          search_area_geometry: searchAreaGeometry,
+          selected_feature_summary: selectedFeatureText || undefined,
+          selected_region: focusedRegion
+            ? { label: focusedRegion.label, layer_id: focusedRegion.layerId, properties: focusedRegion.properties }
+            : undefined,
+          active_lesson_materials: focusedRegionMaterials.map((material) => ({
+            id: material.id,
+            title: material.title,
+            type: material.type,
+            region_binding: material.region_binding
+          })),
+          ...overrides
+        };
+      },
+      [focusedRegion, focusedRegionMaterials, layerState, project, searchAreaGeometry, selectedFeatureText]
+    );
 
   const closeJobStream = useCallback((source: EventSource): boolean => {
     const wasTracked = jobStreamsRef.current.delete(source);
@@ -355,8 +873,27 @@ export default function App() {
     return wasTracked;
   }, []);
 
+  const handleAssistantUiActions = useCallback((payload: JobRecord) => {
+    const executed = payload.result?.actions_executed || [];
+    const openMaterialActions = executed.flatMap((entry) => {
+      const result = entry.result || {};
+      const uiActions = Array.isArray(result.ui_actions) ? result.ui_actions : [];
+      return uiActions.filter((item): item is { type: string; title?: string; materials?: TeachingMaterial[] } => {
+        return Boolean(item && typeof item === "object" && (item as { type?: string }).type === "open_material");
+      });
+    });
+    const latest = openMaterialActions.at(-1);
+    const materials = latest?.materials || [];
+    if (!latest || !materials.length) {
+      return;
+    }
+    setMaterialViewerTitle(latest.title || materials[0]?.title || "课堂资料");
+    setMaterialViewerItems(materials);
+    setMaterialViewerOpen(true);
+  }, []);
+
   const subscribeToJob = useCallback(
-    (jobId: string) => {
+    (jobId: string, mode: AssistantMode) => {
       const source = new EventSource(`${getApiBase()}/jobs/${jobId}/stream`);
       jobStreamsRef.current.add(source);
       activeJobStreamsRef.current += 1;
@@ -371,14 +908,19 @@ export default function App() {
           }
           return;
         }
-        setCurrentJob(payload);
+        setCurrentJobByMode((previous) => ({ ...previous, [mode]: payload }));
         if (payload.status === "completed" || payload.status === "failed") {
           if (!closeJobStream(source)) {
             return;
           }
           await refreshProjectState(payload.project_id);
+          handleAssistantUiActions(payload);
           const message = payload.result?.assistant_message || payload.result?.summary || payload.error || "";
-          appendChat(payload.status === "failed" ? "system" : "assistant", message);
+          const nextConversationId = String(payload.result?.conversation_id || "");
+          if (nextConversationId) {
+            setConversationIds((previous) => ({ ...previous, [mode]: nextConversationId }));
+          }
+          appendChat(mode, payload.status === "failed" ? "system" : "assistant", message);
           pushToast(
             payload.status === "failed" ? "error" : "success",
             payload.status === "failed" ? "任务失败" : "任务完成",
@@ -392,7 +934,7 @@ export default function App() {
         }
       });
     },
-    [appendChat, closeJobStream, pushToast, refreshProjectState]
+    [appendChat, closeJobStream, handleAssistantUiActions, pushToast, refreshProjectState]
   );
 
   useEffect(() => {
@@ -404,18 +946,53 @@ export default function App() {
   }, []);
 
   const submitAssistantText = useCallback(
-    async (message: string, overrides?: Partial<MapContext>, target: AssistantTarget = "webgis") => {
+    async (
+      message: string,
+      overrides?: Partial<MapContext>,
+      target: AssistantTarget = "webgis",
+      inputMode: AssistantInputMode = "text",
+      mode: AssistantMode = assistantMode,
+      screenSnapshot?: { image_data_url: string; width: number; height: number; captured_at: string }
+    ) => {
       if (!project) {
         return;
       }
-      appendChat("user", message);
-      const response = await sendAssistantMessage(project.project_id, message, buildMapContext(overrides), target);
-      subscribeToJob(response.job_id);
+      appendChat(mode, "user", message);
+      const response = await sendAssistantMessage(project.project_id, message, buildMapContext(overrides), target, inputMode, {
+        assistantMode: mode,
+        conversationId: health?.ui.assistant_v2_enabled ? conversationIds[mode] : undefined,
+        history: health?.ui.assistant_v2_enabled ? chatLogByMode[mode] : undefined,
+        screenSnapshot
+      });
+      if (response.conversation_id) {
+        setConversationIds((previous) => ({ ...previous, [mode]: response.conversation_id || previous[mode] }));
+      }
+      subscribeToJob(response.job_id, mode);
     },
-    [appendChat, buildMapContext, project, subscribeToJob]
+    [appendChat, assistantMode, buildMapContext, chatLogByMode, conversationIds, health?.ui.assistant_v2_enabled, project, subscribeToJob]
   );
 
-  assistantDispatchRef.current = submitAssistantText;
+  assistantDispatchRef.current = (message, overrides) => {
+    void submitAssistantText(message, overrides, "webgis", "text", "tool");
+  };
+
+  const handleReadMapWithSnapshot = useCallback(async () => {
+    if (!mapRef.current) {
+      void submitAssistantText(assistantActionPrompt, undefined, "webgis", "text", "knowledge");
+      return;
+    }
+    const size = mapRef.current.getSize() || [0, 0];
+    const imageDataUrl = await captureMapSnapshot(mapRef.current);
+    const snapshot = imageDataUrl
+      ? {
+          image_data_url: imageDataUrl,
+          width: Number(size[0] || 0),
+          height: Number(size[1] || 0),
+          captured_at: new Date().toISOString()
+        }
+      : undefined;
+    void submitAssistantText(assistantActionPrompt, undefined, "webgis", "text", "knowledge", snapshot);
+  }, [assistantActionPrompt, submitAssistantText]);
 
   const handleTemplateRun = useCallback(
     async (templateId: string) => {
@@ -423,9 +1000,9 @@ export default function App() {
         return;
       }
       setDrawerOpen(true);
-      setDrawerTab("units");
+      setDrawerTab("resources");
       const response = await runTemplate(project.project_id, templateId);
-      subscribeToJob(response.job_id);
+      subscribeToJob(response.job_id, "tool");
     },
     [project, subscribeToJob]
   );
@@ -441,7 +1018,7 @@ export default function App() {
     }
     await exportSnapshot(project.project_id, "课堂截图", imageDataUrl, "由 WebGIS 实时交互系统导出");
     await refreshProjectState(project.project_id);
-    appendChat("system", "当前课堂画面已导出到课堂产物列表。");
+    appendChat("tool", "system", "当前课堂画面已导出到课堂产物列表。");
     pushToast("success", "导出完成", "课堂截图已进入左侧产物页。");
   }, [appendChat, project, pushToast, refreshProjectState]);
 
@@ -451,7 +1028,7 @@ export default function App() {
         return;
       }
       const response = await uploadDataset(project.project_id, formData);
-      subscribeToJob(response.job_id);
+      subscribeToJob(response.job_id, "tool");
     },
     [project, subscribeToJob]
   );
@@ -522,7 +1099,7 @@ export default function App() {
       setDrawerTab("search");
       setDrawerOpen(true);
       await refreshProjectState(project.project_id);
-      appendChat("system", response.summary);
+      appendChat("tool", "system", response.summary);
       pushToast("success", `${resolvedMode === "polygon" ? "区域" : "视域"}检索完成`, response.summary);
     },
     [appendChat, onlinePoiEnabled, project, pushToast, refreshProjectState, searchAreaGeometry, searchKeyword]
@@ -530,10 +1107,11 @@ export default function App() {
 
   const handleClearWorkspace = useCallback(async () => {
     pendingMeasureStartRef.current = null;
-    searchAreaSourceRef.current?.clear();
-    highlightSourceRef.current?.clear();
-    lastPoiSignatureRef.current = "";
-    setSearchAreaGeometry(null);
+      searchAreaSourceRef.current?.clear();
+      highlightSourceRef.current?.clear();
+      lastPoiSignatureRef.current = "";
+      setSearchAreaGeometry(null);
+      setFocusedRegion(null);
     setSearchResults([]);
     setSearchSummary("");
     setSelectedFeatureText("");
@@ -547,13 +1125,50 @@ export default function App() {
     pushToast("info", "已清除当前操作", "检索区、测距结果和高亮要素已重置。");
   }, [layerState?.items, project, pushToast, refreshProjectState]);
 
+  const handleToggleTeachingMap = useCallback(async (mapId: string, visible: boolean) => {
+    if (!project) {
+      return;
+    }
+    try {
+      const result = await toggleTeachingMap(project.project_id, mapId, visible);
+      setActiveTeachingMapIds((prev) => {
+        const next = new Set(prev);
+        if (visible) {
+          next.add(mapId);
+        } else {
+          next.delete(mapId);
+        }
+        return next;
+      });
+      // Refresh layers so the new raster layer appears on the map
+      await refreshProjectState(project.project_id);
+      // Optionally fly to the map's recommended view
+      if (visible && result.view?.center && result.view?.zoom) {
+        const map = mapRef.current;
+        if (map) {
+          map.getView().animate({
+            center: fromLonLat(result.view.center),
+            zoom: result.view.zoom,
+            duration: 600,
+          });
+        }
+      }
+    } catch (error: unknown) {
+      pushToast("error", "教学地图切换失败", String(error));
+    }
+  }, [project, pushToast, refreshProjectState]);
+
   const handleResetView = useCallback(() => {
     const map = mapRef.current;
     if (!map) {
       return;
     }
-    map.getView().setCenter(fromLonLat([104, 35]));
-    map.getView().setZoom(4);
+    map.getView().animate({
+      center: fromLonLat([104, 35]),
+      zoom: 4,
+      duration: 1000,
+      easing: easeOut,
+    });
   }, []);
 
   useEffect(() => {
@@ -575,18 +1190,25 @@ export default function App() {
       })
     });
 
-    const highlightSource = new VectorSource();
-    const highlightLayer = new VectorLayer({
-      source: highlightSource,
-      zIndex: 170,
-      style: new Style({
-        image: new CircleStyle({
-          radius: 10,
-          fill: new Fill({ color: "rgba(251, 146, 60, 0.45)" }),
-          stroke: new Stroke({ color: "#fff7ed", width: 2.2 })
-        })
-      })
-    });
+      const highlightSource = new VectorSource();
+      const highlightLayer = new VectorLayer({
+        source: highlightSource,
+        zIndex: 170,
+        style: (feature) => {
+          const geometryType = feature.getGeometry()?.getType() || "";
+          return new Style({
+            fill: geometryType.includes("Polygon") ? new Fill({ color: "rgba(56, 189, 248, 0.2)" }) : undefined,
+            stroke: new Stroke({ color: "#67e8f9", width: 3.2 }),
+            image: geometryType.includes("Point")
+              ? new CircleStyle({
+                  radius: 10,
+                  fill: new Fill({ color: "rgba(56, 189, 248, 0.45)" }),
+                  stroke: new Stroke({ color: "#ecfeff", width: 2.2 })
+                })
+              : undefined
+          });
+        }
+      });
 
     const map = new Map({
       target: mapElementRef.current,
@@ -642,16 +1264,41 @@ export default function App() {
         | { feature: { getProperties: () => Record<string, unknown> }; layer: unknown }
         | undefined;
 
-      if (!hit || hit.layer === searchAreaLayer || hit.layer === highlightLayer) {
-        setSelectedFeatureText("");
-        highlightSource.clear();
-        return;
-      }
+        if (!hit || hit.layer === searchAreaLayer || hit.layer === highlightLayer) {
+          setSelectedFeatureText("");
+          setFocusedRegion(null);
+          highlightSource.clear();
+          return;
+        }
 
-      const properties = { ...hit.feature.getProperties() } as Record<string, unknown>;
-      delete properties.geometry;
-      setSelectedFeatureText(formatFeatureSummary(properties));
-    };
+        const feature = hit.feature as any;
+        const properties = { ...feature.getProperties() } as Record<string, unknown>;
+        delete properties.geometry;
+        setSelectedFeatureText(formatFeatureSummary(properties));
+        const geometry = feature.getGeometry?.();
+        if (geometry) {
+          const cloned = geometry.clone();
+          highlightSource.clear();
+          const highlighted = feature.clone ? feature.clone() : undefined;
+          if (highlighted?.setGeometry) {
+            highlighted.setGeometry(cloned);
+            highlightSource.addFeature(highlighted);
+          }
+          const extent = cloned.getExtent();
+          const centerPixel = map.getPixelFromCoordinate(getCenter(extent)) as [number, number];
+          const layerId =
+            Array.from(vectorLayerByIdRef.current.entries()).find(([, layer]) => layer === hit.layer)?.[0] || "";
+          setFocusedRegion({
+            label: regionLabel(properties),
+            layerId,
+            properties,
+            pixel: centerPixel
+          });
+          if (cloned.getType?.().includes("Polygon")) {
+            map.getView().fit(extent, { duration: 560, padding: [92, 360, 92, 360], maxZoom: 8 });
+          }
+        }
+      };
 
     searchAreaSourceRef.current = searchAreaSource;
     highlightSourceRef.current = highlightSource;
@@ -668,7 +1315,8 @@ export default function App() {
       map.un("singleclick", handleClick);
       map.setTarget(undefined);
       basemapLayersRef.current = [];
-      businessLayersRef.current = [];
+        businessLayersRef.current = [];
+        vectorLayerByIdRef.current.clear();
       searchAreaSourceRef.current = null;
       highlightSourceRef.current = null;
       mapRef.current = null;
@@ -690,9 +1338,21 @@ export default function App() {
       }
       setProject(created);
       await refreshProjectState(created.project_id);
+      await loadKnowledgeBase();
+      // Load teaching maps catalog
+      try {
+        const tmaps = await fetchTeachingMaps();
+        if (!cancelled) {
+          setTeachingMaps(tmaps.items);
+        }
+        const active = await fetchActiveTeachingMaps(created.project_id);
+        if (!cancelled) {
+          setActiveTeachingMapIds(new Set(active.active));
+        }
+      } catch {
+        // teaching maps are optional – do not block init
+      }
       pushToast("success", "课堂项目已创建", "已初始化课堂地图环境。");
-      const response = await runTemplate(created.project_id, "generic_classroom_pack");
-      subscribeToJob(response.job_id);
     })().catch((error: Error) => {
       setInitError(error.message);
       pushToast("error", "初始化失败", error.message);
@@ -701,7 +1361,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [initAttempt, pushToast, refreshProjectState, subscribeToJob]);
+  }, [initAttempt, loadKnowledgeBase, pushToast, refreshProjectState, subscribeToJob]);
 
   useEffect(() => {
     if (!mapRef.current || !layerState?.base_map) {
@@ -789,9 +1449,10 @@ export default function App() {
       return;
     }
     const map = mapRef.current;
-    const format = new GeoJSON();
-    businessLayersRef.current.forEach((layer) => map.removeLayer(layer));
-    businessLayersRef.current = [];
+      const format = new GeoJSON();
+      businessLayersRef.current.forEach((layer) => map.removeLayer(layer));
+      businessLayersRef.current = [];
+      vectorLayerByIdRef.current.clear();
 
     layerState.items
       .slice()
@@ -821,21 +1482,25 @@ export default function App() {
           dataProjection: "EPSG:4326",
           featureProjection: "EPSG:3857"
         });
-        const vectorLayer = new VectorLayer({
-          source: new VectorSource({ features }),
-          visible: record.visible,
-          opacity: record.opacity,
-          zIndex: record.z_index,
-          style: layerStyle(record)
-        });
-        businessLayersRef.current.push(vectorLayer);
+          const vectorLayer = new VectorLayer({
+            source: new VectorSource({ features }),
+            visible: record.visible,
+            opacity: record.opacity,
+            zIndex: record.z_index,
+            style: layerStyle(record)
+          });
+          vectorLayerByIdRef.current.set(record.layer_id, vectorLayer);
+          businessLayersRef.current.push(vectorLayer);
         map.addLayer(vectorLayer);
       });
 
     const serverViewSignature = JSON.stringify(layerState.view || {});
     if (serverViewSignature !== lastAppliedViewRef.current) {
-      map.getView().setCenter(fromLonLat(layerState.view.center || [104, 35]));
-      map.getView().setZoom(layerState.view.zoom || 4);
+      const targetCenter = fromLonLat(layerState.view.center || [104, 35]);
+      const targetZoom = layerState.view.zoom || 4;
+      map.getView().animate(
+        { center: targetCenter, zoom: targetZoom, duration: 1200, easing: easeOut },
+      );
       lastAppliedViewRef.current = serverViewSignature;
     }
 
@@ -924,6 +1589,16 @@ export default function App() {
       <div className="map-vignette" />
       <div className="map-grid-overlay" />
       <div className="map-scanline" />
+      <RegionFocusOverlay
+        label={focusedRegion?.label || ""}
+        pixel={focusedRegion?.pixel || null}
+        materials={focusedRegionMaterials}
+        onOpenMaterials={() => {
+          setMaterialViewerTitle(focusedRegion?.label || "地区教学资料");
+          setMaterialViewerItems(focusedRegionMaterials);
+          setMaterialViewerOpen(true);
+        }}
+      />
 
       <header className="app-header glass-panel">
         <div className="brand-block">
@@ -1009,9 +1684,13 @@ export default function App() {
                 setProject(null);
                 setLayerState(null);
                 setOutputs([]);
-                setCurrentJob(null);
+                setCurrentJobByMode({ knowledge: null, tool: null });
+                setConversationIds({ knowledge: "", tool: "" });
                 setSearchResults([]);
                 setSearchSummary("");
+                setKbItems([]);
+                setKbTotal(0);
+                setKbEditingItem(null);
                 setInitAttempt((value) => value + 1);
               }}
             >
@@ -1025,13 +1704,18 @@ export default function App() {
         <main className="workspace-shell qgis-mode-shell">
           <QgisProfessionalPage
             projectId={project?.project_id || ""}
+            assistantMode={assistantMode}
             chatLog={chatLog}
             currentJob={currentJob}
             assistantInput={assistantInput}
             onAssistantInputChange={setAssistantInput}
+            onAssistantModeChange={setAssistantMode}
             onSubmitAssistant={(message, target) => {
-              void submitAssistantText(message, undefined, target);
+              void submitAssistantText(message, undefined, target, "text", assistantMode);
               setAssistantInput("");
+            }}
+            onConfirm={(confirmationId, decision = "approve") => {
+              void confirmAssistantAction(confirmationId, decision).then((response) => subscribeToJob(response.job_id, assistantMode));
             }}
             onBackToClassroom={() => setWorkspaceMode("classroom")}
             busy={busy}
@@ -1042,12 +1726,16 @@ export default function App() {
         <SideDrawer
           open={drawerOpen}
           activeTab={drawerTab}
-          templates={health?.templates || []}
+          topics={kbTopics}
           layerState={layerState}
-          outputs={outputs}
-          searchResults={searchResults}
-          searchSummary={searchSummary}
-          statusSummary={statusSummary}
+            outputs={outputs}
+            searchResults={searchResults}
+            searchSummary={searchSummary}
+            resourceQuery={resourceQuery}
+            resourceScope={resourceScope}
+            resourceLoading={resourceLoading}
+            resourceResults={resourceResults}
+            statusSummary={statusSummary}
           onToggleOpen={() => setDrawerOpen((value) => !value)}
           onChangeTab={setDrawerTab}
           onToggleLayer={(layerId, visible) => {
@@ -1056,17 +1744,29 @@ export default function App() {
             }
             void patchLayer(project.project_id, layerId, { visible }).then(() => refreshProjectState(project.project_id));
           }}
-          onSelectLayer={(layerId) => {
-            if (!project) {
-              return;
-            }
-            void patchLayer(project.project_id, layerId, { active: true }).then(() => refreshProjectState(project.project_id));
-          }}
+            onSelectLayer={(layerId) => {
+              if (!project) {
+                return;
+              }
+              void patchLayer(project.project_id, layerId, { active: true, visible: true })
+                .then(() => refreshProjectState(project.project_id))
+                .then(() => focusLayerExtent(layerId));
+            }}
           onFocusResult={focusPoiResult}
-          onRunTemplate={(templateId) => {
-            void handleTemplateRun(templateId);
-          }}
-        />
+            onOpenKnowledgeTopic={(topic) => {
+              setKbQuery((previous) => ({ ...previous, topic, query: "", tag: "" }));
+              void runKbSearch({ topic, query: "", tag: "" });
+              setDrawerOpen(true);
+              setDrawerTab("resources");
+            }}
+            onResourceQueryChange={(value) => {
+              setResourceQuery(value);
+              setDrawerTab("resource-search");
+            }}
+            onResourceScopeChange={setResourceScope}
+            onOpenResourceResult={handleOpenResourceResult}
+            onImportResourceResult={handleImportResourceResult}
+          />
 
         <section className="map-workspace" aria-hidden="true" />
 
@@ -1075,7 +1775,11 @@ export default function App() {
             <div className="tool-group-header">
               <span>课堂动作</span>
             </div>
-            <button type="button" className="tool-button active" onClick={() => void submitAssistantText(assistantActionPrompt)}>
+            <button
+              type="button"
+              className="tool-button active"
+              onClick={() => void handleReadMapWithSnapshot()}
+            >
               读图讲解
             </button>
           </section>
@@ -1119,7 +1823,7 @@ export default function App() {
                 if (!map) {
                   return;
                 }
-                map.getView().setZoom((map.getView().getZoom() || 4) + 1);
+                map.getView().animate({ zoom: (map.getView().getZoom() || 4) + 1, duration: 300 });
               }}
             >
               放大
@@ -1132,36 +1836,65 @@ export default function App() {
                 if (!map) {
                   return;
                 }
-                map.getView().setZoom((map.getView().getZoom() || 4) - 1);
+                map.getView().animate({ zoom: (map.getView().getZoom() || 4) - 1, duration: 300 });
               }}
             >
               缩小
             </button>
           </section>
+
+          <TeachingMapPanel
+            items={teachingMaps}
+            activeIds={activeTeachingMapIds}
+            busy={busy}
+            onToggle={handleToggleTeachingMap}
+          />
+
         </aside>
         </main>
       )}
 
       {workspaceMode === "classroom" ? (
         <CopilotWidget
+          assistantMode={assistantMode}
           chatLog={chatLog}
           currentJob={currentJob}
           inputValue={assistantInput}
           onInputChange={setAssistantInput}
+          onAssistantModeChange={setAssistantMode}
           onSubmit={() => {
             const message = assistantInput.trim();
             if (!message) {
               return;
             }
-            void submitAssistantText(message);
+            void submitAssistantText(message, undefined, "webgis", "text", assistantMode);
             setAssistantInput("");
+          }}
+          onConfirm={(confirmationId, decision = "approve") => {
+            void confirmAssistantAction(confirmationId, decision).then((response) => subscribeToJob(response.job_id, assistantMode));
+          }}
+          onVoiceSubmit={(message) => {
+            const transcript = message.trim();
+            if (!transcript) {
+              return;
+            }
+            void submitAssistantText(transcript, undefined, "webgis", "voice", assistantMode);
+          }}
+          onVoiceNotice={(tone, title, detail) => {
+            pushToast(tone, title, detail);
           }}
           busy={busy}
         />
       ) : null}
 
-      <ToastStack items={toasts} onDismiss={dismissToast} />
-      <UploadDialog open={uploadOpen} busy={busy} onClose={() => setUploadOpen(false)} onSubmit={handleUploadDataset} />
-    </div>
+        <ToastStack items={toasts} onDismiss={dismissToast} />
+        <TeachingMaterialViewer
+          open={materialViewerOpen}
+          title={materialViewerTitle}
+          materials={materialViewerItems}
+          onClose={() => setMaterialViewerOpen(false)}
+        />
+        <UploadDialog open={uploadOpen} busy={busy} onClose={() => setUploadOpen(false)} onSubmit={handleUploadDataset} />
+      </div>
   );
 }

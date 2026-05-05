@@ -192,19 +192,262 @@ if ($focused) {
                 return {"ok": True, "message": raw_output}
         return {"ok": True, "message": "QGIS window focused"}
 
-    def fallback_plan(self, message: str) -> Dict[str, Any]:
+    def fallback_plan(self, message: str, qgis_layers: "List[Dict[str, Any]] | None" = None) -> Dict[str, Any]:
         lowered = (message or "").lower()
-        if any(token in lowered for token in ["导出", "export", "地图"]):
+
+        # --- Specific: 上海人口密度 heatmap + export ---
+        if "上海" in lowered and "人口密度" in lowered and any(token in lowered for token in ["制作", "生成", "创建", "存储", "导出"]):
+            output_dir = self.config.outputs_dir / "qgis_preclass"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = output_dir / "shanghai_population_density.png"
+            return {
+                "assistant_message": "我将按 QGIS 专业模式生成上海人口密度热力图并导出为课前材料；请确保 QGIS 中已加载上海人口点或人口密度图层。",
+                "target": "qgis",
+                "actions": [
+                    {"tool_name": "get_layers", "tool_params": {}},
+                    {"tool_name": "create_heatmap", "tool_params": {"layer_name": "上海人口密度"}},
+                    {"tool_name": "export_map", "tool_params": {"file_path": str(output_path), "layout_name": "上海人口密度分布图"}},
+                ],
+            }
+
+        # --- Generic: map creation / visualization requests ---
+        create_tokens = ("制作", "生成", "创建", "绘制", "建立", "渲染", "create", "generate", "render", "draw")
+        viz_tokens = ("热力图", "流向图", "分布图", "专题图", "heatmap", "flow")
+        has_create = any(token in lowered for token in create_tokens)
+        has_viz = any(token in lowered for token in viz_tokens)
+        if has_create or has_viz:
+            # Try to match an actual QGIS layer first, then fall back to text extraction
+            matched_layer = self._match_qgis_layer(lowered, qgis_layers)
+            layer_hint = matched_layer or self._extract_layer_hint(lowered)
+
+            actions: List[Dict[str, Any]] = []
+            if self._is_population_distribution_request(lowered):
+                actions = self._build_population_distribution_actions(qgis_layers, layer_hint)
+            if "热力图" in lowered or "heatmap" in lowered:
+                params: Dict[str, Any] = {"layer_name": layer_hint} if layer_hint else {}
+                actions.append({"tool_name": "create_heatmap", "tool_params": params})
+            elif "流向" in lowered or "流线" in lowered or "flow" in lowered:
+                params = {"layer_name": layer_hint} if layer_hint else {}
+                actions.append({"tool_name": "create_flow_arrows", "tool_params": params})
+            elif not actions:
+                # General map creation: activate layer + set style + zoom
+                if layer_hint:
+                    actions.append({"tool_name": "set_layer_visibility", "tool_params": {"layer_name": layer_hint, "visible": True}})
+                    actions.append({"tool_name": "set_active_layer", "tool_params": {"layer_name": layer_hint}})
+                    actions.append({"tool_name": "zoom_to_layer", "tool_params": {"layer_name": layer_hint}})
+                else:
+                    output_dir = self.config.outputs_dir / "qgis_exports"
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    output_path = output_dir / "map_export.png"
+                    actions.append({"tool_name": "export_map", "tool_params": {"file_path": str(output_path)}})
+
+            if matched_layer:
+                assistant_msg = f"已在 QGIS 中找到图层「{matched_layer}」，将对其执行可视化操作。"
+            elif layer_hint:
+                assistant_msg = f"将尝试对图层「{layer_hint}」执行可视化操作。请确认 QGIS 中已加载该图层。"
+            else:
+                assistant_msg = "将执行可视化操作。请确认 QGIS 中已加载相关数据图层。"
+
+            return {
+                "assistant_message": assistant_msg,
+                "target": "qgis",
+                "actions": actions,
+            }
+
+        # --- Export / map ---
+        if any(token in lowered for token in ["导出", "export"]):
             return {
                 "assistant_message": "QGIS 专业模式当前未配置 MiniMax，已为你准备地图导出提示；请在专业页手动填写导出路径后执行。",
                 "target": "qgis",
                 "actions": [{"tool_name": "get_layers", "tool_params": {}}],
             }
+
+        # --- Default fallback ---
         return {
             "assistant_message": "QGIS 专业模式当前使用规则兜底。我先读取 QGIS 图层状态，复杂自然语言规划需要配置 MiniMax API。",
             "target": "qgis",
             "actions": [{"tool_name": "get_layers", "tool_params": {}}],
         }
+
+    @staticmethod
+    def _match_qgis_layer(message_lower: str, qgis_layers: "List[Dict[str, Any]] | None") -> str:
+        """Match the user's request to an actual QGIS layer by keyword overlap."""
+        if not qgis_layers:
+            return ""
+
+        # Extract topic keywords from the user message
+        topic_keywords: List[str] = []
+        bilingual_topics = (
+            ("人口", "population"),
+            ("密度", "density"),
+            ("气温", "temperature"),
+            ("降水", "precipitation"),
+            ("地形", "terrain"),
+            ("土壤", "soil"),
+            ("迁移", "migration"),
+            ("经济", "gdp"),
+            ("交通", "transport"),
+        )
+        for zh_token, en_token in bilingual_topics:
+            if zh_token in message_lower or en_token in message_lower:
+                topic_keywords.extend([zh_token, en_token])
+        if "gdp" in message_lower:
+            topic_keywords.append("gdp")
+
+        if not topic_keywords:
+            return ""
+
+        has_migration_intent = "迁移" in message_lower or "migration" in message_lower or "流向" in message_lower or "flow" in message_lower
+        best_layer = ""
+        best_score = 0
+        for layer_info in qgis_layers:
+            layer_name = str(layer_info.get("name") or layer_info.get("layer_name") or "").lower()
+            if not layer_name:
+                continue
+            score = sum(1 for kw in topic_keywords if kw in layer_name)
+            if has_migration_intent:
+                if "migration" in layer_name or "flow" in layer_name:
+                    score += 4
+                elif "population" in layer_name:
+                    score -= 2
+            if score > best_score:
+                best_score = score
+                # Return the original (non-lowered) name
+                best_layer = str(layer_info.get("name") or layer_info.get("layer_name") or "")
+        return best_layer
+
+    @staticmethod
+    def _extract_layer_hint(lowered: str) -> str:
+        """Try to extract a plausible layer name from a Chinese natural language request."""
+        import re as _re
+
+        # Pattern: "中国人口分布图" → "中国人口"; "上海GDP图" → "上海GDP"
+        match = _re.search(r"([一-鿿A-Za-z0-9]{2,}?)(?:分布)?(?:地图|图)", lowered)
+        if match:
+            candidate = match.group(1)
+            skip = {"制作", "生成", "创建", "绘制", "建立", "导出", "一张", "一个", "一幅"}
+            if candidate not in skip and len(candidate) >= 2:
+                return candidate
+        return ""
+
+    @staticmethod
+    def _is_population_distribution_request(lowered: str) -> bool:
+        has_population_topic = any(token in lowered for token in ("人口", "population", "density", "pd_"))
+        has_distribution_intent = any(token in lowered for token in ("分布", "密度", "分布图", "专题图", "choropleth"))
+        has_map_create_intent = any(token in lowered for token in ("制作", "生成", "创建", "绘制", "渲染", "create", "generate", "draw", "render"))
+        return bool(has_population_topic and (has_distribution_intent or has_map_create_intent))
+
+    def _build_population_distribution_actions(
+        self,
+        qgis_layers: "List[Dict[str, Any]] | None",
+        layer_hint: str,
+    ) -> List[Dict[str, Any]]:
+        actions: List[Dict[str, Any]] = []
+        export_path = r"C:\Users\Public\qgis_export_map.png"
+        primary_layer = self._pick_population_primary_layer(qgis_layers, layer_hint)
+        boundary_layer = self._pick_boundary_layer(qgis_layers)
+
+        if primary_layer:
+            ref_params = self._layer_ref_params(primary_layer)
+            actions.append({"tool_name": "set_layer_visibility", "tool_params": {**ref_params, "visible": True}})
+            actions.append({"tool_name": "set_active_layer", "tool_params": dict(ref_params)})
+            actions.append({"tool_name": "zoom_to_layer", "tool_params": dict(ref_params)})
+        elif layer_hint:
+            actions.append({"tool_name": "set_layer_visibility", "tool_params": {"layer_name": layer_hint, "visible": True}})
+            actions.append({"tool_name": "set_active_layer", "tool_params": {"layer_name": layer_hint}})
+            actions.append({"tool_name": "zoom_to_layer", "tool_params": {"layer_name": layer_hint}})
+
+        if primary_layer and boundary_layer:
+            primary_id = str(primary_layer.get("id") or primary_layer.get("layer_id") or "")
+            boundary_id = str(boundary_layer.get("id") or boundary_layer.get("layer_id") or "")
+            primary_name = str(primary_layer.get("name") or primary_layer.get("layer_name") or "")
+            boundary_name = str(boundary_layer.get("name") or boundary_layer.get("layer_name") or "")
+            if not (primary_id and primary_id == boundary_id) and not (primary_name and primary_name == boundary_name):
+                boundary_ref = self._layer_ref_params(boundary_layer)
+                actions.append({"tool_name": "set_layer_visibility", "tool_params": {**boundary_ref, "visible": True}})
+                actions.append({"tool_name": "set_layer_z_order", "tool_params": {**boundary_ref, "position": "top"}})
+
+        if not actions:
+            actions.append({"tool_name": "get_layers", "tool_params": {}})
+        else:
+            actions.append({"tool_name": "export_map", "tool_params": {"file_path": export_path}})
+        return actions
+
+    @staticmethod
+    def _layer_ref_params(layer_info: Dict[str, Any]) -> Dict[str, Any]:
+        layer_id = str(layer_info.get("id") or layer_info.get("layer_id") or "").strip()
+        layer_name = str(layer_info.get("name") or layer_info.get("layer_name") or "").strip()
+        if layer_id:
+            return {"layer_id": layer_id}
+        if layer_name:
+            return {"layer_name": layer_name}
+        return {}
+
+    def _pick_population_primary_layer(
+        self,
+        qgis_layers: "List[Dict[str, Any]] | None",
+        layer_hint: str = "",
+    ) -> "Dict[str, Any] | None":
+        if not qgis_layers:
+            return None
+
+        hint = (layer_hint or "").lower()
+        best_layer: Dict[str, Any] | None = None
+        best_score = -10**9
+        for layer_info in qgis_layers:
+            layer_name = str(layer_info.get("name") or layer_info.get("layer_name") or "").lower()
+            if not layer_name:
+                continue
+
+            geometry_type = str(layer_info.get("geometry_type") or "").lower()
+            raw_type = str(layer_info.get("type") or "").lower()
+            is_raster = "raster" in geometry_type or raw_type in {"1", "raster"}
+
+            score = 0
+            if "migration" in layer_name or "迁移" in layer_name:
+                score -= 120
+            if "population" in layer_name or "人口" in layer_name:
+                score += 120
+            if "density" in layer_name or "密度" in layer_name:
+                score += 90
+            if "_pd_" in layer_name or layer_name.startswith("pd_") or "population_density" in layer_name:
+                score += 120
+            if "province_population" in layer_name:
+                score += 40
+            if "sample" in layer_name:
+                score -= 25
+            if is_raster:
+                score += 60
+            if hint and hint in layer_name:
+                score += 45
+
+            if score > best_score:
+                best_score = score
+                best_layer = layer_info
+        return best_layer if best_score > 0 else None
+
+    @staticmethod
+    def _pick_boundary_layer(qgis_layers: "List[Dict[str, Any]] | None") -> "Dict[str, Any] | None":
+        if not qgis_layers:
+            return None
+
+        best_layer: Dict[str, Any] | None = None
+        best_score = -10**9
+        for layer_info in qgis_layers:
+            layer_name = str(layer_info.get("name") or layer_info.get("layer_name") or "").lower()
+            if not layer_name:
+                continue
+            score = 0
+            if "china_provinces" in layer_name:
+                score += 150
+            if "province" in layer_name or "boundary" in layer_name or "省界" in layer_name:
+                score += 100
+            if "population" in layer_name:
+                score -= 40
+            if score > best_score:
+                best_score = score
+                best_layer = layer_info
+        return best_layer if best_score > 0 else None
 
     @staticmethod
     def schema_for_prompt() -> List[Dict[str, Any]]:

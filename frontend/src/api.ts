@@ -1,10 +1,22 @@
 import type {
+  AssistantMode,
+  AssistantInputMode,
   AssistantTarget,
   ArtifactRecord,
   BasemapCatalog,
   BasemapPreset,
+  ChatMessage,
+  ConversationResponse,
   HealthResponse,
   JobRecord,
+  KnowledgeBaseItem,
+  KnowledgeLayerRegisterResponse,
+  KnowledgeManifestResponse,
+  LessonResourceResponse,
+  LessonResourceSet,
+  MaterialWriteResponse,
+  KnowledgeSearchResponse,
+  KnowledgeTopicsResponse,
   LlmStatusResponse,
   LayersResponse,
   MapContext,
@@ -12,7 +24,10 @@ import type {
   ProjectRecord,
   QgisLayersResponse,
   QgisStatusResponse,
-  QgisToolResponse
+  QgisToolResponse,
+  RegionBinding,
+  ResourceSearchResponse,
+  ScreenSnapshot
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:18999";
@@ -118,13 +133,45 @@ export async function sendAssistantMessage(
   projectId: string,
   message: string,
   mapContext: MapContext,
-  target: AssistantTarget = "webgis"
-): Promise<{ job_id: string }> {
-  return requestJson<{ job_id: string }>("/assistant/messages", {
+  target: AssistantTarget = "webgis",
+  inputMode: AssistantInputMode = "text",
+  options?: {
+    assistantMode?: AssistantMode;
+    conversationId?: string;
+    history?: ChatMessage[];
+    screenSnapshot?: ScreenSnapshot;
+  }
+): Promise<{ job_id: string; conversation_id?: string; assistant_mode?: AssistantMode }> {
+  return requestJson<{ job_id: string; conversation_id?: string; assistant_mode?: AssistantMode }>("/assistant/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ project_id: projectId, message, map_context: mapContext, target })
+    body: JSON.stringify({
+      project_id: projectId,
+      message,
+      map_context: mapContext,
+      assistant_mode: options?.assistantMode || "",
+      conversation_id: options?.conversationId || "",
+      history: options?.history || [],
+      target,
+      input_mode: inputMode,
+      screen_snapshot: options?.screenSnapshot || {}
+    })
   });
+}
+
+export async function confirmAssistantAction(
+  confirmationId: string,
+  decision: "approve" | "reject" = "approve"
+): Promise<{ job_id: string; confirmation_id: string; decision: "approve" | "reject" }> {
+  return requestJson<{ job_id: string; confirmation_id: string; decision: "approve" | "reject" }>("/assistant/confirm", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirmation_id: confirmationId, decision })
+  });
+}
+
+export async function fetchConversation(conversationId: string): Promise<ConversationResponse> {
+  return requestJson<ConversationResponse>(`/assistant/conversations/${encodeURIComponent(conversationId)}`);
 }
 
 export async function searchPoi(
@@ -172,4 +219,178 @@ export async function fetchOutputs(projectId: string): Promise<{ items: Artifact
 
 export async function fetchJob(jobId: string): Promise<JobRecord> {
   return requestJson<JobRecord>(`/jobs/${jobId}`);
+}
+
+export async function fetchKbManifest(): Promise<KnowledgeManifestResponse> {
+  return requestJson<KnowledgeManifestResponse>("/kb/manifest");
+}
+
+export async function fetchKbTopics(): Promise<KnowledgeTopicsResponse> {
+  return requestJson<KnowledgeTopicsResponse>("/kb/topics");
+}
+
+export async function searchKb(params: {
+  query?: string;
+  topic?: string;
+  region?: string;
+  tag?: string;
+  limit?: number;
+}): Promise<KnowledgeSearchResponse> {
+  const query = new URLSearchParams();
+  if (params.query) {
+    query.set("query", params.query);
+  }
+  if (params.topic) {
+    query.set("topic", params.topic);
+  }
+  if (params.region) {
+    query.set("region", params.region);
+  }
+  if (params.tag) {
+    query.set("tag", params.tag);
+  }
+  query.set("limit", String(params.limit ?? 20));
+  return requestJson<KnowledgeSearchResponse>(`/kb/search?${query.toString()}`);
+}
+
+export async function upsertKbItem(item: Partial<KnowledgeBaseItem>): Promise<KnowledgeLayerRegisterResponse> {
+  return requestJson<KnowledgeLayerRegisterResponse>("/kb/items", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ item })
+  });
+}
+
+export async function registerKbLayer(
+  projectId: string,
+  layerId: string,
+  metadata: Record<string, unknown> = {}
+): Promise<KnowledgeLayerRegisterResponse> {
+  return requestJson<KnowledgeLayerRegisterResponse>("/kb/layers/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project_id: projectId,
+      layer_id: layerId,
+      metadata
+    })
+  });
+}
+
+export async function searchResources(params: {
+  query?: string;
+  scope?: "all" | "kb" | "web" | "materials";
+  limit?: number;
+}): Promise<ResourceSearchResponse> {
+  const query = new URLSearchParams();
+  if (params.query) {
+    query.set("query", params.query);
+  }
+  query.set("scope", params.scope || "all");
+  query.set("limit", String(params.limit ?? 12));
+  return requestJson<ResourceSearchResponse>(`/resources/search?${query.toString()}`);
+}
+
+export async function uploadKbMaterial(
+  kbItemId: string,
+  formData: FormData,
+  regionBinding: RegionBinding = {}
+): Promise<MaterialWriteResponse> {
+  formData.set("kb_item_id", kbItemId);
+  formData.set("region_binding", JSON.stringify(regionBinding));
+  return requestJson<MaterialWriteResponse>("/kb/materials/upload", {
+    method: "POST",
+    body: formData
+  });
+}
+
+export async function createKbMaterialLink(payload: {
+  kb_item_id: string;
+  url: string;
+  title?: string;
+  description?: string;
+  material_type?: string;
+  thumbnail_url?: string;
+  region_binding?: RegionBinding;
+}): Promise<MaterialWriteResponse> {
+  return requestJson<MaterialWriteResponse>("/kb/materials/link", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function fetchLessonResources(projectId: string): Promise<LessonResourceResponse> {
+  return requestJson<LessonResourceResponse>(`/projects/${projectId}/lesson-resources`);
+}
+
+export async function saveLessonResourceSet(
+  projectId: string,
+  item: Partial<LessonResourceSet>
+): Promise<LessonResourceResponse & { item: LessonResourceSet }> {
+  return requestJson<LessonResourceResponse & { item: LessonResourceSet }>(`/projects/${projectId}/lesson-resources`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ item })
+  });
+}
+
+export async function activateLessonResourceSet(
+  projectId: string,
+  setId: string,
+  patch: Partial<LessonResourceSet> = { active: true }
+): Promise<LessonResourceResponse> {
+  return requestJson<LessonResourceResponse>(`/projects/${projectId}/lesson-resources/${encodeURIComponent(setId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ patch })
+  });
+}
+
+
+// ── Teaching Maps ──────────────────────────────────────────
+
+export interface TeachingMapItem {
+  id: string;
+  name: string;
+  category: string;
+  category_order: number;
+  bounds: [number, number, number, number];
+  view: { center: [number, number]; zoom: number };
+  opacity: number;
+  keywords: string[];
+  asset_url: string;
+}
+
+export interface TeachingMapsResponse {
+  status: string;
+  items: TeachingMapItem[];
+}
+
+export interface TeachingMapToggleResponse {
+  status: string;
+  layer: Record<string, any> | null;
+  view: { center?: [number, number]; zoom?: number };
+}
+
+export async function fetchTeachingMaps(): Promise<TeachingMapsResponse> {
+  return requestJson<TeachingMapsResponse>("/teaching-maps");
+}
+
+export async function toggleTeachingMap(
+  projectId: string,
+  mapId: string,
+  visible: boolean
+): Promise<TeachingMapToggleResponse> {
+  return requestJson<TeachingMapToggleResponse>(`/projects/${projectId}/teaching-maps/${encodeURIComponent(mapId)}/toggle`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ visible })
+  });
+}
+
+export async function fetchActiveTeachingMaps(
+  projectId: string
+): Promise<{ status: string; active: string[] }> {
+  return requestJson<{ status: string; active: string[] }>(`/projects/${projectId}/teaching-maps/active`);
 }

@@ -80,6 +80,8 @@ TEMPLATE_SPECS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+DISABLED_TEMPLATE_IDS: set[str] = set()
+
 
 def _quantile_thresholds(values: List[float], class_count: int) -> List[float]:
     if not values:
@@ -102,6 +104,7 @@ class TemplateService:
             (
                 {"template_id": template_id, **spec}
                 for template_id, spec in TEMPLATE_SPECS.items()
+                if template_id not in DISABLED_TEMPLATE_IDS
             ),
             key=lambda item: (
                 int(item.get("chapter_order") or 0),
@@ -113,6 +116,8 @@ class TemplateService:
         return {"items": ordered_items}
 
     def apply_template(self, project_id: str, template_id: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if template_id in DISABLED_TEMPLATE_IDS:
+            raise ValueError(f"Template temporarily disabled: {template_id}")
         if template_id not in TEMPLATE_SPECS:
             raise ValueError(f"Unknown template: {template_id}")
         if template_id == "generic_classroom_pack":

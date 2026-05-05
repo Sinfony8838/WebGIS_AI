@@ -2,11 +2,22 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from .models import ArtifactRecord, JobRecord, LayerRecord, ProjectRecord, build_workflow_stages, utc_now
+from .models import (
+    ArtifactRecord,
+    ConfirmationRecord,
+    ConversationRecord,
+    JobRecord,
+    LayerRecord,
+    MessageRecord,
+    ProjectRecord,
+    build_workflow_stages,
+    utc_now,
+)
 
 
 class RuntimeStore:
@@ -16,6 +27,9 @@ class RuntimeStore:
         self.projects: Dict[str, ProjectRecord] = {}
         self.jobs: Dict[str, JobRecord] = {}
         self.artifacts: Dict[str, ArtifactRecord] = {}
+        self.conversations: Dict[str, ConversationRecord] = {}
+        self.messages: Dict[str, MessageRecord] = {}
+        self.confirmations: Dict[str, ConfirmationRecord] = {}
         self._load()
 
     def _load(self) -> None:
@@ -36,16 +50,33 @@ class RuntimeStore:
             self.artifacts = {
                 artifact_id: ArtifactRecord(**data) for artifact_id, data in payload.get("artifacts", {}).items()
             }
+            self.conversations = {
+                conversation_id: ConversationRecord(**self._normalize_conversation_payload(data))
+                for conversation_id, data in payload.get("conversations", {}).items()
+            }
+            self.messages = {
+                message_id: MessageRecord(**data) for message_id, data in payload.get("messages", {}).items()
+            }
+            self.confirmations = {
+                confirmation_id: ConfirmationRecord(**data)
+                for confirmation_id, data in payload.get("confirmations", {}).items()
+            }
         except json.JSONDecodeError:
             self._quarantine_corrupt_state("invalid_json")
             self.projects = {}
             self.jobs = {}
             self.artifacts = {}
+            self.conversations = {}
+            self.messages = {}
+            self.confirmations = {}
         except Exception:
             self._quarantine_corrupt_state("invalid_schema")
             self.projects = {}
             self.jobs = {}
             self.artifacts = {}
+            self.conversations = {}
+            self.messages = {}
+            self.confirmations = {}
 
     def _save(self) -> None:
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
@@ -53,15 +84,36 @@ class RuntimeStore:
             "projects": {project_id: project.to_dict() for project_id, project in self.projects.items()},
             "jobs": {job_id: job.to_dict() for job_id, job in self.jobs.items()},
             "artifacts": {artifact_id: artifact.to_dict() for artifact_id, artifact in self.artifacts.items()},
+            "conversations": {
+                conversation_id: conversation.to_dict() for conversation_id, conversation in self.conversations.items()
+            },
+            "messages": {message_id: message.to_dict() for message_id, message in self.messages.items()},
+            "confirmations": {
+                confirmation_id: confirmation.to_dict()
+                for confirmation_id, confirmation in self.confirmations.items()
+            },
         }
         serialized = json.dumps(payload, ensure_ascii=False, indent=2)
         temp_path = self.state_file.with_suffix(f"{self.state_file.suffix}.{uuid4().hex}.tmp")
         try:
             temp_path.write_text(serialized, encoding="utf-8")
-            temp_path.replace(self.state_file)
+            last_error: Optional[Exception] = None
+            for _ in range(3):
+                try:
+                    temp_path.replace(self.state_file)
+                    last_error = None
+                    break
+                except PermissionError as exc:
+                    last_error = exc
+                    time.sleep(0.05)
+            if last_error is not None:
+                raise last_error
         finally:
             if temp_path.exists():
-                temp_path.unlink(missing_ok=True)
+                try:
+                    temp_path.unlink()
+                except OSError:
+                    pass
 
     def _quarantine_corrupt_state(self, reason: str) -> None:
         if not self.state_file.exists():
@@ -73,6 +125,18 @@ class RuntimeStore:
             self.state_file.replace(backup_path)
         except OSError:
             return
+
+    def _normalize_conversation_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(payload or {})
+        normalized.setdefault("raw_messages", [])
+        normalized.setdefault("running_summary", "")
+        normalized.setdefault("task_memory", {})
+        normalized.setdefault("pinned_state", {})
+        normalized.setdefault("last_map_grounding", {})
+        normalized.setdefault("message_ids", [])
+        normalized.setdefault("assistant_mode", "tool")
+        normalized.setdefault("updated_at", normalized.get("created_at") or utc_now())
+        return normalized
 
     def create_project(
         self,
@@ -89,6 +153,98 @@ class RuntimeStore:
     def get_project(self, project_id: str) -> Optional[ProjectRecord]:
         with self._lock:
             return self.projects.get(project_id)
+
+    def create_conversation(self, project_id: str, assistant_mode: str) -> ConversationRecord:
+        with self._lock:
+            if project_id not in self.projects:
+                raise KeyError(f"Unknown project: {project_id}")
+            conversation = ConversationRecord.create(project_id=project_id, assistant_mode=assistant_mode)
+            self.conversations[conversation.conversation_id] = conversation
+            self._save()
+            return conversation
+
+    def get_conversation(self, conversation_id: str) -> Optional[ConversationRecord]:
+        with self._lock:
+            return self.conversations.get(conversation_id)
+
+    def save_conversation(self, conversation: ConversationRecord) -> ConversationRecord:
+        with self._lock:
+            conversation.updated_at = utc_now()
+            self.conversations[conversation.conversation_id] = conversation
+            self._save()
+            return conversation
+
+    def append_conversation_message(
+        self,
+        conversation_id: str,
+        role: str,
+        text: str,
+        assistant_mode: str = "",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> MessageRecord:
+        with self._lock:
+            conversation = self.conversations[conversation_id]
+            message = MessageRecord.create(
+                conversation_id=conversation_id,
+                role=role,
+                text=text,
+                assistant_mode=assistant_mode or conversation.assistant_mode,
+                metadata=metadata,
+            )
+            self.messages[message.message_id] = message
+            conversation.message_ids.append(message.message_id)
+            conversation.raw_messages.append(message.to_dict())
+            conversation.updated_at = utc_now()
+            self._save()
+            return message
+
+    def list_conversation_messages(self, conversation_id: str) -> List[MessageRecord]:
+        with self._lock:
+            conversation = self.conversations.get(conversation_id)
+            if not conversation:
+                return []
+            return [self.messages[message_id] for message_id in conversation.message_ids if message_id in self.messages]
+
+    def create_confirmation(
+        self,
+        project_id: str,
+        conversation_id: str,
+        job_id: str,
+        assistant_mode: str,
+        title: str,
+        reason: str,
+        plan_fingerprint: str = "",
+        payload: Optional[Dict[str, Any]] = None,
+        expires_at: str = "",
+    ) -> ConfirmationRecord:
+        with self._lock:
+            confirmation = ConfirmationRecord.create(
+                project_id=project_id,
+                conversation_id=conversation_id,
+                job_id=job_id,
+                assistant_mode=assistant_mode,
+                title=title,
+                reason=reason,
+                plan_fingerprint=plan_fingerprint,
+                payload=payload,
+                expires_at=expires_at,
+            )
+            self.confirmations[confirmation.confirmation_id] = confirmation
+            self._save()
+            return confirmation
+
+    def get_confirmation(self, confirmation_id: str) -> Optional[ConfirmationRecord]:
+        with self._lock:
+            return self.confirmations.get(confirmation_id)
+
+    def resolve_confirmation(self, confirmation_id: str, status: str) -> ConfirmationRecord:
+        with self._lock:
+            confirmation = self.confirmations[confirmation_id]
+            confirmation.status = status
+            confirmation.updated_at = utc_now()
+            confirmation.resolved_at = utc_now()
+            self._save()
+            return confirmation
 
     def save_project(self, project: ProjectRecord) -> ProjectRecord:
         with self._lock:
