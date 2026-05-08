@@ -1014,6 +1014,15 @@ class WebGISRuntime:
                     focus=params.get("focus", ""),
                     screen_snapshot=screen_snapshot,
                 )
+                if vision_result.get("used_vision") and vision_result.get("summary"):
+                    content = "\n\n".join(
+                        [
+                            str(vision_result.get("summary") or "").strip(),
+                            "---",
+                            "结构化地图上下文补充：",
+                            content,
+                        ]
+                    )
                 if not vision_result.get("used_vision") and vision_result.get("reason"):
                     content = f"{content}\n\n注意事项：{vision_result['reason']}"
             note = self._write_text_output(project_id, "assistant_explanation", content)
