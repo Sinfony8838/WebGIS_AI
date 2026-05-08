@@ -11,17 +11,18 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from .config import AppConfig
-from .models import LayerRecord, ProjectRecord, build_assistant_v2_stages, build_workflow_stages, utc_now
+from .models import LayerRecord, ProjectRecord, WorkflowRecord, build_assistant_v2_stages, build_workflow_stages, utc_now
 from .services.assistant import ASSISTANT_TOOL_SCHEMA, AssistantService
 from .services.datasets import DatasetService
 from .services.knowledge_base import KnowledgeBaseService
 from .services.llm_planner import LLMPlanner
 from .services.minimax_client import MiniMaxClient
 from .services.poi import PoiService
-from .services.qgis_bridge import QGIS_ALLOWED_TOOLS, QgisBridgeClient
 from .services.resource_search import ResourceSearchService
 from .services.session_engine import AssistantSessionEngine
 from .services.teaching_maps import TeachingMapService
+from .services.workflow_executor import WorkflowExecutor
+from .services.workflow_templates import detect_template, expand_template, list_templates
 from .services.templates import DISABLED_TEMPLATE_IDS, TemplateService
 from .services.vision import MapVisionService
 from .store import RuntimeStore
@@ -30,6 +31,28 @@ from .store import RuntimeStore
 TRANSPARENT_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR42mP8z8BQDwAFgwJ/lU9nWQAAAABJRU5ErkJggg=="
 )
+
+
+def _fallback_summary(record: "WorkflowRecord", stats_payload: Dict[str, Any]) -> str:
+    """Plain-text summary used when MiniMax is unavailable."""
+    lines: List[str] = []
+    if record.intent:
+        lines.append(f"### {record.intent}")
+    summary = (stats_payload or {}).get("summary") or {}
+    if summary:
+        snippet_keys = list(summary.keys())[:6]
+        details = "，".join(f"{k}: {summary[k]}" for k in snippet_keys)
+        if details:
+            lines.append(f"统计要点：{details}。")
+    rows = (stats_payload or {}).get("rows") or []
+    if rows:
+        first = rows[0]
+        if isinstance(first, dict):
+            sample = "、".join(f"{k}={v}" for k, v in list(first.items())[:3])
+            lines.append(f"示例：{sample}。")
+    if not lines:
+        lines.append("分析任务已完成，可在右侧查看图层、图例和统计表。")
+    return "\n\n".join(lines)
 
 
 class WebGISRuntime:
@@ -45,20 +68,23 @@ class WebGISRuntime:
         self.poi_service = PoiService(self.config, self.store)
         self.vision_service = MapVisionService(self.config)
         self.minimax_client = MiniMaxClient(self.config)
-        self.qgis_bridge = QgisBridgeClient(self.config)
         self.teaching_map_service = TeachingMapService(self.config, self.store)
         self.assistant_service.teaching_map_service = self.teaching_map_service
         self.assistant_service.minimax_client = self.minimax_client
-        self.llm_planner = LLMPlanner(self.minimax_client, self.assistant_service, self.qgis_bridge)
+        self.llm_planner = LLMPlanner(self.minimax_client, self.assistant_service)
         self.session_engine = AssistantSessionEngine(
             self.config,
             self.store,
             self.llm_planner,
             self.assistant_service,
             self._execute_assistant_action,
-            self._execute_qgis_action,
         )
         self.session_engine.set_resource_search(self.resource_search_service)
+        self.workflow_executor = WorkflowExecutor(
+            self.config,
+            self.store,
+            summary_callback=self._generate_workflow_summary,
+        )
         self._normalize_loaded_projects()
 
     def health(self) -> Dict[str, Any]:
@@ -81,7 +107,11 @@ class WebGISRuntime:
             },
             "llm": self.minimax_client.status(),
             "vision": self.vision_service.status(),
-            "qgis": self.config.qgis_status_config(),
+            "pyqgis_workflow": {
+                "enabled": True,
+                "qgis_root": self.config.qgis_root or "",
+                "init_warning": self.workflow_executor.init_warning() if hasattr(self, "workflow_executor") else None,
+            },
             "basemaps": self.config.basemap_catalog(),
             "templates": self.template_service.list_templates()["items"],
             "knowledge_base": {
@@ -250,22 +280,6 @@ class WebGISRuntime:
     def llm_status(self) -> Dict[str, Any]:
         return {"status": "success", **self.minimax_client.status()}
 
-    def qgis_status(self) -> Dict[str, Any]:
-        return {"status": "success", **self.qgis_bridge.status()}
-
-    def qgis_layers(self) -> Dict[str, Any]:
-        return {"status": "success", "result": self.qgis_bridge.layers()}
-
-    def qgis_focus(self) -> Dict[str, Any]:
-        focus = self.qgis_bridge.focus_window()
-        return {"status": "success" if focus.get("ok") else "error", **focus}
-
-    def qgis_execute_tool(self, tool_name: str, tool_params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        if tool_name not in QGIS_ALLOWED_TOOLS:
-            raise ValueError(f"QGIS tool is not allowed: {tool_name}")
-        result = self.qgis_bridge.execute(tool_name, tool_params or {})
-        return {"status": "success", "result": result}
-
     def list_basemaps(self) -> Dict[str, Any]:
         return {"status": "success", **self.config.basemap_catalog()}
 
@@ -430,7 +444,8 @@ class WebGISRuntime:
         input_mode: str = "text",
         screen_snapshot: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        normalized_target = target if target in {"webgis", "qgis", "auto"} else "webgis"
+        # PyQGIS heavy work moved to /workflow/* — assistant is WebGIS-only.
+        normalized_target = "webgis"
         normalized_input_mode = input_mode if input_mode in {"text", "voice"} else "text"
         normalized_mode = assistant_mode if assistant_mode in {"knowledge", "tool"} else "tool"
         use_v2 = self.config.assistant_v2_enabled or assistant_mode == "knowledge" or bool(conversation_id) or bool(history)
@@ -581,6 +596,131 @@ class WebGISRuntime:
         items = [item for item in self.store.list_outputs(project_id=project_id) if item.get("artifact_type") in teacher_facing]
         return {"status": "success", "items": items}
 
+    # ------------------------------------------------------------------
+    # PyQGIS workflow API helpers
+    # ------------------------------------------------------------------
+
+    def list_workflow_templates(self) -> Dict[str, Any]:
+        return {"status": "success", "items": list_templates()}
+
+    def submit_workflow(
+        self,
+        project_id: str,
+        message: str,
+        mode: str = "template",
+        template_id: str = "",
+        parameters: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Build a workflow JSON from a template (or accept caller-built JSON)
+        and hand it off to :class:`WorkflowExecutor`."""
+        params = dict(parameters or {})
+        params.setdefault("project_id", project_id)
+        chosen_template = template_id or detect_template(message) or "population_choropleth"
+        try:
+            match = expand_template(chosen_template, message, params)
+        except KeyError as exc:
+            raise KeyError(f"Unknown workflow template: {chosen_template}") from exc
+
+        workflow_record = WorkflowRecord.create(
+            project_id=project_id,
+            user_message=message,
+            intent=match.intent,
+            template_id=match.template_id,
+            mode=mode,
+            workflow_json=match.workflow,
+        )
+        workflow_record, _validation = self.workflow_executor.submit(workflow_record)
+        return {
+            "status": "success" if workflow_record.status != "error" else "error",
+            "workflow_id": workflow_record.workflow_id,
+            "workflow_status": workflow_record.status,
+            "intent": workflow_record.intent,
+            "template_id": match.template_id,
+            "parameters": match.parameters,
+            "error": workflow_record.error,
+        }
+
+    def get_workflow(self, workflow_id: str) -> Dict[str, Any]:
+        record = self.store.get_workflow(workflow_id)
+        if record is None:
+            raise KeyError(f"Unknown workflow: {workflow_id}")
+        return {"status": "success", **record.to_dict()}
+
+    def list_workflow_artifacts(self, workflow_id: str) -> Dict[str, Any]:
+        record = self.store.get_workflow(workflow_id)
+        if record is None:
+            raise KeyError(f"Unknown workflow: {workflow_id}")
+        return {
+            "status": "success",
+            "workflow_id": workflow_id,
+            "artifacts": list(record.artifacts),
+        }
+
+    def list_workflows(self, project_id: Optional[str] = None) -> Dict[str, Any]:
+        return {"status": "success", "items": self.store.list_workflows(project_id=project_id)}
+
+    def stream_workflow_events(self, workflow_id: str):
+        return self.workflow_executor.stream(workflow_id)
+
+    def workflow_init_warning(self) -> Optional[Dict[str, Any]]:
+        return self.workflow_executor.init_warning()
+
+    def resolve_workflow_file(self, workflow_id: str, relative: str) -> Path:
+        """Resolve a workflow-relative file for the /workflow-files endpoint."""
+        return self.config.resolve_workflow_path(workflow_id, relative)
+
+    def _generate_workflow_summary(
+        self,
+        record: WorkflowRecord,
+        outputs_by_step: Dict[str, Any],
+    ) -> str:
+        """Optional summary generator. Reads stats.json if present and asks
+        MiniMax for a brief Chinese explanation suitable for classroom use.
+
+        On any failure returns an empty string so the workflow result still
+        ships even without the LLM."""
+        stats_path: Optional[Path] = None
+        for state_id, outputs in outputs_by_step.items():
+            stats_value = outputs.get("stats") if isinstance(outputs, dict) else None
+            if isinstance(stats_value, str) and stats_value:
+                stats_path = Path(stats_value)
+                break
+        stats_payload: Dict[str, Any] = {}
+        if stats_path and stats_path.exists():
+            try:
+                stats_payload = json.loads(stats_path.read_text(encoding="utf-8"))
+            except Exception:
+                stats_payload = {}
+        if not stats_payload and not record.intent:
+            return ""
+
+        if not self.config.minimax_enabled():
+            return _fallback_summary(record, stats_payload)
+
+        try:
+            user_payload = json.dumps(stats_payload, ensure_ascii=False)[:4000]
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是一名高中地理教师，擅长用 100-180 字概括 GIS 分析结果。"
+                        "请输出 Markdown 格式的解释，不要使用代码块，不要输出 JSON。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"任务意图：{record.intent}\n"
+                        f"原始需求：{record.user_message}\n"
+                        f"统计 JSON：\n{user_payload}"
+                    ),
+                },
+            ]
+            content = self.minimax_client.chat_completion(messages, temperature=0.4)
+            return content.strip()
+        except Exception:
+            return _fallback_summary(record, stats_payload)
+
     def _run_template_job(self, job_id: str, project_id: str, template_id: str, payload: Dict[str, Any]) -> None:
         try:
             self.store.set_job_status(job_id, "running")
@@ -715,10 +855,7 @@ class WebGISRuntime:
             messages = [plan.get("assistant_message", "").strip()]
             for action in plan.get("actions", []):
                 self.store.append_job_step(job_id, action["tool_name"], json.dumps(action["tool_params"], ensure_ascii=False), "info")
-                if plan_target == "qgis":
-                    action_result = self._execute_qgis_action(action)
-                else:
-                    action_result = self._execute_assistant_action(project_id, action, map_context)
+                action_result = self._execute_assistant_action(project_id, action, map_context)
                 executed_actions.append({"action": action, "result": action_result})
                 if action_result.get("assistant_message"):
                     messages.append(str(action_result["assistant_message"]))
@@ -799,25 +936,6 @@ class WebGISRuntime:
             )
         except Exception as exc:  # pragma: no cover - defensive runtime branch
             self._fail_job(job_id, "assistant_confirmation", str(exc))
-
-    def _execute_qgis_action(self, action: Dict[str, Any]) -> Dict[str, Any]:
-        tool_name = action["tool_name"]
-        params = action.get("tool_params", {})
-        if tool_name not in QGIS_ALLOWED_TOOLS:
-            raise ValueError(f"QGIS tool is not allowed: {tool_name}")
-        response = self.qgis_bridge.execute(tool_name, params)
-        status = str(response.get("status") or "")
-        if status and status not in {"success", "ok"}:
-            error_message = str(response.get("message") or f"QGIS tool failed: {tool_name}")
-            if tool_name == "set_style" and "dedicated tools" in error_message.lower():
-                return {
-                    "assistant_message": "QGIS 插件已拒绝通用 set_style（复杂专题样式需专用工具），该步骤已跳过并继续执行。",
-                    "qgis_response": response,
-                    "artifacts": [],
-                }
-            raise ValueError(error_message)
-        message = str(response.get("message") or f"QGIS 工具 {tool_name} 已执行。")
-        return {"assistant_message": message, "qgis_response": response, "artifacts": []}
 
     def _execute_assistant_action(self, project_id: str, action: Dict[str, Any], map_context: Dict[str, Any]) -> Dict[str, Any]:
         tool_name = action["tool_name"]

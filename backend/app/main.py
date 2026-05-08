@@ -78,10 +78,6 @@ class ExportSnapshotRequest(BaseModel):
     note: str = ""
 
 
-class QgisToolRequest(BaseModel):
-    tool_params: Dict[str, Any] = Field(default_factory=dict)
-
-
 class KnowledgeItemRequest(BaseModel):
     item: Dict[str, Any] = Field(default_factory=dict)
 
@@ -114,6 +110,14 @@ class TeachingMapToggleRequest(BaseModel):
     visible: bool = True
 
 
+class WorkflowSubmitRequest(BaseModel):
+    project_id: str
+    message: str = ""
+    mode: str = "template"
+    template_id: str = ""
+    parameters: Dict[str, Any] = Field(default_factory=dict)
+
+
 @app.get("/health")
 def health() -> Dict[str, Any]:
     return runtime.health()
@@ -122,58 +126,6 @@ def health() -> Dict[str, Any]:
 @app.get("/llm/status")
 def llm_status() -> Dict[str, Any]:
     return runtime.llm_status()
-
-
-@app.get("/qgis/status")
-def qgis_status() -> Dict[str, Any]:
-    return runtime.qgis_status()
-
-
-@app.get("/qgis/layers")
-def qgis_layers() -> Dict[str, Any]:
-    try:
-        return runtime.qgis_layers()
-    except ConnectionError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except OSError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-
-@app.post("/qgis/tools/{tool_name}")
-def run_qgis_tool(tool_name: str, request: QgisToolRequest) -> Dict[str, Any]:
-    try:
-        return runtime.qgis_execute_tool(tool_name, request.tool_params)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except ConnectionError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except OSError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-
-@app.post("/qgis/focus")
-def focus_qgis() -> Dict[str, Any]:
-    payload = runtime.qgis_focus()
-    if payload.get("status") == "error":
-        raise HTTPException(status_code=400, detail=payload.get("message") or "Failed to focus QGIS")
-    return payload
-
-
-@app.get("/qgis/preview")
-def qgis_preview(file_path: str = Query(...)) -> FileResponse:
-    requested = Path(file_path).expanduser()
-    if not requested.is_absolute():
-        raise HTTPException(status_code=400, detail="Preview path must be absolute")
-    if requested.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
-        raise HTTPException(status_code=400, detail="Unsupported preview file type")
-
-    resolved = requested.resolve()
-    allowed_roots = [config.outputs_dir.resolve(), Path("C:/Users/Public").resolve()]
-    if not any(resolved.is_relative_to(root) for root in allowed_roots):
-        raise HTTPException(status_code=403, detail="Preview path is outside allowed roots")
-    if not resolved.is_file():
-        raise HTTPException(status_code=404, detail="Preview file not found")
-    return FileResponse(resolved)
 
 
 @app.get("/files/{file_path:path}")
@@ -535,3 +487,82 @@ def get_artifact(artifact_id: str) -> Dict[str, Any]:
 @app.get("/outputs")
 def list_outputs(project_id: Optional[str] = None) -> Dict[str, Any]:
     return runtime.list_outputs(project_id=project_id)
+
+
+# ---------------------------------------------------------------------------
+# PyQGIS workflow endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/workflow/templates")
+def list_workflow_templates() -> Dict[str, Any]:
+    return runtime.list_workflow_templates()
+
+
+@app.post("/workflow/submit")
+def submit_workflow(payload: WorkflowSubmitRequest) -> Dict[str, Any]:
+    if not payload.project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    try:
+        return runtime.submit_workflow(
+            project_id=payload.project_id,
+            message=payload.message,
+            mode=payload.mode,
+            template_id=payload.template_id,
+            parameters=payload.parameters,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/workflow/history")
+def workflow_history(project_id: Optional[str] = None) -> Dict[str, Any]:
+    return runtime.list_workflows(project_id=project_id)
+
+
+@app.get("/workflow/{workflow_id}")
+def get_workflow(workflow_id: str) -> Dict[str, Any]:
+    try:
+        return runtime.get_workflow(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/workflow/{workflow_id}/artifacts")
+def get_workflow_artifacts(workflow_id: str) -> Dict[str, Any]:
+    try:
+        return runtime.list_workflow_artifacts(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/workflow/{workflow_id}/stream")
+def stream_workflow(workflow_id: str):
+    def event_stream():
+        for event in runtime.stream_workflow_events(workflow_id):
+            event_type = str(event.get("type") or "message")
+            data = json.dumps(event.get("payload") or {}, ensure_ascii=False)
+            yield f"event: {event_type}\ndata: {data}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.get("/workflow-files/{workflow_id}/{relative_path:path}")
+def serve_workflow_file(workflow_id: str, relative_path: str):
+    try:
+        path = runtime.resolve_workflow_file(workflow_id, relative_path)
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    media_type = None
+    suffix = path.suffix.lower()
+    if suffix == ".geojson":
+        media_type = "application/geo+json"
+    elif suffix == ".json":
+        media_type = "application/json"
+    elif suffix == ".png":
+        media_type = "image/png"
+    elif suffix == ".md":
+        media_type = "text/markdown; charset=utf-8"
+    return FileResponse(path, media_type=media_type)

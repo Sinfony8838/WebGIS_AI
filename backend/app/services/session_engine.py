@@ -13,7 +13,6 @@ from ..store import RuntimeStore
 from .assistant import ASSISTANT_TOOL_SCHEMA, AssistantService
 from .knowledge_base import KnowledgeBaseService
 from .llm_planner import LLMPlanner
-from .qgis_bridge import QGIS_ALLOWED_TOOLS
 
 
 GEOGRAPHY_ALLOWLIST = (
@@ -604,12 +603,12 @@ class KnowledgeEngine:
 
         if answer_type == "assistant_identity":
             return {
-                "direct_answer": "我是本系统里的“超级地理助手”，负责地理知识问答，以及 WebGIS / QGIS 场景下的操作辅助。",
+                "direct_answer": "我是本系统里的“超级地理助手”，负责地理知识问答，以及 WebGIS 场景下的地图操作辅助。复杂的 GIS 分析与制图请使用 PyQGIS 工作流面板。",
                 "mechanism_explanation": "",
                 "map_grounding": "",
                 "teaching_points": [
                     "我可以回答地理概念、区域地理、地图判读和 GIS 方法问题。",
-                    "我也可以协助执行课堂地图操作、图层控制和 QGIS 工具操作。",
+                    "我也可以协助执行课堂地图操作、图层控制；复杂空间分析请走 PyQGIS 工作流。",
                     "高风险操作会进入确认流程，不会默认直接执行。",
                 ],
                 "citations": [],
@@ -852,11 +851,9 @@ class ToolExecutor:
         self,
         store: RuntimeStore,
         execute_webgis: Callable[[str, Dict[str, Any], Dict[str, Any]], Dict[str, Any]],
-        execute_qgis: Callable[[Dict[str, Any]], Dict[str, Any]],
     ):
         self.store = store
         self.execute_webgis = execute_webgis
-        self.execute_qgis = execute_qgis
         self.tool_registry = self._build_registry()
 
     def assess(
@@ -912,10 +909,7 @@ class ToolExecutor:
                 raise ValueError(f"Blocked action: {action['tool_name']}")
             if decision == "ask" and not allow_high_risk:
                 raise PermissionError(f"Confirmation required: {action['tool_name']}")
-            if target == "qgis":
-                result = self.execute_qgis(action)
-            else:
-                result = self.execute_webgis(project_id, action, map_context)
+            result = self.execute_webgis(project_id, action, map_context)
             executed.append({"action": action, "result": result, "risk_level": descriptor["risk_level"]})
         return executed
 
@@ -936,24 +930,6 @@ class ToolExecutor:
             "toggle_teaching_map": {"target": "webgis", "category": "teaching_map", "risk_level": "low", "reversible": True, "requires_confirmation": False},
             "open_material": {"target": "webgis", "category": "material", "risk_level": "low", "reversible": True, "requires_confirmation": False},
         }
-        for tool_name in QGIS_ALLOWED_TOOLS:
-            registry.setdefault(
-                tool_name,
-                {
-                    "target": "qgis",
-                    "category": "qgis",
-                    "risk_level": "low",
-                    "reversible": True,
-                    "requires_confirmation": False,
-                    "visible_in_mode": ["tool", "hybrid"],
-                },
-            )
-        for tool_name in ("export_map", "export_layer_to_file", "create_heatmap", "create_flow_arrows", "run_algorithm", "add_layer_from_path"):
-            if tool_name in registry:
-                registry[tool_name]["risk_level"] = "high"
-                registry[tool_name]["reversible"] = False
-                registry[tool_name]["requires_confirmation"] = True
-                registry[tool_name]["validator"] = self._require_export_path if "export" in tool_name or "path" in tool_name else None
         return registry
 
     def _describe_tool(
@@ -1018,7 +994,6 @@ class AssistantSessionEngine:
         llm_planner: LLMPlanner,
         assistant_service: AssistantService,
         execute_webgis: Callable[[str, Dict[str, Any], Dict[str, Any]], Dict[str, Any]],
-        execute_qgis: Callable[[Dict[str, Any]], Dict[str, Any]],
     ):
         self.config = config
         self.store = store
@@ -1030,7 +1005,7 @@ class AssistantSessionEngine:
             resource_search=None,  # wired later via set_resource_search()
         )
         self.tool_planner = ToolPlanner(llm_planner, assistant_service)
-        self.tool_executor = ToolExecutor(store, execute_webgis, execute_qgis)
+        self.tool_executor = ToolExecutor(store, execute_webgis)
         self.memory = ConversationMemory(store)
 
     def set_resource_search(self, resource_search: Any) -> None:
@@ -1051,8 +1026,10 @@ class AssistantSessionEngine:
         stage_callback: Callable[[str, str, str, str], None],
     ) -> Dict[str, Any]:
         normalized_mode = assistant_mode if assistant_mode in {"knowledge", "tool"} else "tool"
-        normalized_target = target if target in {"webgis", "qgis", "auto"} else "webgis"
-        effective_target = "webgis" if normalized_target == "auto" else normalized_target
+        # PyQGIS heavy work moved to /workflow/*; the in-classroom assistant is WebGIS-only.
+        normalized_target = "webgis"
+        effective_target = "webgis"
+        del target  # ignored (kept for API back-compat)
         map_context = map_context or {}
 
         conversation = self.memory.get_or_create(

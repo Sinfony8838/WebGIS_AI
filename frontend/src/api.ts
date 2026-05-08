@@ -22,12 +22,14 @@ import type {
   MapContext,
   PoiSearchResponse,
   ProjectRecord,
-  QgisLayersResponse,
-  QgisStatusResponse,
-  QgisToolResponse,
   RegionBinding,
   ResourceSearchResponse,
-  ScreenSnapshot
+  ScreenSnapshot,
+  WorkflowArtifactsResponse,
+  WorkflowHistoryResponse,
+  WorkflowRecord,
+  WorkflowSubmitResponse,
+  WorkflowTemplatesResponse
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:18999";
@@ -45,44 +47,12 @@ export function getApiBase(): string {
   return API_BASE;
 }
 
-export function buildQgisPreviewUrl(filePath: string, stamp: number): string {
-  const normalized = filePath.trim();
-  return `${API_BASE}/qgis/preview?file_path=${encodeURIComponent(normalized)}&t=${stamp}`;
-}
-
 export async function fetchHealth(): Promise<HealthResponse> {
   return requestJson<HealthResponse>("/health");
 }
 
 export async function fetchLlmStatus(): Promise<LlmStatusResponse> {
   return requestJson<LlmStatusResponse>("/llm/status");
-}
-
-export async function fetchQgisStatus(): Promise<QgisStatusResponse> {
-  return requestJson<QgisStatusResponse>("/qgis/status");
-}
-
-export async function fetchQgisLayers(): Promise<QgisLayersResponse> {
-  return requestJson<QgisLayersResponse>("/qgis/layers");
-}
-
-export async function executeQgisTool(
-  toolName: string,
-  toolParams: Record<string, unknown> = {}
-): Promise<QgisToolResponse> {
-  return requestJson<QgisToolResponse>(`/qgis/tools/${encodeURIComponent(toolName)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tool_params: toolParams })
-  });
-}
-
-export async function focusQgis(): Promise<QgisToolResponse> {
-  return requestJson<QgisToolResponse>("/qgis/focus", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({})
-  });
 }
 
 export async function fetchBasemaps(): Promise<BasemapCatalog> {
@@ -393,4 +363,61 @@ export async function fetchActiveTeachingMaps(
   projectId: string
 ): Promise<{ status: string; active: string[] }> {
   return requestJson<{ status: string; active: string[] }>(`/projects/${projectId}/teaching-maps/active`);
+}
+
+// ---------------------------------------------------------------------------
+// PyQGIS workflow API
+// ---------------------------------------------------------------------------
+
+export async function listWorkflowTemplates(): Promise<WorkflowTemplatesResponse> {
+  return requestJson<WorkflowTemplatesResponse>("/workflow/templates");
+}
+
+export async function submitWorkflow(payload: {
+  project_id: string;
+  message: string;
+  mode?: string;
+  template_id?: string;
+  parameters?: Record<string, unknown>;
+}): Promise<WorkflowSubmitResponse> {
+  return requestJson<WorkflowSubmitResponse>("/workflow/submit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project_id: payload.project_id,
+      message: payload.message,
+      mode: payload.mode || "template",
+      template_id: payload.template_id || "",
+      parameters: payload.parameters || {}
+    })
+  });
+}
+
+export async function fetchWorkflow(workflowId: string): Promise<WorkflowRecord & { status: string }> {
+  return requestJson<WorkflowRecord & { status: string }>(`/workflow/${encodeURIComponent(workflowId)}`);
+}
+
+export async function fetchWorkflowArtifacts(
+  workflowId: string
+): Promise<WorkflowArtifactsResponse> {
+  return requestJson<WorkflowArtifactsResponse>(`/workflow/${encodeURIComponent(workflowId)}/artifacts`);
+}
+
+export async function fetchWorkflowHistory(projectId: string): Promise<WorkflowHistoryResponse> {
+  const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
+  return requestJson<WorkflowHistoryResponse>(`/workflow/history${query}`);
+}
+
+export function buildWorkflowStreamUrl(workflowId: string): string {
+  return `${API_BASE}/workflow/${encodeURIComponent(workflowId)}/stream`;
+}
+
+export function buildWorkflowFileUrl(publicUrl: string): string {
+  if (!publicUrl) {
+    return "";
+  }
+  if (/^https?:\/\//i.test(publicUrl)) {
+    return publicUrl;
+  }
+  return `${API_BASE}${publicUrl.startsWith("/") ? publicUrl : `/${publicUrl}`}`;
 }

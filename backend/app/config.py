@@ -125,6 +125,10 @@ class AppConfig:
     minimax_model: str = field(default_factory=lambda: _resolve_env_value(MINIMAX_MODEL_ENV_KEYS, "MiniMax-M2.5", "default")[0])
     qgis_host: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_QGIS_HOST", "127.0.0.1"))
     qgis_port: int = field(default_factory=lambda: int(os.getenv("WEBGIS_AI_QGIS_PORT", "5555")))
+    qgis_root: str = field(default_factory=lambda: os.getenv("QGIS_ROOT", os.getenv("WEBGIS_AI_QGIS_ROOT", "")))
+    qgis_prefix_subpath: str = field(
+        default_factory=lambda: os.getenv("WEBGIS_AI_QGIS_PREFIX_SUBPATH", "apps/qgis-ltr")
+    )
     vision_provider: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_VISION_PROVIDER", "minimax_mcp").strip().lower())
     minimax_token_plan_key: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_MINIMAX_TOKEN_PLAN_KEY", ""))
     vision_enabled: bool = field(
@@ -155,11 +159,44 @@ class AppConfig:
         self.state_dir = self.data_dir / "state"
         self.uploads_dir = self.data_dir / "uploads"
         self.outputs_dir = self.data_dir / "outputs"
+        self.workflows_dir = self.data_dir / "workflows"
         self.state_file = self.state_dir / "runtime.json"
 
     def ensure_dirs(self) -> None:
-        for path in (self.state_dir, self.uploads_dir, self.outputs_dir, self.uploads_dir / "kb_materials"):
+        for path in (
+            self.state_dir,
+            self.uploads_dir,
+            self.outputs_dir,
+            self.uploads_dir / "kb_materials",
+            self.workflows_dir,
+        ):
             path.mkdir(parents=True, exist_ok=True)
+
+    def workflow_dir(self, workflow_id: str) -> Path:
+        """Resolve a per-workflow working directory and ensure it exists."""
+        safe_id = "".join(ch for ch in workflow_id if ch.isalnum() or ch in {"_", "-"})
+        if not safe_id:
+            raise ValueError("workflow_id is invalid")
+        path = self.workflows_dir / safe_id
+        (path / "outputs").mkdir(parents=True, exist_ok=True)
+        (path / "steps").mkdir(parents=True, exist_ok=True)
+        (path / "logs").mkdir(parents=True, exist_ok=True)
+        return path
+
+    def public_url_for_workflow_path(self, workflow_id: str, relative: str) -> str:
+        """Return a /workflow-files/{wid}/{relative} URL the frontend can fetch."""
+        cleaned = (relative or "").lstrip("/").replace("\\", "/")
+        if ".." in PurePosixPath(cleaned).parts:
+            raise ValueError("workflow path must not traverse")
+        return f"/workflow-files/{workflow_id}/{cleaned}"
+
+    def resolve_workflow_path(self, workflow_id: str, relative: str) -> Path:
+        """Resolve a workflow-relative path and ensure it stays inside the workflow dir."""
+        base = self.workflow_dir(workflow_id).resolve()
+        cleaned = (relative or "").lstrip("/").replace("\\", "/")
+        candidate = (base / cleaned).resolve()
+        candidate.relative_to(base)  # raises ValueError on traversal
+        return candidate
 
     def default_basemap(self) -> dict:
         catalog = self.basemap_catalog()

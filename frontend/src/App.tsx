@@ -51,13 +51,13 @@ import {
 import { BasemapMenu } from "./components/BasemapMenu";
 import { CopilotWidget } from "./components/CopilotWidget";
 import { type KnowledgeQuery } from "./components/KnowledgePanel";
-import { QgisProfessionalPage } from "./components/QgisProfessionalPage";
 import { RegionFocusOverlay } from "./components/RegionFocusOverlay";
 import { SideDrawer, type DrawerTab } from "./components/SideDrawer";
 import { TeachingMapPanel } from "./components/TeachingMapPanel";
 import { TeachingMaterialViewer } from "./components/TeachingMaterialViewer";
 import { ToastStack, type ToastItem } from "./components/ToastStack";
 import { UploadDialog } from "./components/UploadDialog";
+import { WorkflowDock } from "./components/WorkflowDock";
 import type {
   AssistantInputMode,
   AssistantMode,
@@ -356,7 +356,7 @@ export default function App() {
     tool: [
       {
         role: "assistant",
-        text: "这里是工具助手，可以规划并执行 WebGIS 或 QGIS 操作。",
+        text: "这里是工具助手，可以规划并执行 WebGIS 操作；复杂分析请使用 PyQGIS 工作流面板。",
         timestamp: timestamp()
       }
     ]
@@ -375,7 +375,7 @@ export default function App() {
   const [searchAreaGeometry, setSearchAreaGeometry] = useState<Record<string, unknown> | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [workspaceMode, setWorkspaceMode] = useState<"classroom" | "qgis">("classroom");
+  const [workflowDockOpen, setWorkflowDockOpen] = useState<boolean>(false);
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("resources");
   const [kbQuery, setKbQuery] = useState<KnowledgeQuery>({ query: "", topic: "", region: "", tag: "" });
@@ -798,7 +798,6 @@ export default function App() {
       (item: ResourceSearchResult) => {
         if (item.kb_item) {
           setKbEditingItem(item.kb_item);
-          setWorkspaceMode("classroom");
           setDrawerOpen(true);
           setDrawerTab("resources");
           return;
@@ -1584,7 +1583,7 @@ export default function App() {
   );
 
   return (
-    <div className={`screen-shell ${workspaceMode === "qgis" ? "screen-shell-qgis" : "screen-shell-classroom"}`}>
+    <div className="screen-shell screen-shell-classroom">
       <div ref={mapElementRef} className="map-canvas" data-testid="map-canvas" />
       <div className="map-vignette" />
       <div className="map-grid-overlay" />
@@ -1655,17 +1654,11 @@ export default function App() {
           />
           <button
             type="button"
-            className={`toolbar-button ${workspaceMode === "classroom" ? "active" : ""}`}
-            onClick={() => setWorkspaceMode("classroom")}
+            className={`toolbar-button ${workflowDockOpen ? "active" : ""}`}
+            onClick={() => setWorkflowDockOpen((value) => !value)}
+            data-testid="toolbar-workflow-toggle"
           >
-            课堂模式
-          </button>
-          <button
-            type="button"
-            className={`toolbar-button ${workspaceMode === "qgis" ? "active" : ""}`}
-            onClick={() => setWorkspaceMode("qgis")}
-          >
-            QGIS 专业
+            PyQGIS 工作流
           </button>
           <button type="button" className="toolbar-button" onClick={() => setUploadOpen(true)}>
             上传数据
@@ -1700,29 +1693,7 @@ export default function App() {
         </div>
       </header>
 
-      {workspaceMode === "qgis" ? (
-        <main className="workspace-shell qgis-mode-shell">
-          <QgisProfessionalPage
-            projectId={project?.project_id || ""}
-            assistantMode={assistantMode}
-            chatLog={chatLog}
-            currentJob={currentJob}
-            assistantInput={assistantInput}
-            onAssistantInputChange={setAssistantInput}
-            onAssistantModeChange={setAssistantMode}
-            onSubmitAssistant={(message, target) => {
-              void submitAssistantText(message, undefined, target, "text", assistantMode);
-              setAssistantInput("");
-            }}
-            onConfirm={(confirmationId, decision = "approve") => {
-              void confirmAssistantAction(confirmationId, decision).then((response) => subscribeToJob(response.job_id, assistantMode));
-            }}
-            onBackToClassroom={() => setWorkspaceMode("classroom")}
-            busy={busy}
-          />
-        </main>
-      ) : (
-        <main className="workspace-shell">
+      <main className="workspace-shell">
         <SideDrawer
           open={drawerOpen}
           activeTab={drawerTab}
@@ -1852,9 +1823,8 @@ export default function App() {
 
         </aside>
         </main>
-      )}
 
-      {workspaceMode === "classroom" ? (
+      {project ? (
         <CopilotWidget
           assistantMode={assistantMode}
           chatLog={chatLog}
@@ -1895,6 +1865,13 @@ export default function App() {
           onClose={() => setMaterialViewerOpen(false)}
         />
         <UploadDialog open={uploadOpen} busy={busy} onClose={() => setUploadOpen(false)} onSubmit={handleUploadDataset} />
+        <WorkflowDock
+          projectId={project?.project_id || ""}
+          mapRef={mapRef}
+          open={workflowDockOpen}
+          onRequestClose={() => setWorkflowDockOpen(false)}
+          onToast={(tone, message) => pushToast(tone, message)}
+        />
       </div>
   );
 }

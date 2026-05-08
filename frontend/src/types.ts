@@ -406,29 +406,6 @@ export type LlmStatusResponse = {
   error?: string;
 };
 
-export type QgisStatusResponse = {
-  status: string;
-  enabled: boolean;
-  host: string;
-  port: number;
-  reachable: boolean;
-  health_mode?: string;
-  response?: Record<string, unknown>;
-  error?: string;
-};
-
-export type QgisLayersResponse = {
-  status: string;
-  result: Record<string, unknown>;
-};
-
-export type QgisToolResponse = {
-  status: string;
-  result?: Record<string, unknown>;
-  message?: string;
-  ok?: boolean;
-};
-
 export type ConversationResponse = {
   status: string;
   conversation_id: string;
@@ -447,4 +424,146 @@ export type ConversationResponse = {
     metadata: Record<string, unknown>;
     created_at: string;
   }>;
+};
+
+
+// ---------------------------------------------------------------------------
+// PyQGIS workflow types (main pipeline)
+// ---------------------------------------------------------------------------
+
+export type WorkflowStatus = "pending" | "running" | "success" | "error" | "cancelled";
+export type WorkflowStepStatus = "pending" | "running" | "success" | "error" | "skipped";
+
+export type WorkflowError = {
+  code: string;
+  message: string;
+  user_friendly: string;
+  step_id?: string;
+  details?: Record<string, unknown>;
+};
+
+export type WorkflowStepRecord = {
+  id: string;
+  op: string;
+  status: WorkflowStepStatus;
+  outputs: Record<string, unknown>;
+  error: WorkflowError | null;
+  started_at: string;
+  finished_at: string;
+};
+
+export type WorkflowArtifactRecord = {
+  artifact_id: string;
+  workflow_id: string;
+  kind: "geojson" | "style" | "stats" | "png" | "summary" | "layout_pdf" | "other" | string;
+  title: string;
+  relative_path: string;
+  public_url: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+export type WorkflowRecord = {
+  workflow_id: string;
+  project_id: string;
+  user_message: string;
+  intent: string;
+  template_id: string;
+  mode: string;
+  workflow_json: Record<string, unknown>;
+  status: WorkflowStatus;
+  steps: WorkflowStepRecord[];
+  artifacts: WorkflowArtifactRecord[];
+  error: WorkflowError | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string;
+  finished_at: string;
+};
+
+export type WorkflowSubmitResponse = {
+  status: string;
+  workflow_id: string;
+  workflow_status: WorkflowStatus;
+  intent: string;
+  template_id: string;
+  parameters: Record<string, unknown>;
+  error?: WorkflowError | null;
+};
+
+export type WorkflowTemplateInfo = {
+  id: string;
+  title: string;
+  description: string;
+};
+
+export type WorkflowTemplatesResponse = {
+  status: string;
+  items: WorkflowTemplateInfo[];
+};
+
+export type WorkflowArtifactsResponse = {
+  status: string;
+  workflow_id: string;
+  artifacts: WorkflowArtifactRecord[];
+};
+
+export type WorkflowHistoryResponse = {
+  status: string;
+  items: WorkflowRecord[];
+};
+
+export type WorkflowEventType =
+  | "workflow_created"
+  | "workflow_started"
+  | "step_started"
+  | "step_progress"
+  | "step_success"
+  | "step_error"
+  | "artifact_ready"
+  | "workflow_success"
+  | "workflow_error"
+  | "stream_idle_timeout"
+  | "ping";
+
+export type WorkflowEvent = {
+  type: WorkflowEventType;
+  payload: Record<string, unknown>;
+};
+
+// ---------------------------------------------------------------------------
+// style.json (graduated/choropleth) — used by OpenLayers style function
+// ---------------------------------------------------------------------------
+
+export type GraduatedStyleClass = {
+  min: number;
+  max: number;
+  color: string;
+  label?: string;
+};
+
+export type GraduatedStyleLegendItem = {
+  label: string;
+  color: string;
+};
+
+export type GraduatedStyle = {
+  type: "graduated";
+  field: string;
+  method?: string;
+  classes: GraduatedStyleClass[];
+  stroke?: { color?: string; width?: number };
+  default?: { color?: string };
+  legend?: { title?: string; items: GraduatedStyleLegendItem[] };
+  title?: string;
+};
+
+export type StatsRow = Record<string, string | number | boolean | null | undefined>;
+
+export type StatsPayload = {
+  title?: string;
+  fields?: string[];
+  rows?: StatsRow[];
+  all_rows_count?: number;
+  summary?: Record<string, number | string>;
 };

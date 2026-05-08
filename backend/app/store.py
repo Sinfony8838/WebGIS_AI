@@ -15,6 +15,7 @@ from .models import (
     LayerRecord,
     MessageRecord,
     ProjectRecord,
+    WorkflowRecord,
     build_workflow_stages,
     utc_now,
 )
@@ -30,6 +31,7 @@ class RuntimeStore:
         self.conversations: Dict[str, ConversationRecord] = {}
         self.messages: Dict[str, MessageRecord] = {}
         self.confirmations: Dict[str, ConfirmationRecord] = {}
+        self.workflows: Dict[str, WorkflowRecord] = {}
         self._load()
 
     def _load(self) -> None:
@@ -61,6 +63,10 @@ class RuntimeStore:
                 confirmation_id: ConfirmationRecord(**data)
                 for confirmation_id, data in payload.get("confirmations", {}).items()
             }
+            self.workflows = {
+                workflow_id: WorkflowRecord(**data)
+                for workflow_id, data in payload.get("workflows", {}).items()
+            }
         except json.JSONDecodeError:
             self._quarantine_corrupt_state("invalid_json")
             self.projects = {}
@@ -69,6 +75,7 @@ class RuntimeStore:
             self.conversations = {}
             self.messages = {}
             self.confirmations = {}
+            self.workflows = {}
         except Exception:
             self._quarantine_corrupt_state("invalid_schema")
             self.projects = {}
@@ -77,6 +84,7 @@ class RuntimeStore:
             self.conversations = {}
             self.messages = {}
             self.confirmations = {}
+            self.workflows = {}
 
     def _save(self) -> None:
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
@@ -91,6 +99,10 @@ class RuntimeStore:
             "confirmations": {
                 confirmation_id: confirmation.to_dict()
                 for confirmation_id, confirmation in self.confirmations.items()
+            },
+            "workflows": {
+                workflow_id: workflow.to_dict()
+                for workflow_id, workflow in self.workflows.items()
             },
         }
         serialized = json.dumps(payload, ensure_ascii=False, indent=2)
@@ -474,3 +486,32 @@ class RuntimeStore:
                 artifacts = [artifact for artifact in artifacts if artifact.project_id == project_id]
             artifacts.sort(key=lambda artifact: artifact.created_at, reverse=True)
             return [artifact.to_dict() for artifact in artifacts]
+
+    # ------------------------------------------------------------------
+    # Workflow records (PyQGIS workflow main line)
+    # ------------------------------------------------------------------
+
+    def create_workflow(self, workflow: WorkflowRecord) -> WorkflowRecord:
+        with self._lock:
+            self.workflows[workflow.workflow_id] = workflow
+            self._save()
+            return workflow
+
+    def get_workflow(self, workflow_id: str) -> Optional[WorkflowRecord]:
+        with self._lock:
+            return self.workflows.get(workflow_id)
+
+    def save_workflow(self, workflow: WorkflowRecord) -> WorkflowRecord:
+        with self._lock:
+            workflow.touch()
+            self.workflows[workflow.workflow_id] = workflow
+            self._save()
+            return workflow
+
+    def list_workflows(self, project_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        with self._lock:
+            items = list(self.workflows.values())
+            if project_id:
+                items = [w for w in items if w.project_id == project_id]
+            items.sort(key=lambda w: w.created_at, reverse=True)
+            return [w.to_dict() for w in items]

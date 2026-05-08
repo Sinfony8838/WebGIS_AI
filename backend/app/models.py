@@ -277,6 +277,123 @@ class JobRecord:
         return asdict(self)
 
 
+# ---------------------------------------------------------------------------
+# PyQGIS Workflow data models
+# ---------------------------------------------------------------------------
+
+WORKFLOW_STATUSES = ("pending", "running", "success", "error", "cancelled")
+WORKFLOW_STEP_STATUSES = ("pending", "running", "success", "error", "skipped")
+
+
+@dataclass
+class WorkflowError:
+    """Structured error returned by validators / workers / executor."""
+    code: str = "INTERNAL_ERROR"
+    message: str = ""
+    user_friendly: str = ""
+    step_id: str = ""
+    details: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class WorkflowStepResult:
+    """Result of a single workflow step (sent FastAPI <-> worker)."""
+    step_id: str
+    status: str = "pending"
+    started_at: str = ""
+    finished_at: str = ""
+    outputs: Dict[str, Any] = field(default_factory=dict)
+    error: Optional[Dict[str, Any]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class WorkflowArtifact:
+    """A user-facing output of a workflow (geojson/style/stats/png/summary)."""
+    artifact_id: str
+    workflow_id: str
+    kind: str       # geojson | style | stats | png | summary | layout_pdf | other
+    title: str
+    relative_path: str   # relative to the workflow dir
+    public_url: str
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    created_at: str = field(default_factory=utc_now)
+
+    @classmethod
+    def create(
+        cls,
+        workflow_id: str,
+        kind: str,
+        title: str,
+        relative_path: str,
+        public_url: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> "WorkflowArtifact":
+        return cls(
+            artifact_id=f"wfa_{uuid4().hex}",
+            workflow_id=workflow_id,
+            kind=kind,
+            title=title,
+            relative_path=relative_path,
+            public_url=public_url,
+            metadata=metadata or {},
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class WorkflowRecord:
+    """Full state of a PyQGIS workflow run, persisted in RuntimeStore."""
+    workflow_id: str
+    project_id: str
+    user_message: str = ""
+    intent: str = ""
+    template_id: str = ""
+    mode: str = "template"  # template | freeform
+    workflow_json: Dict[str, Any] = field(default_factory=dict)
+    status: str = "pending"
+    steps: List[Dict[str, Any]] = field(default_factory=list)
+    artifacts: List[Dict[str, Any]] = field(default_factory=list)
+    error: Optional[Dict[str, Any]] = None
+    created_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
+    started_at: str = ""
+    finished_at: str = ""
+
+    @classmethod
+    def create(
+        cls,
+        project_id: str,
+        user_message: str = "",
+        intent: str = "",
+        template_id: str = "",
+        mode: str = "template",
+        workflow_json: Optional[Dict[str, Any]] = None,
+    ) -> "WorkflowRecord":
+        return cls(
+            workflow_id=f"wf_{uuid4().hex}",
+            project_id=project_id,
+            user_message=user_message,
+            intent=intent,
+            template_id=template_id,
+            mode=mode,
+            workflow_json=workflow_json or {},
+        )
+
+    def touch(self) -> None:
+        self.updated_at = utc_now()
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
 @dataclass
 class ProjectRecord:
     project_id: str
