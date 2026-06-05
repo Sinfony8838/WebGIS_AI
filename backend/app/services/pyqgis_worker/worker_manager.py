@@ -31,11 +31,17 @@ class PyQgisWorkerManager:
         self,
         workflows_root: Path,
         qgis_root: str = "",
+        qgis_python: str = "",
         startup_timeout: float = 60.0,
         step_timeout: float = 600.0,
     ) -> None:
         self.workflows_root = Path(workflows_root)
         self.qgis_root = qgis_root or ""
+        # Optional override for the worker subprocess Python executable. The
+        # FastAPI main process commonly runs under a system Python that does
+        # NOT have qgis.core importable; passing the QGIS-bundled interpreter
+        # here makes the spawned worker actually able to load QGIS.
+        self.qgis_python = (qgis_python or "").strip()
         self.startup_timeout = startup_timeout
         self.step_timeout = step_timeout
         self._lock = threading.RLock()
@@ -61,6 +67,20 @@ class PyQgisWorkerManager:
                 self._cleanup_locked()
 
             ctx = mp.get_context("spawn")  # spawn keeps Windows imports clean
+            # If a QGIS-bundled Python is available, point the spawned worker
+            # at it. Without this, the worker inherits the parent's
+            # sys.executable, which on a standard install can't import
+            # qgis.core and yields QGIS_ENV_NOT_READY on every step.
+            if self.qgis_python:
+                qgis_python_path = Path(self.qgis_python)
+                if qgis_python_path.exists():
+                    ctx.set_executable(str(qgis_python_path))
+                    logger.info("PyQGIS worker will spawn under %s", qgis_python_path)
+                else:
+                    logger.warning(
+                        "qgis_python path does not exist, falling back to sys.executable: %s",
+                        qgis_python_path,
+                    )
             self._input_queue = ctx.Queue()
             self._output_queue = ctx.Queue()
             # Avoid importing worker_main eagerly here; the spawn will import.

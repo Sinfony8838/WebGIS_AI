@@ -16,6 +16,32 @@ LLM_PROVIDER_ENV_KEYS = ("WEBGIS_AI_LLM_PROVIDER", "LLM_PROVIDER", "MINIMAX_PROV
 MINIMAX_API_KEY_ENV_KEYS = ("WEBGIS_AI_MINIMAX_API_KEY", "MINIMAX_API_KEY")
 MINIMAX_BASE_URL_ENV_KEYS = ("WEBGIS_AI_MINIMAX_BASE_URL", "MINIMAX_BASE_URL")
 MINIMAX_MODEL_ENV_KEYS = ("WEBGIS_AI_MINIMAX_MODEL", "MINIMAX_MODEL")
+MINIMAX_TOKEN_PLAN_KEY_ENV_KEYS = (
+    "WEBGIS_AI_MINIMAX_TOKEN_PLAN_KEY",
+    "MINIMAX_TOKEN_PLAN_KEY",
+    # MiniMax Token Plan MCP uses the same account credential in current
+    # deployments, so reusing the already configured MiniMax key avoids forcing
+    # operators to duplicate secrets under another environment variable.
+    "WEBGIS_AI_MINIMAX_API_KEY",
+    "MINIMAX_API_KEY",
+)
+
+# Xiaomi MiMo (https://platform.xiaomimimo.com/) — OpenAI Chat Completions compatible.
+# Authentication uses the non-standard header ``api-key: $KEY`` rather than
+# ``Authorization: Bearer``. Multimodal (image) input is supported through the
+# OpenAI ``content`` array with ``{"type": "image_url", "image_url": {...}}``.
+MIMO_API_KEY_ENV_KEYS = ("WEBGIS_AI_MIMO_API_KEY", "MIMO_API_KEY", "XIAOMI_MIMO_API_KEY")
+MIMO_BASE_URL_ENV_KEYS = ("WEBGIS_AI_MIMO_BASE_URL", "MIMO_BASE_URL")
+MIMO_MODEL_ENV_KEYS = ("WEBGIS_AI_MIMO_MODEL", "MIMO_MODEL")
+
+DEFAULT_LLM_PROVIDER = "mimo"
+DEFAULT_MIMO_BASE_URL = "https://api.xiaomimimo.com/v1"
+DEFAULT_MIMO_MODEL = "mimo-v2.5-pro"
+DEFAULT_MIMO_VISION_MODEL = "mimo-v2.5"
+DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.chat/v1"
+DEFAULT_MINIMAX_MODEL = "MiniMax-M2.5"
+
+ALLOWED_LLM_PROVIDERS = ("mimo", "minimax")
 LEGACY_WEATHER_BASEMAP_ID = "weather_live"
 WEATHER_BASEMAP_ID = "weather_precipitation"
 WEATHER_BASEMAP_PREFIX = "weather_"
@@ -116,21 +142,35 @@ class AppConfig:
     )
     amap_web_service_key: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_AMAP_WEB_SERVICE_KEY", ""))
     llm_provider: str = field(
-        default_factory=lambda: _resolve_env_value(LLM_PROVIDER_ENV_KEYS, "minimax", "default")[0].strip().lower() or "minimax"
+        default_factory=lambda: _resolve_env_value(LLM_PROVIDER_ENV_KEYS, DEFAULT_LLM_PROVIDER, "default")[0].strip().lower() or DEFAULT_LLM_PROVIDER
     )
     minimax_api_key: str = field(default_factory=lambda: _resolve_env_value(MINIMAX_API_KEY_ENV_KEYS, "", "unset")[0])
     minimax_base_url: str = field(
-        default_factory=lambda: _resolve_env_value(MINIMAX_BASE_URL_ENV_KEYS, "https://api.minimax.chat/v1", "default")[0]
+        default_factory=lambda: _resolve_env_value(MINIMAX_BASE_URL_ENV_KEYS, DEFAULT_MINIMAX_BASE_URL, "default")[0]
     )
-    minimax_model: str = field(default_factory=lambda: _resolve_env_value(MINIMAX_MODEL_ENV_KEYS, "MiniMax-M2.5", "default")[0])
-    qgis_host: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_QGIS_HOST", "127.0.0.1"))
-    qgis_port: int = field(default_factory=lambda: int(os.getenv("WEBGIS_AI_QGIS_PORT", "5555")))
+    minimax_model: str = field(default_factory=lambda: _resolve_env_value(MINIMAX_MODEL_ENV_KEYS, DEFAULT_MINIMAX_MODEL, "default")[0])
+    mimo_api_key: str = field(default_factory=lambda: _resolve_env_value(MIMO_API_KEY_ENV_KEYS, "", "unset")[0])
+    mimo_base_url: str = field(
+        default_factory=lambda: _resolve_env_value(MIMO_BASE_URL_ENV_KEYS, DEFAULT_MIMO_BASE_URL, "default")[0]
+    )
+    mimo_model: str = field(default_factory=lambda: _resolve_env_value(MIMO_MODEL_ENV_KEYS, DEFAULT_MIMO_MODEL, "default")[0])
     qgis_root: str = field(default_factory=lambda: os.getenv("QGIS_ROOT", os.getenv("WEBGIS_AI_QGIS_ROOT", "")))
     qgis_prefix_subpath: str = field(
         default_factory=lambda: os.getenv("WEBGIS_AI_QGIS_PREFIX_SUBPATH", "apps/qgis-ltr")
     )
-    vision_provider: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_VISION_PROVIDER", "minimax_mcp").strip().lower())
-    minimax_token_plan_key: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_MINIMAX_TOKEN_PLAN_KEY", ""))
+    # Path to the QGIS-bundled Python interpreter. The main FastAPI process
+    # keeps using the system Python (which has FastAPI/uvicorn/etc.), but the
+    # PyQGIS worker subprocess MUST run under QGIS's own Python because the
+    # qgis.core bindings are ABI-locked to it. If left empty we fall back to
+    # `<QGIS_ROOT>/bin/python.exe` (the OSGeo4W default layout); if that file
+    # is missing we use the parent's sys.executable and the worker will fail
+    # cleanly with QGIS_ENV_NOT_READY when it tries to `import qgis.core`.
+    qgis_python: str = field(
+        default_factory=lambda: os.getenv("WEBGIS_AI_QGIS_PYTHON", "")
+    )
+    vision_provider: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_VISION_PROVIDER", "").strip().lower())
+    vision_model: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_VISION_MODEL", "").strip())
+    minimax_token_plan_key: str = field(default_factory=lambda: _resolve_env_value(MINIMAX_TOKEN_PLAN_KEY_ENV_KEYS, "", "unset")[0])
     vision_enabled: bool = field(
         default_factory=lambda: os.getenv("WEBGIS_AI_VISION_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
     )
@@ -142,15 +182,42 @@ class AppConfig:
     minimax_api_key_source: str = field(init=False, default="unset")
     minimax_base_url_source: str = field(init=False, default="default")
     minimax_model_source: str = field(init=False, default="default")
+    mimo_api_key_source: str = field(init=False, default="unset")
+    mimo_base_url_source: str = field(init=False, default="default")
+    mimo_model_source: str = field(init=False, default="default")
+    minimax_token_plan_key_source: str = field(init=False, default="unset")
 
     def __post_init__(self) -> None:
-        _, self.llm_provider_source = _resolve_env_value(LLM_PROVIDER_ENV_KEYS, "minimax", "default")
+        _, self.llm_provider_source = _resolve_env_value(LLM_PROVIDER_ENV_KEYS, DEFAULT_LLM_PROVIDER, "default")
         _, self.minimax_api_key_source = _resolve_env_value(MINIMAX_API_KEY_ENV_KEYS, "", "unset")
-        _, self.minimax_base_url_source = _resolve_env_value(MINIMAX_BASE_URL_ENV_KEYS, "https://api.minimax.chat/v1", "default")
-        _, self.minimax_model_source = _resolve_env_value(MINIMAX_MODEL_ENV_KEYS, "MiniMax-M2.5", "default")
-        self.llm_provider = (self.llm_provider or "minimax").strip().lower() or "minimax"
-        self.minimax_base_url = (self.minimax_base_url or "https://api.minimax.chat/v1").strip() or "https://api.minimax.chat/v1"
-        self.minimax_model = (self.minimax_model or "MiniMax-M2.5").strip() or "MiniMax-M2.5"
+        _, self.minimax_base_url_source = _resolve_env_value(MINIMAX_BASE_URL_ENV_KEYS, DEFAULT_MINIMAX_BASE_URL, "default")
+        _, self.minimax_model_source = _resolve_env_value(MINIMAX_MODEL_ENV_KEYS, DEFAULT_MINIMAX_MODEL, "default")
+        _, self.mimo_api_key_source = _resolve_env_value(MIMO_API_KEY_ENV_KEYS, "", "unset")
+        _, self.mimo_base_url_source = _resolve_env_value(MIMO_BASE_URL_ENV_KEYS, DEFAULT_MIMO_BASE_URL, "default")
+        _, self.mimo_model_source = _resolve_env_value(MIMO_MODEL_ENV_KEYS, DEFAULT_MIMO_MODEL, "default")
+        _, self.minimax_token_plan_key_source = _resolve_env_value(MINIMAX_TOKEN_PLAN_KEY_ENV_KEYS, "", "unset")
+        # Normalise provider; the default is now Mimo (was MiniMax in v1.1).
+        self.llm_provider = (self.llm_provider or DEFAULT_LLM_PROVIDER).strip().lower() or DEFAULT_LLM_PROVIDER
+        # Soft legacy fallback: if the caller never set LLM_PROVIDER but DID set
+        # a MiniMax API key (and no Mimo key), assume they're still on MiniMax
+        # so existing dev environments don't suddenly start failing.
+        if (
+            self.llm_provider_source == "default"
+            and self.mimo_api_key_source == "unset"
+            and self.minimax_api_key_source != "unset"
+        ):
+            self.llm_provider = "minimax"
+            self.llm_provider_source = "default_fallback_minimax_only"
+        self.minimax_base_url = (self.minimax_base_url or DEFAULT_MINIMAX_BASE_URL).strip() or DEFAULT_MINIMAX_BASE_URL
+        self.minimax_model = (self.minimax_model or DEFAULT_MINIMAX_MODEL).strip() or DEFAULT_MINIMAX_MODEL
+        self.mimo_base_url = (self.mimo_base_url or DEFAULT_MIMO_BASE_URL).strip() or DEFAULT_MIMO_BASE_URL
+        self.mimo_model = (self.mimo_model or DEFAULT_MIMO_MODEL).strip() or DEFAULT_MIMO_MODEL
+        # vision_provider defaults track the LLM provider: Mimo direct multimodal
+        # is the new path; minimax_mcp is the legacy subprocess MCP path.
+        if not self.vision_provider:
+            self.vision_provider = "mimo" if self.llm_provider == "mimo" else "minimax_mcp"
+        if not self.vision_model and self.vision_provider == "mimo":
+            self.vision_model = DEFAULT_MIMO_VISION_MODEL
         self.backend_dir = self.root_dir / "backend"
         self.app_dir = self.backend_dir / "app"
         self.data_dir = self.backend_dir / "data"
@@ -161,6 +228,14 @@ class AppConfig:
         self.outputs_dir = self.data_dir / "outputs"
         self.workflows_dir = self.data_dir / "workflows"
         self.state_file = self.state_dir / "runtime.json"
+        # If the user set QGIS_ROOT but not WEBGIS_AI_QGIS_PYTHON, auto-derive
+        # the QGIS-bundled interpreter at <QGIS_ROOT>/bin/python.exe (OSGeo4W
+        # layout used by every official Windows installer). The worker
+        # manager will fall back to sys.executable when this string is empty.
+        if not self.qgis_python and self.qgis_root:
+            candidate = Path(self.qgis_root) / "bin" / "python.exe"
+            if candidate.exists():
+                self.qgis_python = str(candidate)
 
     def ensure_dirs(self) -> None:
         for path in (
@@ -321,6 +396,10 @@ class AppConfig:
                             class_name="basemap-layer basemap-weather-overlay",
                             opacity=float(item["opacity"]),
                             z_index=2,
+                            # Weather overlays are designed for 2D inspection and
+                            # don't read well draped over a 3D ellipsoid; skip them
+                            # in globe mode.
+                            usable_in_3d=False,
                         ),
                     ],
                 }
@@ -438,50 +517,127 @@ class AppConfig:
             .replace("{y}", str(y))
         )
 
+    # ------------------------------------------------------------------
+    # LLM provider status helpers
+    # ------------------------------------------------------------------
+
+    def mimo_enabled(self) -> bool:
+        return self.llm_provider == "mimo" and bool(self.mimo_api_key.strip())
+
     def minimax_enabled(self) -> bool:
         return self.llm_provider == "minimax" and bool(self.minimax_api_key.strip())
 
+    def llm_enabled(self) -> bool:
+        """True iff the currently selected provider has its API key configured."""
+        if self.llm_provider == "mimo":
+            return self.mimo_enabled()
+        if self.llm_provider == "minimax":
+            return self.minimax_enabled()
+        return False
+
+    def active_llm_api_key(self) -> str:
+        """Return the API key of the currently selected provider (or empty)."""
+        if self.llm_provider == "mimo":
+            return self.mimo_api_key
+        if self.llm_provider == "minimax":
+            return self.minimax_api_key
+        return ""
+
+    def active_llm_base_url(self) -> str:
+        if self.llm_provider == "mimo":
+            return self.mimo_base_url.rstrip("/")
+        if self.llm_provider == "minimax":
+            return self.minimax_base_url.rstrip("/")
+        return ""
+
+    def active_llm_model(self) -> str:
+        if self.llm_provider == "mimo":
+            return self.mimo_model
+        if self.llm_provider == "minimax":
+            return self.minimax_model
+        return ""
+
     def llm_status(self) -> Dict[str, Any]:
-        configured = self.minimax_enabled()
+        provider = self.llm_provider
+        configured = self.llm_enabled()
         error = ""
         if not configured:
-            if self.llm_provider != "minimax":
+            if provider == "mimo":
                 error = (
-                    f"当前 provider 为 {self.llm_provider}。请设置 WEBGIS_AI_LLM_PROVIDER=minimax "
-                    "(兼容: LLM_PROVIDER / MINIMAX_PROVIDER)，并重启后端。"
+                    "未检测到 Xiaomi MiMo API Key。请设置 WEBGIS_AI_MIMO_API_KEY "
+                    "(兼容: MIMO_API_KEY / XIAOMI_MIMO_API_KEY)，并重启后端。"
                 )
-            else:
+            elif provider == "minimax":
                 error = (
                     "未检测到 MiniMax API Key。请设置 WEBGIS_AI_MINIMAX_API_KEY "
                     "(兼容: MINIMAX_API_KEY)，并重启后端。"
                 )
+            else:
+                error = (
+                    f"当前 provider 为 {provider}（暂不支持）。请设置 WEBGIS_AI_LLM_PROVIDER=mimo "
+                    "(默认) 或 minimax，并重启后端。"
+                )
+        if provider == "mimo":
+            api_key_source = self.mimo_api_key_source
+            base_url = self.mimo_base_url.rstrip("/")
+            model = self.mimo_model
+        elif provider == "minimax":
+            api_key_source = self.minimax_api_key_source
+            base_url = self.minimax_base_url.rstrip("/")
+            model = self.minimax_model
+        else:
+            api_key_source = "unset"
+            base_url = ""
+            model = ""
         status = {
             "enabled": configured,
             "configured": configured,
-            "provider": self.llm_provider,
-            "model": self.minimax_model,
-            "base_url": self.minimax_base_url.rstrip("/"),
+            "provider": provider,
+            "model": model,
+            "base_url": base_url,
             "provider_source": self.llm_provider_source,
-            "api_key_source": self.minimax_api_key_source,
+            "api_key_source": api_key_source,
         }
         if error:
             status["error"] = error
         return status
 
-    def qgis_status_config(self) -> Dict[str, Any]:
-        return {
-            "enabled": True,
-            "host": self.qgis_host,
-            "port": self.qgis_port,
-        }
-
     def vision_status(self) -> Dict[str, Any]:
-        configured = self.vision_enabled and self.vision_provider == "minimax_mcp" and bool(self.minimax_token_plan_key.strip())
+        """Surface whether the current vision_provider is fully configured.
+
+        v1.2 supports two vision backends:
+          * ``mimo`` — direct OpenAI-compatible chat completions multimodal call.
+            Reuses the same ``WEBGIS_AI_MIMO_API_KEY``.
+          * ``minimax_mcp`` — legacy MiniMax Token Plan MCP subprocess. Needs
+            ``WEBGIS_AI_MINIMAX_TOKEN_PLAN_KEY``.
+        """
+        provider = self.vision_provider
+        if provider == "mimo":
+            configured = self.vision_enabled and bool(self.mimo_api_key.strip())
+            key_source = self.mimo_api_key_source if self.mimo_api_key.strip() else "unset"
+            return {
+                "enabled": self.vision_enabled,
+                "configured": configured,
+                "provider": provider,
+                "model": self.vision_model or DEFAULT_MIMO_VISION_MODEL,
+                "api_key_source": key_source,
+            }
+        if provider == "minimax_mcp":
+            configured = self.vision_enabled and bool(self.minimax_token_plan_key.strip())
+            return {
+                "enabled": self.vision_enabled,
+                "configured": configured,
+                "provider": provider,
+                "token_plan_key_source": self.minimax_token_plan_key_source if self.minimax_token_plan_key.strip() else "unset",
+            }
         return {
             "enabled": self.vision_enabled,
-            "configured": configured,
-            "provider": self.vision_provider,
-            "token_plan_key_source": "WEBGIS_AI_MINIMAX_TOKEN_PLAN_KEY" if self.minimax_token_plan_key.strip() else "unset",
+            "configured": False,
+            "provider": provider,
+            "error": (
+                f"当前 vision_provider 为 {provider}（暂不支持）。"
+                "请设置 WEBGIS_AI_VISION_PROVIDER=mimo 或 minimax_mcp。"
+            ),
         }
 
     def _expand_subdomain_urls(self, template: str) -> List[str]:
@@ -507,7 +663,12 @@ class AppConfig:
         class_name: str,
         opacity: float = 1.0,
         z_index: int = 1,
+        usable_in_3d: bool = True,
     ) -> Dict[str, Any]:
+        # ``usable_in_3d`` flags whether the layer can serve as a Cesium
+        # ImageryProvider in the 3D globe view. Standard XYZ raster basemaps
+        # (vector/imagery/light) are safe; weather-overlay or vector-only
+        # tile styles can opt out by passing ``usable_in_3d=False``.
         return {
             "layer_id": layer_id,
             "title": title,
@@ -518,6 +679,7 @@ class AppConfig:
             "z_index": z_index,
             "class_name": class_name,
             "cross_origin": "anonymous",
+            "usable_in_3d": usable_in_3d,
         }
 
     def _normalize_layer_descriptor(self, layer: Dict[str, Any], index: int) -> Dict[str, Any]:
@@ -534,4 +696,5 @@ class AppConfig:
             "z_index": int(layer.get("z_index", index + 1)),
             "class_name": str(layer.get("class_name") or "basemap-layer basemap-custom"),
             "cross_origin": str(layer.get("cross_origin") or "anonymous"),
+            "usable_in_3d": bool(layer.get("usable_in_3d", True)),
         }

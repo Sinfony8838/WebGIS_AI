@@ -1,8 +1,9 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import cesium from "vite-plugin-cesium";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), cesium()],
   build: {
     rollupOptions: {
       output: {
@@ -14,6 +15,9 @@ export default defineConfig({
           if (normalized.includes("/node_modules/react/") || normalized.includes("/node_modules/react-dom/")) {
             return "react-vendor";
           }
+          if (normalized.includes("/node_modules/cesium/")) {
+            return "cesium-vendor";
+          }
         }
       }
     }
@@ -24,6 +28,11 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
-    setupFiles: "./src/vitest.setup.ts"
+    setupFiles: "./src/vitest.setup.ts",
+    server: {
+      deps: {
+        inline: ["cesium"]
+      }
+    }
   }
 });

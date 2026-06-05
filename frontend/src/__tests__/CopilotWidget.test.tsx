@@ -252,11 +252,94 @@ describe("CopilotWidget", () => {
       }
     });
 
-    expect(screen.getByText("回答类型：regional_geography")).toBeInTheDocument();
+    // v1.2: the per-stage "ROUTING / RETRIEVAL / …" debug strip and the
+    // "回答类型 / 置信度" knowledge meta card were retired in favour of a
+    // single ChatGPT-style thinking indicator. Only functional cards
+    // (confirmation + citations) remain.
+    expect(screen.queryByText(/回答类型：/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/置信度：/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^ROUTING$/i)).not.toBeInTheDocument();
     expect(screen.getByText("引用来源")).toBeInTheDocument();
     fireEvent.click(screen.getByText("知识助手"));
     fireEvent.click(screen.getByText("确认执行"));
     expect(onAssistantModeChange).toHaveBeenCalledWith("knowledge");
     expect(onConfirm).toHaveBeenCalledWith("confirm_1", "approve");
+  });
+
+  it("shows a generic thinking indicator while busy and hides it when done", () => {
+    const { rerender } = render(
+      <CopilotWidget
+        assistantMode="knowledge"
+        busy
+        currentJob={{
+          job_id: "job_pending",
+          project_id: "project_1",
+          job_type: "assistant",
+          title: "处理中",
+          workflow_type: "assistant_message",
+          status: "running",
+          updated_at: "1",
+          steps: [],
+          stages: {
+            routing: { status: "success", summary: "Intent: knowledge", detail: "" },
+            retrieval: { status: "running", summary: "正在查询", detail: "" },
+            planning: { status: "pending", summary: "", detail: "" }
+          },
+          result: null
+        }}
+        chatLog={[
+          { role: "user", text: "胡焕庸线两侧降水差异如何？", timestamp: "1" }
+        ]}
+        inputValue=""
+        onInputChange={vi.fn()}
+        onAssistantModeChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onConfirm={vi.fn()}
+        onVoiceSubmit={vi.fn()}
+        onVoiceNotice={vi.fn()}
+      />
+    );
+
+    const indicator = screen.getByTestId("copilot-thinking");
+    expect(indicator).toBeInTheDocument();
+    // Friendly verb picked from the running stage (retrieval → 正在检索知识库).
+    expect(indicator).toHaveTextContent("正在检索知识库");
+
+    // Re-render the same root with busy=false; the indicator must disappear.
+    rerender(
+      <CopilotWidget
+        assistantMode="knowledge"
+        busy={false}
+        currentJob={null}
+        chatLog={[{ role: "assistant", text: "答复已生成。", timestamp: "1" }]}
+        inputValue=""
+        onInputChange={vi.fn()}
+        onAssistantModeChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onConfirm={vi.fn()}
+        onVoiceSubmit={vi.fn()}
+        onVoiceNotice={vi.fn()}
+      />
+    );
+    expect(screen.queryByTestId("copilot-thinking")).not.toBeInTheDocument();
+  });
+
+  it("falls back to generic 正在思考 when no stage is running but still busy", () => {
+    render(
+      <CopilotWidget
+        assistantMode="tool"
+        busy
+        currentJob={null}
+        chatLog={[]}
+        inputValue=""
+        onInputChange={vi.fn()}
+        onAssistantModeChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onConfirm={vi.fn()}
+        onVoiceSubmit={vi.fn()}
+        onVoiceNotice={vi.fn()}
+      />
+    );
+    expect(screen.getByTestId("copilot-thinking")).toHaveTextContent("正在思考");
   });
 });

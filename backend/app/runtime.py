@@ -6,6 +6,7 @@ import re
 import threading
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -17,6 +18,7 @@ from .services.datasets import DatasetService
 from .services.knowledge_base import KnowledgeBaseService
 from .services.llm_planner import LLMPlanner
 from .services.minimax_client import MiniMaxClient
+from .services.timeline_service import TimelineService
 from .services.poi import PoiService
 from .services.resource_search import ResourceSearchService
 from .services.session_engine import AssistantSessionEngine
@@ -78,6 +80,7 @@ class WebGISRuntime:
             self.llm_planner,
             self.assistant_service,
             self._execute_assistant_action,
+            vision_service=self.vision_service,
         )
         self.session_engine.set_resource_search(self.resource_search_service)
         self.workflow_executor = WorkflowExecutor(
@@ -85,6 +88,7 @@ class WebGISRuntime:
             self.store,
             summary_callback=self._generate_workflow_summary,
         )
+        self.timeline_service = TimelineService(self.minimax_client)
         self._normalize_loaded_projects()
 
     def health(self) -> Dict[str, Any]:
@@ -107,8 +111,9 @@ class WebGISRuntime:
             },
             "llm": self.minimax_client.status(),
             "vision": self.vision_service.status(),
-            "pyqgis_workflow": {
+            "gis_workflow": {
                 "enabled": True,
+                "engine": "pyqgis_worker",
                 "qgis_root": self.config.qgis_root or "",
                 "init_warning": self.workflow_executor.init_warning() if hasattr(self, "workflow_executor") else None,
             },
@@ -277,6 +282,46 @@ class WebGISRuntime:
         self.store.save_project(project)
         return {"status": "success", "items": sets, "active_lesson_resource_set_id": project.metadata.get("active_lesson_resource_set_id", "")}
 
+    # ------------------------------------------------------------------
+    # Timeline
+    # ------------------------------------------------------------------
+
+    def generate_timeline(self, project_id: str, filename: str, raw_bytes: bytes) -> Dict[str, Any]:
+        project = self._require_project(project_id)
+        result = self.timeline_service.generate_timeline(filename, raw_bytes, project_id)
+        timeline = result["timeline"]
+        project.metadata["timeline"] = timeline
+        self.store.save_project(project)
+        return result
+
+    def get_timeline(self, project_id: str) -> Dict[str, Any]:
+        project = self._require_project(project_id)
+        timeline = project.metadata.get("timeline")
+        if not timeline:
+            return {"status": "empty", "timeline": None}
+        return {"status": "success", "timeline": timeline}
+
+    def update_timeline(self, project_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
+        project = self._require_project(project_id)
+        timeline = project.metadata.get("timeline")
+        if not timeline:
+            raise KeyError("No timeline exists for this project")
+
+        if "active_node_id" in patch:
+            for node in timeline["nodes"]:
+                node["active"] = node["id"] == patch["active_node_id"]
+
+        if "nodes" in patch:
+            timeline["nodes"] = patch["nodes"]
+
+        if "title" in patch:
+            timeline["title"] = patch["title"]
+
+        timeline["updated_at"] = datetime.now(timezone.utc).isoformat()
+        project.metadata["timeline"] = timeline
+        self.store.save_project(project)
+        return {"status": "success", "timeline": timeline}
+
     def llm_status(self) -> Dict[str, Any]:
         return {"status": "success", **self.minimax_client.status()}
 
@@ -444,7 +489,7 @@ class WebGISRuntime:
         input_mode: str = "text",
         screen_snapshot: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        # PyQGIS heavy work moved to /workflow/* — assistant is WebGIS-only.
+        # Heavy GIS work moved to /workflow/*; assistant actions are WebGIS-only.
         normalized_target = "webgis"
         normalized_input_mode = input_mode if input_mode in {"text", "voice"} else "text"
         normalized_mode = assistant_mode if assistant_mode in {"knowledge", "tool"} else "tool"
@@ -597,7 +642,7 @@ class WebGISRuntime:
         return {"status": "success", "items": items}
 
     # ------------------------------------------------------------------
-    # PyQGIS workflow API helpers
+    # GIS workflow API helpers. PyQGIS is the backend worker implementation.
     # ------------------------------------------------------------------
 
     def list_workflow_templates(self) -> Dict[str, Any]:

@@ -74,7 +74,9 @@ TOOL_ACTION_HINTS = (
 )
 
 EXPLANATION_HINTS = ("解释", "讲解", "分析", "为什么", "说明", "读图", "原因", "explain", "analysis", "why")
-TIME_SENSITIVE_HINTS = ("最新", "目前", "当前", "今天", "近年", "recent", "latest", "today")
+CURRENT_MAP_HINTS = ("当前视图", "当前地图", "当前画面", "当前图层", "当前区域", "当前选区", "图中", "图上", "视图", "画面")
+MAP_READING_HINTS = ("读图", "判读", "图上", "图中", "视图", "地图", "图例", "等高线", "地貌", "地形", "地势", "空间格局", "分布特征")
+TIME_SENSITIVE_HINTS = ("最新", "目前", "今天", "近年", "recent", "latest", "today")
 
 
 def _contains_any(text: str, tokens: Sequence[str]) -> bool:
@@ -367,15 +369,30 @@ class KnowledgeEngine:
             return self._meta_answer(answer_type)
 
         # --- Phase 1: local KB lookup (fast, free) ---
-        entry = self._match_entry(question)
+        # Current-view map reading is grounded in the live map/screenshot, not
+        # in a generic canned KB item. Skipping loose KB matches here prevents
+        # unrelated teaching points from leaking into image interpretation.
+        references_current_map = self._references_current_map((question or "").lower())
+        entry = None if answer_type == "map_reading" and references_current_map else self._match_entry(question)
         citations = list(entry.get("citations", [])) if entry else []
         retrieval_trace: List[Dict[str, Any]] = []
+        if map_context.get("vision_summary"):
+            retrieval_trace.append(
+                {
+                    "source": "map_vision",
+                    "status": "success",
+                    "provider": map_context.get("vision_provider", ""),
+                    "snapshot_path": map_context.get("vision_snapshot_path", ""),
+                }
+            )
+        elif map_context.get("vision_reason"):
+            retrieval_trace.append({"source": "map_vision", "status": "fallback", "reason": map_context.get("vision_reason", "")})
         if citations:
             retrieval_trace.extend(self._score_sources(citations, source_type="local_kb", timely=answer_type == "timely_fact"))
 
         # --- Phase 2: online search for supplementary context ---
         web_context = ""
-        if self.resource_search is not None:
+        if self.resource_search is not None and answer_type != "map_reading":
             try:
                 web_results = self.resource_search.search(query=question, scope="web", limit=5)
                 web_items = web_results.get("items", [])
@@ -418,14 +435,16 @@ class KnowledgeEngine:
                 llm_used = False
 
         if not llm_used:
-            # Fallback to the original template-based answer
+            # Fallback to deterministic, classroom-safe templates.
             direct_answer = (
                 entry.get("canonical_answer")
                 if entry
                 else "这个问题属于地理相关范围，但本地知识库里还没有完全对应的现成条目。"
                 "我可以先按地理学的一般分析框架给出解释。"
             )
-            if answer_type == "timely_fact":
+            if answer_type == "map_reading":
+                direct_answer = self._map_reading_direct_answer(question, map_context)
+            elif answer_type == "timely_fact":
                 direct_answer = (
                     "这个问题具有时效性。系统应先核对权威实时来源，再给出最终结论。"
                     "下面列出优先参考的权威来源。"
@@ -434,7 +453,7 @@ class KnowledgeEngine:
             teaching_points = list(entry.get("teaching_points", [])) if entry else self._default_teaching_points(answer_type)
             confidence = 0.92 if entry else (0.45 if answer_type == "timely_fact" else 0.68)
 
-        map_grounding = self._map_grounding(map_context)
+        map_grounding = self._map_grounding(map_context, answer_type)
         return {
             "direct_answer": direct_answer,
             "mechanism_explanation": mechanism_explanation,
@@ -489,6 +508,7 @@ class KnowledgeEngine:
             "格式要求（非常重要）：\n"
             "- 直接用自然语言回答，不要输出 JSON、代码块或任何标记语言\n"
             "- 不要输出 <think> 或任何 XML 标签\n"
+            "- 如果问题包含“当前视图、当前地图、当前画面、读图、判读”等表达，必须结合参考上下文中的地图状态作读图回答，不要把它当作时效性事实问题\n"
             "- 回答分为三部分，用空行分隔：\n"
             "  第一部分：直接回答问题（1-3 段）\n"
             "  第二部分：以\"原理分析：\"开头，解释核心地理机制（1-2 段）\n"
@@ -506,11 +526,13 @@ class KnowledgeEngine:
                 context_parts.append(f"知识库要点：{'；'.join(kb_points)}")
         if web_context:
             context_parts.append(f"在线参考资料：\n{web_context}")
+        vision_summary = str(map_context.get("vision_summary") or "").strip()
+        if vision_summary:
+            context_parts.append(f"视觉读图结果：{vision_summary}")
 
-        visible_layers = map_context.get("visible_layers", [])
-        if visible_layers:
-            layer_names = ", ".join(str(item.get("name", "")) for item in visible_layers[:4] if item)
-            context_parts.append(f"当前地图可见图层：{layer_names}")
+        map_summary = self._map_context_brief(map_context)
+        if map_summary:
+            context_parts.append(f"当前地图状态：{map_summary}")
 
         user_content = question
         if context_parts:
@@ -603,12 +625,12 @@ class KnowledgeEngine:
 
         if answer_type == "assistant_identity":
             return {
-                "direct_answer": "我是本系统里的“超级地理助手”，负责地理知识问答，以及 WebGIS 场景下的地图操作辅助。复杂的 GIS 分析与制图请使用 PyQGIS 工作流面板。",
+                "direct_answer": "我是本系统里的“超级地理助手”，负责地理知识问答，以及 WebGIS 场景下的地图操作辅助。复杂的 GIS 分析与制图请使用后台 GIS 分析工作流。",
                 "mechanism_explanation": "",
                 "map_grounding": "",
                 "teaching_points": [
                     "我可以回答地理概念、区域地理、地图判读和 GIS 方法问题。",
-                    "我也可以协助执行课堂地图操作、图层控制；复杂空间分析请走 PyQGIS 工作流。",
+                    "我也可以协助执行课堂地图操作、图层控制；复杂空间分析请走后台 GIS 分析工作流。",
                     "高风险操作会进入确认流程，不会默认直接执行。",
                 ],
                 "citations": [],
@@ -731,15 +753,22 @@ class KnowledgeEngine:
             return "assistant_identity"
         if _contains_any(lowered, ("你能做什么", "你会什么", "能帮我做什么", "help", "capability")):
             return "assistant_capability"
+        if self._references_current_map(lowered) or _contains_any(lowered, ("读图", "判读", "图上", "图中")):
+            return "map_reading"
         if _contains_any(lowered, TIME_SENSITIVE_HINTS):
             return "timely_fact"
         if _contains_any(lowered, ("遥感", "gis", "rs", "空间分析", "buffer", "overlay")):
             return "gis_method"
-        if _contains_any(lowered, ("读图", "判读", "图上", "视图", "地图")):
+        if _contains_any(lowered, MAP_READING_HINTS):
             return "map_reading"
         if _contains_any(lowered, ("地区", "区域", "沿海", "中国", "亚洲")):
             return "regional_geography"
         return "geo_concept"
+
+    def _references_current_map(self, lowered_question: str) -> bool:
+        return _contains_any(lowered_question, CURRENT_MAP_HINTS) or (
+            "当前" in lowered_question and _contains_any(lowered_question, ("地图", "视图", "画面", "图层", "区域", "选区"))
+        )
 
     def _match_entry(self, question: str) -> Optional[Dict[str, Any]]:
         lowered = (question or "").lower()
@@ -762,13 +791,100 @@ class KnowledgeEngine:
             {"title": "NOAA", "url": "https://www.noaa.gov/"},
         ]
 
+    def _visible_layer_names(self, map_context: Dict[str, Any], limit: int = 6) -> List[str]:
+        names: List[str] = []
+        for item in list(map_context.get("visible_layers") or [])[:limit]:
+            if isinstance(item, dict):
+                name = str(item.get("name") or item.get("layer_id") or "").strip()
+            else:
+                name = str(item or "").strip()
+            if name:
+                names.append(name)
+        return names
+
+    def _map_context_brief(self, map_context: Dict[str, Any]) -> str:
+        parts: List[str] = []
+        layer_names = self._visible_layer_names(map_context)
+        if layer_names:
+            parts.append(f"可见图层包括 {', '.join(layer_names)}")
+        selected_region = map_context.get("selected_region") or {}
+        if isinstance(selected_region, dict) and selected_region.get("label"):
+            parts.append(f"当前聚焦区域为 {selected_region.get('label')}")
+        selected_feature = str(map_context.get("selected_feature_summary") or "").strip()
+        if selected_feature:
+            parts.append(f"已选要素：{selected_feature[:160]}")
+        vision_summary = str(map_context.get("vision_summary") or "").strip()
+        if vision_summary:
+            parts.append("已完成页面截图视觉读图")
+        elif map_context.get("vision_reason"):
+            parts.append("截图视觉读图未启用，已使用结构化地图上下文")
+        active_materials = map_context.get("active_lesson_materials") or []
+        if active_materials:
+            material_titles = [
+                str(item.get("title") or item.get("id") or "").strip()
+                for item in list(active_materials)[:4]
+                if isinstance(item, dict)
+            ]
+            material_titles = [title for title in material_titles if title]
+            if material_titles:
+                parts.append(f"已绑定教学资料：{', '.join(material_titles)}")
+        center = map_context.get("center")
+        zoom = map_context.get("zoom")
+        if center or zoom is not None:
+            parts.append(f"视图中心 {center or '未知'}，缩放级别 {zoom if zoom is not None else '未知'}")
+        extent = map_context.get("extent")
+        if extent:
+            parts.append(f"可见范围 {extent}")
+        return "；".join(parts)
+
+    def _map_reading_direct_answer(self, question: str, map_context: Dict[str, Any]) -> str:
+        lowered = (question or "").lower()
+        layer_names = self._visible_layer_names(map_context)
+        map_brief = self._map_context_brief(map_context)
+        vision_summary = str(
+            map_context.get("vision_summary")
+            or map_context.get("screen_analysis")
+            or map_context.get("screenshot_summary")
+            or ""
+        ).strip()
+
+        if vision_summary:
+            summary_text = vision_summary
+            for prefix in ("视觉读图：", "视觉读图:"):
+                if summary_text.startswith(prefix):
+                    summary_text = summary_text[len(prefix):].strip()
+            return f"从当前地图画面可判读：{summary_text}"
+
+        if _contains_any(lowered, ("地貌", "地形", "地势", "等高线")):
+            answer = (
+                "当前视图的地貌特征应从地势起伏、地形单元边界、水系切割和人类活动分布四个方面判读。"
+                "课堂讲解时可以先指出主要高低起伏区，再说明山地、丘陵、平原、盆地或河谷等地貌单元如何影响河流、交通和聚落布局。"
+            )
+        else:
+            answer = (
+                "当前视图可以按“位置范围、图层主题、空间分布、异常区域、成因解释”的顺序判读。"
+                "先说明地图展示的区域和主题，再抓住高值/低值、密集/稀疏、连续/破碎等空间格局，最后联系自然条件和人类活动解释原因。"
+            )
+
+        if map_brief:
+            answer += f"\n\n本次判读依据当前地图状态：{map_brief}。"
+        elif layer_names:
+            answer += f"\n\n本次判读依据当前可见图层：{', '.join(layer_names)}。"
+        else:
+            answer += "\n\n本次请求没有携带可见图层、选区或截图信息，因此只能给出通用读图框架；若要识别图面颜色、图例数值或具体地貌边界，请使用“读图讲解”截图识别。"
+        if map_context.get("vision_reason"):
+            answer += "\n\n当前截图视觉读图尚未启用，以上是基于视图范围、缩放级别和图层状态的辅助判读；启用读图模型后可进一步识别颜色分层、图例数值和地形纹理。"
+        return answer
+
     def _mechanism_text(self, question: str, entry: Optional[Dict[str, Any]], answer_type: str) -> str:
-        if entry:
-            return " ".join(entry.get("teaching_points", [])[:2]).strip()
         if answer_type == "gis_method":
             return "GIS 方法类问题通常要先明确分析对象、空间规则和解释目标。"
         if answer_type == "map_reading":
+            if _contains_any(question, ("地貌", "地形", "地势", "等高线")):
+                return "地貌判读的核心是把图面符号转化为地势起伏和外力作用过程：颜色分层、等高线疏密、水系形态和交通聚落分布，都可以作为判断山地、平原、盆地、河谷等地貌单元的依据。"
             return "地图判读不能只描述形状，还要把符号、位置、尺度和区域联系串起来。"
+        if entry:
+            return " ".join(entry.get("teaching_points", [])[:2]).strip()
         return "地理解释通常要同时说明空间分布、形成过程和区域差异。"
 
     def _default_teaching_points(self, answer_type: str) -> List[str]:
@@ -780,9 +896,9 @@ class KnowledgeEngine:
             ]
         if answer_type == "map_reading":
             return [
-                "先看位置与分布。",
-                "再解释格局、趋势和原因。",
-                "最后回扣课堂目标。",
+                "先确定图名、图例、比例尺和区域位置。",
+                "再判读高低起伏、地貌单元、空间格局和异常区。",
+                "最后联系水系、气候、人类活动解释成因与影响。",
             ]
         return [
             "先概括空间现象或核心概念。",
@@ -790,13 +906,13 @@ class KnowledgeEngine:
             "最后收束到课堂结论。",
         ]
 
-    def _map_grounding(self, map_context: Dict[str, Any]) -> str:
-        visible_layers = map_context.get("visible_layers") or []
-        if not visible_layers:
-            return "当前回答没有必须依赖的地图画面依据。"
-        layer_names = ", ".join(str(item.get("name") or item.get("layer_id") or "") for item in visible_layers[:4] if item)
-        zoom = map_context.get("zoom")
-        return f"可结合当前地图视图理解：缩放级别 {zoom}，可见图层包括 {layer_names}。"
+    def _map_grounding(self, map_context: Dict[str, Any], answer_type: str = "") -> str:
+        map_brief = self._map_context_brief(map_context)
+        if map_brief:
+            return f"基于当前地图：{map_brief}。"
+        if answer_type == "map_reading":
+            return "当前问题需要地图判读，但本次请求没有携带可见图层、选区或截图信息；可刷新地图状态，或使用“读图讲解”获取截图识别。"
+        return "当前回答没有必须依赖的地图画面依据。"
 
 
 class ToolPlanner:
@@ -994,6 +1110,7 @@ class AssistantSessionEngine:
         llm_planner: LLMPlanner,
         assistant_service: AssistantService,
         execute_webgis: Callable[[str, Dict[str, Any], Dict[str, Any]], Dict[str, Any]],
+        vision_service: Any = None,
     ):
         self.config = config
         self.store = store
@@ -1007,6 +1124,7 @@ class AssistantSessionEngine:
         self.tool_planner = ToolPlanner(llm_planner, assistant_service)
         self.tool_executor = ToolExecutor(store, execute_webgis)
         self.memory = ConversationMemory(store)
+        self.vision_service = vision_service
 
     def set_resource_search(self, resource_search: Any) -> None:
         """Wire the resource search service into the knowledge engine for online search."""
@@ -1026,7 +1144,7 @@ class AssistantSessionEngine:
         stage_callback: Callable[[str, str, str, str], None],
     ) -> Dict[str, Any]:
         normalized_mode = assistant_mode if assistant_mode in {"knowledge", "tool"} else "tool"
-        # PyQGIS heavy work moved to /workflow/*; the in-classroom assistant is WebGIS-only.
+        # Heavy GIS work moved to /workflow/*; the in-classroom assistant is WebGIS-only.
         normalized_target = "webgis"
         effective_target = "webgis"
         del target  # ignored (kept for API back-compat)
@@ -1048,7 +1166,7 @@ class AssistantSessionEngine:
         stage_callback("routing", "success", f"Intent: {intent}", route["reason"])
 
         if intent == "knowledge":
-            return self._handle_knowledge(conversation, message, map_context, stage_callback)
+            return self._handle_knowledge(project, conversation, message, map_context, stage_callback)
 
         stage_callback("planning", "running", "Planning GIS actions", "")
         plan = self.tool_planner.plan(message, project, map_context, effective_target, input_mode)
@@ -1443,13 +1561,69 @@ class AssistantSessionEngine:
             "permission_context": permission_context.to_dict(),
         }
 
+    def _enrich_map_reading_with_vision(
+        self,
+        project: ProjectRecord,
+        message: str,
+        map_context: Dict[str, Any],
+        stage_callback: Callable[[str, str, str, str], None],
+    ) -> Dict[str, Any]:
+        if self.knowledge._classify(message) != "map_reading":
+            return map_context
+        screen_snapshot = map_context.get("screen_snapshot") if isinstance(map_context.get("screen_snapshot"), dict) else {}
+        if not screen_snapshot:
+            return map_context
+        if self.vision_service is None:
+            return {**map_context, "vision_reason": "后端未挂载地图视觉读图服务。"}
+
+        stage_callback("grounding", "running", "正在读取当前地图截图", "")
+        try:
+            vision_result = self.vision_service.understand_map(
+                project_id=project.project_id,
+                project=project,
+                map_context=map_context,
+                focus=message,
+                screen_snapshot=screen_snapshot,
+            )
+        except Exception as exc:  # pragma: no cover - defensive runtime branch
+            reason = f"地图视觉读图调用异常，已回退到结构化地图上下文：{exc}"
+            stage_callback("grounding", "success", "截图读图回退", reason)
+            return {**map_context, "vision_reason": reason}
+
+        enriched = {**map_context, "vision_result": vision_result}
+        if vision_result.get("used_vision") and vision_result.get("summary"):
+            summary = str(vision_result.get("summary") or "").strip()
+            stage_callback("grounding", "success", "截图读图完成", summary[:180])
+            enriched.update(
+                {
+                    "vision_used": True,
+                    "vision_summary": summary,
+                    "vision_provider": vision_result.get("provider", ""),
+                    "vision_snapshot_path": vision_result.get("snapshot_path", ""),
+                }
+            )
+            return enriched
+
+        reason = str(vision_result.get("reason") or "地图视觉读图未返回可用结果，已回退到结构化地图上下文。")
+        stage_callback("grounding", "success", "截图读图回退", reason)
+        enriched.update(
+            {
+                "vision_used": False,
+                "vision_reason": reason,
+                "vision_snapshot_path": vision_result.get("snapshot_path", ""),
+            }
+        )
+        return enriched
+
     def _handle_knowledge(
         self,
+        project: ProjectRecord,
         conversation: ConversationRecord,
         message: str,
         map_context: Dict[str, Any],
         stage_callback: Callable[[str, str, str, str], None],
     ) -> Dict[str, Any]:
+        map_context = self._enrich_map_reading_with_vision(project, message, map_context, stage_callback)
         llm_available = self.knowledge.minimax_client is not None and self.config.minimax_enabled()
         stage_label = "AI 通用知识 + 在线检索" if llm_available else "本地知识库检索"
         stage_callback("retrieval", "running", stage_label, "")

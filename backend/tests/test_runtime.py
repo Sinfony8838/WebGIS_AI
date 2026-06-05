@@ -115,6 +115,16 @@ class WebGISRuntimeTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             runtime.kb_upload_material("upload_demo", "script.exe", b"bad")
 
+    def test_health_exposes_backend_gis_workflow_not_qgis_assistant(self) -> None:
+        runtime, _store, _project_id = self.build_runtime()
+
+        health = runtime.health()
+
+        self.assertIn("gis_workflow", health)
+        self.assertEqual(health["gis_workflow"]["engine"], "pyqgis_worker")
+        self.assertNotIn("qgis", health)
+        self.assertNotIn("pyqgis_workflow", health)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -21,10 +21,14 @@ import type {
   LayersResponse,
   MapContext,
   PoiSearchResponse,
+  PptRenderResponse,
   ProjectRecord,
   RegionBinding,
   ResourceSearchResponse,
   ScreenSnapshot,
+  TimelineData,
+  TimelineGenerateResponse,
+  TimelineSaveResponse,
   WorkflowArtifactsResponse,
   WorkflowHistoryResponse,
   WorkflowRecord,
@@ -366,7 +370,7 @@ export async function fetchActiveTeachingMaps(
 }
 
 // ---------------------------------------------------------------------------
-// PyQGIS workflow API
+// GIS workflow API
 // ---------------------------------------------------------------------------
 
 export async function listWorkflowTemplates(): Promise<WorkflowTemplatesResponse> {
@@ -420,4 +424,63 @@ export function buildWorkflowFileUrl(publicUrl: string): string {
     return publicUrl;
   }
   return `${API_BASE}${publicUrl.startsWith("/") ? publicUrl : `/${publicUrl}`}`;
+}
+
+export function buildPublicFileUrl(publicUrl: string): string {
+  if (!publicUrl) {
+    return "";
+  }
+  if (/^https?:\/\//i.test(publicUrl)) {
+    return publicUrl;
+  }
+  return `${API_BASE}${publicUrl.startsWith("/") ? publicUrl : `/${publicUrl}`}`;
+}
+
+export async function renderPptx(file: File): Promise<PptRenderResponse> {
+  const formData = new FormData();
+  formData.set("file", file);
+  const response = await requestJson<PptRenderResponse>("/ppt/render", {
+    method: "POST",
+    body: formData
+  });
+  return {
+    ...response,
+    slides: response.slides.map((slide) => ({
+      ...slide,
+      image_url: buildPublicFileUrl(slide.image_url)
+    }))
+  };
+}
+
+// ── Timeline API ────────────────────────────────────────────
+
+export async function generateTimeline(
+  projectId: string,
+  formData: FormData
+): Promise<TimelineGenerateResponse> {
+  return requestJson<TimelineGenerateResponse>(
+    `/projects/${encodeURIComponent(projectId)}/timeline/generate`,
+    { method: "POST", body: formData }
+  );
+}
+
+export async function fetchTimeline(projectId: string): Promise<{
+  status: string;
+  timeline: TimelineData | null;
+}> {
+  return requestJson(`/projects/${encodeURIComponent(projectId)}/timeline`);
+}
+
+export async function updateTimeline(
+  projectId: string,
+  patch: Record<string, unknown>
+): Promise<TimelineSaveResponse> {
+  return requestJson<TimelineSaveResponse>(
+    `/projects/${encodeURIComponent(projectId)}/timeline`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ patch }),
+    }
+  );
 }

@@ -1,5 +1,5 @@
 /**
- * WorkflowDock — self-contained PyQGIS workflow UI.
+ * WorkflowDock — self-contained GIS analysis workflow UI.
  *
  * Owns:
  *   - the user input box for workflow requests,
@@ -28,6 +28,7 @@ import {
 import { useWorkflowStream } from "../hooks/useWorkflowStream";
 import type {
   GraduatedStyle,
+  LayersResponse,
   StatsPayload,
   WorkflowArtifactRecord,
   WorkflowTemplateInfo
@@ -40,11 +41,38 @@ import { WorkflowPanel } from "./WorkflowPanel";
 const DEFAULT_FILL = "#cccccc";
 const DEFAULT_STROKE = "#444444";
 
+/**
+ * Built-in datasets surfaced in the dataset dropdown so a fresh classroom
+ * project can submit a workflow without uploading anything first. The keys
+ * are the `source` strings the backend's resolve_dataset_path accepts
+ * (see backend/app/services/pyqgis_worker/handlers/_common.py).
+ */
+const BUILTIN_DATASETS: Array<{ source: string; label: string }> = [
+  { source: "builtin:population/china_provinces.geojson", label: "内置 · 中国 31 省级行政区（2020 七普人口）" },
+  { source: "builtin:population/population_regions.geojson", label: "内置 · 中国 7 大区（演示数据）" },
+  { source: "builtin:population/population_centroids.geojson", label: "内置 · 大区中心点（点）" },
+  { source: "builtin:population/migration_flows.geojson", label: "内置 · 大区迁徙连线" }
+];
+
+/**
+ * Templates that need a second dataset (overlay / clip / join / region).
+ * The dock shows a second dropdown for these and maps the selection to
+ * the template-specific parameter name expected by workflow_templates.py.
+ */
+const SECONDARY_PARAM_BY_TEMPLATE: Record<string, { paramName: string; label: string }> = {
+  clip_to_region: { paramName: "region_dataset", label: "裁剪区域图层" },
+  overlay_intersection: { paramName: "overlay_dataset", label: "叠加图层" },
+  spatial_join_attributes: { paramName: "join_dataset", label: "属性来源图层" }
+};
+
 export type WorkflowDockProps = {
   projectId: string;
   mapRef: React.MutableRefObject<Map | null>;
   /** Whether the dock is visible; collapsing the dock keeps state. */
   open?: boolean;
+  /** Project layer state, used to populate the dataset selector with
+   * uploaded layers in addition to the built-in defaults. */
+  layerState?: LayersResponse | null;
   /** Called when the user closes the dock from inside the component. */
   onRequestClose?: () => void;
   /** Optional toast shim so the dock can surface errors via the host UI. */
@@ -93,14 +121,46 @@ export function WorkflowDock({
   projectId,
   mapRef,
   open = true,
+  layerState,
   onRequestClose,
   onToast
 }: WorkflowDockProps): JSX.Element | null {
   const [message, setMessage] = useState("");
   const [templates, setTemplates] = useState<WorkflowTemplateInfo[]>([]);
   const [templateId, setTemplateId] = useState<string>("");
+  const [primaryDataset, setPrimaryDataset] = useState<string>("");
+  const [secondaryDataset, setSecondaryDataset] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [activeWorkflowId, setActiveWorkflowId] = useState<string>("");
+
+  /**
+   * Build the dataset dropdown options. Uploaded layers come first (most
+   * recent on top, i.e. what the teacher just imported), then built-ins.
+   * The value stored is the `source` string the backend expects.
+   */
+  const datasetOptions = useMemo(() => {
+    const uploaded: Array<{ source: string; label: string }> = [];
+    const items = layerState?.items || [];
+    for (const item of items) {
+      if (item.source !== "upload") {
+        continue;
+      }
+      const metadata = item.metadata || {};
+      const qgisFile = typeof metadata.qgis_source_file === "string" ? metadata.qgis_source_file : "";
+      const sourceFile = typeof metadata.source_file === "string" ? metadata.source_file : "";
+      const filename = qgisFile || sourceFile;
+      if (!filename || !projectId) {
+        continue;
+      }
+      uploaded.push({
+        source: `upload:${projectId}/${filename}`,
+        label: `已上传 · ${item.name}`
+      });
+    }
+    return [...uploaded, ...BUILTIN_DATASETS];
+  }, [layerState, projectId]);
+
+  const secondaryConfig = templateId ? SECONDARY_PARAM_BY_TEMPLATE[templateId] : undefined;
 
   const stream = useWorkflowStream(activeWorkflowId);
 
@@ -257,13 +317,30 @@ export function WorkflowDock({
     if (!text) {
       return;
     }
+    // Build parameters payload. When the user picks a primary dataset we
+    // pass it under every parameter alias the backend templates recognise
+    // (dataset / input_dataset / facility_dataset / province_dataset). Each
+    // template builder only reads the alias it knows about, so the extras
+    // are harmless and we don't need to know which template the backend
+    // ends up routing "自动识别" to.
+    const parameters: Record<string, unknown> = {};
+    if (primaryDataset) {
+      parameters.dataset = primaryDataset;
+      parameters.input_dataset = primaryDataset;
+      parameters.facility_dataset = primaryDataset;
+      parameters.province_dataset = primaryDataset;
+    }
+    if (secondaryConfig && secondaryDataset) {
+      parameters[secondaryConfig.paramName] = secondaryDataset;
+    }
     setSubmitting(true);
     try {
       const response = await submitWorkflow({
         project_id: projectId,
         message: text,
         mode: "template",
-        template_id: templateId || ""
+        template_id: templateId || "",
+        parameters
       });
       if (response.workflow_id) {
         setActiveWorkflowId(response.workflow_id);
@@ -278,7 +355,7 @@ export function WorkflowDock({
     } finally {
       setSubmitting(false);
     }
-  }, [message, onToast, projectId, templateId]);
+  }, [message, onToast, primaryDataset, projectId, secondaryConfig, secondaryDataset, templateId]);
 
   const handleClear = useCallback(() => {
     setActiveWorkflowId("");
@@ -306,7 +383,7 @@ export function WorkflowDock({
   return (
     <aside className="workflow-dock" data-testid="workflow-dock">
       <header className="workflow-dock__header">
-        <h2>PyQGIS 工作流</h2>
+        <h2>GIS 分析工作流</h2>
         {onRequestClose ? (
           <button type="button" className="workflow-dock__close" onClick={onRequestClose} aria-label="关闭">
             ×
@@ -319,7 +396,10 @@ export function WorkflowDock({
           工作流模板
           <select
             value={templateId}
-            onChange={(event) => setTemplateId(event.target.value)}
+            onChange={(event) => {
+              setTemplateId(event.target.value);
+              setSecondaryDataset("");
+            }}
             disabled={submitting}
           >
             <option value="">自动识别</option>
@@ -330,6 +410,40 @@ export function WorkflowDock({
             ))}
           </select>
         </label>
+
+        <label className="workflow-dock__label" data-testid="workflow-dock-dataset">
+          数据集
+          <select
+            value={primaryDataset}
+            onChange={(event) => setPrimaryDataset(event.target.value)}
+            disabled={submitting}
+          >
+            <option value="">默认（按模板）</option>
+            {datasetOptions.map((option) => (
+              <option key={option.source} value={option.source}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {secondaryConfig ? (
+          <label className="workflow-dock__label" data-testid="workflow-dock-dataset-secondary">
+            {secondaryConfig.label}
+            <select
+              value={secondaryDataset}
+              onChange={(event) => setSecondaryDataset(event.target.value)}
+              disabled={submitting}
+            >
+              <option value="">默认（按模板）</option>
+              {datasetOptions.map((option) => (
+                <option key={option.source} value={option.source}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
 
         <textarea
           className="workflow-dock__input"

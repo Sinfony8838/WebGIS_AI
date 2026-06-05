@@ -31,12 +31,107 @@ type Props = {
   busy: boolean;
 };
 
-const stageLabels: Record<string, string> = {
-  analysis: "意图解析",
-  actions: "动作执行",
-  map: "地图同步",
-  artifacts: "产物登记"
+// Map workflow / assistant-v2 stage keys to short, human-friendly status
+// verbs used by the inline "AI 正在思考…" indicator. Anything not listed
+// falls back to the generic ``正在思考…`` so the UI never leaks raw keys.
+const stageVerbs: Record<string, string> = {
+  // Assistant V2 stages
+  routing: "正在理解你的问题",
+  retrieval: "正在检索知识库",
+  planning: "正在规划操作",
+  confirmation: "等待你的确认",
+  execution: "正在执行操作",
+  grounding: "正在整合答复",
+  artifacts: "正在整理结果",
+  // Legacy workflow stages (v1.1)
+  analysis: "正在解析意图",
+  actions: "正在执行动作",
+  map: "正在同步地图"
 };
+
+function pickThinkingLabel(stages: Array<[string, { status: string; summary?: string }]>): string {
+  const running = stages.find(([, stage]) => stage.status === "running");
+  if (running) {
+    return stageVerbs[running[0]] || "正在思考";
+  }
+  return "正在思考";
+}
+
+/**
+ * Shared face artwork used in both the collapsed orb and the expanded
+ * header avatar. Same DOM, identical class structure — the only
+ * difference is the class prefix, which scopes the sizing rules in
+ * styles.css. This keeps the assistant character visually identical
+ * across states.
+ */
+function AssistantFace({ variant }: { variant: "orb" | "avatar" }) {
+  const prefix = variant === "orb" ? "copilot-orb" : "copilot-avatar";
+  return (
+    <>
+      <span className={`${prefix}-ear left`} aria-hidden="true" />
+      <span className={`${prefix}-ear right`} aria-hidden="true" />
+      <span className={`${prefix}-face`}>
+        <span className={`${prefix}-sheen`} aria-hidden="true" />
+        <span className={`${prefix}-mouth`} aria-hidden="true" />
+        <span className={`${prefix}-blush left`} aria-hidden="true" />
+        <span className={`${prefix}-blush right`} aria-hidden="true" />
+        <span className={`${prefix}-pulse`} aria-hidden="true" />
+      </span>
+    </>
+  );
+}
+
+function roleLabel(role: string): string {
+  if (role === "assistant") {
+    return "助教";
+  }
+  if (role === "user") {
+    return "教师";
+  }
+  return "系统";
+}
+
+function MicrophoneIcon({ active }: { active: boolean }) {
+  if (active) {
+    // Active state: filled square indicates "stop"
+    return (
+      <svg
+        className="copilot-voice-icon"
+        viewBox="0 0 16 16"
+        width="14"
+        height="14"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <rect x="3.5" y="3.5" width="9" height="9" rx="1.5" fill="currentColor" />
+      </svg>
+    );
+  }
+  return (
+    <svg
+      className="copilot-voice-icon"
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {/* Capsule body */}
+      <rect x="6" y="2" width="4" height="7.5" rx="2" fill="currentColor" />
+      {/* Stand arc */}
+      <path
+        d="M3.75 8 V8.75 a4.25 4.25 0 0 0 8.5 0 V8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinecap="round"
+      />
+      {/* Neck + base */}
+      <line x1="8" y1="13" x2="8" y2="14" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+      <line x1="6" y1="14" x2="10" y2="14" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 const ORB_SIZE = 72;
 const MIN_WIDTH = 440;
@@ -250,7 +345,6 @@ export function CopilotWidget({
   const jobStages = useMemo(() => (currentJob ? Object.entries(currentJob.stages) : []), [currentJob]);
   const isListening = voiceStatus === "listening";
   const citations = currentJob?.result?.citations || currentJob?.result?.knowledge?.citations || [];
-  const knowledge = currentJob?.result?.knowledge || null;
   const plannedActions = currentJob?.result?.actions_planned || [];
   const confirmationId = String(currentJob?.result?.confirmation_id || "");
   const requiresConfirmation = Boolean(currentJob?.result?.requires_confirmation && confirmationId);
@@ -574,15 +668,7 @@ export function CopilotWidget({
           }}
         >
           <span className="copilot-orb-body">
-            <span className="copilot-orb-ear left" />
-            <span className="copilot-orb-ear right" />
-            <span className="copilot-orb-face">
-              <span className="copilot-orb-sheen" />
-              <span className="copilot-orb-mouth" />
-              <span className="copilot-orb-blush left" />
-              <span className="copilot-orb-blush right" />
-              <span className="copilot-orb-pulse" />
-            </span>
+            <AssistantFace variant="orb" />
           </span>
           <span className="copilot-orb-label">助教</span>
           {unreadCount ? <span className="copilot-unread">{unreadCount}</span> : null}
@@ -597,56 +683,33 @@ export function CopilotWidget({
       style={{ left: panelRect.x, top: panelRect.y, width: panelRect.width, height: panelRect.height }}
     >
       <header className="copilot-widget-header" onPointerDown={(event) => startDrag("panel", event, panelRect)}>
-        <div className="copilot-header-main">
-          <div className="copilot-widget-title">
-            <div className="copilot-avatar" aria-hidden="true">
-            <span className="copilot-avatar-ear left" />
-            <span className="copilot-avatar-ear right" />
-            <span className="copilot-avatar-face">
-              <span className="copilot-avatar-mouth" />
-            </span>
+        <div className="copilot-header-identity">
+          <div className={`copilot-avatar ${busy ? "busy" : ""}`} aria-hidden="true">
+            <AssistantFace variant="avatar" />
           </div>
           <div className="copilot-title-copy">
+            <p className="copilot-eyebrow">AI Teaching Assistant</p>
             <h2>智能助教</h2>
-          </div>
-          </div>
-          <div
-            className="assistant-mode-switch assistant-mode-switch-header"
-            role="tablist"
-            aria-label="assistant mode"
-            onPointerDown={(event) => event.stopPropagation()}
-          >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={assistantMode === "knowledge"}
-              className={`assistant-mode-chip ${assistantMode === "knowledge" ? "active" : ""}`}
-              onClick={() => onAssistantModeChange("knowledge")}
-            >
-              知识助手
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={assistantMode === "tool"}
-              className={`assistant-mode-chip ${assistantMode === "tool" ? "active" : ""}`}
-              onClick={() => onAssistantModeChange("tool")}
-            >
-              工具助手
-            </button>
           </div>
         </div>
         <div className="copilot-widget-actions" onPointerDown={(event) => event.stopPropagation()}>
           <span className={`status-pill ${busy ? "busy" : "ready"}`}>{busy ? "执行中" : "在线"}</span>
-          <button type="button" className="mini-control copilot-collapse" onClick={() => setMinimized(true)} aria-label="最小化助教">
-            －
+          <button
+            type="button"
+            className="mini-control copilot-collapse"
+            onClick={() => setMinimized(true)}
+            aria-label="最小化助教"
+            title="最小化"
+          >
+            <span aria-hidden="true">−</span>
           </button>
         </div>
-      </header>
-
-      <div className="copilot-widget-body">
-        <div className="copilot-widget-content">
-          {false && (<>
+        <div
+          className="assistant-mode-switch"
+          role="tablist"
+          aria-label="assistant mode"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
           <button
             type="button"
             role="tab"
@@ -665,77 +728,78 @@ export function CopilotWidget({
           >
             工具助手
           </button>
-          </>)}
+        </div>
+      </header>
 
-        {jobStages.length ? (
-          <div className="copilot-stage-strip">
-            {jobStages.map(([key, stage]) => (
-              <div key={key} className={`copilot-stage ${stage.status || "pending"}`}>
-                <strong>{stageLabels[key] || key}</strong>
-                <span>{stage.summary || "等待中"}</span>
+      <div className="copilot-widget-body">
+        <div className="copilot-widget-content">
+          {requiresConfirmation ? (
+            <div className="copilot-confirm-card" role="alert">
+              <strong>高风险操作待确认</strong>
+              <span>该计划未确认前不会执行。</span>
+              <div className="copilot-confirm-actions">
+                <button type="button" onClick={() => onConfirm(confirmationId, "approve")} disabled={busy}>
+                  确认执行
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => onConfirm(confirmationId, "reject")}
+                  disabled={busy}
+                >
+                  拒绝计划
+                </button>
               </div>
-            ))}
-          </div>
-        ) : null}
-
-        {requiresConfirmation ? (
-          <div className="copilot-confirm-card">
-            <strong>高风险操作待确认</strong>
-            <span>该计划未确认前不会执行。</span>
-            <div className="copilot-confirm-actions">
-              <button type="button" onClick={() => onConfirm(confirmationId, "approve")} disabled={busy}>
-                确认执行
-              </button>
-              <button type="button" className="secondary" onClick={() => onConfirm(confirmationId, "reject")} disabled={busy}>
-                拒绝计划
-              </button>
             </div>
-          </div>
-        ) : null}
+          ) : null}
 
-        {assistantMode === "tool" && plannedActions.length ? (
-          <div className="copilot-plan-card">
-            <strong>计划摘要</strong>
-            {plannedActions.slice(0, 3).map((item) => (
-              <span key={`${item.name}_${JSON.stringify(item.tool_params)}`}>
-                {item.name} / 风险 {item.risk_level}
-              </span>
+          {assistantMode === "tool" && plannedActions.length ? (
+            <div className="copilot-plan-card">
+              <strong>计划摘要</strong>
+              {plannedActions.slice(0, 3).map((item) => (
+                <span key={`${item.name}_${JSON.stringify(item.tool_params)}`}>
+                  {item.name} <em>· 风险 {item.risk_level}</em>
+                </span>
+              ))}
+            </div>
+          ) : null}
+
+          {citations.length ? (
+            <div className="copilot-citation-list">
+              <strong>引用来源</strong>
+              {citations.map((item) => (
+                <a key={`${item.title}_${item.url}`} href={item.url} target="_blank" rel="noreferrer">
+                  {item.title}
+                </a>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="copilot-chat-log" data-testid="copilot-chat-log">
+            {chatLog.map((message) => (
+              <article key={`${message.timestamp}_${message.role}`} className={`copilot-bubble ${message.role}`}>
+                <span className="copilot-role">{roleLabel(message.role)}</span>
+                <p>{message.text}</p>
+              </article>
             ))}
+            {busy ? (
+              <div
+                className="copilot-thinking"
+                role="status"
+                aria-live="polite"
+                data-testid="copilot-thinking"
+              >
+                <span className="copilot-thinking-dots" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                </span>
+                <span className="copilot-thinking-label">{pickThinkingLabel(jobStages)}</span>
+              </div>
+            ) : null}
           </div>
-        ) : null}
-
-        {assistantMode === "knowledge" && knowledge ? (
-          <div className="copilot-knowledge-card">
-            <strong>回答来源：{knowledge.llm_used ? "AI 通用知识" : "本地知识库"}</strong>
-            <span>回答类型：{knowledge.answer_type}</span>
-            <span>置信度：{Math.round((knowledge.confidence || 0) * 100)}%</span>
-            {knowledge.map_grounding ? <span>基于当前地图：是</span> : null}
-          </div>
-        ) : null}
-
-        {citations.length ? (
-          <div className="copilot-citation-list">
-            <strong>引用来源</strong>
-            {citations.map((item) => (
-              <a key={`${item.title}_${item.url}`} href={item.url} target="_blank" rel="noreferrer">
-                {item.title}
-              </a>
-            ))}
-          </div>
-        ) : null}
-
-        <div className="copilot-chat-log" data-testid="copilot-chat-log">
-          {chatLog.map((message) => (
-            <article key={`${message.timestamp}_${message.role}`} className={`copilot-bubble ${message.role}`}>
-              <span className="copilot-role">
-                {message.role === "assistant" ? "助教" : message.role === "user" ? "教师" : "系统"}
-              </span>
-              <p>{message.text}</p>
-            </article>
-          ))}
         </div>
 
-        </div>
         <form
           className="copilot-widget-form"
           onSubmit={(event) => {
@@ -743,29 +807,44 @@ export function CopilotWidget({
             onSubmit();
           }}
         >
-          <textarea
-            data-testid="copilot-input"
-            value={inputValue}
-            placeholder="例如：解释当前视图的空间格局，或说明所选区域的区位特征。"
-            onChange={(event) => onInputChange(event.target.value)}
-          />
-          <div className="copilot-voice-row">
-            <button
-              type="button"
-              className={`copilot-voice-button ${isListening ? "listening" : ""}`}
-              aria-label={isListening ? "停止语音控制" : "开始语音控制"}
-              onClick={handleVoiceToggle}
-              disabled={busy || (!speechSupported && !isListening)}
-            >
-              {isListening ? "停止语音" : "麦克风"}
-            </button>
-            <button type="submit" disabled={busy || !inputValue.trim()}>
-              发送给助教
-            </button>
+          <div className="copilot-composer">
+            <textarea
+              data-testid="copilot-input"
+              value={inputValue}
+              placeholder="向智能助教提问 — 例如：解释当前视图的空间格局，或说明所选区域的区位特征。"
+              onChange={(event) => onInputChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && inputValue.trim() && !busy) {
+                  event.preventDefault();
+                  onSubmit();
+                }
+              }}
+            />
+            <div className="copilot-composer-actions">
+              <button
+                type="button"
+                className={`copilot-voice-button ${isListening ? "listening" : ""}`}
+                aria-label={isListening ? "停止语音控制" : "开始语音控制"}
+                title={isListening ? "停止语音" : speechSupported ? "语音输入" : "当前浏览器不支持语音"}
+                onClick={handleVoiceToggle}
+                disabled={busy || (!speechSupported && !isListening)}
+              >
+                <MicrophoneIcon active={isListening} />
+                <span className="copilot-voice-label">{isListening ? "停止语音" : "麦克风"}</span>
+              </button>
+              <span className="copilot-composer-hint" aria-hidden="true">
+                ⌘ / Ctrl + Enter 发送
+              </span>
+              <button type="submit" className="copilot-send-button" disabled={busy || !inputValue.trim()}>
+                发送给助教
+              </button>
+            </div>
           </div>
-          <p className={`copilot-voice-status ${voiceStatus}`} role="status">
-            {voiceStatusText}
-          </p>
+          {voiceStatusText ? (
+            <p className={`copilot-voice-status ${voiceStatus}`} role="status">
+              {voiceStatusText}
+            </p>
+          ) : null}
           {lastTranscript ? <p className="copilot-voice-transcript">最近转写：{lastTranscript}</p> : null}
         </form>
       </div>

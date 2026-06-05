@@ -203,29 +203,49 @@ def make_layer_alias(workspace: Workspace, step_id: str, layer) -> str:
 
 
 def write_geojson(layer, target_path: Path, target_crs: str = "EPSG:4326") -> Tuple[Path, Dict[str, Any]]:
-    """Write a vector layer to GeoJSON at ``target_path`` in ``target_crs``."""
+    """Write a vector layer to GeoJSON at ``target_path`` in ``target_crs``.
+
+    Newer SIP bindings (QGIS 3.34+) reject ``options.ct = None`` — that
+    setter is typed ``const QgsCoordinateTransform &`` and refuses ``None``,
+    surfacing as ``NoneType cannot be converted to QgsCoordinateTransform``.
+    Instead of constructing a transform here, we leave ``options.ct``
+    unset (an empty invalid transform) and provide ``destCRS`` +
+    ``transformContext`` so QGIS builds the right transform internally.
+    """
     from qgis.core import QgsCoordinateReferenceSystem, QgsVectorFileWriter, QgsProject  # type: ignore
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
     options = QgsVectorFileWriter.SaveVectorOptions()
     options.driverName = "GeoJSON"
     options.fileEncoding = "UTF-8"
-    options.ct = None
     crs_obj = QgsCoordinateReferenceSystem(target_crs)
     options.destCRS = crs_obj
     transform_context = QgsProject.instance().transformContext() if QgsProject.instance() else None
     if transform_context is None:
         from qgis.core import QgsCoordinateTransformContext  # type: ignore
         transform_context = QgsCoordinateTransformContext()
-    error = QgsVectorFileWriter.writeAsVectorFormatV2(
-        layer, str(target_path), transform_context, options
+    # Prefer the V3 API on modern QGIS (returns a tuple where the second
+    # element is the user-friendly error message); fall back to V2 on older
+    # builds. Both accept the same (layer, dest, context, options) signature.
+    writer = getattr(
+        QgsVectorFileWriter,
+        "writeAsVectorFormatV3",
+        getattr(QgsVectorFileWriter, "writeAsVectorFormatV2", None),
     )
-    if isinstance(error, tuple) and error[0] not in (0, QgsVectorFileWriter.NoError):
+    if writer is None:  # pragma: no cover - very old QGIS
         raise WorkflowExecutionError(
             code="EXPORT_FAILED",
-            message=f"GeoJSON export failed: {error}",
+            message="QgsVectorFileWriter has no writeAsVectorFormatV2/V3 method",
+            user_friendly="QGIS 版本过旧，无法导出 GeoJSON。",
+        )
+    result = writer(layer, str(target_path), transform_context, options)
+    error_code = result[0] if isinstance(result, tuple) else result
+    if error_code not in (0, QgsVectorFileWriter.NoError):
+        raise WorkflowExecutionError(
+            code="EXPORT_FAILED",
+            message=f"GeoJSON export failed: {result}",
             user_friendly="导出 GeoJSON 失败。",
-            details={"error": str(error)},
+            details={"error": str(result)},
         )
     return target_path, {
         "feature_count": layer.featureCount(),

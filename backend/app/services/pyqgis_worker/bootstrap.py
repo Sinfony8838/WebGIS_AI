@@ -47,11 +47,43 @@ def _detect_prefix(root: Path) -> Path:
     return root
 
 
+def _load_env_file(env_path: Path) -> dict[str, str]:
+    """Parse the OSGeo4W ``qgis-ltr-bin.env`` style file.
+
+    Each non-empty, non-comment line is ``KEY=VALUE``. Returns the dict so
+    callers can decide which keys to apply (we generally want all of them
+    except ones the parent has already customised).
+    """
+    result: dict[str, str] = {}
+    try:
+        text = env_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return result
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key:
+            result[key] = value.strip()
+    return result
+
+
 def init_qgis_env(qgis_root: Optional[str] = None) -> Path:
     """Configure environment variables and ``sys.path`` for headless QGIS.
 
     Returns the resolved root path. Raises :class:`WorkflowExecutionError` on
     misconfiguration so callers can convert to a structured error response.
+
+    On a standard OSGeo4W install the QGIS installer ships a `bin/*-bin.env`
+    file (e.g. ``qgis-ltr-bin.env`` for the LTR build) that lists every
+    PATH / PYTHONHOME / QT_PLUGIN_PATH / GDAL_DATA / PROJ_DATA value the
+    bundled python.exe needs. We prefer to load that file verbatim because
+    it's QGIS's own source of truth and survives version-to-version layout
+    drift; we only synthesise the values manually if no env file is found.
     """
     root_value = qgis_root or os.environ.get("QGIS_ROOT") or os.environ.get("WEBGIS_AI_QGIS_ROOT", "")
     root_value = (root_value or "").strip()
@@ -71,27 +103,69 @@ def init_qgis_env(qgis_root: Optional[str] = None) -> Path:
             details={"qgis_root": str(root_path)},
         )
 
-    # Add Python plugin paths
+    # Always run Qt headless inside the worker subprocess.
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+    # 1) Preferred path: replay the official QGIS env file. We try the LTR
+    # variant first because it matches our preferred sys.path layout, then
+    # fall back to the rolling release file name. PATH is treated specially
+    # because we want to prepend rather than overwrite the host PATH.
+    env_dir = root_path / "bin"
+    env_file: Optional[Path] = None
+    for candidate_name in ("qgis-ltr-bin.env", "qgis-bin.env"):
+        candidate = env_dir / candidate_name
+        if candidate.exists():
+            env_file = candidate
+            break
+
+    applied_from_env_file = False
+    if env_file is not None:
+        env_pairs = _load_env_file(env_file)
+        for key, value in env_pairs.items():
+            if not value:
+                continue
+            if key == "PATH":
+                os.environ["PATH"] = value + os.pathsep + os.environ.get("PATH", "")
+                continue
+            # The env file is authoritative for QGIS-bundled paths (PYTHONHOME,
+            # QT_PLUGIN_PATH, GDAL_DATA, PROJ_DATA, …). Override anything the
+            # host might have set so we don't accidentally use the system
+            # Python's site-packages for PyQt5 etc.
+            os.environ[key] = value
+        applied_from_env_file = True
+
+    # 2) Fallback: replicate the minimum set if no env file shipped.
+    if not applied_from_env_file:
+        for env_key, sub in (
+            ("GDAL_DATA", "share/gdal"),
+            ("PROJ_LIB", "share/proj"),
+            ("PROJ_DATA", "share/proj"),
+        ):
+            candidate = root_path / sub
+            if candidate.exists() and not os.environ.get(env_key):
+                os.environ[env_key] = str(candidate)
+        bin_dir = root_path / "bin"
+        if bin_dir.exists():
+            os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
+
+    # Always make sure the QGIS Python plugin paths are on sys.path, even
+    # when the env file already set PYTHONPATH (which only affects child
+    # processes, not the live interpreter).
     for sub in _candidate_subdirs():
         candidate = (root_path / sub).resolve()
         if candidate.exists():
             sys.path.insert(0, str(candidate))
 
-    # Environment variables
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    for env_key, sub in (
-        ("GDAL_DATA", "share/gdal"),
-        ("PROJ_LIB", "share/proj"),
-    ):
-        candidate = root_path / sub
-        if candidate.exists() and not os.environ.get(env_key):
-            os.environ[env_key] = str(candidate)
+    # PYTHONHOME from the env file sets the QGIS-bundled Python prefix, but
+    # the live interpreter has already cached sys.prefix. Make sure the
+    # bundled site-packages is reachable via sys.path so PyQt5 imports work
+    # even when this module is loaded under a non-QGIS parent Python during
+    # tests.
+    site_packages = root_path / "apps" / "Python312" / "Lib" / "site-packages"
+    if site_packages.exists() and str(site_packages) not in sys.path:
+        sys.path.insert(0, str(site_packages))
 
-    bin_dir = root_path / "bin"
-    if bin_dir.exists():
-        os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
-
-    # Avoid Qt asking for a display
+    # Standardise the prefix for QgsApplication.setPrefixPath later on.
     os.environ.setdefault("QGIS_PREFIX_PATH", str(_detect_prefix(root_path)))
     return root_path
 

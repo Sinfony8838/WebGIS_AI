@@ -36,7 +36,7 @@ export function WorkflowPanel(props: WorkflowPanelProps): JSX.Element | null {
     <section className="workflow-panel" data-testid="workflow-panel">
       <header className="workflow-panel__header">
         <div>
-          <h3 className="workflow-panel__title">{intent || "PyQGIS 工作流"}</h3>
+          <h3 className="workflow-panel__title">{intent || "GIS 分析工作流"}</h3>
           <p className="workflow-panel__meta">
             <span className={`workflow-panel__status workflow-panel__status--${status}`}>
               {STATUS_ICONS[status] || "ℹ️"} {STATUS_LABELS[status] || status}
@@ -77,7 +77,7 @@ export function WorkflowPanel(props: WorkflowPanelProps): JSX.Element | null {
         ))}
         {steps.length === 0 ? (
           <li className="workflow-panel__step workflow-panel__step--placeholder">
-            等待 PyQGIS Worker 调度…
+            等待后台 GIS Worker 调度…
           </li>
         ) : null}
       </ul>

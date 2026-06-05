@@ -278,7 +278,7 @@ class JobRecord:
 
 
 # ---------------------------------------------------------------------------
-# PyQGIS Workflow data models
+# GIS workflow data models
 # ---------------------------------------------------------------------------
 
 WORKFLOW_STATUSES = ("pending", "running", "success", "error", "cancelled")
@@ -350,7 +350,7 @@ class WorkflowArtifact:
 
 @dataclass
 class WorkflowRecord:
-    """Full state of a PyQGIS workflow run, persisted in RuntimeStore."""
+    """Full state of a backend GIS workflow run, persisted in RuntimeStore."""
     workflow_id: str
     project_id: str
     user_message: str = ""

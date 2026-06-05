@@ -1,62 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { SideDrawer } from "../components/SideDrawer";
-import type { KnowledgeTopicSummary } from "../types";
-
-const topics: KnowledgeTopicSummary[] = [
-  {
-    topic: "population",
-    title: "Population",
-    item_count: 3,
-    renderable_count: 1,
-    stored_only_count: 1,
-    knowledge_only_count: 1,
-    sample_titles: ["Population map"]
-  }
-];
 
 const baseProps = {
   open: true,
-  topics,
   layerState: null,
-  outputs: [],
   searchResults: [],
   searchSummary: "",
   resourceQuery: "",
   resourceScope: "all" as const,
   resourceLoading: false,
   resourceResults: [],
-  statusSummary: {
-    currentMode: "browse",
-    searchScope: "view",
-    latest: "ready",
-    activeBasemap: "AMap",
-    visibleLayers: 0,
-    totalLayers: 0,
-    enabledTemplates: 0
-  },
   onToggleOpen: vi.fn(),
   onChangeTab: vi.fn(),
   onToggleLayer: vi.fn(),
   onSelectLayer: vi.fn(),
   onFocusResult: vi.fn(),
-  onOpenKnowledgeTopic: vi.fn(),
   onResourceQueryChange: vi.fn(),
   onResourceScopeChange: vi.fn(),
   onOpenResourceResult: vi.fn(),
-  onImportResourceResult: vi.fn()
+  onImportResourceResult: vi.fn(),
+  onOpenTimeline: vi.fn()
 };
 
 describe("SideDrawer", () => {
-  it("renders knowledge topics in the resources tab", () => {
-    render(<SideDrawer {...baseProps} activeTab="resources" />);
-
-    expect(screen.getByText("Population")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Population"));
-    expect(baseProps.onOpenKnowledgeTopic).toHaveBeenCalledWith("population");
-  });
-
-  it("renders layers, search results, and outputs across tabs", () => {
+  it("renders layers and search results across tabs", () => {
     const props = {
       ...baseProps,
       layerState: {
@@ -89,18 +57,6 @@ describe("SideDrawer", () => {
           }
         ]
       },
-      outputs: [
-        {
-          artifact_id: "artifact_1",
-          project_id: "project_1",
-          job_id: "job_1",
-          artifact_type: "map_snapshot",
-          title: "Snapshot",
-          path: "C:/tmp/demo.png",
-          metadata: { public_url: "/files/demo.png" },
-          created_at: "1"
-        }
-      ],
       searchResults: [
         {
           poi_id: "poi_1",
@@ -120,9 +76,6 @@ describe("SideDrawer", () => {
 
     rerender(<SideDrawer {...props} activeTab="search" />);
     expect(screen.getByText("Ningbo Port")).toBeInTheDocument();
-
-    rerender(<SideDrawer {...props} activeTab="outputs" />);
-    expect(screen.getByText("Snapshot")).toBeInTheDocument();
   });
 
   it("renders live resource search results and import action", () => {
@@ -137,11 +90,32 @@ describe("SideDrawer", () => {
       citations: [],
       confidence: 0.9
     };
-    render(<SideDrawer {...baseProps} activeTab="resource-search" resourceQuery="Hu line" resourceResults={[result]} />);
+    render(
+      <SideDrawer
+        {...baseProps}
+        activeTab="resource-search"
+        resourceQuery="Hu line"
+        resourceResults={[result]}
+      />
+    );
 
     expect(screen.getByTestId("live-resource-search")).toBeInTheDocument();
     expect(screen.getByText("Hu line")).toBeInTheDocument();
     fireEvent.click(screen.getByText("导入本课时"));
     expect(baseProps.onImportResourceResult).toHaveBeenCalledWith(result);
+  });
+
+  it("exposes the three primary tabs", () => {
+    const { container } = render(<SideDrawer {...baseProps} activeTab="resource-search" />);
+    const tablist = container.querySelector(".drawer-tabs");
+    expect(tablist).not.toBeNull();
+    const scoped = within(tablist as HTMLElement);
+
+    expect(scoped.getByRole("tab", { name: /资料搜索/ })).toBeInTheDocument();
+    expect(scoped.getByRole("tab", { name: /图层/ })).toBeInTheDocument();
+    expect(scoped.getByRole("tab", { name: /检索/ })).toBeInTheDocument();
+    expect(scoped.queryByRole("tab", { name: /^资料$/ })).toBeNull();
+    expect(scoped.queryByRole("tab", { name: /产物/ })).toBeNull();
+    expect(scoped.queryByText("当前状态")).toBeNull();
   });
 });

@@ -111,6 +111,7 @@ class WorkflowExecutor:
         self.worker_manager = worker_manager or PyQgisWorkerManager(
             workflows_root=config.workflows_dir,
             qgis_root=config.qgis_root,
+            qgis_python=getattr(config, "qgis_python", "") or "",
         )
         self.summary_callback = summary_callback
         self.bus = _EventBus()

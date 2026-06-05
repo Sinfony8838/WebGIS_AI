@@ -1,6 +1,6 @@
 """LLM planner for the in-classroom WebGIS assistant.
 
-After the migration to the PyQGIS Worker workflow, the planner is
+After the migration to the backend GIS workflow, the planner is
 WebGIS-only: it produces ``{tool_name, tool_params}`` actions that the
 existing :class:`AssistantService` knows how to execute on the OpenLayers
 map (basemap switching, layer toggles, view changes, POI search, teaching
@@ -121,8 +121,7 @@ class LLMPlanner:
             "[{\"tool_name\": string, \"tool_params\": object}]}. "
             "Use only the tool names listed in webgis_tools. Do not invent tools. "
             "Do not produce QGIS-specific operations — heavy spatial analysis is "
-            "handled by a separate /workflow pipeline that the user can launch from "
-            "the workflow dock. "
+            "handled by the separate /workflow pipeline and returned to the WebGIS map. "
             "Prefer safe, reversible actions and concise classroom-ready Chinese "
             "explanations."
         )

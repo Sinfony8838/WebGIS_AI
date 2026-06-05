@@ -161,3 +161,131 @@ class AppConfigTest(unittest.TestCase):
             self.assertIn("重启后端", status["error"])
             self.assertNotIn("primary-key", status["error"])
             self.assertNotIn("legacy-key", status["error"])
+
+    # ------------------------------------------------------------------
+    # v1.2 Xiaomi MiMo provider tests
+    # ------------------------------------------------------------------
+
+    def test_default_provider_is_mimo(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(os.environ, {}, clear=True):
+            config = AppConfig(root_dir=Path(temp_dir))
+            self.assertEqual(config.llm_provider, "mimo")
+            self.assertEqual(config.mimo_base_url, "https://api.xiaomimimo.com/v1")
+            self.assertEqual(config.mimo_model, "mimo-v2.5-pro")
+            # No key set → provider chosen but unconfigured.
+            status = config.llm_status()
+            self.assertFalse(status["configured"])
+            self.assertEqual(status["provider"], "mimo")
+            self.assertEqual(status["api_key_source"], "unset")
+            self.assertIn("WEBGIS_AI_MIMO_API_KEY", status["error"])
+
+    def test_mimo_primary_envs_configure_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            os.environ,
+            {
+                "WEBGIS_AI_MIMO_API_KEY": "mimo-primary-key",
+                "WEBGIS_AI_MIMO_MODEL": "mimo-v2.5-flash",
+            },
+            clear=True,
+        ):
+            config = AppConfig(root_dir=Path(temp_dir))
+            status = config.llm_status()
+            self.assertTrue(status["enabled"])
+            self.assertTrue(status["configured"])
+            self.assertEqual(status["provider"], "mimo")
+            self.assertEqual(status["api_key_source"], "WEBGIS_AI_MIMO_API_KEY")
+            self.assertEqual(status["model"], "mimo-v2.5-flash")
+            self.assertEqual(config.active_llm_api_key(), "mimo-primary-key")
+
+    def test_mimo_alias_envs_are_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            os.environ,
+            {
+                "MIMO_API_KEY": "alias-mimo-key",
+                "XIAOMI_MIMO_API_KEY": "longer-alias",
+            },
+            clear=True,
+        ):
+            config = AppConfig(root_dir=Path(temp_dir))
+            # The first env in the alias tuple wins, so MIMO_API_KEY is used.
+            self.assertEqual(config.mimo_api_key, "alias-mimo-key")
+            self.assertEqual(config.llm_provider, "mimo")
+            self.assertTrue(config.llm_enabled())
+
+    def test_legacy_minimax_only_env_softly_falls_back_to_minimax(self) -> None:
+        # If the caller never sets LLM_PROVIDER but DOES set a MiniMax key and
+        # no Mimo key, we keep using MiniMax so v1.1 dev setups don't break.
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            os.environ,
+            {"MINIMAX_API_KEY": "legacy-only-key"},
+            clear=True,
+        ):
+            config = AppConfig(root_dir=Path(temp_dir))
+            self.assertEqual(config.llm_provider, "minimax")
+            self.assertEqual(config.llm_provider_source, "default_fallback_minimax_only")
+            self.assertTrue(config.llm_enabled())
+
+    def test_explicit_mimo_overrides_legacy_minimax_key(self) -> None:
+        # When BOTH Mimo and MiniMax keys are set without LLM_PROVIDER, we prefer
+        # the new default (Mimo) — only the "MiniMax-only" shape triggers the fallback.
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            os.environ,
+            {
+                "MIMO_API_KEY": "mimo-key",
+                "MINIMAX_API_KEY": "legacy-key",
+            },
+            clear=True,
+        ):
+            config = AppConfig(root_dir=Path(temp_dir))
+            self.assertEqual(config.llm_provider, "mimo")
+            self.assertEqual(config.active_llm_api_key(), "mimo-key")
+
+    def test_vision_provider_auto_tracks_llm_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            os.environ,
+            {"WEBGIS_AI_MIMO_API_KEY": "mimo-key", "WEBGIS_AI_VISION_ENABLED": "1"},
+            clear=True,
+        ):
+            config = AppConfig(root_dir=Path(temp_dir))
+            self.assertEqual(config.vision_provider, "mimo")
+            self.assertEqual(config.vision_model, "mimo-v2.5")
+            status = config.vision_status()
+            self.assertTrue(status["configured"])
+            self.assertEqual(status["provider"], "mimo")
+            self.assertEqual(status["model"], "mimo-v2.5")
+
+    def test_vision_provider_explicit_minimax_mcp_overrides_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            os.environ,
+            {
+                "WEBGIS_AI_LLM_PROVIDER": "minimax",
+                "WEBGIS_AI_MINIMAX_API_KEY": "key",
+                "WEBGIS_AI_VISION_PROVIDER": "minimax_mcp",
+                "WEBGIS_AI_MINIMAX_TOKEN_PLAN_KEY": "token-plan",
+                "WEBGIS_AI_VISION_ENABLED": "1",
+            },
+            clear=True,
+        ):
+            config = AppConfig(root_dir=Path(temp_dir))
+            self.assertEqual(config.vision_provider, "minimax_mcp")
+            status = config.vision_status()
+            self.assertTrue(status["configured"])
+            self.assertEqual(status["provider"], "minimax_mcp")
+
+    def test_minimax_mcp_vision_reuses_existing_minimax_api_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            os.environ,
+            {
+                "WEBGIS_AI_LLM_PROVIDER": "minimax",
+                "WEBGIS_AI_MINIMAX_API_KEY": "shared-minimax-key",
+                "WEBGIS_AI_VISION_ENABLED": "1",
+            },
+            clear=True,
+        ):
+            config = AppConfig(root_dir=Path(temp_dir))
+            self.assertEqual(config.vision_provider, "minimax_mcp")
+            self.assertEqual(config.minimax_token_plan_key, "shared-minimax-key")
+            status = config.vision_status()
+            self.assertTrue(status["configured"])
+            self.assertEqual(status["provider"], "minimax_mcp")
+            self.assertEqual(status["token_plan_key_source"], "WEBGIS_AI_MINIMAX_API_KEY")

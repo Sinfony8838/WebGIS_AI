@@ -4,15 +4,18 @@ Outputs both the classified layer (in worker memory) AND a portable
 ``style.json`` describing classes/colors so OpenLayers can re-render the
 GeoJSON interactively. We do NOT rely on QGIS to render the PNG here —
 ``export_map_png`` is a separate step.
+
+v1.2: classification break math moved to ``_classification.py`` so the
+new ``classify`` op can reuse it. Color ramp handling stays here because
+it is a styling concern, not a classification one.
 """
 from __future__ import annotations
 
-import statistics
 from typing import Any, Dict, List
 
 from ..errors import WorkflowExecutionError
 from ..workspace import Workspace
-from . import _common
+from . import _classification, _common
 
 
 # A handful of standard color ramps as hex sequences (interpolated client-side
@@ -56,71 +59,10 @@ def _pick_palette(ramp_name: str, classes: int) -> List[str]:
     return chosen + [chosen[-1]] * (classes - len(chosen))
 
 
-def _compute_breaks(values: List[float], classes: int, method: str) -> List[float]:
-    if not values:
-        raise WorkflowExecutionError(
-            code="GEOMETRY_INVALID",
-            message="no values to classify",
-            user_friendly="无法分级：没有任何样本。",
-        )
-    sorted_values = sorted(values)
-    method = (method or "jenks").lower()
-    if method in {"equal", "equal_interval"}:
-        lo = sorted_values[0]
-        hi = sorted_values[-1]
-        if hi <= lo:
-            return [lo, hi]
-        step = (hi - lo) / classes
-        return [lo + step * i for i in range(classes + 1)]
-    if method == "quantile":
-        breaks = [sorted_values[0]]
-        for i in range(1, classes):
-            idx = int(round(i * (len(sorted_values) - 1) / classes))
-            breaks.append(sorted_values[idx])
-        breaks.append(sorted_values[-1])
-        return breaks
-    if method in {"stddev", "std_dev"}:
-        mean = statistics.fmean(sorted_values)
-        stdev = statistics.pstdev(sorted_values) or 1.0
-        breaks = [mean + (i - classes / 2) * stdev for i in range(classes + 1)]
-        breaks[0] = min(breaks[0], sorted_values[0])
-        breaks[-1] = max(breaks[-1], sorted_values[-1])
-        return breaks
-    # Jenks / natural_breaks — fall back to a Fisher-Jenks-like greedy split.
-    return _fisher_jenks_breaks(sorted_values, classes)
-
-
-def _fisher_jenks_breaks(sorted_values: List[float], classes: int) -> List[float]:
-    """A simple, fast approximation: split the sorted array at quantile-like
-    boundaries refined by within-class variance. For small N (<=2000) the cost
-    is fine; for large N this still produces reasonable breaks."""
-    n = len(sorted_values)
-    if classes <= 1:
-        return [sorted_values[0], sorted_values[-1]]
-    # Quantile seed
-    breaks = [sorted_values[0]]
-    for i in range(1, classes):
-        idx = int(round(i * (n - 1) / classes))
-        breaks.append(sorted_values[idx])
-    breaks.append(sorted_values[-1])
-    # One pass of refinement: shift each interior break to local mean midpoint.
-    for _ in range(2):
-        for i in range(1, classes):
-            left_idx = next(idx for idx, v in enumerate(sorted_values) if v >= breaks[i - 1])
-            right_idx = next(idx for idx, v in enumerate(sorted_values) if v >= breaks[i + 1])
-            window = sorted_values[left_idx:right_idx + 1]
-            if window:
-                breaks[i] = statistics.median(window)
-    breaks.sort()
-    return breaks
-
-
-def _format_label(low: float, high: float) -> str:
-    def _fmt(value: float) -> str:
-        if abs(value) >= 1000 or abs(value) < 0.01:
-            return f"{value:.2g}"
-        return f"{value:.2f}"
-    return f"{_fmt(low)} - {_fmt(high)}"
+# Break-point math moved to _classification.py (v1.2 Phase 1.1 refactor).
+# Re-exported as module-private aliases so any external importer keeps working.
+_compute_breaks = _classification.compute_breaks
+_format_label = _classification.format_label
 
 
 def execute(params: Dict[str, Any], workspace: Workspace) -> Dict[str, Any]:
@@ -158,7 +100,7 @@ def execute(params: Dict[str, Any], workspace: Workspace) -> Dict[str, Any]:
             user_friendly=f"字段 {field} 没有可用的数值。",
         )
 
-    breaks = _compute_breaks(values, classes, method)
+    breaks = _classification.compute_breaks(values, classes, method)
     palette = _pick_palette(ramp_name, classes)
     style_classes = []
     for index in range(classes):
@@ -168,7 +110,7 @@ def execute(params: Dict[str, Any], workspace: Workspace) -> Dict[str, Any]:
             "min": float(lo),
             "max": float(hi),
             "color": palette[index],
-            "label": _format_label(lo, hi),
+            "label": _classification.format_label(lo, hi),
         })
 
     style_payload = {

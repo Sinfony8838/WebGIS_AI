@@ -1,4 +1,4 @@
-"""Workflow JSON validator for the PyQGIS workflow pipeline.
+"""Workflow JSON validator for the backend GIS workflow pipeline.
 
 The validator only inspects the workflow JSON structure:
 * whitelist of operations,
@@ -37,19 +37,33 @@ ALLOWED_OPS: Tuple[str, ...] = (
     "export_geojson",
     "export_style_json",
     "export_map_png",
+    "clip",
+    "intersection",
+    "spatial_join",
+    "classify",
 )
 
 #: Operations that are reserved but not yet implemented; validator allows them
 #: to pass but the executor will report a clear "not implemented" error.
 RESERVED_OPS: Tuple[str, ...] = (
-    "spatial_join",
-    "intersection",
-    "clip",
-    "classify",
     "heatmap",
     "add_label",
     "export_layout_pdf",
 )
+
+#: Allowed spatial predicates accepted by ``spatial_join``.
+ALLOWED_SPATIAL_PREDICATES = {
+    "intersects",
+    "contains",
+    "equals",
+    "touches",
+    "overlaps",
+    "within",
+    "crosses",
+}
+
+#: Allowed methods (multiplicity modes) for ``spatial_join``.
+ALLOWED_JOIN_METHODS = {"1_to_1", "1_to_many"}
 
 #: Required parameter keys per op.
 REQUIRED_PARAMS: Dict[str, Tuple[str, ...]] = {
@@ -65,6 +79,10 @@ REQUIRED_PARAMS: Dict[str, Tuple[str, ...]] = {
     "export_geojson": ("input",),
     "export_style_json": ("input",),
     "export_map_png": ("layers",),
+    "clip": ("input", "clip_layer"),
+    "intersection": ("input", "overlay_layer"),
+    "spatial_join": ("input", "join_layer"),
+    "classify": ("input", "field"),
 }
 
 #: Allowed classification methods used by ``choropleth`` / ``classify``.
@@ -443,6 +461,65 @@ class WorkflowValidator:
                     field="field",
                 ))
 
+        if op == "spatial_join":
+            predicate = params.get("predicate")
+            if predicate is not None and not _looks_like_reference(predicate):
+                pred_key = str(predicate).strip().lower() if isinstance(predicate, str) else ""
+                if pred_key and pred_key not in ALLOWED_SPATIAL_PREDICATES:
+                    errors.append(ValidationError(
+                        code="SPATIAL_JOIN_BAD_PREDICATE",
+                        message=f"unknown predicate: {predicate}",
+                        user_friendly=(
+                            f"不支持的空间关系：{predicate}。"
+                            "可选：intersects / contains / within / touches / overlaps / equals / crosses。"
+                        ),
+                        step_id=step_id,
+                        field="predicate",
+                    ))
+            method = params.get("method")
+            if isinstance(method, str) and method.strip().lower() not in ALLOWED_JOIN_METHODS:
+                errors.append(ValidationError(
+                    code="SPATIAL_JOIN_BAD_METHOD",
+                    message=f"unknown method: {method}",
+                    user_friendly="method 仅支持 '1_to_1' 或 '1_to_many'。",
+                    step_id=step_id,
+                    field="method",
+                ))
+
+        if op == "classify":
+            classes = params.get("classes", 5)
+            try:
+                classes_value = int(classes)
+                if not 2 <= classes_value <= 12:
+                    raise ValueError("out of range")
+            except (TypeError, ValueError):
+                errors.append(ValidationError(
+                    code="CLASSIFY_BAD_CLASSES",
+                    message="classify.classes must be int in [2,12]",
+                    user_friendly="分级数必须是 2 到 12 之间的整数。",
+                    step_id=step_id,
+                    field="classes",
+                ))
+            method = params.get("method", "jenks")
+            if isinstance(method, str) and method.strip().lower() not in ALLOWED_CLASSIFY_METHODS:
+                errors.append(ValidationError(
+                    code="CLASSIFY_BAD_METHOD",
+                    message=f"unknown classification method: {method}",
+                    user_friendly=f"暂不支持的分级方法：{method}。",
+                    step_id=step_id,
+                    field="method",
+                ))
+            output_field = params.get("output_field")
+            if isinstance(output_field, str) and output_field.strip():
+                if not re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$", output_field.strip()):
+                    errors.append(ValidationError(
+                        code="CLASSIFY_BAD_OUTPUT_FIELD",
+                        message=f"invalid output_field: {output_field}",
+                        user_friendly="output_field 只能包含字母、数字、下划线，且不能以数字开头。",
+                        step_id=step_id,
+                        field="output_field",
+                    ))
+
         return errors
 
     # -- references ----------------------------------------------------
@@ -513,6 +590,21 @@ class WorkflowValidator:
             "export_geojson": {"geojson", "path", "extent", "crs"},
             "export_style_json": {"style", "path"},
             "export_map_png": {"png", "path", "extent", "crs"},
+            "clip": {"layer", "extent", "crs", "fields", "feature_count", "path"},
+            "intersection": {"layer", "extent", "crs", "fields", "feature_count", "path"},
+            "spatial_join": {"layer", "extent", "crs", "fields", "feature_count", "join_stats", "path"},
+            "classify": {
+                "layer",
+                "extent",
+                "crs",
+                "fields",
+                "feature_count",
+                "output_field",
+                "method",
+                "classes_applied",
+                "breaks",
+                "path",
+            },
         }
         keys = set(defaults.get(op, {"path"}))
         if isinstance(output_bindings, dict):

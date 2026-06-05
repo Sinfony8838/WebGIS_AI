@@ -488,7 +488,7 @@ class RuntimeStore:
             return [artifact.to_dict() for artifact in artifacts]
 
     # ------------------------------------------------------------------
-    # Workflow records (PyQGIS workflow main line)
+    # Workflow records (backend GIS workflow main line)
     # ------------------------------------------------------------------
 
     def create_workflow(self, workflow: WorkflowRecord) -> WorkflowRecord:

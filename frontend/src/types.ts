@@ -8,6 +8,12 @@ export type BasemapLayerDescriptor = {
   z_index: number;
   class_name?: string;
   cross_origin?: string;
+  /**
+   * Whether the backend considers this raster layer safe to use as a
+   * Cesium ImageryProvider in the 3D globe view. Weather overlays and
+   * vector-only tiles typically opt out (false). Default is true.
+   */
+  usable_in_3d?: boolean;
 };
 
 export type BasemapPreset = {
@@ -160,7 +166,7 @@ export type KnowledgeAnswer = {
 };
 
 export type AssistantMode = "knowledge" | "tool";
-export type AssistantTarget = "webgis" | "qgis" | "auto";
+export type AssistantTarget = "webgis";
 export type AssistantInputMode = "text" | "voice";
 
 export type MapContext = {
@@ -380,12 +386,11 @@ export type HealthResponse = {
     provider: string;
     token_plan_key_source?: string;
   };
-  qgis?: {
+  gis_workflow?: {
     enabled: boolean;
-    host: string;
-    port: number;
-    reachable?: boolean;
-    error?: string;
+    engine?: string;
+    qgis_root?: string;
+    init_warning?: Record<string, unknown> | null;
   };
   online_services: {
     amap_poi_enabled: boolean;
@@ -428,7 +433,7 @@ export type ConversationResponse = {
 
 
 // ---------------------------------------------------------------------------
-// PyQGIS workflow types (main pipeline)
+// GIS workflow types (PyQGIS worker is a backend implementation detail)
 // ---------------------------------------------------------------------------
 
 export type WorkflowStatus = "pending" | "running" | "success" | "error" | "cancelled";
@@ -566,4 +571,74 @@ export type StatsPayload = {
   rows?: StatsRow[];
   all_rows_count?: number;
   summary?: Record<string, number | string>;
+};
+
+// ── PPT types ────────────────────────────────────────────────
+
+export type SlideContent = {
+  index: number;
+  html: string;
+  imageUrl?: string;
+  bgColor?: string;
+  images: Record<string, string>; // rId -> object URL
+  width: number;  // EMU
+  height: number; // EMU
+  renderer?: string;
+};
+
+export type PptxParsedPresentation = {
+  fileName: string;
+  slideWidth: number;
+  slideHeight: number;
+  slides: SlideContent[];
+};
+
+export type PptRenderSlide = {
+  index: number;
+  image_url: string;
+  width: number;
+  height: number;
+};
+
+export type PptRenderResponse = {
+  status: string;
+  file_name: string;
+  renderer: string;
+  slide_width: number;
+  slide_height: number;
+  slides: PptRenderSlide[];
+  attempts?: Array<Record<string, string>>;
+};
+
+// ── Timeline types ───────────────────────────────────────────
+
+export type TimelineNode = {
+  id: string;
+  order: number;
+  stage: string;
+  title: string;
+  description: string;
+  durationMin: number;
+  active: boolean;
+};
+
+export type TimelineData = {
+  id: string;
+  project_id: string;
+  source_file_name: string;
+  title: string;
+  totalDurationMin: number;
+  nodes: TimelineNode[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type TimelineGenerateResponse = {
+  status: string;
+  timeline: TimelineData;
+};
+
+export type TimelineSaveResponse = {
+  status: string;
+  timeline: TimelineData;
 };

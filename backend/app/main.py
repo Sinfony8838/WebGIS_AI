@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from .config import AppConfig
 from .runtime import WebGISRuntime
+from .services.ppt_renderer import PptRenderError, render_pptx_to_images
 
 
 config = AppConfig()
@@ -415,6 +416,15 @@ async def upload_dataset(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/ppt/render")
+async def render_ppt(file: UploadFile = File(...)) -> Dict[str, Any]:
+    try:
+        raw = await file.read()
+        return render_pptx_to_images(config, file.filename or "presentation.pptx", raw)
+    except PptRenderError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_dict()) from exc
+
+
 @app.post("/search/poi")
 def search_poi(request: PoiSearchRequest) -> Dict[str, Any]:
     try:
@@ -490,7 +500,7 @@ def list_outputs(project_id: Optional[str] = None) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# PyQGIS workflow endpoints
+# GIS workflow endpoints
 # ---------------------------------------------------------------------------
 
 
@@ -566,3 +576,46 @@ def serve_workflow_file(workflow_id: str, relative_path: str):
     elif suffix == ".md":
         media_type = "text/markdown; charset=utf-8"
     return FileResponse(path, media_type=media_type)
+
+
+# ---------------------------------------------------------------------------
+# Timeline
+# ---------------------------------------------------------------------------
+
+
+class TimelinePatchRequest(BaseModel):
+    patch: Dict[str, Any] = Field(default_factory=dict)
+
+
+@app.post("/projects/{project_id}/timeline/generate")
+async def generate_timeline(
+    project_id: str,
+    file: UploadFile = File(...),
+) -> Dict[str, Any]:
+    try:
+        raw = await file.read()
+        return runtime.generate_timeline(
+            project_id=project_id,
+            filename=file.filename or "lesson.txt",
+            raw_bytes=raw,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/projects/{project_id}/timeline")
+def get_timeline(project_id: str) -> Dict[str, Any]:
+    try:
+        return runtime.get_timeline(project_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.patch("/projects/{project_id}/timeline")
+def update_timeline(project_id: str, request: TimelinePatchRequest) -> Dict[str, Any]:
+    try:
+        return runtime.update_timeline(project_id, request.patch)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

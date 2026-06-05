@@ -28,6 +28,10 @@ def _load_handlers() -> Dict[str, Callable[[Dict[str, Any], Workspace], Dict[str
         export_geojson,
         export_style_json,
         export_map_png,
+        clip as clip_handler,
+        intersection as intersection_handler,
+        spatial_join as spatial_join_handler,
+        classify as classify_handler,
     )
 
     return {
@@ -43,6 +47,10 @@ def _load_handlers() -> Dict[str, Callable[[Dict[str, Any], Workspace], Dict[str
         "export_geojson": export_geojson.execute,
         "export_style_json": export_style_json.execute,
         "export_map_png": export_map_png.execute,
+        "clip": clip_handler.execute,
+        "intersection": intersection_handler.execute,
+        "spatial_join": spatial_join_handler.execute,
+        "classify": classify_handler.execute,
     }
 
 
