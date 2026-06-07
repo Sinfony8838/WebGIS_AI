@@ -1,18 +1,39 @@
 import type {
+  AssistantMode,
+  AssistantInputMode,
   AssistantTarget,
   ArtifactRecord,
   BasemapCatalog,
   BasemapPreset,
+  ChatMessage,
+  ConversationResponse,
   HealthResponse,
   JobRecord,
+  KnowledgeBaseItem,
+  KnowledgeLayerRegisterResponse,
+  KnowledgeManifestResponse,
+  LessonResourceResponse,
+  LessonResourceSet,
+  MaterialWriteResponse,
+  KnowledgeSearchResponse,
+  KnowledgeTopicsResponse,
   LlmStatusResponse,
   LayersResponse,
   MapContext,
   PoiSearchResponse,
+  PptRenderResponse,
   ProjectRecord,
-  QgisLayersResponse,
-  QgisStatusResponse,
-  QgisToolResponse
+  RegionBinding,
+  ResourceSearchResponse,
+  ScreenSnapshot,
+  TimelineData,
+  TimelineGenerateResponse,
+  TimelineSaveResponse,
+  WorkflowArtifactsResponse,
+  WorkflowHistoryResponse,
+  WorkflowRecord,
+  WorkflowSubmitResponse,
+  WorkflowTemplatesResponse
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:18999";
@@ -30,44 +51,12 @@ export function getApiBase(): string {
   return API_BASE;
 }
 
-export function buildQgisPreviewUrl(filePath: string, stamp: number): string {
-  const normalized = filePath.trim();
-  return `${API_BASE}/qgis/preview?file_path=${encodeURIComponent(normalized)}&t=${stamp}`;
-}
-
 export async function fetchHealth(): Promise<HealthResponse> {
   return requestJson<HealthResponse>("/health");
 }
 
 export async function fetchLlmStatus(): Promise<LlmStatusResponse> {
   return requestJson<LlmStatusResponse>("/llm/status");
-}
-
-export async function fetchQgisStatus(): Promise<QgisStatusResponse> {
-  return requestJson<QgisStatusResponse>("/qgis/status");
-}
-
-export async function fetchQgisLayers(): Promise<QgisLayersResponse> {
-  return requestJson<QgisLayersResponse>("/qgis/layers");
-}
-
-export async function executeQgisTool(
-  toolName: string,
-  toolParams: Record<string, unknown> = {}
-): Promise<QgisToolResponse> {
-  return requestJson<QgisToolResponse>(`/qgis/tools/${encodeURIComponent(toolName)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tool_params: toolParams })
-  });
-}
-
-export async function focusQgis(): Promise<QgisToolResponse> {
-  return requestJson<QgisToolResponse>("/qgis/focus", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({})
-  });
 }
 
 export async function fetchBasemaps(): Promise<BasemapCatalog> {
@@ -118,13 +107,45 @@ export async function sendAssistantMessage(
   projectId: string,
   message: string,
   mapContext: MapContext,
-  target: AssistantTarget = "webgis"
-): Promise<{ job_id: string }> {
-  return requestJson<{ job_id: string }>("/assistant/messages", {
+  target: AssistantTarget = "webgis",
+  inputMode: AssistantInputMode = "text",
+  options?: {
+    assistantMode?: AssistantMode;
+    conversationId?: string;
+    history?: ChatMessage[];
+    screenSnapshot?: ScreenSnapshot;
+  }
+): Promise<{ job_id: string; conversation_id?: string; assistant_mode?: AssistantMode }> {
+  return requestJson<{ job_id: string; conversation_id?: string; assistant_mode?: AssistantMode }>("/assistant/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ project_id: projectId, message, map_context: mapContext, target })
+    body: JSON.stringify({
+      project_id: projectId,
+      message,
+      map_context: mapContext,
+      assistant_mode: options?.assistantMode || "",
+      conversation_id: options?.conversationId || "",
+      history: options?.history || [],
+      target,
+      input_mode: inputMode,
+      screen_snapshot: options?.screenSnapshot || {}
+    })
   });
+}
+
+export async function confirmAssistantAction(
+  confirmationId: string,
+  decision: "approve" | "reject" = "approve"
+): Promise<{ job_id: string; confirmation_id: string; decision: "approve" | "reject" }> {
+  return requestJson<{ job_id: string; confirmation_id: string; decision: "approve" | "reject" }>("/assistant/confirm", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirmation_id: confirmationId, decision })
+  });
+}
+
+export async function fetchConversation(conversationId: string): Promise<ConversationResponse> {
+  return requestJson<ConversationResponse>(`/assistant/conversations/${encodeURIComponent(conversationId)}`);
 }
 
 export async function searchPoi(
@@ -172,4 +193,294 @@ export async function fetchOutputs(projectId: string): Promise<{ items: Artifact
 
 export async function fetchJob(jobId: string): Promise<JobRecord> {
   return requestJson<JobRecord>(`/jobs/${jobId}`);
+}
+
+export async function fetchKbManifest(): Promise<KnowledgeManifestResponse> {
+  return requestJson<KnowledgeManifestResponse>("/kb/manifest");
+}
+
+export async function fetchKbTopics(): Promise<KnowledgeTopicsResponse> {
+  return requestJson<KnowledgeTopicsResponse>("/kb/topics");
+}
+
+export async function searchKb(params: {
+  query?: string;
+  topic?: string;
+  region?: string;
+  tag?: string;
+  limit?: number;
+}): Promise<KnowledgeSearchResponse> {
+  const query = new URLSearchParams();
+  if (params.query) {
+    query.set("query", params.query);
+  }
+  if (params.topic) {
+    query.set("topic", params.topic);
+  }
+  if (params.region) {
+    query.set("region", params.region);
+  }
+  if (params.tag) {
+    query.set("tag", params.tag);
+  }
+  query.set("limit", String(params.limit ?? 20));
+  return requestJson<KnowledgeSearchResponse>(`/kb/search?${query.toString()}`);
+}
+
+export async function upsertKbItem(item: Partial<KnowledgeBaseItem>): Promise<KnowledgeLayerRegisterResponse> {
+  return requestJson<KnowledgeLayerRegisterResponse>("/kb/items", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ item })
+  });
+}
+
+export async function registerKbLayer(
+  projectId: string,
+  layerId: string,
+  metadata: Record<string, unknown> = {}
+): Promise<KnowledgeLayerRegisterResponse> {
+  return requestJson<KnowledgeLayerRegisterResponse>("/kb/layers/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project_id: projectId,
+      layer_id: layerId,
+      metadata
+    })
+  });
+}
+
+export async function searchResources(params: {
+  query?: string;
+  scope?: "all" | "kb" | "web" | "materials";
+  limit?: number;
+}): Promise<ResourceSearchResponse> {
+  const query = new URLSearchParams();
+  if (params.query) {
+    query.set("query", params.query);
+  }
+  query.set("scope", params.scope || "all");
+  query.set("limit", String(params.limit ?? 12));
+  return requestJson<ResourceSearchResponse>(`/resources/search?${query.toString()}`);
+}
+
+export async function uploadKbMaterial(
+  kbItemId: string,
+  formData: FormData,
+  regionBinding: RegionBinding = {}
+): Promise<MaterialWriteResponse> {
+  formData.set("kb_item_id", kbItemId);
+  formData.set("region_binding", JSON.stringify(regionBinding));
+  return requestJson<MaterialWriteResponse>("/kb/materials/upload", {
+    method: "POST",
+    body: formData
+  });
+}
+
+export async function createKbMaterialLink(payload: {
+  kb_item_id: string;
+  url: string;
+  title?: string;
+  description?: string;
+  material_type?: string;
+  thumbnail_url?: string;
+  region_binding?: RegionBinding;
+}): Promise<MaterialWriteResponse> {
+  return requestJson<MaterialWriteResponse>("/kb/materials/link", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function fetchLessonResources(projectId: string): Promise<LessonResourceResponse> {
+  return requestJson<LessonResourceResponse>(`/projects/${projectId}/lesson-resources`);
+}
+
+export async function saveLessonResourceSet(
+  projectId: string,
+  item: Partial<LessonResourceSet>
+): Promise<LessonResourceResponse & { item: LessonResourceSet }> {
+  return requestJson<LessonResourceResponse & { item: LessonResourceSet }>(`/projects/${projectId}/lesson-resources`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ item })
+  });
+}
+
+export async function activateLessonResourceSet(
+  projectId: string,
+  setId: string,
+  patch: Partial<LessonResourceSet> = { active: true }
+): Promise<LessonResourceResponse> {
+  return requestJson<LessonResourceResponse>(`/projects/${projectId}/lesson-resources/${encodeURIComponent(setId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ patch })
+  });
+}
+
+
+// ── Teaching Maps ──────────────────────────────────────────
+
+export interface TeachingMapItem {
+  id: string;
+  name: string;
+  category: string;
+  category_order: number;
+  bounds: [number, number, number, number];
+  view: { center: [number, number]; zoom: number };
+  opacity: number;
+  keywords: string[];
+  asset_url: string;
+}
+
+export interface TeachingMapsResponse {
+  status: string;
+  items: TeachingMapItem[];
+}
+
+export interface TeachingMapToggleResponse {
+  status: string;
+  layer: Record<string, any> | null;
+  view: { center?: [number, number]; zoom?: number };
+}
+
+export async function fetchTeachingMaps(): Promise<TeachingMapsResponse> {
+  return requestJson<TeachingMapsResponse>("/teaching-maps");
+}
+
+export async function toggleTeachingMap(
+  projectId: string,
+  mapId: string,
+  visible: boolean
+): Promise<TeachingMapToggleResponse> {
+  return requestJson<TeachingMapToggleResponse>(`/projects/${projectId}/teaching-maps/${encodeURIComponent(mapId)}/toggle`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ visible })
+  });
+}
+
+export async function fetchActiveTeachingMaps(
+  projectId: string
+): Promise<{ status: string; active: string[] }> {
+  return requestJson<{ status: string; active: string[] }>(`/projects/${projectId}/teaching-maps/active`);
+}
+
+// ---------------------------------------------------------------------------
+// GIS workflow API
+// ---------------------------------------------------------------------------
+
+export async function listWorkflowTemplates(): Promise<WorkflowTemplatesResponse> {
+  return requestJson<WorkflowTemplatesResponse>("/workflow/templates");
+}
+
+export async function submitWorkflow(payload: {
+  project_id: string;
+  message: string;
+  mode?: string;
+  template_id?: string;
+  parameters?: Record<string, unknown>;
+}): Promise<WorkflowSubmitResponse> {
+  return requestJson<WorkflowSubmitResponse>("/workflow/submit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project_id: payload.project_id,
+      message: payload.message,
+      mode: payload.mode || "template",
+      template_id: payload.template_id || "",
+      parameters: payload.parameters || {}
+    })
+  });
+}
+
+export async function fetchWorkflow(workflowId: string): Promise<WorkflowRecord & { status: string }> {
+  return requestJson<WorkflowRecord & { status: string }>(`/workflow/${encodeURIComponent(workflowId)}`);
+}
+
+export async function fetchWorkflowArtifacts(
+  workflowId: string
+): Promise<WorkflowArtifactsResponse> {
+  return requestJson<WorkflowArtifactsResponse>(`/workflow/${encodeURIComponent(workflowId)}/artifacts`);
+}
+
+export async function fetchWorkflowHistory(projectId: string): Promise<WorkflowHistoryResponse> {
+  const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
+  return requestJson<WorkflowHistoryResponse>(`/workflow/history${query}`);
+}
+
+export function buildWorkflowStreamUrl(workflowId: string): string {
+  return `${API_BASE}/workflow/${encodeURIComponent(workflowId)}/stream`;
+}
+
+export function buildWorkflowFileUrl(publicUrl: string): string {
+  if (!publicUrl) {
+    return "";
+  }
+  if (/^https?:\/\//i.test(publicUrl)) {
+    return publicUrl;
+  }
+  return `${API_BASE}${publicUrl.startsWith("/") ? publicUrl : `/${publicUrl}`}`;
+}
+
+export function buildPublicFileUrl(publicUrl: string): string {
+  if (!publicUrl) {
+    return "";
+  }
+  if (/^https?:\/\//i.test(publicUrl)) {
+    return publicUrl;
+  }
+  return `${API_BASE}${publicUrl.startsWith("/") ? publicUrl : `/${publicUrl}`}`;
+}
+
+export async function renderPptx(file: File): Promise<PptRenderResponse> {
+  const formData = new FormData();
+  formData.set("file", file);
+  const response = await requestJson<PptRenderResponse>("/ppt/render", {
+    method: "POST",
+    body: formData
+  });
+  return {
+    ...response,
+    slides: response.slides.map((slide) => ({
+      ...slide,
+      image_url: buildPublicFileUrl(slide.image_url)
+    }))
+  };
+}
+
+// ── Timeline API ────────────────────────────────────────────
+
+export async function generateTimeline(
+  projectId: string,
+  formData: FormData
+): Promise<TimelineGenerateResponse> {
+  return requestJson<TimelineGenerateResponse>(
+    `/projects/${encodeURIComponent(projectId)}/timeline/generate`,
+    { method: "POST", body: formData }
+  );
+}
+
+export async function fetchTimeline(projectId: string): Promise<{
+  status: string;
+  timeline: TimelineData | null;
+}> {
+  return requestJson(`/projects/${encodeURIComponent(projectId)}/timeline`);
+}
+
+export async function updateTimeline(
+  projectId: string,
+  patch: Record<string, unknown>
+): Promise<TimelineSaveResponse> {
+  return requestJson<TimelineSaveResponse>(
+    `/projects/${encodeURIComponent(projectId)}/timeline`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ patch }),
+    }
+  );
 }

@@ -167,6 +167,73 @@ $frontendRoot = Join-Path $repoRoot "frontend"
 $stateDir = Join-Path $repoRoot "backend\data\state"
 $stateFile = Join-Path $stateDir "startup_processes.json"
 
+$envNames = @(
+    "WEBGIS_AI_LLM_PROVIDER",
+    "WEBGIS_AI_MIMO_API_KEY",
+    "WEBGIS_AI_MIMO_BASE_URL",
+    "WEBGIS_AI_MIMO_MODEL",
+    "WEBGIS_AI_VISION_PROVIDER",
+    "WEBGIS_AI_VISION_ENABLED",
+    "WEBGIS_AI_VISION_MODEL",
+    "MIMO_API_KEY",
+    "XIAOMI_MIMO_API_KEY",
+    "QGIS_ROOT",
+    "WEBGIS_AI_QGIS_ROOT",
+    "WEBGIS_AI_QGIS_PYTHON"
+)
+foreach ($name in $envNames) {
+    $value = [Environment]::GetEnvironmentVariable($name, "User")
+    if ($value) {
+        Set-Item -Path "Env:$name" -Value $value
+    }
+}
+
+function Resolve-QgisRoot {
+    # Already set by the user / environment? Trust it.
+    foreach ($var in @($env:QGIS_ROOT, $env:WEBGIS_AI_QGIS_ROOT)) {
+        if ($var -and (Test-Path (Join-Path $var "bin\python.exe"))) {
+            return $var
+        }
+    }
+    # Hunt common OSGeo4W install roots: C:\OSGeo4W, C:\Program Files\QGIS x.y,
+    # plus every drive letter at the root level (matches D:\QGIS 3.40.10).
+    $candidates = New-Object System.Collections.Generic.List[string]
+    @('C:\OSGeo4W', 'C:\OSGeo4W64') | ForEach-Object { $candidates.Add($_) }
+    $programDirs = @('C:\Program Files', 'C:\Program Files (x86)')
+    foreach ($programDir in $programDirs) {
+        Get-ChildItem -Path $programDir -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^QGIS' } |
+            ForEach-Object { $candidates.Add($_.FullName) }
+    }
+    Get-PSDrive -PSProvider FileSystem | ForEach-Object {
+        Get-ChildItem -Path $_.Root -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^QGIS' -or $_.Name -match '^OSGeo4W' } |
+            ForEach-Object { $candidates.Add($_.FullName) }
+    }
+    foreach ($candidate in ($candidates | Where-Object { $_ } | Select-Object -Unique)) {
+        if (Test-Path (Join-Path $candidate "bin\python.exe")) {
+            return $candidate
+        }
+    }
+    return $null
+}
+
+$qgisRoot = Resolve-QgisRoot
+if ($qgisRoot) {
+    Write-Step "Detected QGIS install at: $qgisRoot"
+    $env:QGIS_ROOT = $qgisRoot
+    $env:WEBGIS_AI_QGIS_ROOT = $qgisRoot
+    $qgisPython = Join-Path $qgisRoot "bin\python.exe"
+    if (Test-Path $qgisPython) {
+        $env:WEBGIS_AI_QGIS_PYTHON = $qgisPython
+        Write-Step "PyQGIS worker will spawn under: $qgisPython"
+    }
+}
+else {
+    Write-Step "[warn] No QGIS install detected. Workflow steps will fail with QGIS_ENV_NOT_READY."
+    Write-Step "[hint] Set QGIS_ROOT to your QGIS install dir (the folder containing bin\python.exe) and re-run."
+}
+
 $pythonExe = Resolve-Python312 -RequestedPythonExe $PythonExe
 $nodeExe = "C:\Program Files\nodejs\node.exe"
 $npmCli = "C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js"

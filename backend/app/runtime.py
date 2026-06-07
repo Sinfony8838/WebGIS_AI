@@ -2,20 +2,59 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import threading
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 from .config import AppConfig
-from .models import LayerRecord, ProjectRecord, build_workflow_stages
+from .models import LayerRecord, ProjectRecord, WorkflowRecord, build_assistant_v2_stages, build_workflow_stages, utc_now
 from .services.assistant import ASSISTANT_TOOL_SCHEMA, AssistantService
 from .services.datasets import DatasetService
+from .services.knowledge_base import KnowledgeBaseService
 from .services.llm_planner import LLMPlanner
 from .services.minimax_client import MiniMaxClient
+from .services.timeline_service import TimelineService
 from .services.poi import PoiService
-from .services.qgis_bridge import QGIS_ALLOWED_TOOLS, QgisBridgeClient
-from .services.templates import TemplateService
+from .services.resource_search import ResourceSearchService
+from .services.session_engine import AssistantSessionEngine
+from .services.teaching_maps import TeachingMapService
+from .services.workflow_executor import WorkflowExecutor
+from .services.workflow_templates import detect_template, expand_template, list_templates
+from .services.templates import DISABLED_TEMPLATE_IDS, TemplateService
+from .services.vision import MapVisionService
 from .store import RuntimeStore
+
+
+TRANSPARENT_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR42mP8z8BQDwAFgwJ/lU9nWQAAAABJRU5ErkJggg=="
+)
+
+
+def _fallback_summary(record: "WorkflowRecord", stats_payload: Dict[str, Any]) -> str:
+    """Plain-text summary used when MiniMax is unavailable."""
+    lines: List[str] = []
+    if record.intent:
+        lines.append(f"### {record.intent}")
+    summary = (stats_payload or {}).get("summary") or {}
+    if summary:
+        snippet_keys = list(summary.keys())[:6]
+        details = "，".join(f"{k}: {summary[k]}" for k in snippet_keys)
+        if details:
+            lines.append(f"统计要点：{details}。")
+    rows = (stats_payload or {}).get("rows") or []
+    if rows:
+        first = rows[0]
+        if isinstance(first, dict):
+            sample = "、".join(f"{k}={v}" for k, v in list(first.items())[:3])
+            lines.append(f"示例：{sample}。")
+    if not lines:
+        lines.append("分析任务已完成，可在右侧查看图层、图例和统计表。")
+    return "\n\n".join(lines)
 
 
 class WebGISRuntime:
@@ -26,17 +65,37 @@ class WebGISRuntime:
         self.dataset_service = DatasetService(self.config, self.store)
         self.template_service = TemplateService(self.config, self.store)
         self.assistant_service = AssistantService(self.config)
+        self.knowledge_base_service = KnowledgeBaseService(self.config)
+        self.resource_search_service = ResourceSearchService(self.config, self.knowledge_base_service)
         self.poi_service = PoiService(self.config, self.store)
+        self.vision_service = MapVisionService(self.config)
         self.minimax_client = MiniMaxClient(self.config)
-        self.qgis_bridge = QgisBridgeClient(self.config)
-        self.llm_planner = LLMPlanner(self.minimax_client, self.assistant_service, self.qgis_bridge)
+        self.teaching_map_service = TeachingMapService(self.config, self.store)
+        self.assistant_service.teaching_map_service = self.teaching_map_service
+        self.assistant_service.minimax_client = self.minimax_client
+        self.llm_planner = LLMPlanner(self.minimax_client, self.assistant_service)
+        self.session_engine = AssistantSessionEngine(
+            self.config,
+            self.store,
+            self.llm_planner,
+            self.assistant_service,
+            self._execute_assistant_action,
+            vision_service=self.vision_service,
+        )
+        self.session_engine.set_resource_search(self.resource_search_service)
+        self.workflow_executor = WorkflowExecutor(
+            self.config,
+            self.store,
+            summary_callback=self._generate_workflow_summary,
+        )
+        self.timeline_service = TimelineService(self.minimax_client)
         self._normalize_loaded_projects()
 
     def health(self) -> Dict[str, Any]:
         return {
             "status": "success",
             "runtime": {
-                "api": f"http://{self.config.host}:{self.config.port}",
+                "api": self.config.public_api_base_url(),
                 "workspace": str(self.config.root_dir),
                 "uploads": str(self.config.uploads_dir),
                 "outputs": str(self.config.outputs_dir),
@@ -44,37 +103,246 @@ class WebGISRuntime:
             "ui": {
                 "mode": "single_teacher_live_demo",
                 "assistant_tools": ASSISTANT_TOOL_SCHEMA,
+                "assistant_v2_enabled": self.config.assistant_v2_enabled,
             },
             "online_services": {
                 "amap_poi_enabled": self.config.online_services_enabled(),
+                "weather_basemap_enabled": self.config.weather_basemap_enabled(),
             },
             "llm": self.minimax_client.status(),
-            "qgis": self.config.qgis_status_config(),
+            "vision": self.vision_service.status(),
+            "gis_workflow": {
+                "enabled": True,
+                "engine": "pyqgis_worker",
+                "qgis_root": self.config.qgis_root or "",
+                "init_warning": self.workflow_executor.init_warning() if hasattr(self, "workflow_executor") else None,
+            },
             "basemaps": self.config.basemap_catalog(),
             "templates": self.template_service.list_templates()["items"],
+            "knowledge_base": {
+                "manifest_path": str(self.knowledge_base_service.manifest_path),
+                "item_count": len(self.knowledge_base_service.get_manifest().get("items", [])),
+            },
         }
+
+    def list_teaching_maps(self) -> Dict[str, Any]:
+        return self.teaching_map_service.list_maps()
+
+    def toggle_teaching_map(self, project_id: str, map_id: str, visible: bool = True) -> Dict[str, Any]:
+        self._require_project(project_id)
+        return self.teaching_map_service.toggle_overlay(project_id, map_id, visible)
+
+    def get_active_teaching_maps(self, project_id: str) -> Dict[str, Any]:
+        self._require_project(project_id)
+        return {"status": "success", "active": self.teaching_map_service.get_active_overlays(project_id)}
+
+    def kb_manifest(self) -> Dict[str, Any]:
+        return self.knowledge_base_service.get_manifest()
+
+    def kb_search(
+        self,
+        query: str = "",
+        topic: str = "",
+        region: str = "",
+        tag: str = "",
+        limit: int = 20,
+    ) -> Dict[str, Any]:
+        return self.knowledge_base_service.search(query=query, topic=topic, region=region, tag=tag, limit=limit)
+
+    def kb_topics(self) -> Dict[str, Any]:
+        return self.knowledge_base_service.topics()
+
+    def kb_upsert_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = self.knowledge_base_service.upsert_item(item)
+        return {"status": "success", "item": normalized}
+
+    def kb_register_layer(self, project_id: str, layer_id: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        project = self._require_project(project_id)
+        target_layer = next((layer for layer in project.layers if layer.layer_id == layer_id), None)
+        if target_layer is None:
+            raise KeyError(f"Unknown layer in project: {layer_id}")
+        item = self.knowledge_base_service.build_item_from_layer(project_id, target_layer, metadata or {})
+        normalized = self.knowledge_base_service.upsert_item(item)
+        self.store.add_recent_action(
+            project_id,
+            "知识库登记",
+            f"图层“{target_layer.name}”已登记到知识库",
+            status="success",
+            metadata={"layer_id": layer_id, "kb_item_id": normalized.get("id", "")},
+        )
+        return {"status": "success", "item": normalized}
+
+    def kb_upload_material(
+        self,
+        kb_item_id: str,
+        filename: str,
+        raw_bytes: bytes,
+        title: str = "",
+        description: str = "",
+        material_type: str = "",
+        region_binding: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        suffix = Path(filename or "").suffix.lower()
+        if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".mp4", ".webm", ".mov", ".m4v", ".html", ".htm", ".pdf", ".doc", ".docx", ".ppt", ".pptx"}:
+            raise ValueError(f"Unsupported material type: {suffix or 'unknown'}")
+        safe_name = self._safe_upload_filename(filename or f"material{suffix}")
+        output_dir = self.config.uploads_dir / "kb_materials"
+        output_path = self.config.unique_path(output_dir, safe_name)
+        output_path.write_bytes(raw_bytes)
+        material = self.knowledge_base_service.add_material_to_item(
+            kb_item_id,
+            {
+                "title": title or Path(filename).stem or "教学资料",
+                "type": material_type,
+                "source": "teacher_upload",
+                "url": self.config.public_url_for_path(output_path),
+                "thumbnail_url": self.config.public_url_for_path(output_path) if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"} else "",
+                "description": description,
+                "region_binding": region_binding or {},
+            },
+        )
+        return {"status": "success", "material": material}
+
+    def kb_link_material(
+        self,
+        kb_item_id: str,
+        url: str,
+        title: str = "",
+        description: str = "",
+        material_type: str = "link",
+        thumbnail_url: str = "",
+        region_binding: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if not str(url or "").strip().lower().startswith(("http://", "https://", "/files/")):
+            raise ValueError("Material link must be an http(s) URL or a public /files URL")
+        material = self.knowledge_base_service.add_material_to_item(
+            kb_item_id,
+            {
+                "title": title or url,
+                "type": material_type or "link",
+                "source": "teacher_link",
+                "url": url,
+                "thumbnail_url": thumbnail_url,
+                "description": description,
+                "region_binding": region_binding or {},
+            },
+        )
+        return {"status": "success", "material": material}
+
+    def resource_search(self, query: str = "", scope: str = "all", limit: int = 12) -> Dict[str, Any]:
+        return self.resource_search_service.search(query=query, scope=scope, limit=limit)
+
+    def list_lesson_resources(self, project_id: str) -> Dict[str, Any]:
+        project = self._require_project(project_id)
+        sets = self._lesson_resource_sets(project.project_id, project.metadata)
+        active_id = str(project.metadata.get("active_lesson_resource_set_id") or "")
+        return {"status": "success", "items": sets, "active_lesson_resource_set_id": active_id}
+
+    def save_lesson_resource_set(self, project_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        project = self._require_project(project_id)
+        sets = self._lesson_resource_sets(project.project_id, project.metadata)
+        now = self.store_timestamp()
+        resource_set = self._normalize_lesson_resource_set(project_id, payload, now)
+        replaced = False
+        for index, existing in enumerate(sets):
+            if existing["id"] == resource_set["id"]:
+                resource_set["created_at"] = existing.get("created_at") or now
+                sets[index] = resource_set
+                replaced = True
+                break
+        if not replaced:
+            sets.append(resource_set)
+        project.metadata["lesson_resource_sets"] = sets
+        if resource_set.get("active"):
+            project.metadata["active_lesson_resource_set_id"] = resource_set["id"]
+            for item in sets:
+                item["active"] = item["id"] == resource_set["id"]
+        self.store.save_project(project)
+        return {"status": "success", "item": resource_set, "items": sets}
+
+    def activate_lesson_resource_set(self, project_id: str, set_id: str, patch: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        project = self._require_project(project_id)
+        sets = self._lesson_resource_sets(project.project_id, project.metadata)
+        if not any(item.get("id") == set_id for item in sets):
+            raise KeyError(f"Unknown lesson resource set: {set_id}")
+        patch = patch or {}
+        for item in sets:
+            if item.get("id") != set_id:
+                item["active"] = False
+                continue
+            if patch:
+                item.update({key: value for key, value in patch.items() if key in {"title", "item_ids", "material_ids", "region_bindings"}})
+            item["active"] = bool(patch.get("active", True))
+            item["updated_at"] = self.store_timestamp()
+            if item["active"]:
+                project.metadata["active_lesson_resource_set_id"] = set_id
+        if patch.get("active") is False:
+            project.metadata["active_lesson_resource_set_id"] = ""
+        project.metadata["lesson_resource_sets"] = sets
+        self.store.save_project(project)
+        return {"status": "success", "items": sets, "active_lesson_resource_set_id": project.metadata.get("active_lesson_resource_set_id", "")}
+
+    # ------------------------------------------------------------------
+    # Timeline
+    # ------------------------------------------------------------------
+
+    def generate_timeline(self, project_id: str, filename: str, raw_bytes: bytes) -> Dict[str, Any]:
+        project = self._require_project(project_id)
+        result = self.timeline_service.generate_timeline(filename, raw_bytes, project_id)
+        timeline = result["timeline"]
+        project.metadata["timeline"] = timeline
+        self.store.save_project(project)
+        return result
+
+    def get_timeline(self, project_id: str) -> Dict[str, Any]:
+        project = self._require_project(project_id)
+        timeline = project.metadata.get("timeline")
+        if not timeline:
+            return {"status": "empty", "timeline": None}
+        return {"status": "success", "timeline": timeline}
+
+    def update_timeline(self, project_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
+        project = self._require_project(project_id)
+        timeline = project.metadata.get("timeline")
+        if not timeline:
+            raise KeyError("No timeline exists for this project")
+
+        if "active_node_id" in patch:
+            for node in timeline["nodes"]:
+                node["active"] = node["id"] == patch["active_node_id"]
+
+        if "nodes" in patch:
+            timeline["nodes"] = patch["nodes"]
+
+        if "title" in patch:
+            timeline["title"] = patch["title"]
+
+        timeline["updated_at"] = datetime.now(timezone.utc).isoformat()
+        project.metadata["timeline"] = timeline
+        self.store.save_project(project)
+        return {"status": "success", "timeline": timeline}
 
     def llm_status(self) -> Dict[str, Any]:
         return {"status": "success", **self.minimax_client.status()}
 
-    def qgis_status(self) -> Dict[str, Any]:
-        return {"status": "success", **self.qgis_bridge.status()}
-
-    def qgis_layers(self) -> Dict[str, Any]:
-        return {"status": "success", "result": self.qgis_bridge.layers()}
-
-    def qgis_focus(self) -> Dict[str, Any]:
-        focus = self.qgis_bridge.focus_window()
-        return {"status": "success" if focus.get("ok") else "error", **focus}
-
-    def qgis_execute_tool(self, tool_name: str, tool_params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        if tool_name not in QGIS_ALLOWED_TOOLS:
-            raise ValueError(f"QGIS tool is not allowed: {tool_name}")
-        result = self.qgis_bridge.execute(tool_name, tool_params or {})
-        return {"status": "success", "result": result}
-
     def list_basemaps(self) -> Dict[str, Any]:
         return {"status": "success", **self.config.basemap_catalog()}
+
+    def fetch_weather_tile(self, layer: str, z: int, x: int, y: int) -> tuple[bytes, str]:
+        if not self.config.weather_basemap_enabled():
+            return TRANSPARENT_PNG, "image/png"
+        request = urllib.request.Request(
+            self.config.weather_tile_upstream_url(layer, z, x, y),
+            headers={"User-Agent": "WebGIS-AI/1.1"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=8) as response:
+                content_type = response.headers.get_content_type() or "image/png"
+                return response.read(), content_type
+        except urllib.error.HTTPError as exc:
+            raise ConnectionError(f"Weather tile upstream returned HTTP {exc.code}") from exc
+        except urllib.error.URLError as exc:
+            raise ConnectionError(f"Weather tile upstream is unavailable: {exc.reason}") from exc
 
     def create_project(self, name: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         project = self.store.create_project(name=name, metadata=metadata, base_map=self.config.default_basemap())
@@ -214,22 +482,95 @@ class WebGISRuntime:
         project_id: str,
         message: str,
         map_context: Optional[Dict[str, Any]] = None,
+        assistant_mode: str = "tool",
+        conversation_id: str = "",
+        history: Optional[List[Dict[str, Any]]] = None,
         target: str = "webgis",
+        input_mode: str = "text",
+        screen_snapshot: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        normalized_target = target if target in {"webgis", "qgis", "auto"} else "webgis"
+        # Heavy GIS work moved to /workflow/*; assistant actions are WebGIS-only.
+        normalized_target = "webgis"
+        normalized_input_mode = input_mode if input_mode in {"text", "voice"} else "text"
+        normalized_mode = assistant_mode if assistant_mode in {"knowledge", "tool"} else "tool"
+        use_v2 = self.config.assistant_v2_enabled or assistant_mode == "knowledge" or bool(conversation_id) or bool(history)
         job = self.store.create_job(
             project_id=project_id,
             job_type="assistant",
             title="课堂助教请求",
             workflow_type="assistant_message",
-            request={"message": message, "map_context": map_context or {}, "target": normalized_target},
+            request={
+                "message": message,
+                "map_context": map_context or {},
+                "assistant_mode": normalized_mode,
+                "conversation_id": conversation_id,
+                "history": history or [],
+                "target": normalized_target,
+                "input_mode": normalized_input_mode,
+                "screen_snapshot": screen_snapshot or {},
+            },
+            stages=build_assistant_v2_stages() if use_v2 else build_workflow_stages(),
         )
-        threading.Thread(
-            target=self._run_assistant_job,
-            args=(job.job_id, project_id, message, map_context or {}, normalized_target),
-            daemon=True,
-        ).start()
-        return {"status": "accepted", "job_id": job.job_id, "project_id": project_id}
+        if use_v2:
+            threading.Thread(
+                target=self._run_assistant_v2_job,
+                args=(
+                    job.job_id,
+                    project_id,
+                    message,
+                    map_context or {},
+                    normalized_mode,
+                    conversation_id,
+                    history or [],
+                    normalized_target,
+                    normalized_input_mode,
+                    screen_snapshot or {},
+                ),
+                daemon=True,
+            ).start()
+        else:
+            threading.Thread(
+                target=self._run_assistant_job,
+                args=(job.job_id, project_id, message, map_context or {}, normalized_target, normalized_input_mode, screen_snapshot or {}),
+                daemon=True,
+            ).start()
+        return {
+            "status": "accepted",
+            "job_id": job.job_id,
+            "project_id": project_id,
+            "conversation_id": conversation_id,
+            "assistant_mode": normalized_mode,
+        }
+
+    def confirm_assistant_action(self, confirmation_id: str, decision: str = "approve") -> Dict[str, Any]:
+        confirmation = self.store.get_confirmation(confirmation_id)
+        if confirmation is None:
+            raise KeyError(f"Unknown confirmation: {confirmation_id}")
+        normalized_decision = "reject" if str(decision).strip().lower() == "reject" else "approve"
+        job = self.store.create_job(
+            project_id=confirmation.project_id,
+            job_type="assistant_confirmation",
+            title=confirmation.title or ("Reject assistant action" if normalized_decision == "reject" else "Confirm assistant action"),
+            workflow_type="assistant_confirmation",
+            request={"confirmation_id": confirmation_id, "conversation_id": confirmation.conversation_id, "decision": normalized_decision},
+            stages=build_assistant_v2_stages(),
+        )
+        threading.Thread(target=self._run_confirmation_job, args=(job.job_id, confirmation_id, normalized_decision), daemon=True).start()
+        return {
+            "status": "accepted",
+            "job_id": job.job_id,
+            "project_id": confirmation.project_id,
+            "conversation_id": confirmation.conversation_id,
+            "confirmation_id": confirmation_id,
+            "decision": normalized_decision,
+        }
+
+    def get_conversation(self, conversation_id: str) -> Dict[str, Any]:
+        conversation = self.store.get_conversation(conversation_id)
+        if conversation is None:
+            raise KeyError(f"Unknown conversation: {conversation_id}")
+        messages = [item.to_dict() for item in self.store.list_conversation_messages(conversation_id)]
+        return {"status": "success", **conversation.to_dict(), "messages": messages}
 
     def export_snapshot(
         self,
@@ -296,7 +637,134 @@ class WebGISRuntime:
         return {"status": "success", **artifact.to_dict()}
 
     def list_outputs(self, project_id: Optional[str] = None) -> Dict[str, Any]:
-        return {"status": "success", "items": self.store.list_outputs(project_id=project_id)}
+        teacher_facing = {"map_snapshot", "annotation_export", "dataset_import", "assistant_note", "query_summary"}
+        items = [item for item in self.store.list_outputs(project_id=project_id) if item.get("artifact_type") in teacher_facing]
+        return {"status": "success", "items": items}
+
+    # ------------------------------------------------------------------
+    # GIS workflow API helpers. PyQGIS is the backend worker implementation.
+    # ------------------------------------------------------------------
+
+    def list_workflow_templates(self) -> Dict[str, Any]:
+        return {"status": "success", "items": list_templates()}
+
+    def submit_workflow(
+        self,
+        project_id: str,
+        message: str,
+        mode: str = "template",
+        template_id: str = "",
+        parameters: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Build a workflow JSON from a template (or accept caller-built JSON)
+        and hand it off to :class:`WorkflowExecutor`."""
+        params = dict(parameters or {})
+        params.setdefault("project_id", project_id)
+        chosen_template = template_id or detect_template(message) or "population_choropleth"
+        try:
+            match = expand_template(chosen_template, message, params)
+        except KeyError as exc:
+            raise KeyError(f"Unknown workflow template: {chosen_template}") from exc
+
+        workflow_record = WorkflowRecord.create(
+            project_id=project_id,
+            user_message=message,
+            intent=match.intent,
+            template_id=match.template_id,
+            mode=mode,
+            workflow_json=match.workflow,
+        )
+        workflow_record, _validation = self.workflow_executor.submit(workflow_record)
+        return {
+            "status": "success" if workflow_record.status != "error" else "error",
+            "workflow_id": workflow_record.workflow_id,
+            "workflow_status": workflow_record.status,
+            "intent": workflow_record.intent,
+            "template_id": match.template_id,
+            "parameters": match.parameters,
+            "error": workflow_record.error,
+        }
+
+    def get_workflow(self, workflow_id: str) -> Dict[str, Any]:
+        record = self.store.get_workflow(workflow_id)
+        if record is None:
+            raise KeyError(f"Unknown workflow: {workflow_id}")
+        return {"status": "success", **record.to_dict()}
+
+    def list_workflow_artifacts(self, workflow_id: str) -> Dict[str, Any]:
+        record = self.store.get_workflow(workflow_id)
+        if record is None:
+            raise KeyError(f"Unknown workflow: {workflow_id}")
+        return {
+            "status": "success",
+            "workflow_id": workflow_id,
+            "artifacts": list(record.artifacts),
+        }
+
+    def list_workflows(self, project_id: Optional[str] = None) -> Dict[str, Any]:
+        return {"status": "success", "items": self.store.list_workflows(project_id=project_id)}
+
+    def stream_workflow_events(self, workflow_id: str):
+        return self.workflow_executor.stream(workflow_id)
+
+    def workflow_init_warning(self) -> Optional[Dict[str, Any]]:
+        return self.workflow_executor.init_warning()
+
+    def resolve_workflow_file(self, workflow_id: str, relative: str) -> Path:
+        """Resolve a workflow-relative file for the /workflow-files endpoint."""
+        return self.config.resolve_workflow_path(workflow_id, relative)
+
+    def _generate_workflow_summary(
+        self,
+        record: WorkflowRecord,
+        outputs_by_step: Dict[str, Any],
+    ) -> str:
+        """Optional summary generator. Reads stats.json if present and asks
+        MiniMax for a brief Chinese explanation suitable for classroom use.
+
+        On any failure returns an empty string so the workflow result still
+        ships even without the LLM."""
+        stats_path: Optional[Path] = None
+        for state_id, outputs in outputs_by_step.items():
+            stats_value = outputs.get("stats") if isinstance(outputs, dict) else None
+            if isinstance(stats_value, str) and stats_value:
+                stats_path = Path(stats_value)
+                break
+        stats_payload: Dict[str, Any] = {}
+        if stats_path and stats_path.exists():
+            try:
+                stats_payload = json.loads(stats_path.read_text(encoding="utf-8"))
+            except Exception:
+                stats_payload = {}
+        if not stats_payload and not record.intent:
+            return ""
+
+        if not self.config.minimax_enabled():
+            return _fallback_summary(record, stats_payload)
+
+        try:
+            user_payload = json.dumps(stats_payload, ensure_ascii=False)[:4000]
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是一名高中地理教师，擅长用 100-180 字概括 GIS 分析结果。"
+                        "请输出 Markdown 格式的解释，不要使用代码块，不要输出 JSON。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"任务意图：{record.intent}\n"
+                        f"原始需求：{record.user_message}\n"
+                        f"统计 JSON：\n{user_payload}"
+                    ),
+                },
+            ]
+            content = self.minimax_client.chat_completion(messages, temperature=0.4)
+            return content.strip()
+        except Exception:
+            return _fallback_summary(record, stats_payload)
 
     def _run_template_job(self, job_id: str, project_id: str, template_id: str, payload: Dict[str, Any]) -> None:
         try:
@@ -327,13 +795,103 @@ class WebGISRuntime:
         except Exception as exc:  # pragma: no cover - defensive runtime branch
             self._fail_job(job_id, "template_run", str(exc))
 
-    def _run_assistant_job(self, job_id: str, project_id: str, message: str, map_context: Dict[str, Any], target: str = "webgis") -> None:
+    def _run_assistant_v2_job(
+        self,
+        job_id: str,
+        project_id: str,
+        message: str,
+        map_context: Dict[str, Any],
+        assistant_mode: str,
+        conversation_id: str,
+        history: List[Dict[str, Any]],
+        target: str = "webgis",
+        input_mode: str = "text",
+        screen_snapshot: Optional[Dict[str, Any]] = None,
+    ) -> None:
         try:
             project = self._require_project(project_id)
+            if screen_snapshot:
+                map_context = {**map_context, "screen_snapshot": screen_snapshot}
+            self.store.set_job_status(job_id, "running")
+            self.store.append_job_step(job_id, "route", "assistant session engine started", "running")
+
+            def update_stage(stage_name: str, status: str, summary: str = "", detail: str = "") -> None:
+                self.store.update_job_stage(job_id, stage_name, status, summary, detail)
+
+            result = self.session_engine.handle(
+                job_id=job_id,
+                project=project,
+                message=message,
+                assistant_mode=assistant_mode,
+                conversation_id=conversation_id,
+                history=history,
+                map_context=map_context,
+                target=target,
+                input_mode=input_mode,
+                stage_callback=update_stage,
+            )
+            registered_artifacts: Dict[str, Any] = {}
+            for item in result.get("actions_executed", []):
+                action_result = item.get("result", {})
+                registered_artifacts.update(
+                    self._register_artifacts(project_id, job_id, action_result.get("artifacts", []))
+                )
+            artifact_status = "success" if registered_artifacts else "skipped"
+            artifact_summary = "Artifacts registered" if registered_artifacts else "No standalone artifacts"
+            self.store.update_job_stage(job_id, "artifacts", artifact_status, artifact_summary)
+            self.store.set_job_status(
+                job_id,
+                "completed",
+                result={
+                    "status": "success",
+                    "workflow_type": "assistant_message",
+                    "summary": result.get("assistant_message") or message,
+                    "assistant_message": result.get("assistant_message") or "",
+                    "intent": result.get("intent"),
+                    "knowledge": result.get("knowledge"),
+                    "citations": result.get("citations", []),
+                    "actions_planned": result.get("actions_planned", []),
+                    "actions_executed": result.get("actions_executed", []),
+                    "requires_confirmation": result.get("requires_confirmation", False),
+                    "confirmation_id": result.get("confirmation_id", ""),
+                    "confirmation_expires_at": result.get("confirmation_expires_at", ""),
+                    "plan_fingerprint": result.get("plan_fingerprint", ""),
+                    "planner": result.get("planner", ""),
+                    "retrieval_trace": result.get("retrieval_trace", []),
+                    "conversation_id": result.get("conversation_id", ""),
+                    "prompt_parts": result.get("prompt_parts", {}),
+                    "permission_context": result.get("permission_context", {}),
+                    "artifacts": registered_artifacts,
+                    "stages": self.store.get_job(job_id).stages,
+                },
+            )
+        except Exception as exc:  # pragma: no cover - defensive runtime branch
+            self._fail_job(job_id, "assistant_message_v2", str(exc))
+
+    def _run_assistant_job(
+        self,
+        job_id: str,
+        project_id: str,
+        message: str,
+        map_context: Dict[str, Any],
+        target: str = "webgis",
+        input_mode: str = "text",
+        screen_snapshot: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        try:
+            project = self._require_project(project_id)
+            if screen_snapshot:
+                map_context = {**map_context, "screen_snapshot": screen_snapshot}
             self.store.set_job_status(job_id, "running")
             self.store.append_job_step(job_id, "解析指令", "正在理解课堂助教请求。", "running")
             self.store.update_job_stage(job_id, "analysis", "running", "正在分析课堂意图。")
-            plan = self.llm_planner.plan_actions(message, project, map_context=map_context, target=target)
+            plan = self.llm_planner.plan_actions(
+                message,
+                project,
+                map_context=map_context,
+                target=target,
+                input_mode=input_mode,
+            )
             plan_target = str(plan.get("target") or "webgis")
             self.store.update_job_stage(job_id, "analysis", "success", "课堂意图识别完成。")
             self.store.update_job_stage(job_id, "actions", "running", "正在执行地图副驾驶动作。")
@@ -342,10 +900,7 @@ class WebGISRuntime:
             messages = [plan.get("assistant_message", "").strip()]
             for action in plan.get("actions", []):
                 self.store.append_job_step(job_id, action["tool_name"], json.dumps(action["tool_params"], ensure_ascii=False), "info")
-                if plan_target == "qgis":
-                    action_result = self._execute_qgis_action(action)
-                else:
-                    action_result = self._execute_assistant_action(project_id, action, map_context)
+                action_result = self._execute_assistant_action(project_id, action, map_context)
                 executed_actions.append({"action": action, "result": action_result})
                 if action_result.get("assistant_message"):
                     messages.append(str(action_result["assistant_message"]))
@@ -366,6 +921,7 @@ class WebGISRuntime:
                     "assistant_message": "\n\n".join([part for part in messages if part]),
                     "target": plan_target,
                     "planner": plan.get("planner", "rule_fallback"),
+                    "llm_fallback_reason": plan.get("llm_fallback_reason", ""),
                     "actions": plan.get("actions", []),
                     "actions_executed": executed_actions,
                     "artifacts": registered_artifacts,
@@ -375,17 +931,56 @@ class WebGISRuntime:
         except Exception as exc:  # pragma: no cover - defensive runtime branch
             self._fail_job(job_id, "assistant_message", str(exc))
 
-    def _execute_qgis_action(self, action: Dict[str, Any]) -> Dict[str, Any]:
-        tool_name = action["tool_name"]
-        params = action.get("tool_params", {})
-        if tool_name not in QGIS_ALLOWED_TOOLS:
-            raise ValueError(f"QGIS tool is not allowed: {tool_name}")
-        response = self.qgis_bridge.execute(tool_name, params)
-        status = str(response.get("status") or "")
-        if status and status not in {"success", "ok"}:
-            raise ValueError(str(response.get("message") or f"QGIS tool failed: {tool_name}"))
-        message = str(response.get("message") or f"QGIS 工具 {tool_name} 已执行。")
-        return {"assistant_message": message, "qgis_response": response, "artifacts": []}
+    def _run_confirmation_job(self, job_id: str, confirmation_id: str, decision: str = "approve") -> None:
+        try:
+            self.store.set_job_status(job_id, "running")
+            self.store.append_job_step(
+                job_id,
+                "confirm",
+                "rejecting assistant action" if decision == "reject" else "executing confirmed assistant action",
+                "running",
+            )
+
+            def update_stage(stage_name: str, status: str, summary: str = "", detail: str = "") -> None:
+                self.store.update_job_stage(job_id, stage_name, status, summary, detail)
+
+            if decision == "reject":
+                result = self.session_engine.reject_confirmation(confirmation_id)
+            else:
+                result = self.session_engine.execute_confirmation(confirmation_id, stage_callback=update_stage)
+            registered_artifacts: Dict[str, Any] = {}
+            for item in result.get("actions_executed", []):
+                action_result = item.get("result", {})
+                registered_artifacts.update(
+                    self._register_artifacts(result.get("project_id", self.store.get_job(job_id).project_id), job_id, action_result.get("artifacts", []))
+                )
+            self.store.update_job_stage(job_id, "artifacts", "success" if registered_artifacts else "skipped", "Confirmation flow finished")
+            self.store.set_job_status(
+                job_id,
+                "completed",
+                result={
+                    "status": "success",
+                    "workflow_type": "assistant_confirmation",
+                    "summary": result.get("assistant_message", ""),
+                    "assistant_message": result.get("assistant_message", ""),
+                    "intent": result.get("intent"),
+                    "knowledge": result.get("knowledge"),
+                    "citations": result.get("citations", []),
+                    "actions_planned": result.get("actions_planned", []),
+                    "actions_executed": result.get("actions_executed", []),
+                    "requires_confirmation": False,
+                    "confirmation_id": result.get("confirmation_id", ""),
+                    "confirmation_status": "rejected" if decision == "reject" else "approved",
+                    "planner": result.get("planner", "confirmation"),
+                    "retrieval_trace": result.get("retrieval_trace", []),
+                    "conversation_id": result.get("conversation_id", ""),
+                    "permission_context": result.get("permission_context", {}),
+                    "artifacts": registered_artifacts,
+                    "stages": self.store.get_job(job_id).stages,
+                },
+            )
+        except Exception as exc:  # pragma: no cover - defensive runtime branch
+            self._fail_job(job_id, "assistant_confirmation", str(exc))
 
     def _execute_assistant_action(self, project_id: str, action: Dict[str, Any], map_context: Dict[str, Any]) -> Dict[str, Any]:
         tool_name = action["tool_name"]
@@ -455,6 +1050,26 @@ class WebGISRuntime:
         if tool_name == "explain_current_view":
             project = self._require_project(project_id)
             content = self.assistant_service.compose_explanation(project, map_context=map_context, focus=params.get("focus", ""))
+            screen_snapshot = map_context.get("screen_snapshot") if isinstance(map_context.get("screen_snapshot"), dict) else {}
+            if screen_snapshot:
+                vision_result = self.vision_service.understand_map(
+                    project_id=project_id,
+                    project=project,
+                    map_context=map_context,
+                    focus=params.get("focus", ""),
+                    screen_snapshot=screen_snapshot,
+                )
+                if vision_result.get("used_vision") and vision_result.get("summary"):
+                    content = "\n\n".join(
+                        [
+                            str(vision_result.get("summary") or "").strip(),
+                            "---",
+                            "结构化地图上下文补充：",
+                            content,
+                        ]
+                    )
+                if not vision_result.get("used_vision") and vision_result.get("reason"):
+                    content = f"{content}\n\n注意事项：{vision_result['reason']}"
             note = self._write_text_output(project_id, "assistant_explanation", content)
             return {
                 "assistant_message": content,
@@ -485,6 +1100,33 @@ class WebGISRuntime:
                 "assistant_message": self.assistant_service.build_poi_hint(result["keyword"], len(result["items"])),
                 "artifacts": [{"artifact_type": "assistant_note", "title": "POI 检索结果", "path": str(note), "metadata": {"public_url": self.config.public_url_for_path(note)}}],
             }
+        if tool_name == "toggle_teaching_map":
+            result = self.toggle_teaching_map(project_id, params["map_id"], params.get("visible", True))
+            layer = result.get("layer")
+            name = layer["name"] if layer else params["map_id"]
+            visible = params.get("visible", True)
+            state_text = "叠加" if visible else "隐藏"
+            # Also set view to the recommended area when showing a teaching map
+            view = result.get("view", {})
+            if visible and view.get("center") and view.get("zoom"):
+                self.store.set_view(project_id, view)
+            return {
+                "assistant_message": f'教学地图"{name}"已{state_text}。',
+                "view": view,
+                "artifacts": [],
+            }
+        if tool_name == "open_material":
+            material = params.get("material") if isinstance(params.get("material"), dict) else {}
+            if not material:
+                material = self._find_kb_material(str(params.get("material_id") or ""))
+            if not material:
+                raise KeyError(f"Unknown teaching material: {params.get('material_id') or ''}")
+            title = str(material.get("title") or "课堂资料")
+            return {
+                "assistant_message": f"已打开课堂资料“{title}”。",
+                "ui_actions": [{"type": "open_material", "title": title, "materials": [material]}],
+                "artifacts": [],
+            }
         raise ValueError(f"Unsupported assistant tool: {tool_name}")
 
     def _register_artifacts(self, project_id: str, job_id: str, artifacts: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -509,8 +1151,63 @@ class WebGISRuntime:
     def _safe_output_stub(self, value: str) -> str:
         return "".join(ch if ch.isalnum() else "_" for ch in str(value or "note"))
 
+    def _find_kb_material(self, material_id: str) -> Dict[str, Any]:
+        if not material_id:
+            return {}
+        manifest = self.knowledge_base_service.get_manifest()
+        for item in manifest.get("items", []):
+            for material in item.get("materials", []):
+                if str(material.get("id") or "") == material_id:
+                    return material
+        return {}
+
+    def _safe_upload_filename(self, filename: str) -> str:
+        name = Path(filename or "material.dat").name
+        stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", Path(name).stem).strip("._") or "material"
+        suffix = Path(name).suffix.lower()
+        return f"{stem}_{uuid4().hex[:8]}{suffix}"
+
+    def store_timestamp(self) -> str:
+        return utc_now()
+
+    def _lesson_resource_sets(self, project_id: str, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+        rows = []
+        for item in metadata.get("lesson_resource_sets", []):
+            if isinstance(item, dict):
+                rows.append(self._normalize_lesson_resource_set(project_id, item, str(item.get("updated_at") or utc_now())))
+        return rows
+
+    def _normalize_lesson_resource_set(self, project_id: str, payload: Dict[str, Any], now: str) -> Dict[str, Any]:
+        raw = payload or {}
+        set_id = str(raw.get("id") or f"lesson_{uuid4().hex}")
+        def string_list(value: Any) -> List[str]:
+            if not isinstance(value, list):
+                return []
+            return [str(item).strip() for item in value if str(item).strip()]
+
+        bindings = []
+        for entry in raw.get("region_bindings", []):
+            if not isinstance(entry, dict):
+                continue
+            bindings.append({key: str(value).strip() for key, value in entry.items() if key in {"layer_id", "feature_id", "admin_code", "name", "name_field"} and str(value).strip()})
+        return {
+            "id": set_id,
+            "title": str(raw.get("title") or "课堂资料包").strip(),
+            "project_id": project_id or str(raw.get("project_id") or ""),
+            "item_ids": string_list(raw.get("item_ids")),
+            "material_ids": string_list(raw.get("material_ids")),
+            "region_bindings": bindings,
+            "active": bool(raw.get("active")),
+            "created_at": str(raw.get("created_at") or now),
+            "updated_at": now,
+        }
+
     def _normalize_loaded_projects(self) -> None:
         for project in list(self.store.projects.values()):
+            normalized_templates = [item for item in project.enabled_templates if item not in DISABLED_TEMPLATE_IDS]
+            if normalized_templates != project.enabled_templates:
+                project.enabled_templates = normalized_templates
+                self.store.save_project(project)
             normalized = self.config.normalize_basemap(project.base_map)
             if normalized != project.base_map:
                 self.store.set_basemap(project.project_id, normalized)
