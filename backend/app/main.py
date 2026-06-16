@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import secrets
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .config import AppConfig
@@ -20,10 +21,34 @@ runtime = WebGISRuntime(config=config)
 app = FastAPI(title="WebGIS-AI Runtime", version="1.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=config.cors_origins(),
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type", "X-WebGIS-AI-Token"],
 )
+
+
+def _extract_access_token(request: Request) -> str:
+    authorization = request.headers.get("Authorization", "")
+    if authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    header_token = request.headers.get("X-WebGIS-AI-Token", "")
+    if header_token.strip():
+        return header_token.strip()
+    return request.query_params.get("access_token", "").strip()
+
+
+@app.middleware("http")
+async def require_access_token(request: Request, call_next):
+    if request.method == "OPTIONS" or not config.auth_enabled():
+        return await call_next(request)
+    if request.url.path in config.auth_exempt_path_set():
+        return await call_next(request)
+
+    expected = config.auth_token.strip()
+    supplied = _extract_access_token(request)
+    if not supplied or not secrets.compare_digest(supplied, expected):
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    return await call_next(request)
 
 
 class CreateProjectRequest(BaseModel):

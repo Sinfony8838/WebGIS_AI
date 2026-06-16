@@ -31,6 +31,14 @@ class AppConfig:
     root_dir: Path = field(default_factory=_default_root_dir)
     host: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_HOST", "127.0.0.1"))
     port: int = field(default_factory=lambda: int(os.getenv("WEBGIS_AI_PORT", "18999")))
+    cors_allow_origins: str = field(
+        default_factory=lambda: os.getenv(
+            "WEBGIS_AI_CORS_ALLOW_ORIGINS",
+            "http://127.0.0.1:5173,http://localhost:5173",
+        )
+    )
+    auth_token: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_AUTH_TOKEN", ""))
+    auth_exempt_paths: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_AUTH_EXEMPT_PATHS", ""))
     base_map_url: str = field(
         default_factory=lambda: os.getenv(
             "WEBGIS_AI_BASEMAP_URL",
@@ -104,6 +112,16 @@ class AppConfig:
     def ensure_dirs(self) -> None:
         for path in (self.state_dir, self.uploads_dir, self.outputs_dir):
             path.mkdir(parents=True, exist_ok=True)
+
+    def cors_origins(self) -> List[str]:
+        origins = [item.strip() for item in self.cors_allow_origins.split(",") if item.strip()]
+        return origins or ["http://127.0.0.1:5173", "http://localhost:5173"]
+
+    def auth_enabled(self) -> bool:
+        return bool(self.auth_token.strip())
+
+    def auth_exempt_path_set(self) -> set[str]:
+        return {item.strip() for item in self.auth_exempt_paths.split(",") if item.strip()}
 
     def default_basemap(self) -> dict:
         return self.basemap_by_id(self.default_basemap_id)

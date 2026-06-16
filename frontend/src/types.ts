@@ -186,6 +186,11 @@ export type HealthResponse = {
   online_services: {
     amap_poi_enabled: boolean;
   };
+  security?: {
+    auth_enabled: boolean;
+    cors_allow_origins: string[];
+    auth_exempt_paths: string[];
+  };
   basemaps: BasemapCatalog;
   templates: TemplateItem[];
 };

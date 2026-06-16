@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { getApiBase } from "../api";
+import { buildAuthenticatedUrl } from "../api";
 import type { ArtifactRecord, LayerRecord, LayersResponse, PoiSearchItem, TemplateItem } from "../types";
 
 export type DrawerTab = "units" | "layers" | "search" | "outputs";
@@ -131,7 +131,6 @@ export function SideDrawer({
   onFocusResult,
   onRunTemplate
 }: Props) {
-  const apiBase = getApiBase();
   const templateGroups = useMemo(() => groupTemplatesByChapter(templates), [templates]);
   const enabledTemplateSet = useMemo(() => new Set(layerState?.enabled_templates || []), [layerState?.enabled_templates]);
   const [openChapters, setOpenChapters] = useState<Record<string, boolean>>({});
@@ -387,7 +386,7 @@ export function SideDrawer({
                       <a
                         key={artifact.artifact_id}
                         className="drawer-output-card"
-                        href={publicUrl ? `${apiBase}${publicUrl}` : undefined}
+                        href={publicUrl ? buildAuthenticatedUrl(publicUrl) : undefined}
                         target="_blank"
                         rel="noreferrer"
                       >

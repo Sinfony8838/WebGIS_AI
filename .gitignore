@@ -2,11 +2,21 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .venv/
+.env
+.env.*
+!.env.example
 node_modules/
 dist/
 coverage/
+*.log
+*.tsbuildinfo
+tmp_*.txt
+.claude/
 backend/data/state/
 backend/data/uploads/
 backend/data/outputs/
+backend/data/workflows/
+backend/data/_backup/
 frontend/dist/
+frontend/*.log
 

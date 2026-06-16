@@ -16,17 +16,19 @@ import { fromLonLat, toLonLat, transformExtent } from "ol/proj";
 import { getDistance } from "ol/sphere";
 import { Circle as CircleStyle, Fill, Stroke, Style, Text } from "ol/style";
 import {
+  buildAuthenticatedUrl,
+  buildJobStreamUrl,
   createProject,
   exportSnapshot,
   fetchHealth,
   fetchLayers,
   fetchOutputs,
   fetchProject,
-  getApiBase,
   patchLayer,
   runTemplate,
   searchPoi,
   sendAssistantMessage,
+  setStoredApiToken,
   switchBasemap,
   uploadDataset
 } from "./api";
@@ -265,6 +267,7 @@ export default function App() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [initAttempt, setInitAttempt] = useState(0);
   const [initError, setInitError] = useState("");
+  const [accessTokenInput, setAccessTokenInput] = useState("");
 
   const onlinePoiEnabled = health?.online_services.amap_poi_enabled ?? false;
   const basemapItems = health?.basemaps.items || [];
@@ -357,7 +360,7 @@ export default function App() {
 
   const subscribeToJob = useCallback(
     (jobId: string) => {
-      const source = new EventSource(`${getApiBase()}/jobs/${jobId}/stream`);
+      const source = new EventSource(buildJobStreamUrl(jobId));
       jobStreamsRef.current.add(source);
       activeJobStreamsRef.current += 1;
       setBusy(true);
@@ -694,8 +697,9 @@ export default function App() {
       const response = await runTemplate(created.project_id, "generic_classroom_pack");
       subscribeToJob(response.job_id);
     })().catch((error: Error) => {
-      setInitError(error.message);
-      pushToast("error", "初始化失败", error.message);
+      const message = error.message === "AUTH_REQUIRED" ? "需要访问令牌" : error.message;
+      setInitError(message);
+      pushToast("error", "初始化失败", message);
     });
 
     return () => {
@@ -805,7 +809,7 @@ export default function App() {
           }
           const rasterLayer = new ImageLayer({
             source: new ImageStatic({
-              url: `${getApiBase()}${assetUrl}`,
+              url: buildAuthenticatedUrl(assetUrl),
               imageExtent: transformExtent(bounds, "EPSG:4326", "EPSG:3857")
             }),
             opacity: record.opacity,
@@ -1001,6 +1005,33 @@ export default function App() {
           <button type="button" className="toolbar-button" onClick={handleResetView}>
             复位视图
           </button>
+          {initError ? (
+            <>
+              <input
+                className="toolbar-token-input"
+                type="password"
+                value={accessTokenInput}
+                placeholder="访问令牌"
+                onChange={(event) => setAccessTokenInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    setStoredApiToken(accessTokenInput);
+                    setInitAttempt((value) => value + 1);
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="toolbar-button active"
+                onClick={() => {
+                  setStoredApiToken(accessTokenInput);
+                  setInitAttempt((value) => value + 1);
+                }}
+              >
+                保存令牌
+              </button>
+            </>
+          ) : null}
           {initError ? (
             <button
               type="button"

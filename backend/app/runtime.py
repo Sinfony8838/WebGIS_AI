@@ -48,6 +48,11 @@ class WebGISRuntime:
             "online_services": {
                 "amap_poi_enabled": self.config.online_services_enabled(),
             },
+            "security": {
+                "auth_enabled": self.config.auth_enabled(),
+                "cors_allow_origins": self.config.cors_origins(),
+                "auth_exempt_paths": sorted(self.config.auth_exempt_path_set()),
+            },
             "llm": self.minimax_client.status(),
             "qgis": self.config.qgis_status_config(),
             "basemaps": self.config.basemap_catalog(),

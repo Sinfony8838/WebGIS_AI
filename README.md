@@ -1,8 +1,8 @@
 # WebGIS-AI
 
-`WebGIS-AI` 是面向地理课堂实时演示的本地 WebGIS 系统。当前版本已经从旧的 QGIS 教学工作流转向“全屏地图 + 悬浮面板 + 智能助教副驾驶”的课堂大屏模式。
+`WebGIS-AI` 是面向地理课堂实时演示的本地 WebGIS 系统，采用“全屏地图 + 悬浮面板 + 智能助教副驾驶”的课堂大屏模式。
 
-## v1.2 重点
+## 功能重点
 
 - 全屏地图主舞台，界面改成浅灰透明悬浮面板
 - 内置多底图切换：`高德标准 / 高德影像 / 高德浅灰`
@@ -60,6 +60,9 @@
 - `WEBGIS_AI_AMAP_IMAGERY_URL`
 - `WEBGIS_AI_AMAP_ANNOTATION_URL`
 - `WEBGIS_AI_AMAP_POI_POLYGON_URL`
+- `WEBGIS_AI_AUTH_TOKEN`：公网部署时必须设置，后端所有 API、文件下载、任务流均需要访问令牌
+- `WEBGIS_AI_CORS_ALLOW_ORIGINS`：公网部署时设置为真实前端域名，例如 `https://webgis.example.edu`
+- `WEBGIS_AI_AUTH_EXEMPT_PATHS`：可选免鉴权路径，公网不建议豁免 `/health`
 
 如果没有配置 `WEBGIS_AI_AMAP_WEB_SERVICE_KEY`：
 
@@ -142,13 +145,3 @@ cd .\frontend
 & 'C:\Program Files\nodejs\node.exe' 'C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js' run test
 & 'C:\Program Files\nodejs\node.exe' 'C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js' run build
 ```
-
-## 不再保留的旧链路
-
-以下能力已经不再属于本仓库的产品主线：
-
-- `lesson_ppt`
-- `teacher_flow`
-- 教案 / Word / PPT 产物契约
-- Electron 桌面壳
-- OpenClaw 教学蓝图链路

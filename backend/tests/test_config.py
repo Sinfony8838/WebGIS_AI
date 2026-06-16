@@ -64,6 +64,31 @@ class AppConfigTest(unittest.TestCase):
             self.assertNotEqual(first, second)
             self.assertEqual(second.name[:6], "report")
 
+    def test_security_defaults_are_localhost_only_and_auth_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(os.environ, {}, clear=True):
+            config = AppConfig(root_dir=Path(temp_dir))
+
+            self.assertFalse(config.auth_enabled())
+            self.assertEqual(config.auth_exempt_path_set(), set())
+            self.assertEqual(config.cors_origins(), ["http://127.0.0.1:5173", "http://localhost:5173"])
+
+    def test_security_envs_are_parsed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            os.environ,
+            {
+                "WEBGIS_AI_AUTH_TOKEN": "secret-token",
+                "WEBGIS_AI_AUTH_EXEMPT_PATHS": "/health,/docs",
+                "WEBGIS_AI_CORS_ALLOW_ORIGINS": "https://example.edu, https://webgis.example.edu",
+            },
+            clear=True,
+        ):
+            config = AppConfig(root_dir=Path(temp_dir))
+
+            self.assertTrue(config.auth_enabled())
+            self.assertEqual(config.auth_token, "secret-token")
+            self.assertEqual(config.auth_exempt_path_set(), {"/health", "/docs"})
+            self.assertEqual(config.cors_origins(), ["https://example.edu", "https://webgis.example.edu"])
+
     def test_minimax_alias_envs_are_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
             os.environ,

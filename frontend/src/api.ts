@@ -16,10 +16,60 @@ import type {
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:18999";
+const BUILD_API_TOKEN = import.meta.env.VITE_API_TOKEN || "";
+const API_TOKEN_STORAGE_KEY = "webgis_ai_api_token";
+
+function readStoredApiToken(): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  try {
+    return window.localStorage.getItem(API_TOKEN_STORAGE_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+export function getApiToken(): string {
+  return (BUILD_API_TOKEN || readStoredApiToken()).trim();
+}
+
+export function setStoredApiToken(token: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  if (token.trim()) {
+    window.localStorage.setItem(API_TOKEN_STORAGE_KEY, token.trim());
+  } else {
+    window.localStorage.removeItem(API_TOKEN_STORAGE_KEY);
+  }
+}
+
+function withAuth(init: RequestInit = {}): RequestInit {
+  const token = getApiToken();
+  if (!token) {
+    return init;
+  }
+  const headers = new Headers(init.headers || {});
+  headers.set("Authorization", `Bearer ${token}`);
+  return { ...init, headers };
+}
+
+export function buildAuthenticatedUrl(path: string): string {
+  const url = new URL(path, API_BASE);
+  const token = getApiToken();
+  if (token) {
+    url.searchParams.set("access_token", token);
+  }
+  return url.toString();
+}
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, init);
+  const response = await fetch(`${API_BASE}${path}`, withAuth(init));
   if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error("AUTH_REQUIRED");
+    }
     const detail = await response.text();
     throw new Error(detail || `Request failed: ${response.status}`);
   }
@@ -32,7 +82,11 @@ export function getApiBase(): string {
 
 export function buildQgisPreviewUrl(filePath: string, stamp: number): string {
   const normalized = filePath.trim();
-  return `${API_BASE}/qgis/preview?file_path=${encodeURIComponent(normalized)}&t=${stamp}`;
+  return buildAuthenticatedUrl(`/qgis/preview?file_path=${encodeURIComponent(normalized)}&t=${stamp}`);
+}
+
+export function buildJobStreamUrl(jobId: string): string {
+  return buildAuthenticatedUrl(`/jobs/${encodeURIComponent(jobId)}/stream`);
 }
 
 export async function fetchHealth(): Promise<HealthResponse> {
