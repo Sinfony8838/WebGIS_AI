@@ -95,6 +95,85 @@ export type LayersResponse = {
   base_map: BasemapPreset;
 };
 
+export type DatasetCatalogItem = {
+  id: string;
+  name: string;
+  category: string;
+  source: string;
+  format: string;
+  geometry_source?: string;
+  join_key?: string;
+  fields: string[];
+  coverage: string;
+  source_year: string;
+  source_name: string;
+  source_url: string;
+  license: string;
+  includes_taiwan: boolean;
+  status: string;
+  geometry_type: string;
+  recommended_template: string;
+  population_fields: string[];
+  tags: string[];
+  description: string;
+};
+
+export type DatasetCatalogResponse = {
+  status: string;
+  path: string;
+  items: DatasetCatalogItem[];
+  missing_requirements_path: string;
+  missing_requirements_available: boolean;
+};
+
+export type DatasetCatalogLayerResponse = {
+  status: string;
+  layer: LayerRecord;
+  view?: {
+    center?: [number, number];
+    zoom?: number;
+    extent?: [number, number, number, number];
+  };
+};
+
+export type DatasetStatRow = {
+  name: string;
+  region_code: string;
+  population: number | null;
+  area: number | null;
+  density: number | null;
+  coverage_ratio?: number;
+  source_population?: number | null;
+  source_area?: number | null;
+  estimated?: boolean;
+};
+
+export type DatasetStatLayerSummary = {
+  layer_id: string;
+  name: string;
+  catalog_id: string;
+  feature_count: number;
+  matched_count: number;
+  total_population: number | null;
+  total_area: number | null;
+  density: number | null;
+  rows: DatasetStatRow[];
+  method: string;
+};
+
+export type DatasetStatsResponse = {
+  status: string;
+  summary: string;
+  geometry_used: boolean;
+  layers: DatasetStatLayerSummary[];
+  totals: {
+    matched_count: number;
+    total_population: number | null;
+    total_area: number | null;
+    density: number | null;
+  };
+};
+
 export type JobRecord = {
   job_id: string;
   project_id: string;

@@ -11,18 +11,21 @@ export interface BrushSettings {
 export interface BrushOverlayHandle {
   clear: () => void;
   undo: () => void;
+  exportImage: () => string | null;
+  loadImage: (dataUrl?: string | null) => void;
 }
 
 type Props = {
   active: boolean;
   settings: BrushSettings;
   onWheelZoom?: (event: WheelEvent) => void;
+  onContentChange?: (hasContent: boolean) => void;
 };
 
 const MAX_UNDO_STEPS = 30;
 
 export const BrushOverlay = forwardRef<BrushOverlayHandle, Props>(function BrushOverlay(
-  { active, settings, onWheelZoom },
+  { active, settings, onWheelZoom, onContentChange },
   ref
 ) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -31,6 +34,16 @@ export const BrushOverlay = forwardRef<BrushOverlayHandle, Props>(function Brush
   const snapshotRef = useRef<ImageData | null>(null);
   const undoStackRef = useRef<ImageData[]>([]);
   const [hasContent, setHasContent] = useState(false);
+  const hasContentRef = useRef(false);
+
+  const setContentState = useCallback(
+    (next: boolean) => {
+      hasContentRef.current = next;
+      setHasContent(next);
+      onContentChange?.(next);
+    },
+    [onContentChange]
+  );
 
   const pushUndoSnapshot = useCallback(() => {
     const canvas = canvasRef.current;
@@ -53,12 +66,12 @@ export const BrushOverlay = forwardRef<BrushOverlayHandle, Props>(function Brush
     const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
     for (let i = 3; i < data.length; i += 4) {
       if (data[i] > 0) {
-        setHasContent(true);
+        setContentState(true);
         return;
       }
     }
-    setHasContent(false);
-  }, []);
+    setContentState(false);
+  }, [setContentState]);
 
   const clearCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -67,8 +80,8 @@ export const BrushOverlay = forwardRef<BrushOverlayHandle, Props>(function Brush
     if (!ctx) return;
     pushUndoSnapshot();
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    setHasContent(false);
-  }, [pushUndoSnapshot]);
+    setContentState(false);
+  }, [pushUndoSnapshot, setContentState]);
 
   const undoCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -85,10 +98,43 @@ export const BrushOverlay = forwardRef<BrushOverlayHandle, Props>(function Brush
     updateHasContent();
   }, [updateHasContent]);
 
+  const exportImage = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !hasContentRef.current) return null;
+    return canvas.toDataURL("image/png");
+  }, []);
+
+  const loadImage = useCallback(
+    (dataUrl?: string | null) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      undoStackRef.current = [];
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (!dataUrl) {
+        setContentState(false);
+        return;
+      }
+
+      const image = new Image();
+      image.onload = () => {
+        const dpr = window.devicePixelRatio || 1;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(image, 0, 0, canvas.width / dpr, canvas.height / dpr);
+        setContentState(true);
+      };
+      image.src = dataUrl;
+    },
+    [setContentState]
+  );
+
   useImperativeHandle(ref, () => ({
     clear: clearCanvas,
-    undo: undoCanvas
-  }), [clearCanvas, undoCanvas]);
+    undo: undoCanvas,
+    exportImage,
+    loadImage
+  }), [clearCanvas, undoCanvas, exportImage, loadImage]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -139,7 +185,14 @@ export const BrushOverlay = forwardRef<BrushOverlayHandle, Props>(function Brush
       clientX = e.clientX;
       clientY = e.clientY;
     }
-    return { x: clientX - rect.left, y: clientY - rect.top };
+    const cssWidth = canvas.clientWidth || rect.width;
+    const cssHeight = canvas.clientHeight || rect.height;
+    const scaleX = rect.width && cssWidth ? rect.width / cssWidth : 1;
+    const scaleY = rect.height && cssHeight ? rect.height / cssHeight : 1;
+    return {
+      x: (clientX - rect.left) / scaleX,
+      y: (clientY - rect.top) / scaleY
+    };
   }, []);
 
   const drawShape = useCallback(
@@ -281,7 +334,7 @@ export const BrushOverlay = forwardRef<BrushOverlayHandle, Props>(function Brush
       drawingRef.current = false;
       startPosRef.current = null;
       snapshotRef.current = null;
-      setHasContent(true);
+      setContentState(true);
     };
 
     canvas.addEventListener("mousedown", handleMouseDown);
@@ -301,7 +354,7 @@ export const BrushOverlay = forwardRef<BrushOverlayHandle, Props>(function Brush
       canvas.removeEventListener("touchmove", handleMouseMove);
       canvas.removeEventListener("touchend", handleMouseUp);
     };
-  }, [active, settings, getPos, pushUndoSnapshot, drawShape]);
+  }, [active, settings, getPos, pushUndoSnapshot, drawShape, setContentState]);
 
   useEffect(() => {
     const canvas = canvasRef.current;

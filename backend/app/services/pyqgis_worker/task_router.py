@@ -32,6 +32,7 @@ def _load_handlers() -> Dict[str, Callable[[Dict[str, Any], Workspace], Dict[str
         intersection as intersection_handler,
         spatial_join as spatial_join_handler,
         classify as classify_handler,
+        zonal_stats as zonal_stats_handler,
     )
 
     return {
@@ -51,6 +52,7 @@ def _load_handlers() -> Dict[str, Callable[[Dict[str, Any], Workspace], Dict[str
         "intersection": intersection_handler.execute,
         "spatial_join": spatial_join_handler.execute,
         "classify": classify_handler.execute,
+        "zonal_stats": zonal_stats_handler.execute,
     }
 
 

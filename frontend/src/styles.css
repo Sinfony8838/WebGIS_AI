@@ -646,8 +646,33 @@ button {
   white-space: nowrap;
 }
 
-.brand-block span {
+.brand-title {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand-block > span {
   display: none;
+}
+
+.connection-dot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 9px;
+  border-radius: 999px;
+  background: var(--danger);
+  box-shadow: 0 0 0 3px rgba(255, 141, 141, 0.12), 0 0 14px rgba(255, 141, 141, 0.5);
+}
+
+.connection-dot.connected {
+  background: var(--success);
+  box-shadow: 0 0 0 3px rgba(109, 220, 178, 0.12), 0 0 14px rgba(109, 220, 178, 0.58);
+}
+
+.connection-dot.disconnected {
+  background: var(--danger);
 }
 
 .header-actions {
@@ -739,6 +764,50 @@ button {
   font-size: 12px;
   border-radius: 8px;
   white-space: nowrap;
+}
+
+.search-dropdown {
+  position: relative;
+  display: inline-flex;
+}
+
+.search-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border-radius: 12px;
+  z-index: 10;
+  min-width: 120px;
+  background: rgba(10, 22, 38, 0.92);
+  border: 1px solid rgba(132, 178, 220, 0.2);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.search-dropdown-menu button {
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: rgba(223, 233, 242, 0.88);
+  font-size: 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.search-dropdown-menu button:hover:not(:disabled) {
+  background: rgba(88, 199, 255, 0.12);
+}
+
+.search-dropdown-menu button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .app-header .panel-tag {
@@ -3566,7 +3635,7 @@ button {
 .dialog-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 30;
+  z-index: 60;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4951,6 +5020,85 @@ button {
 }
 
 /* ── PPT Viewer ─────────────────────────────────────────────── */
+.ppt-viewer-dock {
+  position: fixed;
+  right: 28px;
+  bottom: 94px;
+  z-index: 24;
+  display: flex;
+  align-items: stretch;
+  max-width: min(420px, calc(100vw - 56px));
+  border: 1px solid rgba(88, 199, 255, 0.22);
+  border-radius: 12px;
+  background: rgba(18, 34, 56, 0.86);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.34);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  overflow: hidden;
+}
+
+.ppt-viewer-dock-main {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: rgba(241, 247, 255, 0.82);
+  cursor: pointer;
+}
+
+.ppt-viewer-dock-main:hover {
+  background: rgba(88, 199, 255, 0.1);
+}
+
+.ppt-viewer-dock-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  min-width: 40px;
+  border-radius: 8px;
+  background: rgba(88, 199, 255, 0.16);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.ppt-viewer-dock-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  text-align: left;
+}
+
+.ppt-viewer-dock-meta {
+  color: rgba(241, 247, 255, 0.52);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ppt-viewer-dock-remove {
+  width: 38px;
+  border: 0;
+  border-left: 1px solid rgba(208, 222, 238, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(241, 247, 255, 0.58);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.ppt-viewer-dock-remove:hover {
+  background: rgba(255, 87, 87, 0.14);
+  color: #ff9a9a;
+}
+
 .ppt-viewer-backdrop {
   position: fixed;
   inset: 0;
@@ -5022,6 +5170,10 @@ button {
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   transform-origin: center center;
   overflow: hidden;
+}
+
+.ppt-viewer-slide .brush-overlay {
+  border-radius: inherit;
 }
 
 .ppt-viewer-slide-image {
@@ -5100,7 +5252,380 @@ button {
   color: rgba(241, 247, 255, 0.7);
 }
 
+/* Database page */
+.database-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 34;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 16px;
+  overflow: hidden;
+  padding: 24px 28px 28px;
+  color: #111827;
+  background: #f6f8fb;
+}
+
+.database-viewer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  min-width: 0;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.database-viewer-heading {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.database-viewer-heading span {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  color: #64748b;
+}
+
+.database-viewer-header h2 {
+  margin: 0;
+  font-size: 28px;
+  line-height: 1.15;
+  color: #0f172a;
+}
+
+.database-viewer-heading p {
+  max-width: 680px;
+  margin: 0;
+  color: #4b5563;
+  line-height: 1.55;
+}
+
+.database-viewer-actions {
+  flex: 0 1 680px;
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto auto;
+  align-items: end;
+  gap: 10px;
+  min-width: min(680px, 56vw);
+}
+
+.database-viewer-search {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.database-viewer-search span {
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+}
+
+.database-viewer-search input {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #111827;
+  padding: 9px 12px;
+  outline: none;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.database-viewer-search input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.database-viewer-actions button,
+.database-viewer-tabs button,
+.database-row-actions button {
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #111827;
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.database-viewer-actions button {
+  min-height: 40px;
+  padding: 0 16px;
+  font-weight: 600;
+}
+
+.database-viewer-actions button:hover,
+.database-row-actions button:hover {
+  border-color: #94a3b8;
+  background: #f8fafc;
+}
+
+.database-viewer-actions .database-primary-action {
+  border-color: #111827;
+  background: #111827;
+  color: #ffffff;
+}
+
+.database-viewer-actions .database-primary-action:hover {
+  border-color: #0f172a;
+  background: #0f172a;
+}
+
+.database-viewer-actions .database-secondary-action {
+  color: #334155;
+}
+
+.database-viewer-tabs {
+  display: flex;
+  gap: 8px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.database-viewer-tabs button {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-color: transparent;
+  white-space: nowrap;
+}
+
+.database-viewer-tabs button.active {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.08);
+}
+
+.database-viewer-tabs em {
+  min-width: 22px;
+  border-radius: 999px;
+  padding: 2px 6px;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 700;
+  color: #475569;
+  background: #f1f5f9;
+}
+
+.database-viewer-tabs button.active em {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.database-viewer-body {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 16px;
+}
+
+.database-viewer-summary {
+  align-self: start;
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+
+.database-viewer-summary strong {
+  font-size: 36px;
+  line-height: 1;
+  color: #111827;
+}
+
+.database-viewer-summary span,
+.database-viewer-summary small {
+  color: #64748b;
+}
+
+.database-viewer-summary span {
+  font-weight: 700;
+  color: #334155;
+}
+
+.database-viewer-summary small {
+  padding-top: 9px;
+  border-top: 1px solid #f1f5f9;
+  font-size: 13px;
+}
+
+.database-viewer-list {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+
+.database-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid #edf2f7;
+  background: #ffffff;
+}
+
+.database-row:last-child {
+  border-bottom: 0;
+}
+
+.database-row:hover {
+  background: #f8fafc;
+}
+
+.database-row-main {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.database-row-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.database-row-title span {
+  flex: 0 0 auto;
+  min-width: 72px;
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: #1d4ed8;
+  background: #eff6ff;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.database-row-title strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  color: #111827;
+}
+
+.database-row p {
+  margin: 0;
+  color: #475569;
+  line-height: 1.45;
+}
+
+.database-row-meta,
+.database-row-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.database-row-meta span,
+.database-row-tags span {
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: #64748b;
+  background: #f1f5f9;
+}
+
+.database-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.database-row-actions button {
+  min-width: 56px;
+  min-height: 34px;
+  padding: 6px 10px;
+  font-weight: 600;
+}
+
+.database-row-actions button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.database-viewer-empty {
+  min-height: 240px;
+  display: grid;
+  place-items: center;
+  color: #64748b;
+}
+
+@media (max-width: 860px) {
+  .database-viewer {
+    padding: 14px;
+  }
+
+  .database-viewer-header,
+  .database-viewer-body,
+  .database-row {
+    grid-template-columns: 1fr;
+  }
+
+  .database-viewer-header {
+    display: grid;
+  }
+
+  .database-viewer-actions {
+    min-width: 0;
+    grid-template-columns: 1fr;
+  }
+
+  .database-viewer-summary {
+    grid-template-columns: auto repeat(5, auto);
+    align-items: center;
+  }
+
+  .database-row-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}
+
 /* ── Timeline Panel (git-style dot-line) ────────────────────── */
+@media (max-width: 760px) {
+  .ppt-viewer-dock {
+    right: 14px;
+    bottom: 78px;
+    max-width: calc(100vw - 28px);
+  }
+
+  .ppt-viewer-stage {
+    padding: 10px;
+  }
+
+  .ppt-viewer-thumbs {
+    max-width: 44vw;
+  }
+}
+
 .timeline-loading {
   display: flex;
   align-items: center;
@@ -5479,4 +6004,127 @@ button {
     border-right: none;
     border-bottom: 1px solid rgba(208, 222, 238, 0.06);
   }
+}
+
+/* ── Timeline Import Modal ──────────────────────────────────── */
+.timeline-import-modal {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 32px 28px 28px;
+  text-align: center;
+  animation: timeline-modal-in 0.2s cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+@keyframes timeline-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.timeline-import-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.timeline-import-modal-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: rgba(241, 247, 255, 0.92);
+}
+
+.timeline-import-close {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: transparent;
+  border: none;
+  color: rgba(241, 247, 255, 0.35);
+  font-size: 20px;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.timeline-import-close:hover {
+  color: rgba(241, 247, 255, 0.7);
+  background: rgba(241, 247, 255, 0.06);
+}
+
+.timeline-import-modal-desc {
+  margin: 0;
+  font-size: 14px;
+  color: rgba(241, 247, 255, 0.5);
+  line-height: 1.5;
+}
+
+.timeline-import-modal-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.timeline-import-modal-primary {
+  width: 100%;
+  padding: 14px 20px;
+  border-radius: 14px;
+  border: 1px solid var(--accent);
+  background: linear-gradient(180deg, rgba(88, 199, 255, 0.18), rgba(88, 199, 255, 0.08));
+  color: var(--accent);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.timeline-import-modal-primary:hover {
+  background: linear-gradient(180deg, rgba(88, 199, 255, 0.28), rgba(88, 199, 255, 0.14));
+  box-shadow: 0 0 20px rgba(88, 199, 255, 0.15);
+}
+
+.timeline-import-modal-secondary {
+  width: 100%;
+  padding: 12px 20px;
+  border-radius: 14px;
+  border: 1px solid rgba(208, 222, 238, 0.12);
+  background: rgba(241, 247, 255, 0.04);
+  color: rgba(241, 247, 255, 0.55);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.timeline-import-modal-secondary:hover {
+  background: rgba(241, 247, 255, 0.08);
+  color: rgba(241, 247, 255, 0.75);
+}
+
+.timeline-import-modal-hint {
+  margin: 0;
+  font-size: 12px;
+  color: rgba(241, 247, 255, 0.28);
+}
+
+.timeline-import-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 40px 20px;
+  color: rgba(241, 247, 255, 0.6);
+  font-size: 14px;
 }

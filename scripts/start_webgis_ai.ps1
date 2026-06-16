@@ -97,7 +97,7 @@ function Ensure-BackendDeps {
         [bool]$AllowInstall
     )
 
-    $requiredModules = @("fastapi", "uvicorn", "multipart")
+    $requiredModules = @("fastapi", "uvicorn", "multipart", "pptx", "fitz", "docx", "pyproj", "shapely")
     $missing = @()
     foreach ($module in $requiredModules) {
         if (-not (Test-PythonModule -PythonExe $PythonExe -ModuleName $module)) {
@@ -144,6 +144,34 @@ function Ensure-FrontendDeps {
     }
 }
 
+function Ensure-AgentDeps {
+    param(
+        [string]$RepoRoot,
+        [string]$NodeExe,
+        [string]$NpmCli,
+        [bool]$AllowInstall
+    )
+
+    $agentRoot = Join-Path $RepoRoot "agent"
+    $nodeModulesPath = Join-Path $agentRoot "node_modules"
+    if (Test-Path $nodeModulesPath) {
+        return
+    }
+
+    if (-not $AllowInstall) {
+        throw "Agent dependencies are not installed. Run npm install in the agent directory or use -InstallIfMissing."
+    }
+
+    Write-Step "Missing agent dependencies detected. Installing now."
+    Push-Location $agentRoot
+    try {
+        & $NodeExe $NpmCli install
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 function Start-ServiceWindow {
     param(
         [string]$Title,
@@ -164,6 +192,7 @@ $Command
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $frontendRoot = Join-Path $repoRoot "frontend"
+$agentRoot = Join-Path $repoRoot "agent"
 $stateDir = Join-Path $repoRoot "backend\data\state"
 $stateFile = Join-Path $stateDir "startup_processes.json"
 
@@ -176,7 +205,14 @@ $envNames = @(
     "WEBGIS_AI_VISION_ENABLED",
     "WEBGIS_AI_VISION_MODEL",
     "MIMO_API_KEY",
+    "MIMO_BASE_URL",
+    "MIMO_MODEL",
     "XIAOMI_MIMO_API_KEY",
+    "WEBGIS_BACKEND_URL",
+    "AGENT_MAX_TURNS",
+    "AGENT_MAX_TOKENS",
+    "AGENT_TEMPERATURE",
+    "AGENT_AUTO_APPROVE",
     "QGIS_ROOT",
     "WEBGIS_AI_QGIS_ROOT",
     "WEBGIS_AI_QGIS_PYTHON"
@@ -187,6 +223,19 @@ foreach ($name in $envNames) {
         Set-Item -Path "Env:$name" -Value $value
     }
 }
+
+if (-not $env:MIMO_API_KEY -and $env:WEBGIS_AI_MIMO_API_KEY) {
+    $env:MIMO_API_KEY = $env:WEBGIS_AI_MIMO_API_KEY
+}
+if (-not $env:MIMO_BASE_URL -and $env:WEBGIS_AI_MIMO_BASE_URL) {
+    $env:MIMO_BASE_URL = $env:WEBGIS_AI_MIMO_BASE_URL
+}
+if (-not $env:MIMO_MODEL -and $env:WEBGIS_AI_MIMO_MODEL) {
+    $env:MIMO_MODEL = $env:WEBGIS_AI_MIMO_MODEL
+}
+$env:WEBGIS_BACKEND_URL = "http://127.0.0.1:18999"
+$env:AGENT_WORKSPACE_DIR = $repoRoot
+$env:AGENT_SERVER_PORT = "19000"
 
 function Resolve-QgisRoot {
     # Already set by the user / environment? Trust it.
@@ -252,9 +301,11 @@ Write-Step "Using Node: $nodeExe"
 
 Ensure-BackendDeps -RepoRoot $repoRoot -PythonExe $pythonExe -AllowInstall:$InstallIfMissing
 Ensure-FrontendDeps -RepoRoot $repoRoot -NodeExe $nodeExe -NpmCli $npmCli -AllowInstall:$InstallIfMissing
+Ensure-AgentDeps -RepoRoot $repoRoot -NodeExe $nodeExe -NpmCli $npmCli -AllowInstall:$InstallIfMissing
 
 $backendCommand = "& '$pythonExe' -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 18999"
 $frontendCommand = "& '$nodeExe' '$npmCli' run dev"
+$agentCommand = "& '$nodeExe' '$npmCli' run server"
 
 Write-Step "Starting backend window."
 $backendProcess = Start-ServiceWindow -Title "WebGIS-AI Backend" -WorkingDirectory $repoRoot -Command $backendCommand
@@ -262,12 +313,17 @@ $backendProcess = Start-ServiceWindow -Title "WebGIS-AI Backend" -WorkingDirecto
 Write-Step "Starting frontend window."
 $frontendProcess = Start-ServiceWindow -Title "WebGIS-AI Frontend" -WorkingDirectory $frontendRoot -Command $frontendCommand
 
+Write-Step "Starting coding agent server window."
+$agentProcess = Start-ServiceWindow -Title "WebGIS-AI Agent Server" -WorkingDirectory $agentRoot -Command $agentCommand
+
 New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
 @{
     backend_pid = $backendProcess.Id
     frontend_pid = $frontendProcess.Id
+    agent_pid = $agentProcess.Id
     backend_url = "http://127.0.0.1:18999"
     frontend_url = "http://127.0.0.1:5173"
+    agent_url = "http://127.0.0.1:19000"
     started_at = (Get-Date).ToString("s")
 } | ConvertTo-Json | Set-Content -Path $stateFile -Encoding utf8
 
@@ -275,6 +331,7 @@ Write-Step "Startup complete."
 Write-Host ""
 Write-Host "Backend: http://127.0.0.1:18999" -ForegroundColor Green
 Write-Host "Frontend: http://127.0.0.1:5173" -ForegroundColor Green
+Write-Host "Agent: http://127.0.0.1:19000" -ForegroundColor Green
 Write-Host "PID log: $stateFile" -ForegroundColor DarkGray
 
 if ($OpenBrowser) {

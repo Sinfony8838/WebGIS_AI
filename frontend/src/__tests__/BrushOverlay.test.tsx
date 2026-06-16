@@ -97,6 +97,38 @@ describe("BrushOverlay", () => {
     expect(context.lineTo).toHaveBeenLastCalledWith(150, 150);
   });
 
+  it("normalizes pointer coordinates inside a transformed canvas", () => {
+    vi.mocked(HTMLCanvasElement.prototype.getBoundingClientRect).mockReturnValue({
+      bottom: 170,
+      height: 150,
+      left: 10,
+      right: 210,
+      top: 20,
+      width: 200,
+      x: 10,
+      y: 20,
+      toJSON: () => ({})
+    });
+
+    const { container } = render(
+      <div>
+        <BrushOverlay
+          active
+          settings={{ tool: "freehand", color: "#ff4444", lineWidth: 4 }}
+        />
+      </div>
+    );
+
+    const canvas = container.querySelector("canvas");
+    expect(canvas).toBeTruthy();
+
+    fireEvent.mouseDown(canvas!, { clientX: 110, clientY: 120 });
+    fireEvent.mouseMove(canvas!, { clientX: 160, clientY: 170 });
+
+    expect(context.moveTo).toHaveBeenLastCalledWith(200, 200);
+    expect(context.lineTo).toHaveBeenLastCalledWith(300, 300);
+  });
+
   it("forwards wheel gestures while brush mode is active", () => {
     const onWheelZoom = vi.fn();
     const { container, rerender } = render(

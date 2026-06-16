@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import csv
 import json
+import math
 import re
 import threading
 import urllib.error
@@ -18,6 +20,7 @@ from .services.datasets import DatasetService
 from .services.knowledge_base import KnowledgeBaseService
 from .services.llm_planner import LLMPlanner
 from .services.minimax_client import MiniMaxClient
+from .services.one_map_catalog import OneMapCatalogService
 from .services.timeline_service import TimelineService
 from .services.poi import PoiService
 from .services.resource_search import ResourceSearchService
@@ -33,6 +36,204 @@ from .store import RuntimeStore
 TRANSPARENT_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR42mP8z8BQDwAFgwJ/lU9nWQAAAABJRU5ErkJggg=="
 )
+
+
+def _safe_id(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "_", str(value or "").strip())
+    return cleaned.strip("_") or "dataset"
+
+
+def _first_geometry_type(payload: Dict[str, Any]) -> str:
+    for feature in payload.get("features", []) if isinstance(payload.get("features"), list) else []:
+        geometry = feature.get("geometry") if isinstance(feature, dict) else None
+        if isinstance(geometry, dict) and geometry.get("type"):
+            return str(geometry["type"])
+    return "Unknown"
+
+
+def _iter_coords(value: Any):
+    if isinstance(value, (list, tuple)):
+        if len(value) >= 2 and all(isinstance(part, (int, float)) for part in value[:2]):
+            yield float(value[0]), float(value[1])
+            return
+        for item in value:
+            yield from _iter_coords(item)
+
+
+def _geojson_bounds(payload: Dict[str, Any]) -> List[float]:
+    coords = list(_iter_coords(payload.get("coordinates") if payload.get("type") != "FeatureCollection" else [
+        feature.get("geometry", {}).get("coordinates")
+        for feature in payload.get("features", [])
+        if isinstance(feature, dict)
+    ]))
+    if not coords:
+        return [73, 18, 135, 54]
+    xs = [point[0] for point in coords]
+    ys = [point[1] for point in coords]
+    return [min(xs), min(ys), max(xs), max(ys)]
+
+
+def _bounds_center(bounds: List[float]) -> List[float]:
+    return [(bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0]
+
+
+def _feature_point(feature: Dict[str, Any]) -> Optional[List[float]]:
+    geometry = feature.get("geometry") if isinstance(feature, dict) else None
+    if not isinstance(geometry, dict):
+        return None
+    if geometry.get("type") == "Point":
+        coords = geometry.get("coordinates")
+        if isinstance(coords, list) and len(coords) >= 2:
+            return [float(coords[0]), float(coords[1])]
+    bounds = _geojson_bounds(geometry)
+    return _bounds_center(bounds)
+
+
+def _point_in_ring(point: List[float], ring: Any) -> bool:
+    if not isinstance(ring, list) or len(ring) < 3:
+        return False
+    x, y = point
+    inside = False
+    j = len(ring) - 1
+    for i, current in enumerate(ring):
+        previous = ring[j]
+        j = i
+        if not (isinstance(current, list) and isinstance(previous, list) and len(current) >= 2 and len(previous) >= 2):
+            continue
+        xi, yi = float(current[0]), float(current[1])
+        xj, yj = float(previous[0]), float(previous[1])
+        intersects = (yi > y) != (yj > y) and x < ((xj - xi) * (y - yi) / ((yj - yi) or 1e-12) + xi)
+        if intersects:
+            inside = not inside
+    return inside
+
+
+def _point_in_polygon(point: List[float], polygon: Any) -> bool:
+    if not isinstance(polygon, list) or not polygon:
+        return False
+    if not _point_in_ring(point, polygon[0]):
+        return False
+    return not any(_point_in_ring(point, hole) for hole in polygon[1:] if isinstance(hole, list))
+
+
+def _point_in_selection(point: List[float], geometry: Optional[Dict[str, Any]]) -> bool:
+    if not geometry:
+        return True
+    geom_type = geometry.get("type")
+    coords = geometry.get("coordinates")
+    if geom_type == "Polygon":
+        return _point_in_polygon(point, coords)
+    if geom_type == "MultiPolygon" and isinstance(coords, list):
+        return any(_point_in_polygon(point, polygon) for polygon in coords)
+    return True
+
+
+def _as_number(value: Any) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def _coerce_catalog_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if stripped == "":
+        return ""
+    number = _as_number(stripped)
+    if number is None:
+        return stripped
+    return int(number) if number.is_integer() else number
+
+
+def _normalize_join_value(value: Any) -> str:
+    return str(value or "").strip().upper()
+
+
+CSV_JOIN_DEFAULTS: Dict[str, Dict[str, str]] = {
+    "world_population_by_country": {
+        "geometry_source": "world_countries",
+        "join_key": "region_code",
+    }
+}
+
+
+def _shape_area_stats(
+    feature_geometry: Optional[Dict[str, Any]],
+    selection_geometry: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, float]]:
+    if not isinstance(feature_geometry, dict) or feature_geometry.get("type") not in {"Polygon", "MultiPolygon"}:
+        return None
+    try:
+        from pyproj import Transformer  # type: ignore
+        from shapely.geometry import shape  # type: ignore
+        from shapely.ops import transform  # type: ignore
+        from shapely.validation import make_valid  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError("Area-weighted statistics require shapely and pyproj. Run pip install -r requirements.txt.") from exc
+
+    transformer = Transformer.from_crs("EPSG:4326", "EPSG:6933", always_xy=True)
+    feature_shape = make_valid(shape(feature_geometry))
+    if feature_shape.is_empty:
+        return None
+    projected_feature = make_valid(transform(transformer.transform, feature_shape))
+    feature_area_m2 = float(projected_feature.area)
+    if feature_area_m2 <= 0:
+        return None
+    if not selection_geometry:
+        return {"ratio": 1.0, "area_km2": feature_area_m2 / 1_000_000.0}
+
+    selection_shape = make_valid(shape(selection_geometry))
+    if selection_shape.is_empty:
+        return {"ratio": 0.0, "area_km2": 0.0}
+    projected_selection = make_valid(transform(transformer.transform, selection_shape))
+    intersection_area_m2 = float(projected_feature.intersection(projected_selection).area)
+    ratio = max(0.0, min(1.0, intersection_area_m2 / feature_area_m2))
+    return {"ratio": ratio, "area_km2": intersection_area_m2 / 1_000_000.0}
+
+
+def _classify_colors(features: List[Dict[str, Any]], field: str) -> None:
+    values = [
+        value
+        for value in (_as_number((feature.get("properties") or {}).get(field)) for feature in features)
+        if value is not None
+    ]
+    values = sorted(values)
+    colors = ["#fef3c7", "#fde68a", "#f59e0b", "#dc2626", "#7f1d1d"]
+    if not values:
+        for feature in features:
+            (feature.setdefault("properties", {}))["__fillColor"] = "#38bdf8"
+            (feature.setdefault("properties", {}))["__fillOpacity"] = 0.24
+        return
+    breaks = [values[min(len(values) - 1, int((len(values) - 1) * q / 5))] for q in range(1, 6)]
+    for feature in features:
+        props = feature.setdefault("properties", {})
+        value = _as_number(props.get(field))
+        index = 0
+        if value is not None:
+            while index < len(breaks) - 1 and value > breaks[index]:
+                index += 1
+        props["__fillColor"] = colors[index]
+        props["__fillOpacity"] = 0.42
+        props["__strokeColor"] = "#334155"
+        props["__strokeWidth"] = 0.8
+
+
+def _decorate_default_style(features: List[Dict[str, Any]], geometry_type: str = "") -> None:
+    is_line = "Line" in geometry_type
+    is_point = "Point" in geometry_type
+    for feature in features:
+        props = feature.setdefault("properties", {})
+        props.setdefault("__fillColor", "#38bdf8")
+        props.setdefault("__fillOpacity", 0.28 if not is_line else 0.0)
+        props.setdefault("__strokeColor", "#2563eb" if is_line else "#0f172a")
+        props.setdefault("__strokeWidth", 2.4 if is_line else 0.9)
+        if is_point:
+            props.setdefault("__radius", 5.5)
 
 
 def _fallback_summary(record: "WorkflowRecord", stats_payload: Dict[str, Any]) -> str:
@@ -66,6 +267,7 @@ class WebGISRuntime:
         self.template_service = TemplateService(self.config, self.store)
         self.assistant_service = AssistantService(self.config)
         self.knowledge_base_service = KnowledgeBaseService(self.config)
+        self.one_map_catalog_service = OneMapCatalogService(self.config)
         self.resource_search_service = ResourceSearchService(self.config, self.knowledge_base_service)
         self.poi_service = PoiService(self.config, self.store)
         self.vision_service = MapVisionService(self.config)
@@ -347,6 +549,13 @@ class WebGISRuntime:
     def create_project(self, name: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         project = self.store.create_project(name=name, metadata=metadata, base_map=self.config.default_basemap())
         return {"status": "success", **project.to_dict()}
+
+    def list_projects(self) -> Dict[str, Any]:
+        projects = sorted(self.store.projects.values(), key=lambda project: project.updated_at, reverse=True)
+        return {
+            "status": "success",
+            "items": [project.to_dict() for project in projects],
+        }
 
     def get_project(self, project_id: str) -> Dict[str, Any]:
         project = self._require_project(project_id)
@@ -640,6 +849,269 @@ class WebGISRuntime:
         teacher_facing = {"map_snapshot", "annotation_export", "dataset_import", "assistant_note", "query_summary"}
         items = [item for item in self.store.list_outputs(project_id=project_id) if item.get("artifact_type") in teacher_facing]
         return {"status": "success", "items": items}
+
+    def list_dataset_catalog(self) -> Dict[str, Any]:
+        return self.one_map_catalog_service.list_catalog()
+
+    def _read_geojson_catalog_payload(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        path = self.one_map_catalog_service.resolve_item_path(item)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Catalog dataset is not valid GeoJSON: {item.get('id')}") from exc
+        if payload.get("type") != "FeatureCollection" or not isinstance(payload.get("features"), list):
+            raise ValueError(f"Catalog dataset must be a GeoJSON FeatureCollection: {item.get('id')}")
+        return json.loads(json.dumps(payload, ensure_ascii=False))
+
+    def _materialize_csv_catalog_payload(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        join_defaults = CSV_JOIN_DEFAULTS.get(str(item.get("id") or ""))
+        join_key = str(item.get("join_key") or (join_defaults or {}).get("join_key") or "").strip()
+        geometry_source = str(item.get("geometry_source") or (join_defaults or {}).get("geometry_source") or "").strip()
+        if not join_key or not geometry_source:
+            raise ValueError(
+                f"Catalog CSV dataset cannot be loaded as a layer without geometry_source and join_key: {item.get('id')}"
+            )
+
+        csv_path = self.one_map_catalog_service.resolve_item_path(item)
+        rows_by_key: Dict[str, Dict[str, Any]] = {}
+        with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            if not reader.fieldnames or join_key not in reader.fieldnames:
+                raise ValueError(f"Catalog CSV dataset is missing join key '{join_key}': {item.get('id')}")
+            for raw_row in reader:
+                key = _normalize_join_value(raw_row.get(join_key))
+                if not key:
+                    continue
+                rows_by_key[key] = {field: _coerce_catalog_value(value) for field, value in raw_row.items()}
+        if not rows_by_key:
+            raise ValueError(f"Catalog CSV dataset has no joinable rows: {item.get('id')}")
+
+        geometry_item = self.one_map_catalog_service.get_item(geometry_source)
+        if geometry_item.get("format", "").lower() != "geojson":
+            raise ValueError(f"Catalog geometry_source must point to a GeoJSON dataset: {geometry_source}")
+        payload = self._read_geojson_catalog_payload(geometry_item)
+        joined_features: List[Dict[str, Any]] = []
+        for feature in payload.get("features", []):
+            if not isinstance(feature, dict):
+                continue
+            props = feature.get("properties") if isinstance(feature.get("properties"), dict) else {}
+            row = rows_by_key.get(_normalize_join_value(props.get(join_key)))
+            if not row:
+                continue
+            next_feature = json.loads(json.dumps(feature, ensure_ascii=False))
+            next_props = next_feature.setdefault("properties", {})
+            next_props.update(row)
+            next_props.setdefault("geometry_source_id", geometry_item["id"])
+            joined_features.append(next_feature)
+
+        if not joined_features:
+            raise ValueError(
+                f"Catalog CSV dataset did not match any geometry features using '{join_key}': {item.get('id')}"
+            )
+        payload["features"] = joined_features
+        return payload
+
+    def add_catalog_dataset_layer(self, project_id: str, dataset_id: str) -> Dict[str, Any]:
+        self._require_project(project_id)
+        item = self.one_map_catalog_service.get_item(dataset_id)
+        item_format = item.get("format", "").lower()
+        materialized_from_csv = False
+        if item_format == "geojson":
+            payload = self._read_geojson_catalog_payload(item)
+        elif item_format == "csv":
+            payload = self._materialize_csv_catalog_payload(item)
+            materialized_from_csv = True
+        else:
+            raise ValueError(f"Catalog dataset format cannot be loaded as a map layer: {item_format or 'unknown'}")
+
+        features = [feature for feature in payload.get("features", []) if isinstance(feature, dict)]
+        geometry_type = item.get("geometry_type") or _first_geometry_type(payload)
+        if not geometry_type and features:
+            geometry_type = _first_geometry_type(payload)
+        numeric_candidates = [
+            "density",
+            "population",
+            "gdp_per_capita_2020",
+            "population_2020",
+            "area",
+            "area_km2",
+        ]
+        catalog_fields = set(item.get("fields") or [])
+        style_field = next((field for field in numeric_candidates if field in catalog_fields), "")
+        if style_field:
+            _classify_colors(features, style_field)
+        else:
+            _decorate_default_style(features, geometry_type)
+
+        project = self._require_project(project_id)
+        layer_id = f"one_map_{_safe_id(item['id'])}"
+        z_index = max([layer.z_index for layer in project.layers], default=30) + 10
+        layer = LayerRecord.create(
+            layer_id=layer_id,
+            name=item.get("name") or item["id"],
+            kind="vector",
+            source="one_map_catalog",
+            geometry_type=geometry_type,
+            opacity=0.86,
+            z_index=z_index,
+            style={"labelField": "name"},
+            data=payload,
+            metadata={
+                "catalog_id": item["id"],
+                "catalog_source": item["source"],
+                "category": item.get("category", ""),
+                "coverage": item.get("coverage", ""),
+                "source_name": item.get("source_name", ""),
+                "source_year": item.get("source_year", ""),
+                "source_url": item.get("source_url", ""),
+                "license": item.get("license", ""),
+                "status": item.get("status", ""),
+                "fields": item.get("fields", []),
+                "includes_taiwan": item.get("includes_taiwan", False),
+                "style_field": style_field,
+                "materialized_from_csv": materialized_from_csv,
+                "join_key": item.get("join_key", ""),
+                "geometry_source": item.get("geometry_source", ""),
+                "description": item.get("description", ""),
+            },
+        )
+        self.store.upsert_layer(project_id, layer)
+        self.store.set_active_layer(project_id, layer.layer_id)
+
+        bounds = _geojson_bounds(payload)
+        width = max(0.0, bounds[2] - bounds[0])
+        height = max(0.0, bounds[3] - bounds[1])
+        zoom = 2 if width > 120 or height > 70 else 4 if width > 35 or height > 25 else 7 if width > 5 else 10
+        view = self.store.set_view(project_id, {"center": _bounds_center(bounds), "zoom": zoom, "extent": bounds})
+        self.store.add_recent_action(
+            project_id,
+            "加载一张图数据",
+            f"已加载“{layer.name}”到底图。",
+            status="success",
+            metadata={"layer_id": layer.layer_id, "catalog_id": item["id"]},
+        )
+        return {"status": "success", "layer": layer.to_dict(), "view": view}
+
+    def summarize_catalog_layers(
+        self,
+        project_id: str,
+        geometry: Optional[Dict[str, Any]] = None,
+        layer_id: str = "",
+    ) -> Dict[str, Any]:
+        project = self._require_project(project_id)
+        geometry = geometry or None
+        candidates = [
+            layer
+            for layer in project.layers
+            if layer.kind == "vector"
+            and layer.source == "one_map_catalog"
+            and (not layer_id or layer.layer_id == layer_id)
+            and (layer.visible or layer_id)
+        ]
+        if layer_id and not candidates:
+            raise KeyError(f"Unknown or unavailable one-map layer: {layer_id}")
+
+        layer_summaries: List[Dict[str, Any]] = []
+        total_population = 0.0
+        total_area = 0.0
+        total_matched = 0
+
+        for layer in candidates:
+            data = layer.data if isinstance(layer.data, dict) else {}
+            features = data.get("features", [])
+            if not isinstance(features, list):
+                continue
+
+            rows: List[Dict[str, Any]] = []
+            layer_population = 0.0
+            layer_area = 0.0
+            matched_count = 0
+            has_population_value = False
+            has_area_value = False
+
+            for index, feature in enumerate(features):
+                if not isinstance(feature, dict):
+                    continue
+                props = feature.get("properties") if isinstance(feature.get("properties"), dict) else {}
+                source_population = _as_number(props.get("population") or props.get("population_2020") or props.get("pop_max"))
+                source_area = _as_number(props.get("area") or props.get("area_km2"))
+                source_density = _as_number(props.get("density"))
+                coverage_ratio = 1.0
+                geometry_stats = _shape_area_stats(feature.get("geometry"), geometry)
+                if geometry_stats is not None:
+                    coverage_ratio = geometry_stats["ratio"]
+                    if coverage_ratio <= 0:
+                        continue
+                    computed_area = geometry_stats["area_km2"]
+                    area = source_area * coverage_ratio if source_area is not None else computed_area
+                else:
+                    point = _feature_point(feature)
+                    if point is None or not _point_in_selection(point, geometry):
+                        continue
+                    area = source_area
+
+                population = source_population * coverage_ratio if source_population is not None else None
+                density = population / area if population is not None and area and area > 0 else source_density
+                matched_count += 1
+                if population is not None:
+                    layer_population += population
+                    has_population_value = True
+                if area is not None:
+                    layer_area += area
+                    has_area_value = True
+                rows.append(
+                    {
+                        "name": str(props.get("name") or props.get("city") or props.get("name_en") or f"feature_{index + 1}"),
+                        "region_code": str(props.get("adcode") or props.get("region_code") or props.get("iso3") or ""),
+                        "population": round(population, 2) if population is not None else None,
+                        "area": round(area, 2) if area is not None else None,
+                        "density": round(density, 4) if density is not None else None,
+                        "coverage_ratio": round(coverage_ratio, 6),
+                        "source_population": source_population,
+                        "source_area": source_area,
+                        "estimated": coverage_ratio < 0.999999,
+                    }
+                )
+
+            computed_density = layer_population / layer_area if layer_area > 0 and has_population_value else None
+            if has_population_value:
+                total_population += layer_population
+            if has_area_value:
+                total_area += layer_area
+            total_matched += matched_count
+            layer_summaries.append(
+                {
+                    "layer_id": layer.layer_id,
+                    "name": layer.name,
+                    "catalog_id": str(layer.metadata.get("catalog_id", "")),
+                    "feature_count": len(features),
+                    "matched_count": matched_count,
+                    "total_population": round(layer_population, 2) if has_population_value else None,
+                    "total_area": round(layer_area, 2) if has_area_value else None,
+                    "density": round(computed_density, 4) if computed_density is not None else None,
+                    "rows": rows[:80],
+                    "method": "area_weighted_intersection",
+                }
+            )
+
+        overall_density = total_population / total_area if total_area > 0 and total_population > 0 else None
+        summary = (
+            f"已统计 {len(layer_summaries)} 个一张图图层，命中 {total_matched} 个要素。"
+            if layer_summaries
+            else "当前没有可统计的一张图图层，请先从数据库加载 GeoJSON 数据。"
+        )
+        return {
+            "status": "success",
+            "summary": summary,
+            "geometry_used": bool(geometry),
+            "layers": layer_summaries,
+            "totals": {
+                "matched_count": total_matched,
+                "total_population": round(total_population, 2) if total_population else None,
+                "total_area": round(total_area, 2) if total_area else None,
+                "density": round(overall_density, 4) if overall_density is not None else None,
+            },
+        }
 
     # ------------------------------------------------------------------
     # GIS workflow API helpers. PyQGIS is the backend worker implementation.

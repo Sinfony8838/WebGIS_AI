@@ -22,12 +22,14 @@ import type Map from "ol/Map";
 
 import {
   buildWorkflowFileUrl,
+  fetchDatasetCatalog,
   listWorkflowTemplates,
   submitWorkflow
 } from "../api";
 import { useWorkflowStream } from "../hooks/useWorkflowStream";
 import type {
   GraduatedStyle,
+  DatasetCatalogItem,
   LayersResponse,
   StatsPayload,
   WorkflowArtifactRecord,
@@ -48,11 +50,17 @@ const DEFAULT_STROKE = "#444444";
  * (see backend/app/services/pyqgis_worker/handlers/_common.py).
  */
 const BUILTIN_DATASETS: Array<{ source: string; label: string }> = [
-  { source: "builtin:population/china_provinces.geojson", label: "内置 · 中国 31 省级行政区（2020 七普人口）" },
+  { source: "builtin:one_map/population/china_province_population_density.geojson", label: "一张图 · 中国省级人口密度（含台湾）" },
   { source: "builtin:population/population_regions.geojson", label: "内置 · 中国 7 大区（演示数据）" },
   { source: "builtin:population/population_centroids.geojson", label: "内置 · 大区中心点（点）" },
   { source: "builtin:population/migration_flows.geojson", label: "内置 · 大区迁徙连线" }
 ];
+
+function catalogLabel(item: DatasetCatalogItem): string {
+  const prefix = item.status === "estimated" ? "估算" : "一张图";
+  const year = item.source_year ? ` · ${item.source_year}` : "";
+  return `${prefix} · ${item.name}${year}`;
+}
 
 /**
  * Templates that need a second dataset (overlay / clip / join / region).
@@ -73,6 +81,8 @@ export type WorkflowDockProps = {
   /** Project layer state, used to populate the dataset selector with
    * uploaded layers in addition to the built-in defaults. */
   layerState?: LayersResponse | null;
+  /** Dataset source preselected from the database/catalog page. */
+  initialDatasetSource?: string;
   /** Called when the user closes the dock from inside the component. */
   onRequestClose?: () => void;
   /** Optional toast shim so the dock can surface errors via the host UI. */
@@ -122,11 +132,13 @@ export function WorkflowDock({
   mapRef,
   open = true,
   layerState,
+  initialDatasetSource = "",
   onRequestClose,
   onToast
 }: WorkflowDockProps): JSX.Element | null {
   const [message, setMessage] = useState("");
   const [templates, setTemplates] = useState<WorkflowTemplateInfo[]>([]);
+  const [catalogItems, setCatalogItems] = useState<DatasetCatalogItem[]>([]);
   const [templateId, setTemplateId] = useState<string>("");
   const [primaryDataset, setPrimaryDataset] = useState<string>("");
   const [secondaryDataset, setSecondaryDataset] = useState<string>("");
@@ -157,8 +169,11 @@ export function WorkflowDock({
         label: `已上传 · ${item.name}`
       });
     }
-    return [...uploaded, ...BUILTIN_DATASETS];
-  }, [layerState, projectId]);
+    const catalogOptions = catalogItems
+      .filter((item) => item.source && item.status !== "missing")
+      .map((item) => ({ source: item.source, label: catalogLabel(item) }));
+    return [...uploaded, ...(catalogOptions.length ? catalogOptions : BUILTIN_DATASETS)];
+  }, [catalogItems, layerState, projectId]);
 
   const secondaryConfig = templateId ? SECONDARY_PARAM_BY_TEMPLATE[templateId] : undefined;
 
@@ -175,7 +190,16 @@ export function WorkflowDock({
     listWorkflowTemplates()
       .then((res) => setTemplates(res.items || []))
       .catch(() => setTemplates([]));
+    fetchDatasetCatalog()
+      .then((res) => setCatalogItems(res.items || []))
+      .catch(() => setCatalogItems([]));
   }, []);
+
+  useEffect(() => {
+    if (initialDatasetSource) {
+      setPrimaryDataset(initialDatasetSource);
+    }
+  }, [initialDatasetSource]);
 
   // Load style.json / stats.json / summary.md whenever artifacts change.
   useEffect(() => {

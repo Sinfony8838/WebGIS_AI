@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  addCatalogDatasetLayer,
   confirmAssistantAction,
+  fetchDatasetCatalog,
   fetchKbManifest,
   fetchKbTopics,
   registerKbLayer,
   searchKb,
   sendAssistantMessage,
+  summarizeCatalogLayers,
   upsertKbItem
 } from "../api";
 
@@ -138,6 +141,51 @@ describe("api.sendAssistantMessage", () => {
     await fetchKbManifest();
     const [url] = fetchMock.mock.calls[0];
     expect(String(url)).toContain("/kb/manifest");
+  });
+
+  it("requests one-map dataset catalog from /datasets/catalog", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ status: "success", items: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+
+    await fetchDatasetCatalog();
+    const [url] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/datasets/catalog");
+  });
+
+  it("loads one-map catalog datasets as map layers", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ status: "success", layer: { layer_id: "one_map_world" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+
+    await addCatalogDatasetLayer("project_1", "world_population_density");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/datasets/catalog/layers");
+    expect(init?.method).toBe("POST");
+    expect(String(init?.body)).toContain('"project_id":"project_1"');
+    expect(String(init?.body)).toContain('"dataset_id":"world_population_density"');
+  });
+
+  it("posts selection geometry for one-map statistics", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ status: "success", layers: [], totals: { matched_count: 0 } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+
+    await summarizeCatalogLayers("project_1", { type: "Polygon", coordinates: [] });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/datasets/catalog/statistics");
+    expect(init?.method).toBe("POST");
+    expect(String(init?.body)).toContain('"project_id":"project_1"');
+    expect(String(init?.body)).toContain('"type":"Polygon"');
   });
 
   it("requests kb topic summaries from /kb/topics", async () => {

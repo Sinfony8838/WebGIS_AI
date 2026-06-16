@@ -72,6 +72,17 @@ class PoiSearchRequest(BaseModel):
     geometry: Dict[str, Any] = Field(default_factory=dict)
 
 
+class CatalogLayerRequest(BaseModel):
+    project_id: str
+    dataset_id: str
+
+
+class CatalogStatisticsRequest(BaseModel):
+    project_id: str
+    layer_id: str = ""
+    geometry: Dict[str, Any] = Field(default_factory=dict)
+
+
 class ExportSnapshotRequest(BaseModel):
     project_id: str
     title: str = "课堂导图"
@@ -280,6 +291,11 @@ def create_project(request: CreateProjectRequest) -> Dict[str, Any]:
     return runtime.create_project(name=request.name or None, metadata=request.metadata)
 
 
+@app.get("/projects")
+def list_projects() -> Dict[str, Any]:
+    return runtime.list_projects()
+
+
 @app.get("/projects/{project_id}")
 def get_project(project_id: str) -> Dict[str, Any]:
     try:
@@ -409,6 +425,35 @@ async def upload_dataset(
             lat_field=lat_field,
             lon_field=lon_field,
             image_bounds=bounds or None,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/datasets/catalog")
+def list_dataset_catalog() -> Dict[str, Any]:
+    return runtime.list_dataset_catalog()
+
+
+@app.post("/datasets/catalog/layers")
+def add_dataset_catalog_layer(request: CatalogLayerRequest) -> Dict[str, Any]:
+    try:
+        return runtime.add_catalog_dataset_layer(request.project_id, request.dataset_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/datasets/catalog/statistics")
+def summarize_dataset_catalog_layers(request: CatalogStatisticsRequest) -> Dict[str, Any]:
+    try:
+        return runtime.summarize_catalog_layers(
+            request.project_id,
+            geometry=request.geometry,
+            layer_id=request.layer_id,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -603,6 +648,8 @@ async def generate_timeline(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=f"LLM 服务不可用: {exc}") from exc
 
 
 @app.get("/projects/{project_id}/timeline")

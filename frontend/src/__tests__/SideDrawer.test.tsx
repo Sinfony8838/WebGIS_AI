@@ -7,6 +7,7 @@ const baseProps = {
   layerState: null,
   searchResults: [],
   searchSummary: "",
+  oneMapStats: null,
   resourceQuery: "",
   resourceScope: "all" as const,
   resourceLoading: false,
@@ -105,7 +106,7 @@ describe("SideDrawer", () => {
     expect(baseProps.onImportResourceResult).toHaveBeenCalledWith(result);
   });
 
-  it("exposes the three primary tabs", () => {
+  it("exposes the primary tabs", () => {
     const { container } = render(<SideDrawer {...baseProps} activeTab="resource-search" />);
     const tablist = container.querySelector(".drawer-tabs");
     expect(tablist).not.toBeNull();
@@ -114,8 +115,45 @@ describe("SideDrawer", () => {
     expect(scoped.getByRole("tab", { name: /资料搜索/ })).toBeInTheDocument();
     expect(scoped.getByRole("tab", { name: /图层/ })).toBeInTheDocument();
     expect(scoped.getByRole("tab", { name: /检索/ })).toBeInTheDocument();
+    expect(scoped.getByRole("tab", { name: /区域统计/ })).toBeInTheDocument();
     expect(scoped.queryByRole("tab", { name: /^资料$/ })).toBeNull();
     expect(scoped.queryByRole("tab", { name: /产物/ })).toBeNull();
     expect(scoped.queryByText("当前状态")).toBeNull();
+  });
+
+  it("renders one-map area statistics", () => {
+    render(
+      <SideDrawer
+        {...baseProps}
+        activeTab="stats"
+        oneMapStats={{
+          status: "success",
+          summary: "已统计 1 个一张图图层，命中 2 个要素。",
+          geometry_used: true,
+          totals: { matched_count: 2, total_population: 1000, total_area: 10, density: 100 },
+          layers: [
+            {
+              layer_id: "one_map_population",
+              name: "人口密度",
+              catalog_id: "china_province_population_density",
+              feature_count: 31,
+              matched_count: 2,
+              total_population: 1000,
+              total_area: 10,
+              density: 100,
+              rows: [
+                { name: "上海市", region_code: "310000", population: 500, area: 5, density: 100 },
+                { name: "江苏省", region_code: "320000", population: 500, area: 5, density: 100 }
+              ],
+              method: "representative_point_within_selection"
+            }
+          ]
+        }}
+      />
+    );
+
+    expect(screen.getByTestId("drawer-stats")).toBeInTheDocument();
+    expect(screen.getByText("人口密度")).toBeInTheDocument();
+    expect(screen.getByText(/上海市/)).toBeInTheDocument();
   });
 });

@@ -41,6 +41,7 @@ ALLOWED_OPS: Tuple[str, ...] = (
     "intersection",
     "spatial_join",
     "classify",
+    "zonal_stats",
 )
 
 #: Operations that are reserved but not yet implemented; validator allows them
@@ -83,6 +84,7 @@ REQUIRED_PARAMS: Dict[str, Tuple[str, ...]] = {
     "intersection": ("input", "overlay_layer"),
     "spatial_join": ("input", "join_layer"),
     "classify": ("input", "field"),
+    "zonal_stats": ("input", "raster"),
 }
 
 #: Allowed classification methods used by ``choropleth`` / ``classify``.
@@ -603,6 +605,15 @@ class WorkflowValidator:
                 "method",
                 "classes_applied",
                 "breaks",
+                "path",
+            },
+            "zonal_stats": {
+                "layer",
+                "extent",
+                "crs",
+                "fields",
+                "feature_count",
+                "stats_fields",
                 "path",
             },
         }

@@ -1,10 +1,11 @@
 """Timeline generation service.
 
-Parses lesson plan documents (.pptx, .pdf, .txt) and uses the LLM to
+Parses lesson plan documents (.pptx, .pdf, .docx, .txt) and uses the LLM to
 extract structured teaching stages into a timeline.
 """
 from __future__ import annotations
 
+from io import BytesIO
 import json
 import re
 from datetime import datetime, timezone
@@ -44,6 +45,10 @@ class TimelineService:
             return self._extract_from_pptx(raw_bytes)
         if lower.endswith(".pdf"):
             return self._extract_from_pdf(raw_bytes)
+        if lower.endswith(".docx"):
+            return self._extract_from_docx(raw_bytes)
+        if lower.endswith(".doc"):
+            raise ValueError("Legacy .doc files are not supported. Please save the lesson plan as .docx.")
         if lower.endswith(".txt") or lower.endswith(".md"):
             return raw_bytes.decode("utf-8", errors="replace")
         raise ValueError(f"不支持的文件格式: {filename}")
@@ -66,10 +71,16 @@ class TimelineService:
         raw_response = self.llm.chat_completion(messages, temperature=0.3)
         nodes_raw = self._parse_llm_json(raw_response)
 
+        if not nodes_raw:
+            raise ValueError("LLM 未能从教案中提取出任何教学阶段")
+
         nodes: List[Dict[str, Any]] = []
         total_duration = 0
         for i, node in enumerate(nodes_raw):
-            duration = int(node.get("durationMin", 5))
+            try:
+                duration = int(node.get("durationMin", 5))
+            except (TypeError, ValueError):
+                duration = 5
             total_duration += duration
             nodes.append({
                 "id": str(uuid4()),
@@ -105,8 +116,6 @@ class TimelineService:
         except ImportError:
             raise ValueError("python-pptx is not installed")
 
-        from io import BytesIO
-
         prs = Presentation(BytesIO(raw_bytes))
         texts: List[str] = []
         for slide in prs.slides:
@@ -127,11 +136,52 @@ class TimelineService:
         return "\n".join(texts)
 
     @staticmethod
+    def _extract_from_docx(raw_bytes: bytes) -> str:
+        try:
+            from docx import Document
+        except ImportError:
+            raise ValueError("python-docx is not installed")
+
+        try:
+            document = Document(BytesIO(raw_bytes))
+        except Exception as exc:
+            raise ValueError(f"Unable to read Word document: {exc}") from exc
+
+        texts: List[str] = []
+        for paragraph in document.paragraphs:
+            text = paragraph.text.strip()
+            if text:
+                texts.append(text)
+
+        for table in document.tables:
+            for row in table.rows:
+                cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                if cells:
+                    texts.append("\t".join(cells))
+
+        return "\n".join(texts)
+
+    @staticmethod
     def _parse_llm_json(raw: str) -> List[Dict[str, Any]]:
         text = raw.strip()
+        # Strip markdown code fences (with optional language tag)
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
-        parsed = json.loads(text)
+        text = text.strip()
+
+        # Try direct parse first
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            # Fall back: extract the first JSON array or object from surrounding text
+            match = re.search(r"(\[[\s\S]*\]|\{[\s\S]*\})", text)
+            if not match:
+                raise ValueError("LLM 返回内容中未找到有效的 JSON")
+            try:
+                parsed = json.loads(match.group(1))
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"LLM 返回的 JSON 无法解析: {exc}") from exc
+
         if isinstance(parsed, list):
             return parsed
         if isinstance(parsed, dict) and "nodes" in parsed:

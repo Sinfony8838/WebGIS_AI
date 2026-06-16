@@ -1,8 +1,8 @@
 import { useMemo } from "react";
-import type { LayerRecord, LayersResponse, PoiSearchItem, ResourceSearchResult } from "../types";
+import type { DatasetStatsResponse, LayerRecord, LayersResponse, PoiSearchItem, ResourceSearchResult } from "../types";
 import { LiveResourceSearchPanel } from "./LiveResourceSearchPanel";
 
-export type DrawerTab = "resource-search" | "layers" | "search";
+export type DrawerTab = "resource-search" | "layers" | "search" | "stats";
 
 type Props = {
   open: boolean;
@@ -10,6 +10,7 @@ type Props = {
   layerState: LayersResponse | null;
   searchResults: PoiSearchItem[];
   searchSummary: string;
+  oneMapStats: DatasetStatsResponse | null;
   resourceQuery: string;
   resourceScope: "all" | "kb" | "web";
   resourceLoading: boolean;
@@ -29,7 +30,8 @@ type Props = {
 const TABS: Array<{ key: DrawerTab; label: string }> = [
   { key: "resource-search", label: "资料搜索" },
   { key: "layers", label: "图层" },
-  { key: "search", label: "检索" }
+  { key: "search", label: "检索" },
+  { key: "stats", label: "区域统计" }
 ];
 
 function statusLabel(status?: string): string {
@@ -40,6 +42,20 @@ function statusLabel(status?: string): string {
     return "仅存档";
   }
   return "知识";
+}
+
+function formatStatNumber(value: number | null | undefined, fractionDigits = 0): string {
+  if (value === null || value === undefined) {
+    return "未统计";
+  }
+  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: fractionDigits }).format(value);
+}
+
+function formatCoverage(value: number | null | undefined): string {
+  if (value === null || value === undefined) {
+    return "未统计";
+  }
+  return `${new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 1 }).format(value * 100)}%`;
 }
 
 function renderLayerRow(
@@ -68,6 +84,7 @@ export function SideDrawer({
   layerState,
   searchResults,
   searchSummary,
+  oneMapStats,
   resourceQuery,
   resourceScope,
   resourceLoading,
@@ -90,7 +107,8 @@ export function SideDrawer({
   const tabCount: Record<DrawerTab, number> = {
     "resource-search": resourceResults.length,
     layers: totalLayers,
-    search: searchResults.length
+    search: searchResults.length,
+    stats: oneMapStats?.layers.length || 0
   };
 
   return (
@@ -226,6 +244,60 @@ export function SideDrawer({
                 ) : (
                   <div className="drawer-empty-state">
                     在顶部搜索栏输入关键词后，可按当前视域或手绘区域发起检索。
+                  </div>
+                )}
+              </div>
+            </section>
+          ) : null}
+
+          {activeTab === "stats" ? (
+            <section className="drawer-section" data-testid="drawer-stats">
+              <div className="drawer-section-header">
+                <span>一张图区域统计</span>
+                <small>{oneMapStats?.layers.length || 0}</small>
+              </div>
+              {oneMapStats ? <p className="drawer-summary">{oneMapStats.summary}</p> : null}
+              {oneMapStats ? (
+                <div className="drawer-stat-strip">
+                  <div>
+                    <span>命中要素</span>
+                    <strong>{oneMapStats.totals.matched_count}</strong>
+                  </div>
+                  <div>
+                    <span>人口</span>
+                    <strong>{formatStatNumber(oneMapStats.totals.total_population)}</strong>
+                  </div>
+                  <div>
+                    <span>密度</span>
+                    <strong>{formatStatNumber(oneMapStats.totals.density, 2)}</strong>
+                  </div>
+                </div>
+              ) : null}
+              <div className="drawer-result-list">
+                {oneMapStats?.layers.length ? (
+                  oneMapStats.layers.map((layer) => (
+                    <article key={layer.layer_id} className="drawer-result-card">
+                      <strong>{layer.name}</strong>
+                      <span>
+                        命中 {layer.matched_count} / {layer.feature_count} 个要素
+                      </span>
+                      <small>
+                        人口 {formatStatNumber(layer.total_population)} · 面积 {formatStatNumber(layer.total_area, 2)} ·
+                        密度 {formatStatNumber(layer.density, 2)}
+                      </small>
+                      <small>
+                        方法 {layer.method === "area_weighted_intersection" ? "面积比例估算" : layer.method}
+                      </small>
+                      {layer.rows.length ? (
+                        <small>
+                          命中：{layer.rows.slice(0, 6).map((row) => `${row.name} ${formatCoverage(row.coverage_ratio)}`).join("、")}
+                        </small>
+                      ) : null}
+                    </article>
+                  ))
+                ) : (
+                  <div className="drawer-empty-state">
+                    先从数据库加载一张图数据或可关联 CSV 数据，再用右侧“绘区”工具框选区域并点击“统计框选区”。
                   </div>
                 )}
               </div>

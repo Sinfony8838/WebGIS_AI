@@ -460,6 +460,50 @@ class WorkflowValidatorTests(unittest.TestCase):
         from backend.app.services.workflow_validator import RESERVED_OPS
         self.assertNotIn("classify", RESERVED_OPS)
 
+    def test_zonal_stats_in_allowed_ops(self) -> None:
+        self.assertIn("zonal_stats", ALLOWED_OPS)
+
+    def test_zonal_stats_requires_input_and_raster(self) -> None:
+        wf = {
+            "steps": [
+                {"id": "s1", "op": "load_layer", "params": {"source": "zones.geojson"}},
+                {"id": "s2", "op": "zonal_stats", "params": {"input": "${s1.layer}"}, "depends_on": ["s1"]},
+            ]
+        }
+        result = validate_workflow(wf)
+        self.assertFalse(result.valid)
+        self.assertTrue(any(
+            e.code == "STEP_PARAM_MISSING" and e.field == "raster"
+            for e in result.errors
+        ))
+
+    def test_zonal_stats_valid(self) -> None:
+        wf = {
+            "version": "1.0",
+            "intent": "zonal stats demo",
+            "steps": [
+                {"id": "s1", "op": "load_layer", "params": {"source": "zones.geojson"}},
+                {
+                    "id": "s2",
+                    "op": "zonal_stats",
+                    "params": {
+                        "input": "${s1.layer}",
+                        "raster": "builtin:one_map/climate/world_precipitation.tif",
+                        "statistics": ["sum", "mean"],
+                    },
+                    "depends_on": ["s1"],
+                },
+                {
+                    "id": "s3",
+                    "op": "choropleth",
+                    "params": {"input": "${s2.layer}", "field": "zs_mean"},
+                    "depends_on": ["s2"],
+                },
+            ],
+        }
+        result = validate_workflow(wf)
+        self.assertTrue(result.valid, msg=[e.to_dict() for e in result.errors])
+
 
 class WorkflowTemplateTests(unittest.TestCase):
     def test_detect_population(self) -> None:

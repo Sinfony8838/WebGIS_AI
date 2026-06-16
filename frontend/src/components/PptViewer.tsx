@@ -1,25 +1,43 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { type MutableRefObject, useState, useEffect, useRef, useCallback } from "react";
 import type { SlideContent } from "../types";
+import { BrushOverlay, type BrushOverlayHandle, type BrushSettings } from "./BrushOverlay";
 
 type Props = {
   open: boolean;
-  onClose: () => void;
+  onExpand: () => void;
+  onCollapse: () => void;
+  onRemove: () => void;
   slides: SlideContent[];
   fileName: string;
+  brushActive?: boolean;
+  brushSettings?: BrushSettings;
+  brushOverlayRef?: MutableRefObject<BrushOverlayHandle | null>;
+  onBrushContentChange?: (hasContent: boolean) => void;
 };
 
 const EMU_PER_PX = 914400 / 96;
 
-export function PptViewer({ open, onClose, slides, fileName }: Props) {
+export function PptViewer({
+  open,
+  onExpand,
+  onCollapse,
+  onRemove,
+  slides,
+  fileName,
+  brushActive = false,
+  brushSettings,
+  brushOverlayRef,
+  onBrushContentChange
+}: Props) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [scale, setScale] = useState(1);
   const stageRef = useRef<HTMLDivElement>(null);
+  const annotationImagesRef = useRef<Record<number, string>>({});
 
   const slide = slides[currentIndex];
   const slideW = slide ? slide.width / EMU_PER_PX : 960;
   const slideH = slide ? slide.height / EMU_PER_PX : 540;
 
-  // Compute scale to fit slide in viewport
   const recalcScale = useCallback(() => {
     if (!stageRef.current || !slide) return;
     const { clientWidth, clientHeight } = stageRef.current;
@@ -30,6 +48,46 @@ export function PptViewer({ open, onClose, slides, fileName }: Props) {
     setScale(Math.min(1, scaleX, scaleY));
   }, [slideW, slideH, slide]);
 
+  const saveCurrentAnnotation = useCallback(() => {
+    const brush = brushOverlayRef?.current;
+    if (!brush) return;
+    const dataUrl = brush.exportImage();
+    if (dataUrl) {
+      annotationImagesRef.current[currentIndex] = dataUrl;
+    } else {
+      delete annotationImagesRef.current[currentIndex];
+    }
+  }, [brushOverlayRef, currentIndex]);
+
+  const restoreAnnotation = useCallback(
+    (index: number) => {
+      const brush = brushOverlayRef?.current;
+      if (!brush) return;
+      brush.loadImage(annotationImagesRef.current[index] ?? null);
+    },
+    [brushOverlayRef]
+  );
+
+  const goToSlide = useCallback(
+    (nextIndex: number) => {
+      const clamped = Math.max(0, Math.min(nextIndex, slides.length - 1));
+      if (clamped === currentIndex) return;
+      saveCurrentAnnotation();
+      setCurrentIndex(clamped);
+    },
+    [currentIndex, saveCurrentAnnotation, slides.length]
+  );
+
+  const handleCollapse = useCallback(() => {
+    saveCurrentAnnotation();
+    onCollapse();
+  }, [onCollapse, saveCurrentAnnotation]);
+
+  const handleRemove = useCallback(() => {
+    annotationImagesRef.current = {};
+    onRemove();
+  }, [onRemove]);
+
   useEffect(() => {
     if (!open) return;
     recalcScale();
@@ -37,55 +95,78 @@ export function PptViewer({ open, onClose, slides, fileName }: Props) {
     return () => window.removeEventListener("resize", recalcScale);
   }, [open, recalcScale]);
 
-  // Reset index when slides change
   useEffect(() => {
+    annotationImagesRef.current = {};
     setCurrentIndex(0);
   }, [slides]);
 
-  // Keyboard navigation
+  useEffect(() => {
+    if (!open) return;
+    const frame = window.requestAnimationFrame(() => restoreAnnotation(currentIndex));
+    return () => window.cancelAnimationFrame(frame);
+  }, [currentIndex, open, restoreAnnotation, slides]);
+
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === "ArrowRight" || e.key === " ") {
         e.preventDefault();
-        setCurrentIndex((i) => Math.min(i + 1, slides.length - 1));
+        goToSlide(currentIndex + 1);
       }
       if (e.key === "ArrowLeft") {
         e.preventDefault();
-        setCurrentIndex((i) => Math.max(i - 1, 0));
+        goToSlide(currentIndex - 1);
       }
       if (e.key === "Escape") {
-        onClose();
+        handleCollapse();
       }
       if (e.key === "Home") {
-        setCurrentIndex(0);
+        goToSlide(0);
       }
       if (e.key === "End") {
-        setCurrentIndex(slides.length - 1);
+        goToSlide(slides.length - 1);
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [open, slides.length, onClose]);
+  }, [currentIndex, goToSlide, handleCollapse, open, slides.length]);
 
-  if (!open || slides.length === 0) return null;
+  if (slides.length === 0) return null;
+
+  if (!open) {
+    return (
+      <div className="ppt-viewer-dock" role="group" aria-label="已导入 PPT">
+        <button type="button" className="ppt-viewer-dock-main" onClick={onExpand}>
+          <span className="ppt-viewer-dock-badge">PPT</span>
+          <span className="ppt-viewer-dock-title">{fileName}</span>
+          <span className="ppt-viewer-dock-meta">
+            {currentIndex + 1} / {slides.length}
+          </span>
+        </button>
+        <button type="button" className="ppt-viewer-dock-remove" onClick={handleRemove} aria-label="移除 PPT">
+          ×
+        </button>
+      </div>
+    );
+  }
 
   return (
-    <div className="ppt-viewer-backdrop">
-      {/* Header */}
+    <div className={`ppt-viewer-backdrop ${brushActive ? "ppt-viewer-backdrop--brush" : ""}`}>
       <div className="ppt-viewer-header">
         <span className="ppt-viewer-filename">{fileName}</span>
         <span className="ppt-viewer-counter">
           {currentIndex + 1} / {slides.length}
         </span>
         <div className="ppt-viewer-controls">
-          <button type="button" onClick={onClose}>
-            关闭
+          <button type="button" onClick={handleCollapse}>
+            收起
+          </button>
+          <button type="button" onClick={handleRemove}>
+            移除
           </button>
         </div>
       </div>
 
-      {/* Stage */}
       <div className="ppt-viewer-stage" ref={stageRef}>
         <div
           className="ppt-viewer-slide"
@@ -106,15 +187,23 @@ export function PptViewer({ open, onClose, slides, fileName }: Props) {
           ) : (
             <div dangerouslySetInnerHTML={{ __html: slide?.html ?? "" }} />
           )}
+          {brushSettings ? (
+            <BrushOverlay
+              key={`ppt-brush-${currentIndex}`}
+              ref={brushOverlayRef}
+              active={brushActive}
+              settings={brushSettings}
+              onContentChange={onBrushContentChange}
+            />
+          ) : null}
         </div>
       </div>
 
-      {/* Navigation */}
       <div className="ppt-viewer-nav">
         <button
           type="button"
           disabled={currentIndex === 0}
-          onClick={() => setCurrentIndex((i) => i - 1)}
+          onClick={() => goToSlide(currentIndex - 1)}
         >
           上一页
         </button>
@@ -124,7 +213,7 @@ export function PptViewer({ open, onClose, slides, fileName }: Props) {
               key={i}
               type="button"
               className={i === currentIndex ? "active" : ""}
-              onClick={() => setCurrentIndex(i)}
+              onClick={() => goToSlide(i)}
             >
               {i + 1}
             </button>
@@ -133,7 +222,7 @@ export function PptViewer({ open, onClose, slides, fileName }: Props) {
         <button
           type="button"
           disabled={currentIndex === slides.length - 1}
-          onClick={() => setCurrentIndex((i) => i + 1)}
+          onClick={() => goToSlide(currentIndex + 1)}
         >
           下一页
         </button>

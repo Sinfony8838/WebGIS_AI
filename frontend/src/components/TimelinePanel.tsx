@@ -2,19 +2,15 @@ import { useRef } from "react";
 import type { TimelineData, TimelineNode } from "../types";
 
 type Props = {
-  timeline: TimelineData | null;
-  loading: boolean;
+  timeline: TimelineData;
   onImport: (file: File) => void;
   onNodeClick: (nodeId: string) => void;
-  onManualCreate: () => void;
 };
 
 export function TimelinePanel({
   timeline,
-  loading,
   onImport,
   onNodeClick,
-  onManualCreate,
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -25,39 +21,6 @@ export function TimelinePanel({
     if (file) onImport(file);
     e.target.value = "";
   };
-
-  if (loading) {
-    return (
-      <div className="timeline-loading">
-        <span className="timeline-spinner" />
-        <span>正在分析教案…</span>
-      </div>
-    );
-  }
-
-  if (!timeline) {
-    return (
-      <div className="timeline-empty">
-        <p>导入教案文件以自动生成教学流程</p>
-        <div className="timeline-import-actions">
-          <button type="button" className="timeline-import-btn" onClick={openFilePicker}>
-            导入教案文件
-          </button>
-          <button type="button" className="timeline-manual-btn" onClick={onManualCreate}>
-            手动创建
-          </button>
-        </div>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".pptx,.pdf,.txt,.md"
-          hidden
-          onChange={handleFileChange}
-        />
-        <p className="timeline-hint">支持 .pptx / .pdf / .txt 格式</p>
-      </div>
-    );
-  }
 
   const activeIndex = timeline.nodes.findIndex((n) => n.active);
   const progressPercent =
@@ -80,7 +43,7 @@ export function TimelinePanel({
         <input
           ref={fileInputRef}
           type="file"
-          accept=".pptx,.pdf,.txt,.md"
+          accept=".pptx,.pdf,.docx,.txt,.md"
           hidden
           onChange={handleFileChange}
         />

@@ -53,7 +53,7 @@ def _has_any(text: str, tokens: Tuple[str, ...]) -> bool:
 
 
 def _template_population_choropleth(message: str, params: Dict[str, Any]) -> TemplateMatch:
-    dataset = str(params.get("dataset") or "builtin:population/china_provinces.geojson")
+    dataset = str(params.get("dataset") or "builtin:one_map/population/china_province_population_density.geojson")
     population_field = str(params.get("population_field") or "population")
     # area_field optional: if empty, we skip the derivation step and classify
     # directly on density_field (or population_field as fallback). This makes
@@ -248,7 +248,7 @@ def _template_facility_buffer(message: str, params: Dict[str, Any]) -> TemplateM
 
 def _template_hu_line_compare(message: str, params: Dict[str, Any]) -> TemplateMatch:
     province_dataset = str(
-        params.get("province_dataset") or "builtin:population/china_provinces.geojson"
+        params.get("province_dataset") or "builtin:one_map/population/china_province_population_density.geojson"
     )
     population_field = str(params.get("population_field") or "population")
     area_field = str(params.get("area_field") or "").strip()
@@ -365,7 +365,7 @@ def _template_clip_to_region(message: str, params: Dict[str, Any]) -> TemplateMa
     )
     region_dataset = str(
         params.get("region_dataset")
-        or "builtin:population/china_provinces.geojson"
+        or "builtin:one_map/population/china_province_population_density.geojson"
     )
     output_name = str(params.get("layer_name") or "clipped")
     project_id = str(params.get("project_id") or "")
@@ -448,7 +448,7 @@ def _template_overlay_intersection(message: str, params: Dict[str, Any]) -> Temp
     )
     overlay_dataset = str(
         params.get("overlay_dataset")
-        or "builtin:population/china_provinces.geojson"
+        or "builtin:one_map/population/china_province_population_density.geojson"
     )
     output_name = str(params.get("layer_name") or "intersected")
     project_id = str(params.get("project_id") or "")
@@ -531,7 +531,7 @@ def _template_spatial_join_attributes(message: str, params: Dict[str, Any]) -> T
     )
     join_dataset = str(
         params.get("join_dataset")
-        or "builtin:population/china_provinces.geojson"
+        or "builtin:one_map/population/china_province_population_density.geojson"
     )
     predicate = str(params.get("predicate") or "intersects").lower()
     output_name = str(params.get("layer_name") or "spatial_joined")
@@ -614,7 +614,7 @@ def _template_classify_field(message: str, params: Dict[str, Any]) -> TemplateMa
     Typical use: 把人口密度分成 5 级, 把降水量按四等分分级。
     Pure data transformation; downstream steps can group_by the class_id.
     """
-    dataset = str(params.get("dataset") or "builtin:population/china_provinces.geojson")
+    dataset = str(params.get("dataset") or "builtin:one_map/population/china_province_population_density.geojson")
     field = str(params.get("field") or "population")
     classes = int(params.get("classes", 5) or 5)
     method = str(params.get("method") or "jenks").lower()

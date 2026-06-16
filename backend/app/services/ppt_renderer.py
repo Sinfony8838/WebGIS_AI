@@ -93,8 +93,20 @@ def _attempt_powerpoint(source_path: Path, output_dir: Path, attempts: List[Dict
     export_dir = output_dir / "powerpoint_worker_png"
     export_dir.mkdir(parents=True, exist_ok=True)
     result_path = output_dir / "powerpoint_worker_result.json"
+
+    worker_python = _find_powerpoint_worker_python(attempts)
+    if not worker_python:
+        attempts.append(
+            {
+                "renderer": "powerpoint-worker",
+                "status": "unavailable",
+                "detail": "No Python interpreter with pywin32 or comtypes was found.",
+            }
+        )
+        return None
+
     command = [
-        sys.executable,
+        worker_python,
         "-m",
         "backend.app.services.ppt_renderer_worker",
         str(source_path),
@@ -136,6 +148,85 @@ def _attempt_powerpoint(source_path: Path, output_dir: Path, attempts: List[Dict
     detail = "\n".join(part.strip() for part in (stdout, stderr) if part and part.strip())
     attempts.append({"renderer": "powerpoint-worker", "status": "failed", "detail": detail[:1200] or f"exit code {proc.returncode}"})
     return None
+
+
+def _find_powerpoint_worker_python(attempts: List[Dict[str, str]]) -> str:
+    seen: set[str] = set()
+    for candidate in _powerpoint_python_candidates():
+        resolved = _resolve_python_candidate(candidate)
+        if not resolved:
+            continue
+        normalized = str(Path(resolved).resolve()).lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+
+        result = _run_command([resolved, "-c", _POWERPOINT_COM_CHECK], timeout=8)
+        if result.returncode == 0:
+            if normalized != str(Path(sys.executable).resolve()).lower():
+                attempts.append(
+                    {
+                        "renderer": "powerpoint-worker-python",
+                        "status": "selected",
+                        "detail": resolved,
+                    }
+                )
+            return resolved
+
+    return ""
+
+
+def _powerpoint_python_candidates() -> List[str]:
+    candidates: List[str] = []
+    for env_name in ("WEBGIS_AI_PPT_RENDER_PYTHON", "WEBGIS_AI_POWERPOINT_PYTHON"):
+        value = os.getenv(env_name, "").strip().strip('"')
+        if value:
+            candidates.append(value)
+
+    candidates.append(sys.executable)
+
+    path_python = shutil.which("python")
+    if path_python:
+        candidates.append(path_python)
+
+    home = Path.home()
+    candidates.extend(
+        [
+            "D:/Anaconda3/python.exe",
+            "D:/anaconda3/python.exe",
+            "C:/ProgramData/Anaconda3/python.exe",
+            str(home / "anaconda3" / "python.exe"),
+            str(home / "miniconda3" / "python.exe"),
+        ]
+    )
+    return candidates
+
+
+def _resolve_python_candidate(candidate: str) -> str:
+    if not candidate:
+        return ""
+    path = Path(candidate)
+    if path.exists():
+        return str(path)
+    found = shutil.which(candidate)
+    return found or ""
+
+
+_POWERPOINT_COM_CHECK = """
+import sys
+try:
+    import pythoncom  # noqa: F401
+    import win32com.client  # noqa: F401
+    sys.exit(0)
+except Exception:
+    pass
+try:
+    import comtypes  # noqa: F401
+    import comtypes.client  # noqa: F401
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+"""
 
 
 def _attempt_powerpoint_pywin32(source_path: Path, output_dir: Path, attempts: List[Dict[str, str]]) -> Dict[str, Any] | None:

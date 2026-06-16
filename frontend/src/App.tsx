@@ -22,11 +22,13 @@ import { Circle as CircleStyle, Fill, RegularShape, Stroke, Style, Text } from "
 import { easeOut } from "ol/easing";
 import { getCenter } from "ol/extent";
 import {
+  addCatalogDatasetLayer,
   activateLessonResourceSet,
   createKbMaterialLink,
   confirmAssistantAction,
   createProject,
   exportSnapshot,
+  fetchDatasetCatalog,
   fetchLessonResources,
   fetchHealth,
   fetchKbManifest,
@@ -44,9 +46,11 @@ import {
   searchKb,
   searchPoi,
   searchResources,
+  sendAgentMessage,
   sendAssistantMessage,
   saveLessonResourceSet,
   switchBasemap,
+  summarizeCatalogLayers,
   updateTimeline,
   upsertKbItem,
   uploadDataset,
@@ -59,6 +63,7 @@ import {
 import { AnnotationDialog } from "./components/AnnotationDialog";
 import { BasemapMenu } from "./components/BasemapMenu";
 import { CopilotWidget } from "./components/CopilotWidget";
+import { DatabaseViewer } from "./components/DatabaseViewer";
 import { type KnowledgeQuery } from "./components/KnowledgePanel";
 import { Map3DGlobe, type CameraState, type Map3DGlobeHandle } from "./components/Map3DGlobe";
 import { MapInstructionStrip } from "./components/MapInstructionStrip";
@@ -89,6 +94,8 @@ import type {
   AssistantTarget,
   ArtifactRecord,
   ChatMessage,
+  DatasetCatalogItem,
+  DatasetStatsResponse,
   HealthResponse,
   JobRecord,
   KnowledgeBaseItem,
@@ -395,7 +402,7 @@ export default function App() {
     tool: [
       {
         role: "assistant",
-        text: "这里是工具助手，可以规划并执行 WebGIS 操作；复杂分析请使用后台 GIS 分析工作流。",
+        text: "这里是内嵌 Agent，可以像 coding agent 一样读取项目、调用工具、执行 WebGIS 后端能力。默认会自动批准工具调用；如需收紧权限，可将 AGENT_AUTO_APPROVE 设为 false。",
         timestamp: timestamp()
       }
     ]
@@ -418,6 +425,9 @@ export default function App() {
     lineWidth: 4
   });
   const brushRef = useRef<BrushOverlayHandle | null>(null);
+  const pptBrushRef = useRef<BrushOverlayHandle | null>(null);
+  const [mapBrushHasContent, setMapBrushHasContent] = useState(false);
+  const [pptBrushHasContent, setPptBrushHasContent] = useState(false);
   // ── 3D digital-globe state ───────────────────────────────────────────
   // Boot into the 3D globe view; users land on the digital earth first
   // and can drill in to the 2D map either by zooming, double-clicking, or
@@ -435,10 +445,13 @@ export default function App() {
   const globeRef = useRef<Map3DGlobeHandle | null>(null);
   const planeAutoArmedRef = useRef(true);
   const [searchKeyword, setSearchKeyword] = useState("");
+  const [searchDropdownOpen, setSearchDropdownOpen] = useState(false);
   const [searchResults, setSearchResults] = useState<PoiSearchItem[]>([]);
   const [searchSummary, setSearchSummary] = useState("");
+  const [oneMapStats, setOneMapStats] = useState<DatasetStatsResponse | null>(null);
   const [searchAreaGeometry, setSearchAreaGeometry] = useState<Record<string, unknown> | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [databaseViewerOpen, setDatabaseViewerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [workflowDockOpen, setWorkflowDockOpen] = useState<boolean>(false);
   const [drawerOpen, setDrawerOpen] = useState(true);
@@ -461,24 +474,35 @@ export default function App() {
     const [materialViewerTitle, setMaterialViewerTitle] = useState("");
     const [materialViewerItems, setMaterialViewerItems] = useState<TeachingMaterial[]>([]);
     const [teachingMaps, setTeachingMaps] = useState<TeachingMapItem[]>([]);
+    const [datasetCatalogItems, setDatasetCatalogItems] = useState<DatasetCatalogItem[]>([]);
+    const [workflowInitialDataset, setWorkflowInitialDataset] = useState("");
     const [activeTeachingMapIds, setActiveTeachingMapIds] = useState<Set<string>>(new Set());
     const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [pptViewerOpen, setPptViewerOpen] = useState(false);
   const [pptSlides, setPptSlides] = useState<SlideContent[]>([]);
   const [pptFileName, setPptFileName] = useState("");
   const [pptLoading, setPptLoading] = useState(false);
+  const pptPresentationReady = pptSlides.length > 0;
+  const brushTargetRef = pptViewerOpen && pptPresentationReady ? pptBrushRef : brushRef;
+  const brushTargetHasContent = pptViewerOpen && pptPresentationReady ? pptBrushHasContent : mapBrushHasContent;
   const [timeline, setTimeline] = useState<TimelineData | null>(null);
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [timelineOpen, setTimelineOpen] = useState(false);
+  const [timelineImportOpen, setTimelineImportOpen] = useState(false);
+  const timelineFileInputRef = useRef<HTMLInputElement>(null);
   const [initAttempt, setInitAttempt] = useState(0);
   const [initError, setInitError] = useState("");
   const currentJob = currentJobByMode[assistantMode];
   const chatLog = chatLogByMode[assistantMode];
+  const connectionReady = Boolean(project && health && !initError);
 
   const onlinePoiEnabled = health?.online_services.amap_poi_enabled ?? false;
   const basemapItems = health?.basemaps.items || [];
   const activeBasemapId = layerState?.base_map.id || health?.basemaps.default_id || "";
   const kbActiveLayerId = layerState?.active_layer_id || "";
+  const hasVisibleOneMapLayer = Boolean(
+    layerState?.items.some((item) => item.source === "one_map_catalog" && item.visible)
+  );
     const kbCanRegister = Boolean(project && kbActiveLayerId && !kbLoading);
     const activeLessonResourceSet = lessonResourceSets.find((item) => item.id === activeLessonResourceSetId) || lessonResourceSets.find((item) => item.active);
     const allKnowledgeMaterials = useMemo(
@@ -548,7 +572,13 @@ export default function App() {
       setLessonResourceSets(lessonPayload.items);
       setActiveLessonResourceSetId(lessonPayload.active_lesson_resource_set_id);
       setActiveTeachingMapIds(new Set(activeTeachingPayload.active));
-      if (timelinePayload.timeline) setTimeline(timelinePayload.timeline);
+      if (timelinePayload.timeline) {
+        setTimeline(timelinePayload.timeline);
+        setTimelineOpen(true);
+        setDrawerOpen(false);
+      } else {
+        setTimeline(null);
+      }
     }, []);
 
   const runKbSearch = useCallback(
@@ -983,11 +1013,12 @@ export default function App() {
             setConversationIds((previous) => ({ ...previous, [mode]: nextConversationId }));
           }
           appendChat(mode, payload.status === "failed" ? "system" : "assistant", message);
-          pushToast(
-            payload.status === "failed" ? "error" : "success",
-            payload.status === "failed" ? "任务失败" : "任务完成",
-            payload.result?.summary || message
-          );
+          const isAssistantAnswer = Boolean(payload.result?.assistant_message || payload.result?.conversation_id);
+          if (payload.status === "failed") {
+            pushToast("error", "任务失败", payload.error || message);
+          } else if (!isAssistantAnswer) {
+            pushToast("success", "任务完成", payload.result?.summary || message);
+          }
         }
       });
       source.addEventListener("error", () => {
@@ -1020,6 +1051,23 @@ export default function App() {
         return;
       }
       appendChat(mode, "user", message);
+      if (mode === "tool") {
+        setBusy(true);
+        try {
+          const response = await sendAgentMessage(message, conversationIds.tool);
+          if (response.session_id) {
+            setConversationIds((previous) => ({ ...previous, tool: response.session_id }));
+          }
+          appendChat("tool", "assistant", response.reply);
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : String(err);
+          appendChat("tool", "system", detail);
+          pushToast("error", "Agent 调用失败", detail);
+        } finally {
+          setBusy(false);
+        }
+        return;
+      }
       let effectiveSnapshot = screenSnapshot;
       if (!effectiveSnapshot && mapRef.current && shouldAttachMapSnapshot(message, mode)) {
         const size = mapRef.current.getSize() || [0, 0];
@@ -1044,7 +1092,7 @@ export default function App() {
       }
       subscribeToJob(response.job_id, mode);
     },
-    [appendChat, assistantMode, buildMapContext, chatLogByMode, conversationIds, health?.ui.assistant_v2_enabled, project, subscribeToJob]
+    [appendChat, assistantMode, buildMapContext, chatLogByMode, conversationIds, health?.ui.assistant_v2_enabled, project, pushToast, subscribeToJob]
   );
 
   assistantDispatchRef.current = (message, overrides) => {
@@ -1102,26 +1150,33 @@ export default function App() {
     let renderError = "";
     try {
       const rendered = await renderPptx(file);
-      setPptSlides(
-        rendered.slides.map((slide) => ({
-          index: slide.index,
-          html: "",
-          imageUrl: slide.image_url,
-          images: {},
-          width: slide.width,
-          height: slide.height,
-          renderer: rendered.renderer
-        }))
-      );
+      const slides = rendered.slides.map((slide) => ({
+        index: slide.index,
+        html: "",
+        imageUrl: slide.image_url,
+        images: {},
+        width: slide.width,
+        height: slide.height,
+        renderer: rendered.renderer
+      }));
+      setPptSlides((previousSlides) => {
+        releaseSlideObjectUrls(previousSlides);
+        return slides;
+      });
       setPptFileName(rendered.file_name || file.name);
+      setPptBrushHasContent(false);
       setPptViewerOpen(true);
       pushToast("success", "PPT 已导入", `已使用 ${rendered.renderer} 渲染 ${rendered.slides.length} 张幻灯片`);
     } catch (err) {
       renderError = err instanceof Error ? err.message : String(err);
       try {
         const result = await parsePptxFile(file);
-        setPptSlides(result.slides);
+        setPptSlides((previousSlides) => {
+          releaseSlideObjectUrls(previousSlides);
+          return result.slides;
+        });
         setPptFileName(result.fileName);
+        setPptBrushHasContent(false);
         setPptViewerOpen(true);
         pushToast("info", "PPT 已导入（简易模式）", "未找到可用的服务端渲染器，已使用前端解析兜底。复杂背景可能不完全一致。");
       } catch (fallbackErr) {
@@ -1133,10 +1188,19 @@ export default function App() {
     }
   }, [pushToast]);
 
-  const handlePptClose = useCallback(() => {
+  const handlePptCollapse = useCallback(() => {
     setPptViewerOpen(false);
-    releaseSlideObjectUrls(pptSlides);
-  }, [pptSlides]);
+  }, []);
+
+  const handlePptRemove = useCallback(() => {
+    setPptViewerOpen(false);
+    setPptBrushHasContent(false);
+    setPptFileName("");
+    setPptSlides((previousSlides) => {
+      releaseSlideObjectUrls(previousSlides);
+      return [];
+    });
+  }, []);
 
   const handleTimelineImport = useCallback(async (file: File) => {
     if (!project) return;
@@ -1146,9 +1210,12 @@ export default function App() {
       formData.append("file", file);
       const result = await generateTimeline(project.project_id, formData);
       setTimeline(result.timeline);
+      setTimelineOpen(true);
+      setTimelineImportOpen(false);
       pushToast("success", "教学流程已生成", `${result.timeline.nodes.length} 个阶段`);
-    } catch (err) {
-      pushToast("error", "生成失败", String(err));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      pushToast("error", "生成失败", message);
     } finally {
       setTimelineLoading(false);
     }
@@ -1168,29 +1235,34 @@ export default function App() {
     }
   }, [project, timeline, pushToast]);
 
-  const handleTimelineManualCreate = useCallback(() => {
+  const handleTimelineManualCreate = useCallback(async () => {
+    if (!project) return;
     const makeId = () => crypto.randomUUID();
-    setTimeline({
-      id: makeId(),
-      project_id: project?.project_id ?? "",
-      source_file_name: "manual",
-      title: "教学流程",
-      totalDurationMin: 45,
-      nodes: [
-        { id: makeId(), order: 0, stage: "导入", title: "课堂导入", description: "", durationMin: 5, active: true },
-        { id: makeId(), order: 1, stage: "新授", title: "新知讲授", description: "", durationMin: 20, active: false },
-        { id: makeId(), order: 2, stage: "练习", title: "课堂练习", description: "", durationMin: 12, active: false },
-        { id: makeId(), order: 3, stage: "小结", title: "课堂小结", description: "", durationMin: 8, active: false },
-      ],
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    });
-  }, [project]);
+    const nodes = [
+      { id: makeId(), order: 0, stage: "导入", title: "课堂导入", description: "", durationMin: 5, active: true },
+      { id: makeId(), order: 1, stage: "新授", title: "新知讲授", description: "", durationMin: 20, active: false },
+      { id: makeId(), order: 2, stage: "练习", title: "课堂练习", description: "", durationMin: 12, active: false },
+      { id: makeId(), order: 3, stage: "小结", title: "课堂小结", description: "", durationMin: 8, active: false },
+    ];
+    try {
+      const result = await updateTimeline(project.project_id, { nodes, title: "教学流程" });
+      setTimeline(result.timeline);
+      setTimelineOpen(true);
+      setTimelineImportOpen(false);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      pushToast("error", "创建失败", message);
+    }
+  }, [project, pushToast]);
 
   const handleOpenTimeline = useCallback(() => {
     setDrawerOpen(false);
-    setTimelineOpen(true);
-  }, []);
+    if (timeline) {
+      setTimelineOpen(true);
+    } else {
+      setTimelineImportOpen(true);
+    }
+  }, [timeline]);
 
   const handleUploadDataset = useCallback(
     async (formData: FormData) => {
@@ -1281,11 +1353,15 @@ export default function App() {
     measureSourceRef.current?.clear();
     annotationSourceRef.current?.clear();
     brushRef.current?.clear();
+    pptBrushRef.current?.clear();
+    setMapBrushHasContent(false);
+    setPptBrushHasContent(false);
     lastPoiSignatureRef.current = "";
     setSearchAreaGeometry(null);
     setFocusedRegion(null);
     setSearchResults([]);
     setSearchSummary("");
+    setOneMapStats(null);
     setSelectedFeatureText("");
     setMeasureText("");
     setMeasureTotalKm(null);
@@ -1333,6 +1409,123 @@ export default function App() {
       pushToast("error", "教学地图切换失败", String(error));
     }
   }, [project, pushToast, refreshProjectState]);
+
+  const handleDatabaseOpenKnowledgeItem = useCallback((item: KnowledgeBaseItem) => {
+    setKbEditingItem(item);
+    setDrawerOpen(true);
+    setDrawerTab("resource-search");
+    setDatabaseViewerOpen(false);
+  }, []);
+
+  const handleDatabaseOpenMaterial = useCallback((title: string, materials: TeachingMaterial[]) => {
+    setMaterialViewerTitle(title);
+    setMaterialViewerItems(materials);
+    setMaterialViewerOpen(true);
+  }, []);
+
+  const handleDatabaseToggleLayer = useCallback(async (layerId: string, visible: boolean) => {
+    if (!project) {
+      return;
+    }
+    try {
+      await patchLayer(project.project_id, layerId, { visible });
+      await refreshProjectState(project.project_id);
+      pushToast("success", visible ? "图层已显示" : "图层已隐藏", layerId);
+    } catch (error) {
+      pushToast("error", "图层更新失败", error instanceof Error ? error.message : "图层状态更新失败");
+    }
+  }, [project, pushToast, refreshProjectState]);
+
+  const handleDatabaseFocusLayer = useCallback(async (layerId: string) => {
+    if (!project) {
+      return;
+    }
+    try {
+      await patchLayer(project.project_id, layerId, { active: true, visible: true });
+      await refreshProjectState(project.project_id);
+      setDatabaseViewerOpen(false);
+      focusLayerExtent(layerId);
+    } catch (error) {
+      pushToast("error", "图层定位失败", error instanceof Error ? error.message : "图层状态更新失败");
+    }
+  }, [focusLayerExtent, project, pushToast, refreshProjectState]);
+
+  const handleDatabaseOpenArtifact = useCallback((artifact: ArtifactRecord) => {
+    const publicUrl = typeof artifact.metadata?.public_url === "string" ? artifact.metadata.public_url : "";
+    if (!publicUrl) {
+      pushToast("error", "产物无法打开", artifact.title || artifact.artifact_id);
+      return;
+    }
+    const url = /^https?:\/\//i.test(publicUrl)
+      ? publicUrl
+      : `${getApiBase()}${publicUrl.startsWith("/") ? publicUrl : `/${publicUrl}`}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+  }, [pushToast]);
+
+  const handleDatabaseLoadDataset = useCallback(async (item: DatasetCatalogItem) => {
+    if (!project) {
+      return;
+    }
+    try {
+      const response = await addCatalogDatasetLayer(project.project_id, item.id);
+      await refreshProjectState(project.project_id);
+      setViewMode("plane");
+      setDatabaseViewerOpen(false);
+      setDrawerOpen(true);
+      setDrawerTab("layers");
+      pushToast("success", "一张图数据已加载", response.layer.name || item.name || item.id);
+    } catch (error) {
+      pushToast("error", "一张图数据加载失败", error instanceof Error ? error.message : "请求失败");
+    }
+  }, [project, pushToast, refreshProjectState]);
+
+  const handleDatabaseUseDataset = useCallback((item: DatasetCatalogItem) => {
+    if (!item.source) {
+      pushToast("error", "数据集无法制图", item.name || item.id);
+      return;
+    }
+    setWorkflowInitialDataset(item.source);
+    setWorkflowDockOpen(true);
+    setDatabaseViewerOpen(false);
+    pushToast("info", "已选择一张图数据", item.name || item.id);
+  }, [pushToast]);
+
+  const handleOneMapStats = useCallback(async () => {
+    if (!project) {
+      return;
+    }
+    if (!searchAreaGeometry) {
+      pushToast("error", "尚未框选区域", "先点击右侧“绘区”，在地图上画出统计区域。");
+      return;
+    }
+    if (!hasVisibleOneMapLayer) {
+      pushToast("error", "没有可统计图层", "先在数据库的一张图数据中加载人口图层或可关联 CSV 到底图。");
+      return;
+    }
+    try {
+      const response = await summarizeCatalogLayers(project.project_id, searchAreaGeometry);
+      setOneMapStats(response);
+      setDrawerTab("stats");
+      setDrawerOpen(true);
+      pushToast("success", "区域统计完成", response.summary);
+    } catch (error) {
+      pushToast("error", "区域统计失败", error instanceof Error ? error.message : "请求失败");
+    }
+  }, [hasVisibleOneMapLayer, project, pushToast, searchAreaGeometry]);
+
+  const handleDatabaseActivateLessonSet = useCallback(async (setId: string) => {
+    if (!project) {
+      return;
+    }
+    try {
+      const response = await activateLessonResourceSet(project.project_id, setId, { active: true });
+      setLessonResourceSets(response.items);
+      setActiveLessonResourceSetId(response.active_lesson_resource_set_id || setId);
+      pushToast("success", "课时资源已启用", setId);
+    } catch (error) {
+      pushToast("error", "课时资源切换失败", error instanceof Error ? error.message : "请求失败");
+    }
+  }, [project, pushToast]);
 
   const handleResetView = useCallback(() => {
     const map = mapRef.current;
@@ -1477,6 +1670,13 @@ export default function App() {
   useEffect(() => {
     graticuleLayerRef.current?.setVisible(showGraticule);
   }, [showGraticule]);
+
+  useEffect(() => {
+    if (!searchDropdownOpen) return undefined;
+    const close = () => setSearchDropdownOpen(false);
+    document.addEventListener("click", close, { once: true });
+    return () => document.removeEventListener("click", close);
+  }, [searchDropdownOpen]);
 
   // Auto plane → globe: watch the OL view's resolution and pop back to 3D
   // when the user zooms far enough out. Also mirror view state into
@@ -1830,6 +2030,16 @@ export default function App() {
       setProject(created);
       await refreshProjectState(created.project_id);
       await loadKnowledgeBase();
+      try {
+        const catalog = await fetchDatasetCatalog();
+        if (!cancelled) {
+          setDatasetCatalogItems(catalog.items || []);
+        }
+      } catch {
+        if (!cancelled) {
+          setDatasetCatalogItems([]);
+        }
+      }
       // Load teaching maps catalog
       try {
         const tmaps = await fetchTeachingMaps();
@@ -2313,6 +2523,7 @@ export default function App() {
         active={interactionMode === "brush"}
         settings={brushSettings}
         onWheelZoom={handleBrushWheelZoom}
+        onContentChange={setMapBrushHasContent}
       />
       <div className="map-vignette" />
       <div className="map-grid-overlay" />
@@ -2395,7 +2606,14 @@ export default function App() {
               <circle cx="2.5" cy="0" r="1.2" fill="#06182c" />
             </g>
           </svg>
-          <strong>GeoBot 智能教学平台</strong>
+          <div className="brand-title">
+            <strong>GeoBot 智能教学平台</strong>
+            <span
+              className={`connection-dot ${connectionReady ? "connected" : "disconnected"}`}
+              aria-label={connectionReady ? "系统已连接" : "系统未连接"}
+              title={connectionReady ? "系统已连接" : "系统未连接"}
+            />
+          </div>
         </div>
 
         <div className="header-search">
@@ -2414,24 +2632,56 @@ export default function App() {
               placeholder={onlinePoiEnabled ? "输入港口、机场、城市等关键词" : "POI 在线检索未配置"}
               disabled={!onlinePoiEnabled}
             />
-            <button type="button" className="toolbar-button compact" disabled={!onlinePoiEnabled} onClick={() => void handlePoiSearch("view")}>
-              视域检索
-            </button>
+            <div className="search-dropdown">
+              <button
+                type="button"
+                className="toolbar-button compact"
+                disabled={!onlinePoiEnabled}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSearchDropdownOpen((v) => !v);
+                }}
+                aria-expanded={searchDropdownOpen}
+              >
+                检索
+              </button>
+              {searchDropdownOpen && (
+                <div className="search-dropdown-menu" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    disabled={!onlinePoiEnabled}
+                    onClick={() => {
+                      setSearchDropdownOpen(false);
+                      void handlePoiSearch("view");
+                    }}
+                  >
+                    视域检索
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!onlinePoiEnabled || !searchAreaGeometry}
+                    onClick={() => {
+                      setSearchDropdownOpen(false);
+                      void handlePoiSearch("polygon");
+                    }}
+                  >
+                    区域检索
+                  </button>
+                </div>
+              )}
+            </div>
             <button
               type="button"
               className="toolbar-button compact"
-              disabled={!onlinePoiEnabled || !searchAreaGeometry}
-              onClick={() => void handlePoiSearch("polygon")}
+              disabled={!searchAreaGeometry || !hasVisibleOneMapLayer}
+              onClick={() => void handleOneMapStats()}
             >
-              区域检索
+              统计
             </button>
           </div>
         </div>
 
         <div className="header-actions">
-          <span className={`status-pill ${initError ? "" : busy ? "busy" : "ready"}`}>
-            {initError ? "连接异常" : busy ? "任务执行中" : "系统在线"}
-          </span>
           <BasemapMenu
             items={basemapItems}
             activeId={activeBasemapId}
@@ -2454,8 +2704,12 @@ export default function App() {
           >
             GIS 分析工作流
           </button>
-          <button type="button" className="toolbar-button" onClick={() => setUploadOpen(true)}>
-            上传数据
+          <button
+            type="button"
+            className={`toolbar-button ${databaseViewerOpen ? "active" : ""}`}
+            onClick={() => setDatabaseViewerOpen(true)}
+          >
+            数据库
           </button>
           <button
             type="button"
@@ -2511,6 +2765,7 @@ export default function App() {
           layerState={layerState}
           searchResults={searchResults}
           searchSummary={searchSummary}
+          oneMapStats={oneMapStats}
           resourceQuery={resourceQuery}
           resourceScope={resourceScope}
           resourceLoading={resourceLoading}
@@ -2542,7 +2797,7 @@ export default function App() {
           onOpenTimeline={handleOpenTimeline}
         />
 
-        {timelineOpen ? (
+        {timelineOpen && timeline ? (
           <div className="timeline-rail">
             <div className="timeline-rail-header">
               <span>教学流程</span>
@@ -2558,14 +2813,77 @@ export default function App() {
             <div className="timeline-rail-scroll">
               <TimelinePanel
                 timeline={timeline}
-                loading={timelineLoading}
                 onImport={handleTimelineImport}
                 onNodeClick={handleTimelineNodeClick}
-                onManualCreate={handleTimelineManualCreate}
               />
             </div>
           </div>
         ) : null}
+
+        {timelineImportOpen && !timeline ? (
+          <div
+            className="dialog-backdrop"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setTimelineImportOpen(false);
+            }}
+          >
+            <div className="dialog-panel timeline-import-modal">
+              {timelineLoading ? (
+                <div className="timeline-import-loading">
+                  <span className="timeline-spinner" />
+                  <span>正在分析教案…</span>
+                </div>
+              ) : (
+                <>
+                  <div className="timeline-import-modal-header">
+                    <h3>添加教案</h3>
+                    <button
+                      type="button"
+                      className="timeline-import-close"
+                      onClick={() => setTimelineImportOpen(false)}
+                      aria-label="关闭"
+                    >
+                      &times;
+                    </button>
+                  </div>
+                  <p className="timeline-import-modal-desc">
+                    选择教案文件以自动生成教学流程
+                  </p>
+                  <div className="timeline-import-modal-actions">
+                    <button
+                      type="button"
+                      className="timeline-import-modal-primary"
+                      onClick={() => timelineFileInputRef.current?.click()}
+                    >
+                      选择教案文件
+                    </button>
+                    <button
+                      type="button"
+                      className="timeline-import-modal-secondary"
+                      onClick={() => void handleTimelineManualCreate()}
+                    >
+                      手动创建
+                    </button>
+                  </div>
+                  <p className="timeline-import-modal-hint">
+                    支持 .pptx / .pdf / .docx / .txt / .md 格式
+                  </p>
+                </>
+              )}
+            </div>
+          </div>
+        ) : null}
+        <input
+          ref={timelineFileInputRef}
+          type="file"
+          accept=".pptx,.pdf,.docx,.txt,.md"
+          hidden
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) void handleTimelineImport(file);
+            e.target.value = "";
+          }}
+        />
 
         <section className="map-workspace" aria-hidden="true" />
 
@@ -2639,10 +2957,10 @@ export default function App() {
       {interactionMode === "brush" ? (
         <BrushToolbar
           settings={brushSettings}
-          hasContent={false}
+          hasContent={brushTargetHasContent}
           onChangeSettings={(next) => setBrushSettings((prev) => ({ ...prev, ...next }))}
-          onUndo={() => brushRef.current?.undo()}
-          onClear={() => brushRef.current?.clear()}
+          onUndo={() => brushTargetRef.current?.undo()}
+          onClear={() => brushTargetRef.current?.clear()}
         />
       ) : null}
 
@@ -2692,14 +3010,43 @@ export default function App() {
           mapRef={mapRef}
           open={workflowDockOpen}
           layerState={layerState}
+          initialDatasetSource={workflowInitialDataset}
           onRequestClose={() => setWorkflowDockOpen(false)}
           onToast={(tone, message) => pushToast(tone, message)}
+        />
+        <DatabaseViewer
+          open={databaseViewerOpen}
+          onClose={() => setDatabaseViewerOpen(false)}
+          onUpload={() => setUploadOpen(true)}
+          knowledgeItems={kbAllItems}
+          layers={layerState?.items || []}
+          outputs={outputs}
+          lessonResourceSets={lessonResourceSets}
+          teachingMaps={teachingMaps}
+          datasetCatalogItems={datasetCatalogItems}
+          activeTeachingMapIds={activeTeachingMapIds}
+          activeLessonResourceSetId={activeLessonResourceSetId}
+          onOpenKnowledgeItem={handleDatabaseOpenKnowledgeItem}
+          onOpenMaterial={handleDatabaseOpenMaterial}
+          onToggleLayer={(layerId, visible) => void handleDatabaseToggleLayer(layerId, visible)}
+          onFocusLayer={(layerId) => void handleDatabaseFocusLayer(layerId)}
+          onOpenArtifact={handleDatabaseOpenArtifact}
+          onActivateLessonSet={(setId) => void handleDatabaseActivateLessonSet(setId)}
+          onToggleTeachingMap={(mapId, visible) => void handleToggleTeachingMap(mapId, visible)}
+          onLoadDataset={handleDatabaseLoadDataset}
+          onUseDataset={handleDatabaseUseDataset}
         />
         <PptViewer
           open={pptViewerOpen}
           slides={pptSlides}
           fileName={pptFileName}
-          onClose={handlePptClose}
+          onExpand={() => setPptViewerOpen(true)}
+          onCollapse={handlePptCollapse}
+          onRemove={handlePptRemove}
+          brushActive={interactionMode === "brush"}
+          brushSettings={brushSettings}
+          brushOverlayRef={pptBrushRef}
+          onBrushContentChange={setPptBrushHasContent}
         />
       </div>
   );

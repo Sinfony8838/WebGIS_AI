@@ -349,6 +349,10 @@ export function CopilotWidget({
   const confirmationId = String(currentJob?.result?.confirmation_id || "");
   const requiresConfirmation = Boolean(currentJob?.result?.requires_confirmation && confirmationId);
   const compactLayout = panelRect.height < 560 || panelRect.width < 560;
+  const inputPlaceholder =
+    assistantMode === "tool"
+      ? "向内嵌 Agent 提问 - 例如：检查项目结构、修改代码、调用 WebGIS 后端工具。"
+      : "向智能助教提问 - 例如：解释当前视图的空间格局，或说明所选区域的区位特征。";
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -726,7 +730,7 @@ export function CopilotWidget({
             className={`assistant-mode-chip ${assistantMode === "tool" ? "active" : ""}`}
             onClick={() => onAssistantModeChange("tool")}
           >
-            工具助手
+            Agent 助手
           </button>
         </div>
       </header>
@@ -811,7 +815,7 @@ export function CopilotWidget({
             <textarea
               data-testid="copilot-input"
               value={inputValue}
-              placeholder="向智能助教提问 — 例如：解释当前视图的空间格局，或说明所选区域的区位特征。"
+              placeholder={inputPlaceholder}
               onChange={(event) => onInputChange(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && inputValue.trim() && !busy) {

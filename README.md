@@ -1,89 +1,204 @@
 # WebGIS-AI
 
-`WebGIS-AI` 是面向地理课堂实时演示的本地 WebGIS 系统。当前版本已经从旧的 QGIS 教学工作流转向“全屏地图 + 悬浮面板 + 智能助教副驾驶”的课堂大屏模式。
+`WebGIS-AI` 是面向地理课堂实时演示、读图讲解与 GIS 探究的本地 WebGIS 智能教学平台。项目当前主线已经从早期的 QGIS 教学脚本与文档产物生成，转向“全屏地图主舞台 + 悬浮课堂控制台 + 智能助教 + 知识库资料 + PyQGIS 分析工作流”的课堂大屏模式。
 
-## v1.1 重点
+系统适合在教师机本地运行，用于地理课堂投屏、专题地图讲解、人口/气候/区域等案例分析、空间数据导入、POI 检索、地图标注、截图沉淀和 GIS 方法入门实验。
 
-- 全屏地图主舞台，界面改成浅灰透明悬浮面板
-- 内置多底图切换：`高德标准 / 高德影像 / 高德浅灰`
-- 新增 POI 检索：
-  - 当前视域检索
-  - 手绘区域检索
-  - 结果列表与地图点位联动
-- 智能助教升级为桌面悬浮部件：
-  - 可最小化成圆球
-  - 可拖动
-  - 展开后可移动、缩放
-- 保留课堂模板、数据导入、标注、测距、截图导出
+## 当前定位
 
-## 技术栈
+- **地图主导**：以全屏 WebGIS 地图承载课堂观察、图层对比、标注和结论沉淀。
+- **课堂可控**：教师通过顶部工具栏、左侧抽屉、右侧工具栏和右下角智能助教完成授课操作。
+- **AI 辅助但不黑箱**：智能助教可读图、问答和规划 WebGIS 操作；真正执行的动作受工具白名单、风险评估和后端状态管理约束。
+- **GIS 分析可追溯**：空间分析由后端工作流验证、执行并输出 GeoJSON、样式、统计、PNG 和 Markdown 解释。
+- **本地运行优先**：后端统一持有外部服务 Key，前端不硬编码密钥，适合学校机房、实验室和教师个人电脑部署。
 
-- 前端：`React + TypeScript + Vite + OpenLayers`
-- 后端：`FastAPI`
-- 运行时模型：`projects / jobs / artifacts / SSE job stream`
+## 主要功能
 
-## 当前界面
+### 1. 全屏课堂地图
 
-- 顶部：品牌条、底图切换、模板切换、上传、导出、复位
-- 左侧：可收起抽屉，包含图层、POI 检索结果、课堂产物
-- 右侧：地图工具栏，包含选择、标注、测距、绘区、清除、缩放
-- 底部：课堂快捷动作条
-- 右下：悬浮智能助教
+- 基于 OpenLayers 的全屏地图主舞台。
+- 支持高德标准、高德影像、高德浅灰和兼容 XYZ 底图。
+- 配置 OpenWeatherMap 后可叠加实时降水、云图、温度、风速、气压等天气瓦片。
+- 支持矢量图层、栅格覆盖层、POI 检索结果、课堂标注和测距结果。
+- 支持视图复位、图层显隐、图层选择、要素高亮和地图截图。
 
-## 数据与模板
+### 2. 课堂交互工具
 
-内置模板：
+- 浏览、标注、测距、绘制 POI 检索区域、清除、缩放。
+- 测距支持实时长度反馈。
+- 标注可直接写入当前地图并沉淀到课堂截图。
+- 左侧课堂控制台提供资料搜索、图层列表和 POI 结果联动。
 
-- 通用地理课堂包
-- 人口专题课堂包
-- 人口分布
-- 人口密度
-- 人口迁移
-- 胡焕庸线对比
+### 3. POI 检索
+
+配置 `WEBGIS_AI_AMAP_WEB_SERVICE_KEY` 后可使用高德 POI 检索：
+
+- 当前视域检索。
+- 手绘多边形区域检索。
+- 检索结果自动写入点图层。
+- 左侧结果列表与地图点位联动。
+
+### 4. 课堂模板与课本地图
+
+内置课堂模板：
+
+- 通用课堂包。
+- 人口专题包。
+- 人口分布。
+- 人口密度。
+- 人口迁移。
+- 胡焕庸线对比。
+
+内置课本地图注册机制，支持将教材或教学地图作为半透明栅格覆盖层叠加到地图中。当前已包含人口、气候、地形和区域类素材注册入口。
+
+> 注意：课本地图和图片覆盖层依赖 `bounds` 配准质量。正式课堂中建议先校准后使用；配准不准的图片不要作为空间证据主图层。
+
+### 5. 数据上传与 CRS 处理
 
 支持上传：
 
-- `GeoJSON`
-- `CSV`
+- `GeoJSON` / `JSON`
+- `CSV` 经纬度点数据
 - `ZIP Shapefile`
-- `PNG / JPG` 图片覆盖层
+- `PNG` / `JPG` 图片覆盖层
 
-## 环境变量
+数据处理特性：
 
-后端统一持有底图和 POI 服务配置。前端不会硬编码服务 key。
+- 项目内矢量数据统一存储为 `EPSG:4326`。
+- GeoJSON 可读取显式 CRS。
+- CSV 会校验经纬度字段和坐标范围，疑似投影坐标会明确报错。
+- Shapefile ZIP 会尝试从 `.prj` 检测 CRS；缺失 `.prj` 时按 `EPSG:4326` 处理并写入警告。
+- ZIP 解压包含路径安全检查。
 
-常用环境变量：
+### 6. 知识库与课程资料
 
-- `WEBGIS_AI_AMAP_WEB_SERVICE_KEY`
-- `WEBGIS_AI_DEFAULT_BASEMAP`
-- `WEBGIS_AI_AMAP_VECTOR_URL`
-- `WEBGIS_AI_AMAP_IMAGERY_URL`
-- `WEBGIS_AI_AMAP_ANNOTATION_URL`
-- `WEBGIS_AI_AMAP_POI_POLYGON_URL`
+- 内置知识库 manifest 和地理知识条目。
+- 支持按关键词、主题、区域、标签检索。
+- 支持将课堂图层注册为知识条目。
+- 支持上传或链接图片、视频、动画、文档、外部链接等教学素材。
+- 教学素材可绑定地区、图层、要素或行政编码。
+- 支持“课时资料包”，将知识条目和素材导入当前课堂。
+- 资料搜索面板同时支持本地知识库、素材和权威资料入口建议。
 
-如果没有配置 `WEBGIS_AI_AMAP_WEB_SERVICE_KEY`：
+### 7. 智能助教
 
-- 底图切换仍可使用
-- POI 在线检索会在界面中提示未配置
+智能助教以可拖动、可缩放、可最小化的悬浮窗口呈现，支持：
 
-## 启动方式
+- 知识助手：地理概念、区域地理、地图判读、GIS 方法问答。
+- 工具助手：规划并执行 WebGIS 操作，如切换底图、显示图层、应用模板、检索 POI、添加标注、读图讲解等。
+- 文本输入和浏览器语音识别输入。
+- 对话记忆、阶段状态展示和引用来源展示。
+- 地图截图读图：配置视觉模型后可调用多模态模型；未配置时回退到结构化地图上下文解释。
 
-### 一键启动
+支持的 LLM / Vision 配置包括：
+
+- Xiaomi MiMo：默认 LLM provider，兼容 OpenAI Chat Completions 风格接口。
+- MiniMax：保留兼容路径，支持文本规划和 MiniMax Token Plan MCP 图片理解。
+
+### 8. GIS 分析工作流
+
+后端包含 PyQGIS worker 分析链路，前端通过“GIS 分析工作流”面板提交任务并通过 SSE 获取实时状态。
+
+当前模板包括：
+
+- 人口密度分级设色图。
+- 设施缓冲区分析。
+- 胡焕庸线对比分析。
+- 区域裁剪分析。
+- 图层求交集。
+- 图层空间连接。
+- 字段分级。
+
+当前工作流操作白名单包括：
+
+- `load_layer`
+- `inspect_layer`
+- `reproject`
+- `fix_geometries`
+- `filter_features`
+- `calculate_field`
+- `buffer`
+- `choropleth`
+- `aggregate_stats`
+- `export_geojson`
+- `export_style_json`
+- `export_map_png`
+- `clip`
+- `intersection`
+- `spatial_join`
+- `classify`
+
+工作流输出会登记为 artifact，并可在前端加载为地图图层、图例、统计表和结果解释。
+
+## 课程使用示例
+
+以《人口分布》为例，推荐使用“免配准依赖”的课堂流程：
+
+1. 使用高德浅灰底图作为主地图。
+2. 加载“人口专题包”，只使用内置人口矢量图层作为空间证据。
+3. 通过图层显隐对比人口分布、人口密度、人口迁移和胡焕庸线。
+4. 用标注工具标出东南稠密区、西北稀疏区、黑河、腾冲等关键位置。
+5. 让学生先描述，再用智能助教生成规范表达或追问。
+6. 最后导出带图层和标注的课堂截图，作为本节课的证据链。
+
+更多课程场景：
+
+- 气候与地形：对比温度、降水、地形和区域差异。
+- 城市地理：检索学校、医院、交通站点等 POI，讨论公共服务设施布局。
+- GIS 方法入门：上传数据并运行缓冲区、裁剪、空间连接、分级设色等工作流。
+- 区域地理：围绕某一区域叠加素材、标注特征并生成读图讲解。
+
+## 技术栈
+
+- 前端：`React` + `TypeScript` + `Vite` + `OpenLayers`
+- 3D 预研组件：`Cesium`（代码层已有组件，当前主课堂入口仍以 2D OpenLayers 为主）
+- 后端：`FastAPI`
+- GIS 工作流：`PyQGIS worker`
+- 状态模型：`projects / layers / jobs / artifacts / conversations / workflows`
+- 实时状态：`SSE job stream` / `SSE workflow stream`
+
+## 目录结构
+
+```text
+backend/
+  app/
+    main.py                 # FastAPI 入口
+    runtime.py              # WebGIS 运行时服务编排
+    config.py               # 环境变量、底图、LLM、路径配置
+    models.py               # 项目、图层、任务、工作流数据模型
+    services/               # 助教、知识库、POI、数据导入、工作流等服务
+    data/builtin/           # 内置知识库、课堂数据、课本地图注册
+  tests/                    # 后端单元测试
+frontend/
+  src/
+    App.tsx                 # 主课堂页面
+    api.ts                  # 前端 API 调用
+    components/             # 地图工具栏、助教、工作流、知识资料等组件
+    hooks/                  # 工作流 SSE hook
+    lib/                    # 共享前端工具
+scripts/
+  start_webgis_ai.ps1       # Windows 启动脚本
+start_webgis_ai.cmd         # 一键启动入口
+```
+
+## 快速启动
+
+### Windows 一键启动
 
 ```powershell
 .\start_webgis_ai.cmd
 ```
 
-首次缺依赖时自动安装并打开浏览器：
+首次缺依赖时可自动安装并打开浏览器：
 
 ```powershell
 .\start_webgis_ai.cmd -InstallIfMissing -OpenBrowser
 ```
 
-如果自动识别 Python 失败，可显式指定 `Python 3.12`：
+默认访问地址：
 
-```powershell
-.\start_webgis_ai.cmd -PythonExe "C:\Users\zcyxn\AppData\Local\Programs\Python\Python312\python.exe" -InstallIfMissing -OpenBrowser
+```text
+http://127.0.0.1:5173
 ```
 
 ### 手动启动
@@ -91,40 +206,92 @@
 后端：
 
 ```powershell
-& 'C:\Users\zcyxn\AppData\Local\Programs\Python\Python312\python.exe' -m pip install -r requirements.txt
-& 'C:\Users\zcyxn\AppData\Local\Programs\Python\Python312\python.exe' -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 18999
+python -m pip install -r requirements.txt
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 18999
 ```
 
 前端：
 
 ```powershell
-cd .\frontend
-& 'C:\Program Files\nodejs\node.exe' 'C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js' install
-& 'C:\Program Files\nodejs\node.exe' 'C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js' run dev
+cd frontend
+npm install
+npm run dev
 ```
 
-默认访问：
+## 常用环境变量
 
-```text
-http://127.0.0.1:5173
-```
+基础服务：
+
+- `WEBGIS_AI_HOST`
+- `WEBGIS_AI_PORT`
+- `WEBGIS_AI_DEFAULT_BASEMAP`
+- `WEBGIS_AI_AMAP_VECTOR_URL`
+- `WEBGIS_AI_AMAP_IMAGERY_URL`
+- `WEBGIS_AI_AMAP_ANNOTATION_URL`
+
+在线服务：
+
+- `WEBGIS_AI_AMAP_WEB_SERVICE_KEY`
+- `WEBGIS_AI_AMAP_POI_POLYGON_URL`
+- `WEBGIS_AI_OPENWEATHERMAP_API_KEY`
+- `WEBGIS_AI_OPENWEATHERMAP_LAYER`
+
+LLM / Vision：
+
+- `WEBGIS_AI_LLM_PROVIDER`：`mimo` 或 `minimax`
+- `WEBGIS_AI_MIMO_API_KEY`
+- `WEBGIS_AI_MIMO_BASE_URL`
+- `WEBGIS_AI_MIMO_MODEL`
+- `WEBGIS_AI_MINIMAX_API_KEY`
+- `WEBGIS_AI_MINIMAX_BASE_URL`
+- `WEBGIS_AI_MINIMAX_MODEL`
+- `WEBGIS_AI_VISION_ENABLED`
+- `WEBGIS_AI_VISION_PROVIDER`
+- `WEBGIS_AI_VISION_MODEL`
+- `WEBGIS_AI_MINIMAX_TOKEN_PLAN_KEY`
+
+GIS 工作流：
+
+- `QGIS_ROOT`
+- `WEBGIS_AI_QGIS_ROOT`
+- `WEBGIS_AI_QGIS_PREFIX_SUBPATH`
+
+资料搜索：
+
+- `WEBGIS_AI_RESOURCE_SEARCH_ENDPOINT`
 
 ## 关键接口
 
 - `GET /health`
+- `GET /llm/status`
 - `GET /basemaps`
+- `GET /teaching-maps`
 - `POST /projects`
 - `GET /projects/{project_id}`
 - `PATCH /projects/{project_id}/basemap`
 - `GET /layers?project_id=...`
 - `PATCH /layers`
 - `POST /assistant/messages`
+- `POST /assistant/confirm`
+- `GET /assistant/conversations/{conversation_id}`
 - `POST /templates/{template_id}/run`
 - `POST /datasets/upload`
 - `POST /search/poi`
 - `POST /exports/snapshot`
-- `GET /jobs/{job_id}`
-- `GET /jobs/{job_id}/stream`
+- `GET /kb/manifest`
+- `GET /kb/search`
+- `GET /kb/topics`
+- `POST /kb/items`
+- `POST /kb/layers/register`
+- `POST /kb/materials/upload`
+- `POST /kb/materials/link`
+- `GET /resources/search`
+- `GET /workflow/templates`
+- `POST /workflow/submit`
+- `GET /workflow/history`
+- `GET /workflow/{workflow_id}`
+- `GET /workflow/{workflow_id}/stream`
+- `GET /workflow/{workflow_id}/artifacts`
 - `GET /outputs`
 
 ## 测试
@@ -132,23 +299,22 @@ http://127.0.0.1:5173
 后端：
 
 ```powershell
-& 'C:\Users\zcyxn\AppData\Local\Programs\Python\Python312\python.exe' -m unittest discover backend/tests
+python -m unittest discover backend/tests
 ```
 
 前端：
 
 ```powershell
-cd .\frontend
-& 'C:\Program Files\nodejs\node.exe' 'C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js' run test
-& 'C:\Program Files\nodejs\node.exe' 'C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js' run build
+cd frontend
+npm run test
+npm run build
 ```
 
-## 不再保留的旧链路
+## 当前边界
 
-以下能力已经不再属于本仓库的产品主线：
+- 图片覆盖层和课本地图依赖人工配准，`bounds` 不准时不应作为课堂证据主图层。
+- POI、天气、大模型和视觉读图均依赖外部 Key；未配置时系统会降级或提示不可用。
+- GIS 工作流以模板化分析为主，适合课堂常见空间分析，不等同于完整桌面 GIS。
+- 当前主课堂入口是 2D WebGIS；Cesium 3D 数字地球组件仍属于预研/扩展能力。
+- 项目不再维护旧的 Word / PPT 教案产物链路、Electron 桌面壳和 OpenClaw 教学蓝图链路。
 
-- `lesson_ppt`
-- `teacher_flow`
-- 教案 / Word / PPT 产物契约
-- Electron 桌面壳
-- OpenClaw 教学蓝图链路

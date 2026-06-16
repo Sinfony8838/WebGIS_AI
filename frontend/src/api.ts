@@ -6,7 +6,10 @@ import type {
   BasemapCatalog,
   BasemapPreset,
   ChatMessage,
+  DatasetCatalogLayerResponse,
   ConversationResponse,
+  DatasetCatalogResponse,
+  DatasetStatsResponse,
   HealthResponse,
   JobRecord,
   KnowledgeBaseItem,
@@ -37,18 +40,82 @@ import type {
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:18999";
+const AGENT_BASE = import.meta.env.VITE_AGENT_BASE_URL || "http://127.0.0.1:19000";
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, init);
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, init);
+  } catch (err) {
+    throw new Error(
+      `无法连接到后端服务 (${API_BASE})，请确认服务已启动`
+    );
+  }
   if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(detail || `Request failed: ${response.status}`);
+    let message = `请求失败 (${response.status})`;
+    try {
+      const body = await response.json();
+      if (body && typeof body.detail === "string") {
+        message = body.detail;
+      } else if (body && typeof body.detail === "object") {
+        message = JSON.stringify(body.detail);
+      }
+    } catch {
+      try {
+        const text = await response.text();
+        if (text) message = text;
+      } catch { /* ignore */ }
+    }
+    throw new Error(message);
   }
   return (await response.json()) as T;
 }
 
 export function getApiBase(): string {
   return API_BASE;
+}
+
+export type AgentChatEvent =
+  | { type: "status"; message: string }
+  | { type: "assistant"; message: string; progress: boolean }
+  | { type: "tool_call"; name: string; args: Record<string, unknown> }
+  | { type: "tool_result"; name: string; output: string; error: boolean };
+
+export type AgentChatResponse = {
+  status: string;
+  session_id: string;
+  reply: string;
+  events: AgentChatEvent[];
+  total_tokens: number;
+  tool_call_count: number;
+  auto_approve: boolean;
+  cwd: string;
+};
+
+export async function sendAgentMessage(message: string, sessionId = ""): Promise<AgentChatResponse> {
+  let response: Response;
+  try {
+    response = await fetch(`${AGENT_BASE}/agent/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, session_id: sessionId })
+    });
+  } catch {
+    throw new Error(`无法连接到内嵌 Agent 服务 (${AGENT_BASE})，请确认一键启动已启动 WebGIS-AI Agent Server。`);
+  }
+  if (!response.ok) {
+    let messageText = `Agent 请求失败 (${response.status})`;
+    try {
+      const body = await response.json();
+      if (body && typeof body.detail === "string") {
+        messageText = body.detail;
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(messageText);
+  }
+  return (await response.json()) as AgentChatResponse;
 }
 
 export async function fetchHealth(): Promise<HealthResponse> {
@@ -85,6 +152,33 @@ export async function switchBasemap(projectId: string, basemapId: string): Promi
 
 export async function fetchLayers(projectId: string): Promise<LayersResponse> {
   return requestJson<LayersResponse>(`/layers?project_id=${encodeURIComponent(projectId)}`);
+}
+
+export async function fetchDatasetCatalog(): Promise<DatasetCatalogResponse> {
+  return requestJson<DatasetCatalogResponse>("/datasets/catalog");
+}
+
+export async function addCatalogDatasetLayer(
+  projectId: string,
+  datasetId: string
+): Promise<DatasetCatalogLayerResponse> {
+  return requestJson<DatasetCatalogLayerResponse>("/datasets/catalog/layers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: projectId, dataset_id: datasetId })
+  });
+}
+
+export async function summarizeCatalogLayers(
+  projectId: string,
+  geometry: Record<string, unknown> | null,
+  layerId = ""
+): Promise<DatasetStatsResponse> {
+  return requestJson<DatasetStatsResponse>("/datasets/catalog/statistics", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: projectId, layer_id: layerId, geometry: geometry || {} })
+  });
 }
 
 export async function patchLayer(projectId: string, layerId: string, patch: Record<string, unknown>): Promise<void> {
