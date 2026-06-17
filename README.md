@@ -22,6 +22,84 @@
 - 后端：`FastAPI`
 - 运行时模型：`projects / jobs / artifacts / SSE job stream`
 
+## 整体架构设计
+
+`WebGIS-AI` 采用前后端分离架构。前端负责地图交互、课堂大屏界面和智能助教操作入口；后端负责项目状态、图层数据、课堂模板、POI 检索、文件产物、异步任务和访问控制。
+
+```text
+Browser / Classroom Screen
+        |
+        | HTTP JSON / file upload / SSE
+        v
+React + OpenLayers frontend
+        |
+        | REST API client
+        v
+FastAPI backend
+        |
+        +-- Runtime orchestration: projects, layers, jobs, artifacts
+        +-- Services: assistant, templates, datasets, POI, map exports
+        +-- Storage: JSON state, uploaded datasets, generated outputs
+        +-- External services: basemap tiles, POI web service, optional LLM
+```
+
+核心数据流：
+
+- 启动后前端调用 `/health`、`/basemaps` 获取运行状态和底图配置。
+- 用户创建或打开课堂项目后，后端用 `project_id` 管理视图、底图、图层、产物和最近操作。
+- 数据上传接口将 `GeoJSON / CSV / ZIP Shapefile / 图片覆盖层` 转换为前端可渲染图层。
+- 课堂模板和智能助教请求会创建后台任务，前端通过 `/jobs/{job_id}` 和 `/jobs/{job_id}/stream` 读取进度。
+- 导出、报告、截图等产物统一登记为 `artifact`，再通过受控文件接口下载。
+- 公网发布时通过 `WEBGIS_AI_AUTH_TOKEN` 做访问令牌校验，通过 `WEBGIS_AI_CORS_ALLOW_ORIGINS` 限制允许访问的前端域名。
+
+## 代码文件说明
+
+```text
+WebGIS-AI/
+├─ README.md                         项目入口说明、启动方式、接口和架构说明
+├─ PROJECT_DESCRIPTION.md             项目介绍材料
+├─ requirements.txt                   后端 Python 依赖
+├─ start_webgis_ai.cmd                Windows 一键启动入口
+├─ scripts/
+│  ├─ start_webgis_ai.ps1             一键启动脚本主体
+│  ├─ build_project_introduction_doc.py
+│  └─ build_defense_ppt.py            说明文档和答辩材料生成脚本
+├─ backend/
+│  ├─ app/
+│  │  ├─ main.py                      FastAPI 应用入口、鉴权中间件和 HTTP 路由
+│  │  ├─ config.py                    环境变量、路径、底图、鉴权和外部服务配置
+│  │  ├─ runtime.py                   课堂运行时编排，连接项目、图层、任务和服务
+│  │  ├─ store.py                     本地 JSON 状态存储，管理 projects/jobs/artifacts
+│  │  ├─ models.py                    Project、Layer、Job、Artifact 数据模型
+│  │  ├─ geo.py                       地理计算辅助函数
+│  │  ├─ data/builtin/                内置课堂模板和人口专题 GeoJSON 数据
+│  │  └─ services/
+│  │     ├─ assistant.py              智能助教规则规划和课堂解释生成
+│  │     ├─ datasets.py               上传数据解析、标准化和图层生成
+│  │     ├─ templates.py              课堂模板执行和专题图层生成
+│  │     ├─ poi.py                    POI 检索、结果标准化和图层转换
+│  │     ├─ minimax_client.py         可选 LLM 客户端封装
+│  │     └─ llm_planner.py            LLM 规划结果校验和规则兜底
+│  └─ tests/                          后端单元测试和接口安全测试
+├─ frontend/
+│  ├─ package.json                    前端依赖和 npm scripts
+│  ├─ vite.config.ts                  Vite 构建配置
+│  └─ src/
+│     ├─ main.tsx                     React 入口
+│     ├─ App.tsx                      主界面、地图舞台、工具栏和状态编排
+│     ├─ api.ts                       后端 API 客户端、鉴权 token 和 SSE URL 处理
+│     ├─ types.ts                     前后端共享的 TypeScript 类型
+│     ├─ styles.css                   全局样式和课堂大屏布局
+│     ├─ components/
+│     │  ├─ BasemapMenu.tsx           底图切换菜单
+│     │  ├─ CopilotWidget.tsx         悬浮智能助教窗口
+│     │  ├─ SideDrawer.tsx            图层、POI 结果和产物抽屉
+│     │  ├─ ToastStack.tsx            全局提示消息
+│     │  └─ UploadDialog.tsx          数据上传对话框
+│     └─ __tests__/                   前端组件和 API 鉴权测试
+└─ docs/                              上线配置、安全核查、课程融合和答辩材料
+```
+
 ## 当前界面
 
 - 顶部：品牌条、底图切换、模板切换、上传、导出、复位
