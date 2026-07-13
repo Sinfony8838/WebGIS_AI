@@ -12,17 +12,6 @@ from ..store import RuntimeStore
 
 
 TEMPLATE_SPECS: Dict[str, Dict[str, Any]] = {
-    "generic_classroom_pack": {
-        "title": "通用课堂包",
-        "description": "用于区域认知、区位判断和课堂即时讲解的基础课堂包。",
-        "chapter_id": "general_classroom",
-        "chapter_title": "通用课堂",
-        "chapter_order": 10,
-        "unit_id": "regional_cognition",
-        "unit_title": "区域认知基础",
-        "unit_order": 10,
-        "template_order": 10,
-    },
     "population_classroom_pack": {
         "title": "人口专题包",
         "description": "一次加载人口分布、密度、迁移与胡焕庸线对比四类示范模板。",
@@ -80,6 +69,8 @@ TEMPLATE_SPECS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+DISABLED_TEMPLATE_IDS: set[str] = set()
+
 
 def _quantile_thresholds(values: List[float], class_count: int) -> List[float]:
     if not values:
@@ -102,6 +93,7 @@ class TemplateService:
             (
                 {"template_id": template_id, **spec}
                 for template_id, spec in TEMPLATE_SPECS.items()
+                if template_id not in DISABLED_TEMPLATE_IDS
             ),
             key=lambda item: (
                 int(item.get("chapter_order") or 0),
@@ -113,11 +105,11 @@ class TemplateService:
         return {"items": ordered_items}
 
     def apply_template(self, project_id: str, template_id: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if template_id in DISABLED_TEMPLATE_IDS:
+            raise ValueError(f"Template temporarily disabled: {template_id}")
         if template_id not in TEMPLATE_SPECS:
             raise ValueError(f"Unknown template: {template_id}")
-        if template_id == "generic_classroom_pack":
-            result = self._build_generic_classroom_pack(project_id)
-        elif template_id == "population_distribution":
+        if template_id == "population_distribution":
             result = self._build_population_distribution(project_id)
         elif template_id == "population_density":
             result = self._build_population_density(project_id)
@@ -174,114 +166,103 @@ class TemplateService:
     def _clone_features(self, collection: Dict[str, Any]) -> Dict[str, Any]:
         return copy.deepcopy(collection)
 
-    def _build_generic_classroom_pack(self, project_id: str) -> Dict[str, Any]:
-        regions = self._clone_features(self._load_builtin_geojson("classroom", "eurasia_regions.geojson"))
-        points = self._clone_features(self._load_builtin_geojson("classroom", "classroom_focus_points.geojson"))
-        for feature in regions["features"]:
-            feature["properties"]["__fillColor"] = "#2a6f97"
-            feature["properties"]["__fillOpacity"] = 0.16
-            feature["properties"]["__strokeColor"] = "#d7ecff"
-            feature["properties"]["__strokeWidth"] = 2
-        for feature in points["features"]:
-            feature["properties"]["__fillColor"] = "#ffb703"
-            feature["properties"]["__radius"] = 7
-            feature["properties"]["__strokeColor"] = "#1b1b1b"
-
-        layers = [
-            LayerRecord.create(
-                layer_id="builtin_eurasia_regions",
-                name="欧亚区域框架",
-                kind="vector",
-                source="builtin",
-                geometry_type="Polygon",
-                data=regions,
-                metadata={"feature_count": len(regions["features"]), "teaching_pack": "generic_classroom_pack"},
-                style={"labelField": "name", "fillColor": "#2a6f97", "strokeColor": "#d7ecff"},
-                z_index=10,
-            ),
-            LayerRecord.create(
-                layer_id="builtin_classroom_points",
-                name="课堂关注点",
-                kind="vector",
-                source="builtin",
-                geometry_type="Point",
-                data=points,
-                metadata={"feature_count": len(points["features"]), "teaching_pack": "generic_classroom_pack"},
-                style={"labelField": "name", "radius": 7, "fillColor": "#ffb703"},
-                z_index=25,
-            ),
-        ]
-        return {
-            "summary": "已加载通用课堂包，可用于区域认知、区位判断和即时读图讲解。",
-            "assistant_message": "通用课堂包已就绪。现在适合从区域格局、交通通道和关键节点切入课堂讲解。",
-            "layers": layers,
-            "view": {"center": [72.0, 37.0], "zoom": 4, "extent": [-10.0, 10.0, 145.0, 65.0]},
-            "enabled_templates": ["generic_classroom_pack"],
-        }
+    def _load_province_collection(self) -> Dict[str, Any]:
+        """Real province boundaries + 2020 census figures.  Replaces the old
+        rectangular "region block" fixtures that only simulated regions."""
+        return self._clone_features(self._load_builtin_geojson("population", "china_provinces.geojson"))
 
     def _build_population_distribution(self, project_id: str) -> Dict[str, Any]:
-        collection = self._clone_features(self._load_builtin_geojson("population", "population_regions.geojson"))
-        values = [float(feature["properties"].get("population", 0)) for feature in collection["features"]]
+        collection = self._load_province_collection()
+        values = [
+            float(feature["properties"].get("population") or 0)
+            for feature in collection["features"]
+            if float(feature["properties"].get("population") or 0) > 0
+        ]
         thresholds = _quantile_thresholds(values, 5)
         palette = ["#fff0d9", "#ffd08a", "#f6a04d", "#dc6a2c", "#a73b1d"]
         for feature in collection["features"]:
-            value = float(feature["properties"].get("population", 0))
+            value = float(feature["properties"].get("population") or 0)
+            if value <= 0:
+                feature["properties"]["__fillColor"] = "#e6e9ee"
+                feature["properties"]["__fillOpacity"] = 0.35
+                feature["properties"]["__strokeColor"] = "#8a93a3"
+                feature["properties"]["__strokeWidth"] = 0.8
+                continue
             level = 0
             for index, threshold in enumerate(thresholds, start=1):
                 if value >= threshold:
                     level = index
             feature["properties"]["__fillColor"] = palette[min(level, len(palette) - 1)]
+            feature["properties"]["__fillOpacity"] = 0.72
             feature["properties"]["__strokeColor"] = "#432818"
-            feature["properties"]["__strokeWidth"] = 1.4
+            feature["properties"]["__strokeWidth"] = 1.0
 
         layer = LayerRecord.create(
             layer_id="builtin_population_regions",
-            name="人口分布",
+            name="人口分布（省级）",
             kind="vector",
             source="builtin",
             geometry_type="Polygon",
             data=collection,
             metadata={"feature_count": len(collection["features"]), "template_id": "population_distribution"},
-            style={"labelField": "name", "strokeColor": "#432818"},
+            style={"labelField": "short_name", "strokeColor": "#432818"},
             z_index=30,
         )
         return {
-            "summary": "已切换到人口分布模板，适合讲解东密西疏与沿海集聚。",
-            "assistant_message": "人口分布模板已加载。可以直接观察华东、华中与西北地区人口规模的梯度差异。",
+            "summary": "已切换到人口分布模板（省级真实边界，七普人口分级设色）。",
+            "assistant_message": "人口分布模板已加载，基于省级行政区真实边界与 2020 年人口数据，可直接观察东密西疏的梯度差异。",
             "layers": [layer],
             "view": {"center": [104.0, 35.0], "zoom": 4, "extent": [78.0, 18.0, 132.0, 50.5]},
             "enabled_templates": ["population_distribution"],
         }
 
     def _build_population_density(self, project_id: str) -> Dict[str, Any]:
-        collection = self._clone_features(self._load_builtin_geojson("population", "population_centroids.geojson"))
-        densities = [float(feature["properties"].get("density", 0)) for feature in collection["features"]]
-        minimum = min(densities)
-        maximum = max(densities)
-        span = max(maximum - minimum, 1.0)
-        for feature in collection["features"]:
-            density = float(feature["properties"].get("density", 0))
-            ratio = (density - minimum) / span
-            feature["properties"]["__radius"] = round(8 + ratio * 18, 2)
+        provinces = self._load_province_collection()
+        features = []
+        densities: List[float] = []
+        for feature in provinces["features"]:
+            properties = feature["properties"]
+            center = properties.get("center")
+            density = float(properties.get("density") or 0)
+            if not center or density <= 0:
+                continue
+            densities.append(density)
+            features.append(
+                {
+                    "type": "Feature",
+                    "properties": {
+                        "name": properties.get("short_name") or properties.get("name"),
+                        "population": properties.get("population"),
+                        "density": density,
+                    },
+                    "geometry": {"type": "Point", "coordinates": [float(center[0]), float(center[1])]},
+                }
+            )
+        maximum = max(densities) if densities else 1.0
+        for feature in features:
+            density = float(feature["properties"]["density"])
+            ratio = (density / maximum) ** 0.5
+            feature["properties"]["__radius"] = round(5 + ratio * 20, 2)
             feature["properties"]["__fillColor"] = "#1d4ed8"
-            feature["properties"]["__fillOpacity"] = round(0.28 + ratio * 0.45, 2)
+            feature["properties"]["__fillOpacity"] = round(0.25 + ratio * 0.5, 2)
             feature["properties"]["__strokeColor"] = "#dbeafe"
+        collection = {"type": "FeatureCollection", "features": features}
 
         layer = LayerRecord.create(
             layer_id="builtin_population_density",
-            name="人口密度",
+            name="人口密度（省级）",
             kind="vector",
             source="builtin",
             geometry_type="Point",
             data=collection,
-            metadata={"feature_count": len(collection["features"]), "template_id": "population_density"},
+            metadata={"feature_count": len(features), "template_id": "population_density"},
             style={"labelField": "name", "radius": 10, "fillColor": "#1d4ed8"},
             opacity=0.9,
             z_index=34,
         )
         return {
-            "summary": "已切换到人口密度模板，适合从点状符号解释集聚中心。",
-            "assistant_message": "人口密度模板已加载。圆点越大，表示对应区域的人口密度越高。",
+            "summary": "已切换到人口密度模板（省级真实密度，点状符号分级）。",
+            "assistant_message": "人口密度模板已加载。圆点越大表示该省人口密度越高，数据来自 2020 年七普。",
             "layers": [layer],
             "view": {"center": [104.0, 35.0], "zoom": 4, "extent": [78.0, 18.0, 132.0, 50.5]},
             "enabled_templates": ["population_density"],
@@ -319,11 +300,15 @@ class TemplateService:
         }
 
     def _build_hu_line_comparison(self, project_id: str) -> Dict[str, Any]:
-        points = self._clone_features(self._load_builtin_geojson("population", "population_centroids.geojson"))
+        provinces = self._load_province_collection()
         weighted_points: List[Tuple[Tuple[float, float], float]] = []
-        for feature in points["features"]:
-            coordinates = feature["geometry"]["coordinates"]
-            weighted_points.append(((float(coordinates[0]), float(coordinates[1])), float(feature["properties"].get("population", 1))))
+        for feature in provinces["features"]:
+            properties = feature["properties"]
+            center = properties.get("center")
+            population = float(properties.get("population") or 0)
+            if not center or population <= 0:
+                continue
+            weighted_points.append(((float(center[0]), float(center[1])), population))
 
         dynamic_payload = generate_dynamic_hu_line(weighted_points)
         layer = LayerRecord.create(

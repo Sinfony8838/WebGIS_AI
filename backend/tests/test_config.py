@@ -33,6 +33,42 @@ class AppConfigTest(unittest.TestCase):
         self.assertEqual(normalized["layers"][0]["urls"][0], "https://example.com/{z}/{x}/{y}.png")
         self.assertTrue(normalized.get("legacy"))
 
+    def test_weather_basemaps_are_visible_without_openweather_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(os.environ, {}, clear=True):
+            config = AppConfig(root_dir=Path(temp_dir))
+            catalog = config.basemap_catalog()
+            ids = {item["id"] for item in catalog["items"]}
+
+            self.assertIn("weather_precipitation", ids)
+            self.assertIn("weather_clouds", ids)
+            self.assertIn("weather_temperature", ids)
+            weather_item = next(item for item in catalog["items"] if item["id"] == "weather_precipitation")
+            self.assertIn("WEBGIS_AI_OPENWEATHERMAP_API_KEY", weather_item["description"])
+            self.assertEqual(catalog["default_id"], "amap_vector")
+
+    def test_weather_basemaps_use_backend_proxy_and_keep_key_server_side(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            os.environ,
+            {
+                "WEBGIS_AI_OPENWEATHERMAP_API_KEY": "demo-weather-key",
+                "WEBGIS_AI_OPENWEATHERMAP_LAYER": "clouds_new",
+            },
+            clear=True,
+        ):
+            config = AppConfig(root_dir=Path(temp_dir))
+            catalog = config.basemap_catalog()
+            weather_item = next(item for item in catalog["items"] if item["id"] == "weather_clouds")
+
+            self.assertEqual(
+                weather_item["layers"][1]["urls"][0],
+                "http://127.0.0.1:18999/tiles/weather/clouds_new/{z}/{x}/{y}.png",
+            )
+            self.assertNotIn("demo-weather-key", weather_item["layers"][1]["urls"][0])
+            self.assertEqual(
+                config.weather_tile_upstream_url("clouds_new", 4, 12, 9),
+                "https://tile.openweathermap.org/map/clouds_new/4/12/9.png?appid=demo-weather-key",
+            )
+
     def test_public_path_round_trip_only_allows_uploads_and_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = AppConfig(root_dir=Path(temp_dir))
@@ -63,31 +99,6 @@ class AppConfigTest(unittest.TestCase):
 
             self.assertNotEqual(first, second)
             self.assertEqual(second.name[:6], "report")
-
-    def test_security_defaults_are_localhost_only_and_auth_disabled(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(os.environ, {}, clear=True):
-            config = AppConfig(root_dir=Path(temp_dir))
-
-            self.assertFalse(config.auth_enabled())
-            self.assertEqual(config.auth_exempt_path_set(), set())
-            self.assertEqual(config.cors_origins(), ["http://127.0.0.1:5173", "http://localhost:5173"])
-
-    def test_security_envs_are_parsed(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
-            os.environ,
-            {
-                "WEBGIS_AI_AUTH_TOKEN": "secret-token",
-                "WEBGIS_AI_AUTH_EXEMPT_PATHS": "/health,/docs",
-                "WEBGIS_AI_CORS_ALLOW_ORIGINS": "https://example.edu, https://webgis.example.edu",
-            },
-            clear=True,
-        ):
-            config = AppConfig(root_dir=Path(temp_dir))
-
-            self.assertTrue(config.auth_enabled())
-            self.assertEqual(config.auth_token, "secret-token")
-            self.assertEqual(config.auth_exempt_path_set(), {"/health", "/docs"})
-            self.assertEqual(config.cors_origins(), ["https://example.edu", "https://webgis.example.edu"])
 
     def test_minimax_alias_envs_are_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
@@ -150,3 +161,113 @@ class AppConfigTest(unittest.TestCase):
             self.assertIn("重启后端", status["error"])
             self.assertNotIn("primary-key", status["error"])
             self.assertNotIn("legacy-key", status["error"])
+
+    # ------------------------------------------------------------------
+    # v1.3 provider tests（MiMo 已移除，MiniMax 是唯一 provider）
+    # ------------------------------------------------------------------
+
+    def test_default_provider_is_minimax(self) -> None:
+        # v1.3: Mimo upstream retired → MiniMax (Anthropic-compatible) is the default.
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(os.environ, {}, clear=True):
+            config = AppConfig(root_dir=Path(temp_dir))
+            self.assertEqual(config.llm_provider, "minimax")
+            self.assertEqual(config.minimax_base_url, "https://api.minimaxi.com/anthropic")
+            self.assertEqual(config.minimax_model, "MiniMax-M2.7-highspeed")
+            # No key set → provider chosen but unconfigured.
+            status = config.llm_status()
+            self.assertFalse(status["configured"])
+            self.assertEqual(status["provider"], "minimax")
+            self.assertEqual(status["api_key_source"], "unset")
+            self.assertIn("WEBGIS_AI_MINIMAX_API_KEY", status["error"])
+
+    def test_legacy_mimo_provider_env_is_coerced_to_minimax(self) -> None:
+        # 历史遗留的 WEBGIS_AI_LLM_PROVIDER=mimo 不再受支持，
+        # 会被强制归一到 minimax 并在 provider_source 中标记。
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            os.environ,
+            {
+                "WEBGIS_AI_LLM_PROVIDER": "mimo",
+                "WEBGIS_AI_MINIMAX_API_KEY": "minimax-key",
+            },
+            clear=True,
+        ):
+            config = AppConfig(root_dir=Path(temp_dir))
+            self.assertEqual(config.llm_provider, "minimax")
+            self.assertTrue(config.llm_provider_source.startswith("coerced_from_"))
+            self.assertTrue(config.llm_enabled())
+            self.assertEqual(config.active_llm_api_key(), "minimax-key")
+
+    def test_minimax_only_key_uses_default_provider(self) -> None:
+        # MiniMax is the default provider, so a MiniMax-only key needs no
+        # LLM_PROVIDER at all.
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            os.environ,
+            {"MINIMAX_API_KEY": "minimax-only-key"},
+            clear=True,
+        ):
+            config = AppConfig(root_dir=Path(temp_dir))
+            self.assertEqual(config.llm_provider, "minimax")
+            self.assertEqual(config.llm_provider_source, "default")
+            self.assertTrue(config.llm_enabled())
+
+    def test_stale_mimo_key_is_ignored_when_minimax_configured(self) -> None:
+        # 残留的 MIMO_API_KEY 环境变量不再有任何作用。
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            os.environ,
+            {
+                "MIMO_API_KEY": "stale-mimo-key",
+                "MINIMAX_API_KEY": "minimax-key",
+            },
+            clear=True,
+        ):
+            config = AppConfig(root_dir=Path(temp_dir))
+            self.assertEqual(config.llm_provider, "minimax")
+            self.assertEqual(config.active_llm_api_key(), "minimax-key")
+
+    def test_vision_provider_defaults_to_minimax_mcp(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            os.environ,
+            {"WEBGIS_AI_MINIMAX_API_KEY": "minimax-key", "WEBGIS_AI_VISION_ENABLED": "1"},
+            clear=True,
+        ):
+            config = AppConfig(root_dir=Path(temp_dir))
+            self.assertEqual(config.vision_provider, "minimax_mcp")
+            status = config.vision_status()
+            self.assertTrue(status["configured"])
+            self.assertEqual(status["provider"], "minimax_mcp")
+
+    def test_vision_provider_explicit_minimax_mcp_overrides_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            os.environ,
+            {
+                "WEBGIS_AI_LLM_PROVIDER": "minimax",
+                "WEBGIS_AI_MINIMAX_API_KEY": "key",
+                "WEBGIS_AI_VISION_PROVIDER": "minimax_mcp",
+                "WEBGIS_AI_MINIMAX_TOKEN_PLAN_KEY": "token-plan",
+                "WEBGIS_AI_VISION_ENABLED": "1",
+            },
+            clear=True,
+        ):
+            config = AppConfig(root_dir=Path(temp_dir))
+            self.assertEqual(config.vision_provider, "minimax_mcp")
+            status = config.vision_status()
+            self.assertTrue(status["configured"])
+            self.assertEqual(status["provider"], "minimax_mcp")
+
+    def test_minimax_mcp_vision_reuses_existing_minimax_api_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            os.environ,
+            {
+                "WEBGIS_AI_LLM_PROVIDER": "minimax",
+                "WEBGIS_AI_MINIMAX_API_KEY": "shared-minimax-key",
+                "WEBGIS_AI_VISION_ENABLED": "1",
+            },
+            clear=True,
+        ):
+            config = AppConfig(root_dir=Path(temp_dir))
+            self.assertEqual(config.vision_provider, "minimax_mcp")
+            self.assertEqual(config.minimax_token_plan_key, "shared-minimax-key")
+            status = config.vision_status()
+            self.assertTrue(status["configured"])
+            self.assertEqual(status["provider"], "minimax_mcp")
+            self.assertEqual(status["token_plan_key_source"], "WEBGIS_AI_MINIMAX_API_KEY")

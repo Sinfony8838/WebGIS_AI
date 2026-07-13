@@ -7,6 +7,7 @@ from uuid import uuid4
 
 
 WORKFLOW_STAGE_KEYS = ("analysis", "actions", "map", "artifacts")
+ASSISTANT_V2_STAGE_KEYS = ("routing", "retrieval", "planning", "confirmation", "execution", "grounding", "artifacts")
 
 
 def utc_now() -> str:
@@ -24,6 +25,25 @@ def build_workflow_stages(default_status: str = "pending") -> Dict[str, Dict[str
     }
 
 
+def build_dynamic_stages(
+    stage_keys: Optional[List[str]] = None,
+    default_status: str = "pending",
+) -> Dict[str, Dict[str, str]]:
+    keys = stage_keys or list(WORKFLOW_STAGE_KEYS)
+    return {
+        stage: {
+            "status": default_status,
+            "summary": "",
+            "detail": "",
+        }
+        for stage in keys
+    }
+
+
+def build_assistant_v2_stages(default_status: str = "pending") -> Dict[str, Dict[str, str]]:
+    return build_dynamic_stages(list(ASSISTANT_V2_STAGE_KEYS), default_status=default_status)
+
+
 @dataclass
 class LayerRecord:
     layer_id: str
@@ -37,6 +57,9 @@ class LayerRecord:
     style: Dict[str, Any] = field(default_factory=dict)
     data: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # Bumped only when ``data`` changes, so clients can skip re-parsing
+    # unchanged GeoJSON on visibility/opacity updates.
+    data_rev: int = 0
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
 
@@ -112,6 +135,111 @@ class ArtifactRecord:
 
 
 @dataclass
+class MessageRecord:
+    message_id: str
+    conversation_id: str
+    role: str
+    text: str
+    assistant_mode: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    created_at: str = field(default_factory=utc_now)
+
+    @classmethod
+    def create(
+        cls,
+        conversation_id: str,
+        role: str,
+        text: str,
+        assistant_mode: str = "",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> "MessageRecord":
+        return cls(
+            message_id=f"msg_{uuid4().hex}",
+            conversation_id=conversation_id,
+            role=role,
+            text=text,
+            assistant_mode=assistant_mode,
+            metadata=metadata or {},
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ConversationRecord:
+    conversation_id: str
+    project_id: str
+    assistant_mode: str
+    created_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
+    raw_messages: List[Dict[str, Any]] = field(default_factory=list)
+    running_summary: str = ""
+    task_memory: Dict[str, Any] = field(default_factory=dict)
+    pinned_state: Dict[str, Any] = field(default_factory=dict)
+    last_map_grounding: Dict[str, Any] = field(default_factory=dict)
+    message_ids: List[str] = field(default_factory=list)
+
+    @classmethod
+    def create(cls, project_id: str, assistant_mode: str) -> "ConversationRecord":
+        return cls(
+            conversation_id=f"conv_{uuid4().hex}",
+            project_id=project_id,
+            assistant_mode=assistant_mode,
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ConfirmationRecord:
+    confirmation_id: str
+    project_id: str
+    conversation_id: str
+    job_id: str
+    assistant_mode: str
+    status: str = "pending"
+    title: str = ""
+    reason: str = ""
+    plan_fingerprint: str = ""
+    payload: Dict[str, Any] = field(default_factory=dict)
+    created_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
+    expires_at: str = ""
+    resolved_at: str = ""
+
+    @classmethod
+    def create(
+        cls,
+        project_id: str,
+        conversation_id: str,
+        job_id: str,
+        assistant_mode: str,
+        title: str,
+        reason: str,
+        plan_fingerprint: str = "",
+        payload: Optional[Dict[str, Any]] = None,
+        expires_at: str = "",
+    ) -> "ConfirmationRecord":
+        return cls(
+            confirmation_id=f"confirm_{uuid4().hex}",
+            project_id=project_id,
+            conversation_id=conversation_id,
+            job_id=job_id,
+            assistant_mode=assistant_mode,
+            title=title,
+            reason=reason,
+            plan_fingerprint=plan_fingerprint,
+            payload=payload or {},
+            expires_at=expires_at,
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class JobRecord:
     job_id: str
     project_id: str
@@ -147,6 +275,211 @@ class JobRecord:
             request=request or {},
             stages=stages or build_workflow_stages(),
         )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class LessonRecord:
+    lesson_id: str
+    title: str
+    subject: str = "鍦扮悊"
+    grade: str = ""
+    objectives: List[str] = field(default_factory=list)
+    stages: List[Dict[str, Any]] = field(default_factory=list)
+    source: str = "manual"  # builtin | imported | manual
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    created_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
+
+    @classmethod
+    def create(
+        cls,
+        title: str,
+        subject: str = "鍦扮悊",
+        grade: str = "",
+        objectives: Optional[List[str]] = None,
+        stages: Optional[List[Dict[str, Any]]] = None,
+        source: str = "manual",
+        metadata: Optional[Dict[str, Any]] = None,
+        lesson_id: str = "",
+    ) -> "LessonRecord":
+        return cls(
+            lesson_id=lesson_id or f"lesson_{uuid4().hex}",
+            title=title,
+            subject=subject,
+            grade=grade,
+            objectives=objectives or [],
+            stages=stages or [],
+            source=source,
+            metadata=metadata or {},
+        )
+
+    def touch(self) -> None:
+        self.updated_at = utc_now()
+
+    def find_stage(self, stage_id: str) -> Optional[Dict[str, Any]]:
+        for stage in self.stages:
+            if str(stage.get("stage_id")) == stage_id:
+                return stage
+        return None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ClassSessionRecord:
+    session_id: str
+    lesson_id: str
+    project_id: str
+    status: str = "running"  # running | ended
+    join_code: str = ""
+    current_stage_id: str = ""
+    started_at: str = field(default_factory=utc_now)
+    ended_at: str = ""
+    events: List[Dict[str, Any]] = field(default_factory=list)
+    active_question: Dict[str, Any] = field(default_factory=dict)
+    responses: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    updated_at: str = field(default_factory=utc_now)
+
+    @classmethod
+    def create(
+        cls,
+        lesson_id: str,
+        project_id: str,
+        join_code: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> "ClassSessionRecord":
+        return cls(
+            session_id=f"session_{uuid4().hex}",
+            lesson_id=lesson_id,
+            project_id=project_id,
+            join_code=join_code,
+            metadata=metadata or {},
+        )
+
+    def touch(self) -> None:
+        self.updated_at = utc_now()
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+# ---------------------------------------------------------------------------
+# GIS workflow data models
+# ---------------------------------------------------------------------------
+
+WORKFLOW_STATUSES = ("pending", "running", "success", "error", "cancelled")
+WORKFLOW_STEP_STATUSES = ("pending", "running", "success", "error", "skipped")
+
+
+@dataclass
+class WorkflowError:
+    """Structured error returned by validators / workers / executor."""
+    code: str = "INTERNAL_ERROR"
+    message: str = ""
+    user_friendly: str = ""
+    step_id: str = ""
+    details: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class WorkflowStepResult:
+    """Result of a single workflow step (sent FastAPI <-> worker)."""
+    step_id: str
+    status: str = "pending"
+    started_at: str = ""
+    finished_at: str = ""
+    outputs: Dict[str, Any] = field(default_factory=dict)
+    error: Optional[Dict[str, Any]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class WorkflowArtifact:
+    """A user-facing output of a workflow (geojson/style/stats/png/summary)."""
+    artifact_id: str
+    workflow_id: str
+    kind: str       # geojson | style | stats | png | summary | layout_pdf | other
+    title: str
+    relative_path: str   # relative to the workflow dir
+    public_url: str
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    created_at: str = field(default_factory=utc_now)
+
+    @classmethod
+    def create(
+        cls,
+        workflow_id: str,
+        kind: str,
+        title: str,
+        relative_path: str,
+        public_url: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> "WorkflowArtifact":
+        return cls(
+            artifact_id=f"wfa_{uuid4().hex}",
+            workflow_id=workflow_id,
+            kind=kind,
+            title=title,
+            relative_path=relative_path,
+            public_url=public_url,
+            metadata=metadata or {},
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class WorkflowRecord:
+    """Full state of a backend GIS workflow run, persisted in RuntimeStore."""
+    workflow_id: str
+    project_id: str
+    user_message: str = ""
+    intent: str = ""
+    template_id: str = ""
+    mode: str = "template"  # template | freeform
+    workflow_json: Dict[str, Any] = field(default_factory=dict)
+    status: str = "pending"
+    steps: List[Dict[str, Any]] = field(default_factory=list)
+    artifacts: List[Dict[str, Any]] = field(default_factory=list)
+    error: Optional[Dict[str, Any]] = None
+    created_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
+    started_at: str = ""
+    finished_at: str = ""
+
+    @classmethod
+    def create(
+        cls,
+        project_id: str,
+        user_message: str = "",
+        intent: str = "",
+        template_id: str = "",
+        mode: str = "template",
+        workflow_json: Optional[Dict[str, Any]] = None,
+    ) -> "WorkflowRecord":
+        return cls(
+            workflow_id=f"wf_{uuid4().hex}",
+            project_id=project_id,
+            user_message=user_message,
+            intent=intent,
+            template_id=template_id,
+            mode=mode,
+            workflow_json=workflow_json or {},
+        )
+
+    def touch(self) -> None:
+        self.updated_at = utc_now()
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -192,4 +525,3 @@ class ProjectRecord:
         payload = asdict(self)
         payload["layers"] = [layer.to_dict() for layer in self.layers]
         return payload
-

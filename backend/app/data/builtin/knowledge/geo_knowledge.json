@@ -1,0 +1,74 @@
+[
+  {
+    "id": "hu_huanyong_line",
+    "title": "胡焕庸线",
+    "domain": "regional_geography",
+    "tags": ["胡焕庸线", "人口分布", "中国人口地理"],
+    "canonical_answer": "胡焕庸线是中国人口地理中的一条经典分界线，大致连接黑河与腾冲，用来概括中国东南人口密集、西北人口稀疏的总体格局。",
+    "teaching_points": [
+      "它不是行政边界，而是人口分布格局的概括线。",
+      "线两侧差异与地形、气候、水资源、交通和经济机会有关。",
+      "课堂中通常用于引出人口分布、区域差异和人地关系。"
+    ],
+    "citations": [
+      {
+        "title": "中国科学院地理科学与资源研究所",
+        "url": "https://www.igsnrr.ac.cn/"
+      },
+      {
+        "title": "国家统计局",
+        "url": "https://www.stats.gov.cn/"
+      }
+    ],
+    "related_templates": ["hu_line_comparison", "population_distribution"],
+    "updated_at": "2026-04-25T00:00:00+00:00"
+  },
+  {
+    "id": "coastal_attraction_population_migration",
+    "title": "沿海吸引力",
+    "domain": "human_geography",
+    "tags": ["人口迁移", "沿海地区", "区位优势"],
+    "canonical_answer": "沿海地区对人口具有较强吸引力，通常与港口贸易、产业集聚、交通可达性、就业机会和城市服务水平较高有关。",
+    "teaching_points": [
+      "产业和岗位是直接吸引因素。",
+      "港口、铁路和高速网络提高了区域联系能力。",
+      "人口迁移也会反过来强化城市扩张和服务需求。"
+    ],
+    "citations": [
+      {
+        "title": "World Bank Urban Development",
+        "url": "https://www.worldbank.org/en/topic/urbandevelopment"
+      },
+      {
+        "title": "UN-Habitat",
+        "url": "https://unhabitat.org/"
+      }
+    ],
+    "related_templates": ["population_migration"],
+    "updated_at": "2026-04-25T00:00:00+00:00"
+  },
+  {
+    "id": "gis_buffer_analysis",
+    "title": "缓冲区分析",
+    "domain": "gis_basics",
+    "tags": ["GIS", "缓冲区", "空间分析"],
+    "canonical_answer": "缓冲区分析是围绕点、线、面目标按指定距离生成影响范围，用于邻近性判断、服务范围分析和风险区识别。",
+    "teaching_points": [
+      "点缓冲区常用于服务半径。",
+      "线缓冲区常用于道路、河流影响范围。",
+      "面缓冲区常用于保护区外围控制带分析。"
+    ],
+    "citations": [
+      {
+        "title": "USGS",
+        "url": "https://www.usgs.gov/"
+      },
+      {
+        "title": "Esri GIS Dictionary",
+        "url": "https://support.esri.com/en-us/gis-dictionary"
+      }
+    ],
+    "related_templates": [],
+    "updated_at": "2026-04-25T00:00:00+00:00"
+  }
+]

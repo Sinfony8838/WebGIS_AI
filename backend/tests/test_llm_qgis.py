@@ -27,15 +27,6 @@ class _SuccessMiniMaxClient:
         return self.payload
 
 
-class _StubQgisBridge:
-    def fallback_plan(self, message: str):  # noqa: ANN001, ANN201
-        return {
-            "assistant_message": "qgis fallback",
-            "target": "qgis",
-            "actions": [{"tool_name": "get_layers", "tool_params": {}}],
-        }
-
-
 class LlmAndQgisIntegrationTest(unittest.TestCase):
     def setUp(self) -> None:
         self.config = AppConfig()
@@ -43,7 +34,7 @@ class LlmAndQgisIntegrationTest(unittest.TestCase):
         self.project = ProjectRecord.create(base_map=self.config.default_basemap())
 
     def test_llm_failure_falls_back_to_rule_planner(self) -> None:
-        planner = LLMPlanner(_FailingMiniMaxClient(), self.rule_planner, _StubQgisBridge())
+        planner = LLMPlanner(_FailingMiniMaxClient(), self.rule_planner)
         plan = planner.plan_actions(
             "解释当前地图",
             self.project,
@@ -54,60 +45,59 @@ class LlmAndQgisIntegrationTest(unittest.TestCase):
         self.assertEqual(plan["target"], "webgis")
         self.assertTrue(plan["actions"])
 
-    def test_llm_valid_json_for_qgis_is_accepted(self) -> None:
+    def test_llm_valid_json_for_webgis_is_accepted(self) -> None:
         payload = (
-            '{"assistant_message":"执行QGIS检查","target":"qgis","actions":'
-            '[{"tool_name":"get_layers","tool_params":{}}]}'
+            '{"assistant_message":"调整地图视角","target":"webgis","actions":'
+            '[{"tool_name":"set_view","tool_params":{"center":[104,35],"zoom":5}}]}'
         )
-        planner = LLMPlanner(_SuccessMiniMaxClient(payload), self.rule_planner, _StubQgisBridge())
-        plan = planner.plan_actions("读取QGIS图层", self.project, target="qgis")
+        planner = LLMPlanner(_SuccessMiniMaxClient(payload), self.rule_planner)
+        plan = planner.plan_actions("perform a custom map view operation", self.project, target="webgis")
         self.assertEqual(plan["planner"], "minimax")
-        self.assertEqual(plan["target"], "qgis")
-        self.assertEqual(plan["actions"][0]["tool_name"], "get_layers")
+        self.assertEqual(plan["target"], "webgis")
+        self.assertEqual(plan["actions"][0]["tool_name"], "set_view")
 
     def test_llm_json_embedded_in_text_is_extracted(self) -> None:
         payload = (
             "Execution plan:\n"
             "```json\n"
-            '{"assistant_message":"执行QGIS检查","target":"qgis","actions":[{"tool_name":"get_layers","tool_params":{}}]}\n'
+            '{"assistant_message":"调整地图视角","target":"webgis","actions":[{"tool_name":"set_view","tool_params":{"center":[104,35],"zoom":5}}]}\n'
             "```\n"
             "End."
         )
-        planner = LLMPlanner(_SuccessMiniMaxClient(payload), self.rule_planner, _StubQgisBridge())
-        plan = planner.plan_actions("读取QGIS图层", self.project, target="qgis")
+        planner = LLMPlanner(_SuccessMiniMaxClient(payload), self.rule_planner)
+        plan = planner.plan_actions("perform another custom map operation", self.project, target="webgis")
         self.assertEqual(plan["planner"], "minimax")
-        self.assertEqual(plan["target"], "qgis")
-        self.assertEqual(plan["actions"][0]["tool_name"], "get_layers")
+        self.assertEqual(plan["target"], "webgis")
+        self.assertEqual(plan["actions"][0]["tool_name"], "set_view")
 
     def test_llm_action_count_is_capped(self) -> None:
-        actions = ",".join(['{"tool_name":"get_layers","tool_params":{}}' for _ in range(25)])
+        actions = ",".join(['{"tool_name":"set_view","tool_params":{"center":[104,35],"zoom":5}}' for _ in range(25)])
         payload = (
-            '{"assistant_message":"批量动作","target":"qgis","actions":['
+            '{"assistant_message":"批量动作","target":"webgis","actions":['
             + actions
             + "]}"
         )
-        planner = LLMPlanner(_SuccessMiniMaxClient(payload), self.rule_planner, _StubQgisBridge())
-        plan = planner.plan_actions("读取QGIS图层", self.project, target="qgis")
+        planner = LLMPlanner(_SuccessMiniMaxClient(payload), self.rule_planner)
+        plan = planner.plan_actions("perform batch map operations", self.project, target="webgis")
         self.assertEqual(plan["planner"], "minimax")
         self.assertEqual(len(plan["actions"]), 12)
 
     def test_llm_unknown_tool_is_blocked_and_fallback_used(self) -> None:
         payload = (
-            '{"assistant_message":"危险动作","target":"qgis","actions":'
+            '{"assistant_message":"危险动作","target":"webgis","actions":'
             '[{"tool_name":"run_python_code","tool_params":{"code":"print(1)"}}]}'
         )
-        planner = LLMPlanner(_SuccessMiniMaxClient(payload), self.rule_planner, _StubQgisBridge())
-        plan = planner.plan_actions("执行未知工具", self.project, target="qgis")
+        planner = LLMPlanner(_SuccessMiniMaxClient(payload), self.rule_planner)
+        plan = planner.plan_actions("执行未知工具", self.project, target="webgis")
         self.assertEqual(plan["planner"], "rule_fallback")
-        self.assertEqual(plan["target"], "qgis")
-        self.assertEqual(plan["actions"][0]["tool_name"], "get_layers")
+        self.assertEqual(plan["target"], "webgis")
 
     def test_qgis_bridge_blocks_run_python_code(self) -> None:
         bridge = QgisBridgeClient(self.config)
         with self.assertRaises(ValueError):
             bridge.call("run_python_code")
 
-    def test_runtime_accepts_assistant_target(self) -> None:
+    def test_runtime_normalizes_legacy_qgis_assistant_target(self) -> None:
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
         root_dir = Path(__file__).resolve().parents[2]
@@ -124,7 +114,7 @@ class LlmAndQgisIntegrationTest(unittest.TestCase):
         response = runtime.submit_assistant_message(project["project_id"], "读取图层", target="qgis")
         job = runtime.store.get_job(response["job_id"])
         self.assertIsNotNone(job)
-        self.assertEqual(job.request.get("target"), "qgis")
+        self.assertEqual(job.request.get("target"), "webgis")
         for _ in range(20):
             current = runtime.store.get_job(response["job_id"])
             if current and current.status in {"completed", "failed"}:
