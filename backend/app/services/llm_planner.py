@@ -1,3 +1,22 @@
+"""LLM planner for the in-classroom WebGIS assistant.
+
+After the migration to the backend GIS workflow, the planner is
+WebGIS-only: it produces ``{tool_name, tool_params}`` actions that the
+existing :class:`AssistantService` knows how to execute on the OpenLayers
+map (basemap switching, layer toggles, view changes, POI search, teaching
+maps, etc.). Heavy GIS work is now handled by the workflow pipeline
+(``/workflow/*``), not by this module.
+
+Two paths remain:
+
+* **Voice** input — handed to ``AssistantService.plan_voice_actions``
+  (deterministic, no LLM).
+* **Text** input — first tried by ``AssistantService.plan_actions``;
+  if any of the rule-based actions are recognised the rule plan wins
+  ("rule_preflight"). Otherwise the message is sent to MiniMax which
+  returns a JSON plan; on any failure we fall back to the rule planner
+  again ("rule_fallback").
+"""
 from __future__ import annotations
 
 import json
@@ -7,7 +26,6 @@ from typing import Any, Dict, Iterable, List, Optional
 from ..models import ProjectRecord
 from .assistant import ASSISTANT_TOOL_SCHEMA, AssistantService
 from .minimax_client import MiniMaxClient
-from .qgis_bridge import QGIS_ALLOWED_TOOLS, QGIS_TOOL_SCHEMA, QgisBridgeClient
 
 
 WEBGIS_ALLOWED_TOOLS = {item["name"] for item in ASSISTANT_TOOL_SCHEMA}
@@ -15,10 +33,11 @@ MAX_LLM_ACTIONS = 12
 
 
 class LLMPlanner:
-    def __init__(self, minimax_client: MiniMaxClient, fallback_planner: AssistantService, qgis_bridge: QgisBridgeClient):
+    """Plan WebGIS map actions for the assistant copilot."""
+
+    def __init__(self, minimax_client: MiniMaxClient, fallback_planner: AssistantService):
         self.minimax_client = minimax_client
         self.fallback_planner = fallback_planner
-        self.qgis_bridge = qgis_bridge
 
     def plan_actions(
         self,
@@ -26,28 +45,66 @@ class LLMPlanner:
         project: ProjectRecord,
         map_context: Optional[Dict[str, Any]] = None,
         target: str = "webgis",
+        input_mode: str = "text",
     ) -> Dict[str, Any]:
-        normalized_target = target if target in {"webgis", "qgis", "auto"} else "webgis"
+        """Return a WebGIS action plan dict.
+
+        ``target`` is kept for backward compatibility with existing callers,
+        but the only valid value after the migration is ``"webgis"``. Any
+        other value is normalised down to ``"webgis"`` so the assistant
+        keeps working on the existing UI.
+        """
+        normalized_target = "webgis"
+        normalized_input_mode = input_mode if input_mode in {"text", "voice"} else "text"
+        map_context = map_context or {}
+
+        if normalized_input_mode == "voice":
+            plan = self.fallback_planner.plan_voice_actions(message, project, map_context=map_context)
+            plan["target"] = normalized_target
+            plan["planner"] = "voice_rule" if plan.get("actions") else "voice_clarification"
+            return plan
+
+        rule_plan = self.fallback_planner.plan_actions(message, project, map_context=map_context)
+        if self._should_use_rule_preflight(rule_plan):
+            rule_plan["target"] = normalized_target
+            rule_plan["planner"] = "rule_preflight"
+            return rule_plan
+
         try:
             raw_content = self.minimax_client.chat_completion(
-                self._messages(message, project, map_context or {}, normalized_target),
+                self._messages(message, project, map_context),
                 temperature=0.15,
             )
             parsed = self._parse_json(raw_content)
-            return self._validate_plan(parsed, normalized_target)
+            return self._validate_plan(parsed)
         except Exception as exc:
-            fallback = self._fallback(message, project, map_context or {}, normalized_target)
+            fallback = dict(rule_plan)
+            fallback["target"] = normalized_target
+            fallback["planner"] = "rule_fallback"
             fallback["llm_fallback_reason"] = str(exc)
             return fallback
 
-    def _messages(self, message: str, project: ProjectRecord, map_context: Dict[str, Any], target: str) -> List[Dict[str, str]]:
+    # ------------------------------------------------------------------
+    # Prompt construction
+    # ------------------------------------------------------------------
+
+    def _messages(
+        self,
+        message: str,
+        project: ProjectRecord,
+        map_context: Dict[str, Any],
+    ) -> List[Dict[str, str]]:
         visible_layers = [
-            {"layer_id": layer.layer_id, "name": layer.name, "kind": layer.kind, "geometry_type": layer.geometry_type}
+            {
+                "layer_id": layer.layer_id,
+                "name": layer.name,
+                "kind": layer.kind,
+                "geometry_type": layer.geometry_type,
+            }
             for layer in project.layers
             if layer.visible
         ]
-        context = {
-            "target": target,
+        context: Dict[str, Any] = {
             "project": {
                 "project_id": project.project_id,
                 "active_layer_id": project.active_layer_id,
@@ -57,15 +114,16 @@ class LLMPlanner:
             },
             "map_context": map_context,
             "webgis_tools": ASSISTANT_TOOL_SCHEMA,
-            "qgis_tools": QGIS_TOOL_SCHEMA,
         }
         system = (
-            "You are a geography classroom GIS copilot. Return only valid JSON. "
-            "The JSON schema is {\"assistant_message\": string, \"target\": \"webgis\"|\"qgis\", "
-            "\"actions\": [{\"tool_name\": string, \"tool_params\": object}]}. "
-            "Use only the provided tool names. Do not invent tools. Do not write Python code. "
-            "For target=webgis, use only webgis_tools. For target=qgis, use only qgis_tools. "
-            "Prefer safe, reversible actions and concise classroom-ready Chinese explanations."
+            "You are a geography classroom WebGIS copilot. Return only valid JSON. "
+            "The JSON schema is {\"assistant_message\": string, \"actions\": "
+            "[{\"tool_name\": string, \"tool_params\": object}]}. "
+            "Use only the tool names listed in webgis_tools. Do not invent tools. "
+            "Do not produce QGIS-specific operations — heavy spatial analysis is "
+            "handled by the separate /workflow pipeline and returned to the WebGIS map. "
+            "Prefer safe, reversible actions and concise classroom-ready Chinese "
+            "explanations."
         )
         return [
             {"role": "system", "content": system},
@@ -73,12 +131,15 @@ class LLMPlanner:
             {"role": "user", "content": message},
         ]
 
+    # ------------------------------------------------------------------
+    # JSON parsing and validation
+    # ------------------------------------------------------------------
+
     def _parse_json(self, content: str) -> Dict[str, Any]:
-        cleaned = content.strip()
+        cleaned = (content or "").strip()
         if cleaned.startswith("```"):
             cleaned = re.sub(r"^```(?:json)?", "", cleaned, flags=re.IGNORECASE).strip()
             cleaned = re.sub(r"```$", "", cleaned).strip()
-
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError:
@@ -87,24 +148,19 @@ class LLMPlanner:
                 raise
             return json.loads(extracted)
 
-    def _validate_plan(self, payload: Dict[str, Any], requested_target: str) -> Dict[str, Any]:
-        plan_target = str(payload.get("target") or requested_target)
-        if plan_target == "auto":
-            plan_target = requested_target if requested_target in {"webgis", "qgis"} else "webgis"
-        if plan_target not in {"webgis", "qgis"}:
-            raise ValueError(f"Unsupported LLM target: {plan_target}")
-
-        allowed_tools = QGIS_ALLOWED_TOOLS if plan_target == "qgis" else WEBGIS_ALLOWED_TOOLS
+    def _validate_plan(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("LLM plan must be an object")
         raw_actions = payload.get("actions")
         if not isinstance(raw_actions, list):
             raise ValueError("LLM plan does not contain actions[]")
 
-        actions = []
+        actions: List[Dict[str, Any]] = []
         for item in raw_actions:
             if not isinstance(item, dict):
                 raise ValueError("LLM action must be an object")
             tool_name = str(item.get("tool_name") or "")
-            if tool_name not in allowed_tools:
+            if tool_name not in WEBGIS_ALLOWED_TOOLS:
                 raise ValueError(f"LLM requested unsupported tool: {tool_name}")
             tool_params = item.get("tool_params") or {}
             if not isinstance(tool_params, dict):
@@ -118,12 +174,13 @@ class LLMPlanner:
 
         return {
             "assistant_message": str(payload.get("assistant_message") or "我将按当前地图上下文执行操作。"),
-            "target": plan_target,
+            "target": "webgis",
             "actions": actions,
             "planner": "minimax",
         }
 
-    def _extract_json_object(self, content: str) -> str:
+    @staticmethod
+    def _extract_json_object(content: str) -> str:
         start = content.find("{")
         while start != -1:
             depth = 0
@@ -139,7 +196,6 @@ class LLMPlanner:
                     elif char == '"':
                         in_string = False
                     continue
-
                 if char == '"':
                     in_string = True
                 elif char == "{":
@@ -151,16 +207,30 @@ class LLMPlanner:
             start = content.find("{", start + 1)
         return ""
 
-    def _fallback(self, message: str, project: ProjectRecord, map_context: Dict[str, Any], target: str) -> Dict[str, Any]:
-        if target == "qgis":
-            fallback = self.qgis_bridge.fallback_plan(message)
-            fallback["planner"] = "rule_fallback"
-            return fallback
-        fallback = self.fallback_planner.plan_actions(message, project, map_context=map_context)
-        fallback["target"] = "webgis"
-        fallback["planner"] = "rule_fallback"
-        return fallback
+    @staticmethod
+    def _should_use_rule_preflight(plan: Dict[str, Any]) -> bool:
+        deterministic_tools = {
+            "switch_basemap",
+            "apply_template",
+            "toggle_layer",
+            "reorder_layer",
+            "style_layer",
+            "draw_annotation",
+            "measure",
+            "export_snapshot",
+            "search_poi",
+            "toggle_teaching_map",
+            "open_material",
+        }
+        actions = plan.get("actions") or []
+        return any(
+            str(action.get("tool_name") or "") in deterministic_tools
+            for action in actions
+            if isinstance(action, dict)
+        )
 
 
-def allowed_tool_names(target: str) -> Iterable[str]:
-    return QGIS_ALLOWED_TOOLS if target == "qgis" else WEBGIS_ALLOWED_TOOLS
+def allowed_tool_names(target: str = "webgis") -> Iterable[str]:
+    """Return the WebGIS-only tool whitelist (kept for callers that still
+    expect a ``target`` argument)."""
+    return WEBGIS_ALLOWED_TOOLS

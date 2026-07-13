@@ -31,26 +31,37 @@ class TemplateServiceTest(unittest.TestCase):
 
         items = service.list_templates()["items"]
 
-        self.assertEqual(items[0]["template_id"], "generic_classroom_pack")
-        self.assertEqual(items[0]["chapter_title"], "通用课堂")
-        self.assertEqual(items[0]["unit_title"], "区域认知基础")
-        self.assertEqual(items[1]["template_id"], "population_classroom_pack")
-        self.assertEqual(items[1]["chapter_title"], "人口专题")
-        self.assertEqual(items[1]["unit_title"], "人口空间格局")
-        self.assertIn("template_order", items[1])
+        self.assertEqual(items[0]["template_id"], "population_classroom_pack")
+        self.assertEqual(items[0]["chapter_title"], "人口专题")
+        self.assertEqual(items[0]["unit_title"], "人口空间格局")
+        self.assertIn("template_order", items[0])
+        self.assertNotIn("generic_classroom_pack", {item["template_id"] for item in items})
 
     def test_population_classroom_pack_contains_four_demo_layers(self) -> None:
         _config, _store, service, project_id = self.build_service()
         result = service.apply_template(project_id, "population_classroom_pack")
         layer_names = [layer["name"] for layer in result["layers"]]
-        self.assertIn("人口分布", layer_names)
-        self.assertIn("人口密度", layer_names)
+        self.assertIn("人口分布（省级）", layer_names)
+        self.assertIn("人口密度（省级）", layer_names)
         self.assertIn("人口迁移", layer_names)
         self.assertIn("胡焕庸线对比", layer_names)
 
+    def test_population_distribution_uses_real_province_boundaries(self) -> None:
+        _config, store, service, project_id = self.build_service()
+        service.apply_template(project_id, "population_distribution")
+        layer = next(
+            item for item in store.get_project(project_id).layers
+            if item.layer_id == "builtin_population_regions"
+        )
+        features = layer.data["features"]
+        # 34 real provinces instead of the 7 old rectangular region blocks
+        self.assertGreaterEqual(len(features), 30)
+        names = {feature["properties"].get("name") for feature in features}
+        self.assertIn("河南省", names)
+
     def test_template_report_path_is_unique_across_repeated_runs(self) -> None:
         _config, _store, service, project_id = self.build_service()
-        first = service.apply_template(project_id, "generic_classroom_pack")
-        second = service.apply_template(project_id, "generic_classroom_pack")
+        first = service.apply_template(project_id, "population_classroom_pack")
+        second = service.apply_template(project_id, "population_classroom_pack")
 
         self.assertNotEqual(first["artifacts"][0]["path"], second["artifacts"][0]["path"])

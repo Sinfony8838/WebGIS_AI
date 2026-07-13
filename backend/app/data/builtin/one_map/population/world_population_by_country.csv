@@ -1,0 +1,178 @@
+name,name_en,region_code,population,area,density,source_year,source_name
+斐济,Fiji,FJI,889953,19351.22,45.99,2019,Natural Earth 110m Admin 0 countries
+坦桑尼亚,Tanzania,TZA,58005463,936793.28,61.92,2019,Natural Earth 110m Admin 0 countries
+西撒哈拉,Western Sahara,ESH,603253,96882.36,6.23,2017,Natural Earth 110m Admin 0 countries
+加拿大,Canada,CAN,37589262,9986076.67,3.76,2019,Natural Earth 110m Admin 0 countries
+美国,United States of America,USA,328239523,9493417.3,34.58,2019,Natural Earth 110m Admin 0 countries
+哈萨克斯坦,Kazakhstan,KAZ,18513930,2720727.32,6.8,2019,Natural Earth 110m Admin 0 countries
+乌兹别克斯坦,Uzbekistan,UZB,33580650,460615.3,72.9,2019,Natural Earth 110m Admin 0 countries
+巴布亚新几内亚,Papua New Guinea,PNG,8776109,466532.96,18.81,2019,Natural Earth 110m Admin 0 countries
+印度尼西亚,Indonesia,IDN,270625568,1827223.5,148.11,2019,Natural Earth 110m Admin 0 countries
+阿根廷,Argentina,ARG,44938712,2784576.89,16.14,2019,Natural Earth 110m Admin 0 countries
+智利,Chile,CHL,18952038,814668.81,23.26,2019,Natural Earth 110m Admin 0 countries
+刚果民主共和国,Democratic Republic of the Congo,COD,86790567,2333591.93,37.19,2019,Natural Earth 110m Admin 0 countries
+索马里,Somalia,SOM,10192317.3,486270.75,20.96,2019,Natural Earth 110m Admin 0 countries
+肯尼亚,Kenya,KEN,52573973,593398.62,88.6,2019,Natural Earth 110m Admin 0 countries
+苏丹,Sudan,SDN,42813238,1856202.21,23.06,2019,Natural Earth 110m Admin 0 countries
+乍得,Chad,TCD,15946876,1274814.69,12.51,2019,Natural Earth 110m Admin 0 countries
+海地,Haiti,HTI,11263077,28624.64,393.47,2019,Natural Earth 110m Admin 0 countries
+多米尼加,Dominican Republic,DOM,10738958,48306.27,222.31,2019,Natural Earth 110m Admin 0 countries
+俄罗斯,Russia,RUS,144373535,16926455.47,8.53,2019,Natural Earth 110m Admin 0 countries
+巴哈马,The Bahamas,BHS,389482,15614.86,24.94,2019,Natural Earth 110m Admin 0 countries
+福克兰群岛,Falkland Islands,FLK,3398,16311.61,0.21,2016,Natural Earth 110m Admin 0 countries
+挪威,Norway,NOR,5347896,394589.78,13.55,2019,Natural Earth 110m Admin 0 countries
+格陵兰,Greenland,GRL,56225,2190190.43,0.03,2019,Natural Earth 110m Admin 0 countries
+法属南部和南极领地,French Southern and Antarctic Lands,ATF,140,11552.23,0.01,2017,Natural Earth 110m Admin 0 countries
+东帝汶,East Timor,TLS,1293119,14772.26,87.54,2019,Natural Earth 110m Admin 0 countries
+南非,South Africa,ZAF,58558270,1217958.24,48.08,2019,Natural Earth 110m Admin 0 countries
+莱索托,Lesotho,LSO,2125268,27532.64,77.19,2019,Natural Earth 110m Admin 0 countries
+墨西哥,Mexico,MEX,127575529,1973787.84,64.63,2019,Natural Earth 110m Admin 0 countries
+乌拉圭,Uruguay,URY,3461734,176976.94,19.56,2019,Natural Earth 110m Admin 0 countries
+巴西,Brazil,BRA,211049527,8540552.42,24.71,2019,Natural Earth 110m Admin 0 countries
+玻利维亚,Bolivia,BOL,11513100,1088819.28,10.57,2019,Natural Earth 110m Admin 0 countries
+秘鲁,Peru,PER,32510453,1314818.49,24.73,2019,Natural Earth 110m Admin 0 countries
+哥伦比亚,Colombia,COL,50339443,1156904.04,43.51,2019,Natural Earth 110m Admin 0 countries
+巴拿马,Panama,PAN,4246439,75578.43,56.19,2019,Natural Earth 110m Admin 0 countries
+哥斯达黎加,Costa Rica,CRI,5047561,54049.46,93.39,2019,Natural Earth 110m Admin 0 countries
+尼加拉瓜,Nicaragua,NIC,6545502,130040.19,50.33,2019,Natural Earth 110m Admin 0 countries
+洪都拉斯,Honduras,HND,9746117,114197.6,85.34,2019,Natural Earth 110m Admin 0 countries
+萨尔瓦多,El Salvador,SLV,6453553,20972.41,307.72,2019,Natural Earth 110m Admin 0 countries
+危地马拉,Guatemala,GTM,16604026,109828.88,151.18,2019,Natural Earth 110m Admin 0 countries
+伯利兹,Belize,BLZ,390353,22116.29,17.65,2019,Natural Earth 110m Admin 0 countries
+委内瑞拉,Venezuela,VEN,28515829,912337.31,31.26,2019,Natural Earth 110m Admin 0 countries
+圭亚那,Guyana,GUY,782766,210714.73,3.71,2019,Natural Earth 110m Admin 0 countries
+苏里南,Suriname,SUR,581363,144901.77,4.01,2019,Natural Earth 110m Admin 0 countries
+法国,France,FRA,67059887,643811.64,104.16,2019,Natural Earth 110m Admin 0 countries
+厄瓜多尔,Ecuador,ECU,17373662,251859.02,68.98,2019,Natural Earth 110m Admin 0 countries
+波多黎各,Puerto Rico,PRI,3193694,9253.85,345.12,2019,Natural Earth 110m Admin 0 countries
+牙买加,Jamaica,JAM,2948279,12501.89,235.83,2019,Natural Earth 110m Admin 0 countries
+古巴,Cuba,CUB,11333483,115175.82,98.4,2019,Natural Earth 110m Admin 0 countries
+津巴布韦,Zimbabwe,ZWE,14645468,377428.86,38.8,2019,Natural Earth 110m Admin 0 countries
+博茨瓦纳,Botswana,BWA,2303697,593444.14,3.88,2019,Natural Earth 110m Admin 0 countries
+纳米比亚,Namibia,NAM,2494530,827304.88,3.02,2019,Natural Earth 110m Admin 0 countries
+塞内加尔,Senegal,SEN,16296364,195112.65,83.52,2019,Natural Earth 110m Admin 0 countries
+马里,Mali,MLI,19658031,1238542.15,15.87,2019,Natural Earth 110m Admin 0 countries
+毛里塔尼亚,Mauritania,MRT,4525696,1055694.16,4.29,2019,Natural Earth 110m Admin 0 countries
+贝宁,Benin,BEN,11801151,117476.63,100.46,2019,Natural Earth 110m Admin 0 countries
+尼日尔,Niger,NER,23310715,1185334.94,19.67,2019,Natural Earth 110m Admin 0 countries
+尼日利亚,Nigeria,NGA,200963599,908758.75,221.14,2019,Natural Earth 110m Admin 0 countries
+喀麦隆,Cameroon,CMR,25876380,462302.16,55.97,2019,Natural Earth 110m Admin 0 countries
+多哥,Togo,TGO,8082366,61223.69,132.01,2019,Natural Earth 110m Admin 0 countries
+加纳,Ghana,GHA,30417856,244497.06,124.41,2019,Natural Earth 110m Admin 0 countries
+科特迪瓦,Ivory Coast,CIV,25716544,331228.58,77.64,2019,Natural Earth 110m Admin 0 countries
+几内亚,Guinea,GIN,12771246,240533.86,53.1,2019,Natural Earth 110m Admin 0 countries
+几内亚比绍,Guinea-Bissau,GNB,1920922,36312.5,52.9,2019,Natural Earth 110m Admin 0 countries
+利比里亚,Liberia,LBR,4937374,98637.41,50.06,2019,Natural Earth 110m Admin 0 countries
+塞拉利昂,Sierra Leone,SLE,7813215,76300.95,102.4,2019,Natural Earth 110m Admin 0 countries
+布基纳法索,Burkina Faso,BFA,20321378,272637.06,74.54,2019,Natural Earth 110m Admin 0 countries
+中非共和国,Central African Republic,CAF,4745185,624509.53,7.6,2019,Natural Earth 110m Admin 0 countries
+刚果共和国,Republic of the Congo,COG,5380508,341186.49,15.77,2019,Natural Earth 110m Admin 0 countries
+加蓬,Gabon,GAB,2172579,270672.65,8.03,2019,Natural Earth 110m Admin 0 countries
+赤道几内亚,Equatorial Guinea,GNQ,1355986,27239.26,49.78,2019,Natural Earth 110m Admin 0 countries
+赞比亚,Zambia,ZMB,17861030,754611.88,23.67,2019,Natural Earth 110m Admin 0 countries
+马拉维,Malawi,MWI,18628747,111625.26,166.89,2019,Natural Earth 110m Admin 0 countries
+莫桑比克,Mozambique,MOZ,30366036,813738.6,37.32,2019,Natural Earth 110m Admin 0 countries
+斯威士兰,Eswatini,SWZ,1148130,18147.08,63.27,2019,Natural Earth 110m Admin 0 countries
+安哥拉,Angola,AGO,31825295,1249853.22,25.46,2019,Natural Earth 110m Admin 0 countries
+布隆迪,Burundi,BDI,11530580,26354.81,437.51,2019,Natural Earth 110m Admin 0 countries
+以色列,Israel,ISR,9053300,23075.52,392.33,2019,Natural Earth 110m Admin 0 countries
+黎巴嫩,Lebanon,LBN,6855713,10091.17,679.38,2019,Natural Earth 110m Admin 0 countries
+马达加斯加,Madagascar,MDG,26969307,591045.46,45.63,2019,Natural Earth 110m Admin 0 countries
+巴勒斯坦,Palestine,PSE,4685306,5038.72,929.86,2019,Natural Earth 110m Admin 0 countries
+冈比亚,The Gambia,GMB,2347706,14081.99,166.72,2019,Natural Earth 110m Admin 0 countries
+突尼斯,Tunisia,TUN,11694719,156318.87,74.81,2019,Natural Earth 110m Admin 0 countries
+阿尔及利亚,Algeria,DZA,43053054,2321934.12,18.54,2019,Natural Earth 110m Admin 0 countries
+约旦,Jordan,JOR,10101694,89151.38,113.31,2019,Natural Earth 110m Admin 0 countries
+阿拉伯联合酋长国,United Arab Emirates,ARE,9770529,80217.2,121.8,2019,Natural Earth 110m Admin 0 countries
+卡塔尔,Qatar,QAT,2832067,11350.96,249.5,2019,Natural Earth 110m Admin 0 countries
+科威特,Kuwait,KWT,4207083,16653.25,252.63,2019,Natural Earth 110m Admin 0 countries
+伊拉克,Iraq,IRQ,39309783,437515.17,89.85,2019,Natural Earth 110m Admin 0 countries
+阿曼,Oman,OMN,4974986,309965.71,16.05,2019,Natural Earth 110m Admin 0 countries
+瓦努阿图,Vanuatu,VUT,299882,7521.42,39.87,2019,Natural Earth 110m Admin 0 countries
+柬埔寨,Cambodia,KHM,16486542,182951.85,90.11,2019,Natural Earth 110m Admin 0 countries
+泰国,Thailand,THA,69625582,511935.01,136.0,2019,Natural Earth 110m Admin 0 countries
+老挝,Laos,LAO,7169455,229752.81,31.21,2019,Natural Earth 110m Admin 0 countries
+缅甸,Myanmar,MMR,54045420,681457.25,79.31,2019,Natural Earth 110m Admin 0 countries
+越南,Vietnam,VNM,96462106,337137.48,286.12,2019,Natural Earth 110m Admin 0 countries
+朝鲜民主主义人民共和国,North Korea,PRK,25666161,125451.27,204.59,2019,Natural Earth 110m Admin 0 countries
+大韩民国,South Korea,KOR,51709098,99016.74,522.23,2019,Natural Earth 110m Admin 0 countries
+蒙古国,Mongolia,MNG,3225167,1540286.79,2.09,2019,Natural Earth 110m Admin 0 countries
+印度,India,IND,1366417754,3150308.66,433.74,2019,Natural Earth 110m Admin 0 countries
+孟加拉国,Bangladesh,BGD,163046161,134064.96,1216.17,2019,Natural Earth 110m Admin 0 countries
+不丹,Bhutan,BTN,763092,39440.02,19.35,2019,Natural Earth 110m Admin 0 countries
+尼泊尔,Nepal,NPL,28608710,150940.64,189.54,2019,Natural Earth 110m Admin 0 countries
+巴基斯坦,Pakistan,PAK,216565318,875273.31,247.43,2019,Natural Earth 110m Admin 0 countries
+阿富汗,Afghanistan,AFG,38041754,652497.15,58.3,2019,Natural Earth 110m Admin 0 countries
+塔吉克斯坦,Tajikistan,TJK,9321018,137922.61,67.58,2019,Natural Earth 110m Admin 0 countries
+吉尔吉斯斯坦,Kyrgyzstan,KGZ,6456900,195598.0,33.01,2019,Natural Earth 110m Admin 0 countries
+土库曼斯坦,Turkmenistan,TKM,5942089,480332.0,12.37,2019,Natural Earth 110m Admin 0 countries
+伊朗,Iran,IRN,82913906,1618717.13,51.22,2019,Natural Earth 110m Admin 0 countries
+叙利亚,Syria,SYR,17070135,185269.94,92.14,2019,Natural Earth 110m Admin 0 countries
+亚美尼亚,Armenia,ARM,2957731,28612.63,103.37,2019,Natural Earth 110m Admin 0 countries
+瑞典,Sweden,SWE,10285453,448002.69,22.96,2019,Natural Earth 110m Admin 0 countries
+白俄罗斯,Belarus,BLR,9466856,208059.63,45.5,2019,Natural Earth 110m Admin 0 countries
+乌克兰,Ukraine,UKR,44385155,570720.15,77.77,2019,Natural Earth 110m Admin 0 countries
+波兰,Poland,POL,37970874,309156.44,122.82,2019,Natural Earth 110m Admin 0 countries
+奥地利,Austria,AUT,8877067,84842.58,104.63,2019,Natural Earth 110m Admin 0 countries
+匈牙利,Hungary,HUN,9769949,92241.67,105.92,2019,Natural Earth 110m Admin 0 countries
+摩尔多瓦,Moldova,MDA,2657637,32237.56,82.44,2019,Natural Earth 110m Admin 0 countries
+罗马尼亚,Romania,ROU,19356544,237802.25,81.4,2019,Natural Earth 110m Admin 0 countries
+立陶宛,Lithuania,LTU,2786844,63528.2,43.87,2019,Natural Earth 110m Admin 0 countries
+拉脱维亚,Latvia,LVA,1912789,63607.19,30.07,2019,Natural Earth 110m Admin 0 countries
+爱沙尼亚,Estonia,EST,1326590,44431.4,29.86,2019,Natural Earth 110m Admin 0 countries
+德国,Germany,DEU,83132799,356102.94,233.45,2019,Natural Earth 110m Admin 0 countries
+保加利亚,Bulgaria,BGR,6975761,110027.86,63.4,2019,Natural Earth 110m Admin 0 countries
+希腊,Greece,GRC,10716322,131882.52,81.26,2019,Natural Earth 110m Admin 0 countries
+土耳其,Turkey,TUR,83429615,797976.31,104.55,2019,Natural Earth 110m Admin 0 countries
+阿尔巴尼亚,Albania,ALB,2854191,29655.9,96.24,2019,Natural Earth 110m Admin 0 countries
+克罗地亚,Croatia,HRV,4067500,57422.42,70.83,2019,Natural Earth 110m Admin 0 countries
+瑞士,Switzerland,CHE,8574832,46049.74,186.21,2019,Natural Earth 110m Admin 0 countries
+卢森堡,Luxembourg,LUX,619896,2407.55,257.48,2019,Natural Earth 110m Admin 0 countries
+比利时,Belgium,BEL,11484055,30027.62,382.45,2019,Natural Earth 110m Admin 0 countries
+荷兰,Netherlands,NLD,17332850,39774.24,435.78,2019,Natural Earth 110m Admin 0 countries
+葡萄牙,Portugal,PRT,10269417,93309.9,110.06,2019,Natural Earth 110m Admin 0 countries
+西班牙,Spain,ESP,47076781,501661.72,93.84,2019,Natural Earth 110m Admin 0 countries
+爱尔兰,Ireland,IRL,4941444,58235.26,84.85,2019,Natural Earth 110m Admin 0 countries
+新喀里多尼亚,New Caledonia,NCL,287800,23278.38,12.36,2019,Natural Earth 110m Admin 0 countries
+所罗门群岛,Solomon Islands,SLB,669823,24826.82,26.98,2019,Natural Earth 110m Admin 0 countries
+新西兰,New Zealand,NZL,4917000,277275.42,17.73,2019,Natural Earth 110m Admin 0 countries
+澳大利亚,Australia,AUS,25364307,7702079.91,3.29,2019,Natural Earth 110m Admin 0 countries
+斯里兰卡,Sri Lanka,LKA,21803000,65635.8,332.18,2019,Natural Earth 110m Admin 0 countries
+中华人民共和国,People's Republic of China,CHN,1397715000,9407764.39,148.57,2019,Natural Earth 110m Admin 0 countries
+中华民国,Taiwan,TWN,23568378,34448.74,684.16,2020,Natural Earth 110m Admin 0 countries
+意大利,Italy,ITA,60297396,314588.89,191.67,2019,Natural Earth 110m Admin 0 countries
+丹麦,Denmark,DNK,5818553,42589.19,136.62,2019,Natural Earth 110m Admin 0 countries
+英国,United Kingdom,GBR,66834405,248869.51,268.55,2019,Natural Earth 110m Admin 0 countries
+冰岛,Iceland,ISL,361313,107180.1,3.37,2019,Natural Earth 110m Admin 0 countries
+阿塞拜疆,Azerbaijan,AZE,10023318,91031.62,110.11,2019,Natural Earth 110m Admin 0 countries
+格鲁吉亚,Georgia,GEO,3720382,68924.08,53.98,2019,Natural Earth 110m Admin 0 countries
+菲律宾,Philippines,PHL,108116615,293395.75,368.5,2019,Natural Earth 110m Admin 0 countries
+马来西亚,Malaysia,MYS,31949777,339717.22,94.05,2019,Natural Earth 110m Admin 0 countries
+文莱,Brunei,BRN,433285,10745.87,40.32,2019,Natural Earth 110m Admin 0 countries
+斯洛文尼亚,Slovenia,SVN,2087946,19070.08,109.49,2019,Natural Earth 110m Admin 0 countries
+芬兰,Finland,FIN,5520314,339088.06,16.28,2019,Natural Earth 110m Admin 0 countries
+斯洛伐克,Slovakia,SVK,5454073,46924.27,116.23,2019,Natural Earth 110m Admin 0 countries
+捷克,Czech Republic,CZE,10669709,80938.95,131.82,2019,Natural Earth 110m Admin 0 countries
+厄立特里亚,Eritrea,ERI,6081196,119689.95,50.81,2020,Natural Earth 110m Admin 0 countries
+日本,Japan,JPN,126264931,404362.09,312.26,2019,Natural Earth 110m Admin 0 countries
+巴拉圭,Paraguay,PRY,7044636,402205.63,17.52,2019,Natural Earth 110m Admin 0 countries
+也门,Yemen,YEM,29161922,457340.63,63.76,2019,Natural Earth 110m Admin 0 countries
+沙特阿拉伯,Saudi Arabia,SAU,34268528,1924274.02,17.81,2019,Natural Earth 110m Admin 0 countries
+南极洲,Antarctica,ATA,4490,12238054.01,0.0,2019,Natural Earth 110m Admin 0 countries
+北塞浦路斯土耳其共和国,Turkish Republic of Northern Cyprus,CYN,326000,3782.1,86.2,2017,Natural Earth 110m Admin 0 countries
+塞浦路斯,Cyprus,CYP,1198575,6221.37,192.65,2019,Natural Earth 110m Admin 0 countries
+摩洛哥,Morocco,MAR,36471769,592486.65,61.56,2019,Natural Earth 110m Admin 0 countries
+埃及,Egypt,EGY,100388073,999009.68,100.49,2019,Natural Earth 110m Admin 0 countries
+利比亚,Libya,LBY,6777452,1637754.35,4.14,2019,Natural Earth 110m Admin 0 countries
+埃塞俄比亚,Ethiopia,ETH,112078730,1137153.63,98.56,2019,Natural Earth 110m Admin 0 countries
+吉布提,Djibouti,DJI,973560,21965.93,44.32,2019,Natural Earth 110m Admin 0 countries
+索马里兰,Somaliland,SOL,5096159,168160.54,30.31,2014,Natural Earth 110m Admin 0 countries
+乌干达,Uganda,UGA,44269594,246860.18,179.33,2019,Natural Earth 110m Admin 0 countries
+卢旺达,Rwanda,RWA,12626950,23469.77,538.01,2019,Natural Earth 110m Admin 0 countries
+波斯尼亚和黑塞哥维那,Bosnia and Herzegovina,BIH,3301000,50514.28,65.35,2019,Natural Earth 110m Admin 0 countries
+北马其顿,North Macedonia,MKD,2083459,25025.76,83.25,2019,Natural Earth 110m Admin 0 countries
+塞尔维亚,Serbia,SRB,6944975,76217.44,91.12,2019,Natural Earth 110m Admin 0 countries
+黑山,Montenegro,MNE,622137,13423.44,46.35,2019,Natural Earth 110m Admin 0 countries
+科索沃,Kosovo,KOS,1794248,11213.31,160.01,2019,Natural Earth 110m Admin 0 countries
+特立尼达和多巴哥,Trinidad and Tobago,TTO,1394973,7770.26,179.53,2019,Natural Earth 110m Admin 0 countries
+南苏丹,South Sudan,SSD,11062113,627561.43,17.63,2019,Natural Earth 110m Admin 0 countries

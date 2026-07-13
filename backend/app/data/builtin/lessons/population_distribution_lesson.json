@@ -1,0 +1,344 @@
+{
+  "lesson_id": "lesson_builtin_population_distribution",
+  "title": "人口分布：中国人口的空间格局与胡焕庸线",
+  "subject": "地理",
+  "grade": "高中必修二 第一章第一节",
+  "source": "builtin",
+  "objectives": [
+    "借助人口专题图层，描述中国人口分布的基本特点",
+    "掌握“总体格局-高低值区域-分界线-影响因素”的四步描述框架",
+    "结合自然与人文因素，解释中国人口东南多、西北少的原因",
+    "通过图层观察、指标查询、地图标注与截图输出，形成地理实践成果"
+  ],
+  "metadata": {
+    "duration_minutes": 40,
+    "reference": "人教版高中地理必修二《人口分布》",
+    "design_note": "免配准版：课堂证据只使用内置矢量图层、指标查询、标注与截图，不依赖图片覆盖层。",
+    "builtin_version": "2"
+  },
+  "stages": [
+    {
+      "stage_id": "s1",
+      "title": "问题导入：人口分布均匀吗",
+      "minutes": 3,
+      "scene": {
+        "basemap_id": "amap_light",
+        "templates": ["population_distribution"],
+        "layer_visibility": {
+          "builtin_population_regions": true,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {"center": [104.0, 35.0], "zoom": 4},
+        "annotations": [],
+        "visual_query": null
+      },
+      "script": [
+        "今天我们不先背结论，而是先看地图。请大家观察人口分布图：中国人口是均匀分布的吗？",
+        "如果人口是均匀分布的，这张地图应该是什么样子？"
+      ],
+      "questions": [
+        {
+          "question_id": "s1q1",
+          "type": "choice",
+          "text": "观察当前人口分布图，中国人口分布的总体特征是？",
+          "options": ["大致均匀分布", "东南部稠密、西北部稀疏", "西北部稠密、东南部稀疏", "只集中在沿海城市"],
+          "answer_index": 1,
+          "expected_points": ["分布不均", "东多西少", "沿海、平原集中"],
+          "misconceptions": [
+            {"tag": "只见城市不见格局", "description": "只注意到个别大城市，没有形成东南-西北的整体格局认识"}
+          ]
+        }
+      ],
+      "assistant_prompts": ["请结合当前人口分布图层，用一句课堂语言概括中国人口分布的总体特征。"]
+    },
+    {
+      "stage_id": "s2",
+      "title": "概念建构：人口分布与人口密度",
+      "minutes": 4,
+      "scene": {
+        "basemap_id": "amap_light",
+        "templates": ["population_distribution", "population_density"],
+        "layer_visibility": {
+          "builtin_population_regions": false,
+          "builtin_population_density": true,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {"center": [104.0, 35.0], "zoom": 4},
+        "annotations": [
+          {"text": "人口较稠密", "position": [117.2, 32.0]},
+          {"text": "人口较稀疏", "position": [85.0, 40.5]}
+        ],
+        "visual_query": null
+      },
+      "script": [
+        "人口分布是集散状况，人口密度是平均每平方千米的人口数。",
+        "人口数量是绝对量，容易受区域面积影响；人口密度是相对量，更适合比较不同地区的人口疏密。"
+      ],
+      "questions": [
+        {
+          "question_id": "s2q1",
+          "type": "open",
+          "text": "为什么比较不同地区人口疏密时要看人口密度，而不能只看人口数量？",
+          "options": [],
+          "answer_index": null,
+          "expected_points": ["面积不同数量不可直接比较", "密度反映单位面积人口"],
+          "misconceptions": [
+            {"tag": "混淆数量与密度", "description": "认为人口多的地区密度一定高，忽略区域面积差异"}
+          ]
+        },
+        {
+          "question_id": "s2q2",
+          "type": "choice",
+          "text": "甲区域人口 500 万、面积 50 万平方千米；乙区域人口 300 万、面积 10 万平方千米。下列说法正确的是？",
+          "options": ["甲区域人口密度更高", "乙区域人口密度更高", "两区域人口密度相同", "人口多的区域密度一定高"],
+          "answer_index": 1,
+          "expected_points": ["密度=人口÷面积", "乙 30 人/km² 大于甲 10 人/km²"],
+          "misconceptions": [
+            {"tag": "混淆数量与密度", "description": "直接用人口总数判断疏密，没有除以面积"}
+          ]
+        }
+      ],
+      "assistant_prompts": ["请用高中生能听懂的方式解释人口数量与人口密度的区别，并结合当前密度图举一个例子。"]
+    },
+    {
+      "stage_id": "s3",
+      "title": "数据探究：2020 年地级市人口 Top20",
+      "minutes": 6,
+      "scene": {
+        "basemap_id": "amap_light",
+        "templates": [],
+        "layer_visibility": {
+          "builtin_population_regions": false,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {"center": [107.0, 33.0], "zoom": 4},
+        "annotations": [],
+        "visual_query": {
+          "dataset": "prefecture_population",
+          "metric": "population",
+          "operation": "top",
+          "year": 2020,
+          "limit": 20,
+          "order": "desc",
+          "geo_level": "prefecture"
+        }
+      },
+      "script": [
+        "现在系统按七普数据查询出 2020 年人口最多的 20 个地级市，并在地图上高亮。",
+        "小组任务：观察这 20 个城市的位置，它们在空间上有什么共同点？"
+      ],
+      "questions": [
+        {
+          "question_id": "s3q1",
+          "type": "open",
+          "text": "人口 Top20 的地级市在空间分布上有哪些共同特征？",
+          "options": [],
+          "answer_index": null,
+          "expected_points": ["多位于东部沿海或平原", "多为省会/直辖市等经济中心", "基本都在胡焕庸线东南侧"],
+          "misconceptions": [
+            {"tag": "以行政级别代替区位", "description": "只回答“都是大城市/省会”，没有落到地形、沿海、经济区位等空间证据"}
+          ]
+        }
+      ],
+      "assistant_prompts": ["请根据当前高亮的人口Top20城市，引导学生归纳它们的区位共性。"]
+    },
+    {
+      "stage_id": "s4",
+      "title": "中国主案例：胡焕庸线两侧差异",
+      "minutes": 8,
+      "scene": {
+        "basemap_id": "amap_light",
+        "templates": ["population_distribution", "hu_line_comparison"],
+        "layer_visibility": {
+          "builtin_population_regions": true,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": true
+        },
+        "view": {"center": [104.0, 35.0], "zoom": 4},
+        "annotations": [
+          {"text": "黑河", "position": [127.53, 50.24]},
+          {"text": "腾冲", "position": [98.49, 25.02]},
+          {"text": "东南稠密区", "position": [113.0, 28.5]},
+          {"text": "西北稀疏区", "position": [88.0, 41.5]}
+        ],
+        "visual_query": null
+      },
+      "script": [
+        "现在我们打开胡焕庸线。请注意，这条线不是孤立的人口线，它背后反映了自然环境和区域发展的长期差异。",
+        "胡焕庸线两侧人口分布有什么明显差异？这条线也反映了哪些自然环境差异？"
+      ],
+      "questions": [
+        {
+          "question_id": "s4q1",
+          "type": "choice",
+          "text": "胡焕庸线东南侧约占国土面积 43%，人口大约占全国的多少？",
+          "options": ["约 50%", "约 70%", "约 94%", "约 30%"],
+          "answer_index": 2,
+          "expected_points": ["东南侧人口高度集中"],
+          "misconceptions": [
+            {"tag": "面积决定人口", "description": "认为面积越大的一侧人口一定越多，忽略自然与经济条件"}
+          ]
+        },
+        {
+          "question_id": "s4q2",
+          "type": "open",
+          "text": "东南侧为什么更容易形成人口集聚？",
+          "options": [],
+          "answer_index": null,
+          "expected_points": ["地势低平、气候湿润", "农业基础好", "交通城市密集、经济发达"],
+          "misconceptions": [
+            {"tag": "单因素解释", "description": "只用一个因素（如只有气候）解释，缺少自然+人文的综合视角"}
+          ]
+        }
+      ],
+      "assistant_prompts": ["请根据当前地图提出一个追问，引导学生解释胡焕庸线两侧人口差异。"]
+    },
+    {
+      "stage_id": "s5",
+      "title": "影响因素归纳：自然与人文共同作用",
+      "minutes": 8,
+      "scene": {
+        "basemap_id": "amap_light",
+        "templates": ["population_distribution", "hu_line_comparison"],
+        "layer_visibility": {
+          "builtin_population_regions": true,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": true
+        },
+        "view": {"center": [104.0, 35.0], "zoom": 4},
+        "annotations": [],
+        "visual_query": null
+      },
+      "script": [
+        "影响人口分布的因素分两类：自然因素（气候、地形、水源、土壤、矿产）与人文因素（经济、交通、历史开发、政策、生产方式、文化）。",
+        "小组任务：每组选择一个因素，用“因素-地图证据-解释”的句式表达。"
+      ],
+      "questions": [
+        {
+          "question_id": "s5q1",
+          "type": "open",
+          "text": "选择一个影响因素，用“因素-地图证据-解释”说明它如何影响中国人口分布。",
+          "options": [],
+          "answer_index": null,
+          "expected_points": ["气候：东部季风区水热好", "地形：平原开发难度小", "水源：干旱区沿河沿绿洲", "经济：就业机会吸引集聚", "交通：便利地区集聚"],
+          "misconceptions": [
+            {"tag": "结论无证据", "description": "直接背因素结论，没有指出地图上的对应空间证据"},
+            {"tag": "自然人文割裂", "description": "认为只有自然因素起作用，忽略经济、交通等人文因素的强化作用"}
+          ]
+        }
+      ],
+      "assistant_prompts": ["请分别举一个自然因素和一个人文因素影响人口分布的中国实例，并说明地图上能看到的证据。"]
+    },
+    {
+      "stage_id": "s6",
+      "title": "城市尺度补充：长三角为什么密",
+      "minutes": 5,
+      "scene": {
+        "basemap_id": "amap_light",
+        "templates": ["population_density"],
+        "layer_visibility": {
+          "builtin_population_regions": false,
+          "builtin_population_density": true,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {"center": [120.2, 31.3], "zoom": 7},
+        "annotations": [
+          {"text": "长三角城市群", "position": [120.2, 31.3]}
+        ],
+        "visual_query": null
+      },
+      "script": [
+        "我们把视角拉近到长三角。为什么上海及长三角地区能形成这么高的人口密度和人口吸引力？"
+      ],
+      "questions": [
+        {
+          "question_id": "s6q1",
+          "type": "open",
+          "text": "长三角地区高人口密度的形成，主要有哪些人文原因？",
+          "options": [],
+          "answer_index": null,
+          "expected_points": ["经济发达就业多", "交通便利对外联系强", "城市化水平高、公共服务完善", "历史开发基础好"],
+          "misconceptions": [
+            {"tag": "只谈自然条件", "description": "只回答地形平坦、气候湿润，没有触及经济、交通、城市化等人文动力"}
+          ]
+        }
+      ],
+      "assistant_prompts": ["请结合当前长三角视图，说明经济、交通与城市化如何共同推高区域人口密度。"]
+    },
+    {
+      "stage_id": "s7",
+      "title": "课堂总结：证据链定格",
+      "minutes": 4,
+      "scene": {
+        "basemap_id": "amap_light",
+        "templates": ["population_distribution", "hu_line_comparison"],
+        "layer_visibility": {
+          "builtin_population_regions": true,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": true
+        },
+        "view": {"center": [104.0, 35.0], "zoom": 4},
+        "annotations": [
+          {"text": "黑河", "position": [127.53, 50.24]},
+          {"text": "腾冲", "position": [98.49, 25.02]}
+        ],
+        "visual_query": null
+      },
+      "script": [
+        "描述人口分布四步：先说总体是否均匀，再说哪里多哪里少，再找分界线或集聚区，最后从自然和人文因素解释。",
+        "现在导出当前地图截图，作为本节课共同完成的证据链：人口分布现象、胡焕庸线、东西差异和课堂标注都在里面。"
+      ],
+      "questions": [],
+      "assistant_prompts": ["请把本节课的四步描述法整理成一段可以直接抄在笔记上的总结。"]
+    },
+    {
+      "stage_id": "s8",
+      "title": "即时评价：四步法检测",
+      "minutes": 2,
+      "scene": {
+        "basemap_id": "amap_light",
+        "templates": ["population_distribution", "hu_line_comparison"],
+        "layer_visibility": {
+          "builtin_population_regions": true,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": true
+        },
+        "view": {"center": [104.0, 35.0], "zoom": 4},
+        "annotations": [],
+        "visual_query": null
+      },
+      "script": [
+        "最后一道检测题，用今天学的四步法判断哪一个描述最规范。"
+      ],
+      "questions": [
+        {
+          "question_id": "s8q1",
+          "type": "choice",
+          "text": "下列关于中国人口分布的描述，最符合“四步法”的是？",
+          "options": [
+            "中国人口很多，大城市人特别多",
+            "中国人口分布不均，东南部稠密、西北部稀疏，以胡焕庸线为界，主要受地形气候与经济交通共同影响",
+            "中国东部有很多人，因为东部好",
+            "中国人口以胡焕庸线为界，线的东侧都是城市"
+          ],
+          "answer_index": 1,
+          "expected_points": ["总体格局", "高低值区域", "分界线", "自然+人文成因"],
+          "misconceptions": [
+            {"tag": "描述不完整", "description": "只描述现象或只给单一原因，缺少完整的四步结构"}
+          ]
+        }
+      ],
+      "assistant_prompts": []
+    }
+  ]
+}

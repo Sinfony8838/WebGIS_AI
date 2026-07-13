@@ -1,170 +1,204 @@
 # WebGIS-AI
 
-`WebGIS-AI` 是面向地理课堂实时演示的本地 WebGIS 系统，采用“全屏地图 + 悬浮面板 + 智能助教副驾驶”的课堂大屏模式。
+`WebGIS-AI` 是面向地理课堂实时演示、读图讲解与 GIS 探究的本地 WebGIS 智能教学平台。项目当前主线已经从早期的 QGIS 教学脚本与文档产物生成，转向“全屏地图主舞台 + 悬浮课堂控制台 + 智能助教 + 知识库资料 + PyQGIS 分析工作流”的课堂大屏模式。
 
-## 功能重点
+系统适合在教师机本地运行，用于地理课堂投屏、专题地图讲解、人口/气候/区域等案例分析、空间数据导入、POI 检索、地图标注、截图沉淀和 GIS 方法入门实验。
 
-- 全屏地图主舞台，界面改成浅灰透明悬浮面板
-- 内置多底图切换：`高德标准 / 高德影像 / 高德浅灰`
-- 新增 POI 检索：
-  - 当前视域检索
-  - 手绘区域检索
-  - 结果列表与地图点位联动
-- 智能助教升级为桌面悬浮部件：
-  - 可最小化成圆球
-  - 可拖动
-  - 展开后可移动、缩放
-- 保留课堂模板、数据导入、标注、测距、截图导出
+## 当前定位
 
-## 技术栈
+- **地图主导**：以全屏 WebGIS 地图承载课堂观察、图层对比、标注和结论沉淀。
+- **课堂可控**：教师通过顶部工具栏、左侧抽屉、右侧工具栏和右下角智能助教完成授课操作。
+- **AI 辅助但不黑箱**：智能助教可读图、问答和规划 WebGIS 操作；真正执行的动作受工具白名单、风险评估和后端状态管理约束。
+- **GIS 分析可追溯**：空间分析由后端工作流验证、执行并输出 GeoJSON、样式、统计、PNG 和 Markdown 解释。
+- **本地运行优先**：后端统一持有外部服务 Key，前端不硬编码密钥，适合学校机房、实验室和教师个人电脑部署。
 
-- 前端：`React + TypeScript + Vite + OpenLayers`
-- 后端：`FastAPI`
-- 运行时模型：`projects / jobs / artifacts / SSE job stream`
+## 主要功能
 
-## 整体架构设计
+### 1. 全屏课堂地图
 
-`WebGIS-AI` 采用前后端分离架构。前端负责地图交互、课堂大屏界面和智能助教操作入口；后端负责项目状态、图层数据、课堂模板、POI 检索、文件产物、异步任务和访问控制。
+- 基于 OpenLayers 的全屏地图主舞台。
+- 支持高德标准、高德影像、高德浅灰和兼容 XYZ 底图。
+- 配置 OpenWeatherMap 后可叠加实时降水、云图、温度、风速、气压等天气瓦片。
+- 支持矢量图层、栅格覆盖层、POI 检索结果、课堂标注和测距结果。
+- 支持视图复位、图层显隐、图层选择、要素高亮和地图截图。
 
-```text
-Browser / Classroom Screen
-        |
-        | HTTP JSON / file upload / SSE
-        v
-React + OpenLayers frontend
-        |
-        | REST API client
-        v
-FastAPI backend
-        |
-        +-- Runtime orchestration: projects, layers, jobs, artifacts
-        +-- Services: assistant, templates, datasets, POI, map exports
-        +-- Storage: JSON state, uploaded datasets, generated outputs
-        +-- External services: basemap tiles, POI web service, optional LLM
-```
+### 2. 课堂交互工具
 
-核心数据流：
+- 浏览、标注、测距、绘制 POI 检索区域、清除、缩放。
+- 测距支持实时长度反馈。
+- 标注可直接写入当前地图并沉淀到课堂截图。
+- 左侧课堂控制台提供资料搜索、图层列表和 POI 结果联动。
 
-- 启动后前端调用 `/health`、`/basemaps` 获取运行状态和底图配置。
-- 用户创建或打开课堂项目后，后端用 `project_id` 管理视图、底图、图层、产物和最近操作。
-- 数据上传接口将 `GeoJSON / CSV / ZIP Shapefile / 图片覆盖层` 转换为前端可渲染图层。
-- 课堂模板和智能助教请求会创建后台任务，前端通过 `/jobs/{job_id}` 和 `/jobs/{job_id}/stream` 读取进度。
-- 导出、报告、截图等产物统一登记为 `artifact`，再通过受控文件接口下载。
-- 公网发布时通过 `WEBGIS_AI_AUTH_TOKEN` 做访问令牌校验，通过 `WEBGIS_AI_CORS_ALLOW_ORIGINS` 限制允许访问的前端域名。
+### 3. POI 检索
 
-## 代码文件说明
+配置 `WEBGIS_AI_AMAP_WEB_SERVICE_KEY` 后可使用高德 POI 检索：
 
-```text
-WebGIS-AI/
-├─ README.md                         项目入口说明、启动方式、接口和架构说明
-├─ PROJECT_DESCRIPTION.md             项目介绍材料
-├─ requirements.txt                   后端 Python 依赖
-├─ start_webgis_ai.cmd                Windows 一键启动入口
-├─ scripts/
-│  ├─ start_webgis_ai.ps1             一键启动脚本主体
-│  ├─ build_project_introduction_doc.py
-│  └─ build_defense_ppt.py            说明文档和答辩材料生成脚本
-├─ backend/
-│  ├─ app/
-│  │  ├─ main.py                      FastAPI 应用入口、鉴权中间件和 HTTP 路由
-│  │  ├─ config.py                    环境变量、路径、底图、鉴权和外部服务配置
-│  │  ├─ runtime.py                   课堂运行时编排，连接项目、图层、任务和服务
-│  │  ├─ store.py                     本地 JSON 状态存储，管理 projects/jobs/artifacts
-│  │  ├─ models.py                    Project、Layer、Job、Artifact 数据模型
-│  │  ├─ geo.py                       地理计算辅助函数
-│  │  ├─ data/builtin/                内置课堂模板和人口专题 GeoJSON 数据
-│  │  └─ services/
-│  │     ├─ assistant.py              智能助教规则规划和课堂解释生成
-│  │     ├─ datasets.py               上传数据解析、标准化和图层生成
-│  │     ├─ templates.py              课堂模板执行和专题图层生成
-│  │     ├─ poi.py                    POI 检索、结果标准化和图层转换
-│  │     ├─ minimax_client.py         可选 LLM 客户端封装
-│  │     └─ llm_planner.py            LLM 规划结果校验和规则兜底
-│  └─ tests/                          后端单元测试和接口安全测试
-├─ frontend/
-│  ├─ package.json                    前端依赖和 npm scripts
-│  ├─ vite.config.ts                  Vite 构建配置
-│  └─ src/
-│     ├─ main.tsx                     React 入口
-│     ├─ App.tsx                      主界面、地图舞台、工具栏和状态编排
-│     ├─ api.ts                       后端 API 客户端、鉴权 token 和 SSE URL 处理
-│     ├─ types.ts                     前后端共享的 TypeScript 类型
-│     ├─ styles.css                   全局样式和课堂大屏布局
-│     ├─ components/
-│     │  ├─ BasemapMenu.tsx           底图切换菜单
-│     │  ├─ CopilotWidget.tsx         悬浮智能助教窗口
-│     │  ├─ SideDrawer.tsx            图层、POI 结果和产物抽屉
-│     │  ├─ ToastStack.tsx            全局提示消息
-│     │  └─ UploadDialog.tsx          数据上传对话框
-│     └─ __tests__/                   前端组件和 API 鉴权测试
-└─ docs/                              上线配置、安全核查、课程融合和答辩材料
-```
+- 当前视域检索。
+- 手绘多边形区域检索。
+- 检索结果自动写入点图层。
+- 左侧结果列表与地图点位联动。
 
-## 当前界面
+### 4. 课堂模板与课本地图
 
-- 顶部：品牌条、底图切换、模板切换、上传、导出、复位
-- 左侧：可收起抽屉，包含图层、POI 检索结果、课堂产物
-- 右侧：地图工具栏，包含选择、标注、测距、绘区、清除、缩放
-- 底部：课堂快捷动作条
-- 右下：悬浮智能助教
+内置课堂模板：
 
-## 数据与模板
+- 人口专题包。
+- 人口分布。
+- 人口密度。
+- 人口迁移。
+- 胡焕庸线对比。
 
-内置模板：
+内置课本地图注册机制，支持将教材或教学地图作为半透明栅格覆盖层叠加到地图中。当前已包含人口、气候、地形和区域类素材注册入口。
 
-- 通用地理课堂包
-- 人口专题课堂包
-- 人口分布
-- 人口密度
-- 人口迁移
-- 胡焕庸线对比
+> 注意：课本地图和图片覆盖层依赖 `bounds` 配准质量。正式课堂中建议先校准后使用；配准不准的图片不要作为空间证据主图层。
+
+### 5. 数据上传与 CRS 处理
 
 支持上传：
 
-- `GeoJSON`
-- `CSV`
+- `GeoJSON` / `JSON`
+- `CSV` 经纬度点数据
 - `ZIP Shapefile`
-- `PNG / JPG` 图片覆盖层
+- `PNG` / `JPG` 图片覆盖层
 
-## 环境变量
+数据处理特性：
 
-后端统一持有底图和 POI 服务配置。前端不会硬编码服务 key。
+- 项目内矢量数据统一存储为 `EPSG:4326`。
+- GeoJSON 可读取显式 CRS。
+- CSV 会校验经纬度字段和坐标范围，疑似投影坐标会明确报错。
+- Shapefile ZIP 会尝试从 `.prj` 检测 CRS；缺失 `.prj` 时按 `EPSG:4326` 处理并写入警告。
+- ZIP 解压包含路径安全检查。
 
-常用环境变量：
+### 6. 知识库与课程资料
 
-- `WEBGIS_AI_AMAP_WEB_SERVICE_KEY`
-- `WEBGIS_AI_DEFAULT_BASEMAP`
-- `WEBGIS_AI_AMAP_VECTOR_URL`
-- `WEBGIS_AI_AMAP_IMAGERY_URL`
-- `WEBGIS_AI_AMAP_ANNOTATION_URL`
-- `WEBGIS_AI_AMAP_POI_POLYGON_URL`
-- `WEBGIS_AI_AUTH_TOKEN`：公网部署时必须设置，后端所有 API、文件下载、任务流均需要访问令牌
-- `WEBGIS_AI_CORS_ALLOW_ORIGINS`：公网部署时设置为真实前端域名，例如 `https://webgis.example.edu`
-- `WEBGIS_AI_AUTH_EXEMPT_PATHS`：可选免鉴权路径，公网不建议豁免 `/health`
+- 内置知识库 manifest 和地理知识条目。
+- 支持按关键词、主题、区域、标签检索。
+- 支持将课堂图层注册为知识条目。
+- 支持上传或链接图片、视频、动画、文档、外部链接等教学素材。
+- 教学素材可绑定地区、图层、要素或行政编码。
+- 支持“课时资料包”，将知识条目和素材导入当前课堂。
+- 资料搜索面板同时支持本地知识库、素材和权威资料入口建议。
 
-如果没有配置 `WEBGIS_AI_AMAP_WEB_SERVICE_KEY`：
+### 7. 智能助教
 
-- 底图切换仍可使用
-- POI 在线检索会在界面中提示未配置
+智能助教以可拖动、可缩放、可最小化的悬浮窗口呈现，支持：
 
-## 启动方式
+- 知识助手：地理概念、区域地理、地图判读、GIS 方法问答。
+- 工具助手：规划并执行 WebGIS 操作，如切换底图、显示图层、应用模板、检索 POI、添加标注、读图讲解等。
+- 文本输入和浏览器语音识别输入。
+- 对话记忆、阶段状态展示和引用来源展示。
+- 地图截图读图：配置视觉模型后可调用多模态模型；未配置时回退到结构化地图上下文解释。
 
-### 一键启动
+支持的 LLM / Vision 配置包括：
+
+- MiniMax：推荐 provider，走 Anthropic 兼容接口（`https://api.minimaxi.com/anthropic`，默认模型 `MiniMax-M2.7-highspeed`；若把 `WEBGIS_AI_MINIMAX_BASE_URL` 指到不含 `/anthropic` 的地址则回退 OpenAI Chat Completions 格式）。设置 `WEBGIS_AI_LLM_PROVIDER=minimax` + `WEBGIS_AI_MINIMAX_API_KEY` 启用；文档见 https://platform.minimaxi.com/docs/api-reference/text-anthropic-api 。
+- Xiaomi MiMo：旧默认 provider，兼容 OpenAI Chat Completions 风格接口（服务不可用时请切换到 MiniMax）。
+- MiniMax Token Plan MCP：图片理解视觉通道（`WEBGIS_AI_MINIMAX_TOKEN_PLAN_KEY`）。
+
+### 8. GIS 分析工作流
+
+后端包含 PyQGIS worker 分析链路，前端通过“GIS 分析工作流”面板提交任务并通过 SSE 获取实时状态。
+
+当前模板包括：
+
+- 人口密度分级设色图。
+- 设施缓冲区分析。
+- 胡焕庸线对比分析。
+- 区域裁剪分析。
+- 图层求交集。
+- 图层空间连接。
+- 字段分级。
+
+当前工作流操作白名单包括：
+
+- `load_layer`
+- `inspect_layer`
+- `reproject`
+- `fix_geometries`
+- `filter_features`
+- `calculate_field`
+- `buffer`
+- `choropleth`
+- `aggregate_stats`
+- `export_geojson`
+- `export_style_json`
+- `export_map_png`
+- `clip`
+- `intersection`
+- `spatial_join`
+- `classify`
+
+工作流输出会登记为 artifact，并可在前端加载为地图图层、图例、统计表和结果解释。
+
+## 课程使用示例
+
+以《人口分布》为例，推荐使用“免配准依赖”的课堂流程：
+
+1. 使用高德浅灰底图作为主地图。
+2. 加载“人口专题包”，只使用内置人口矢量图层作为空间证据。
+3. 通过图层显隐对比人口分布、人口密度、人口迁移和胡焕庸线。
+4. 用标注工具标出东南稠密区、西北稀疏区、黑河、腾冲等关键位置。
+5. 让学生先描述，再用智能助教生成规范表达或追问。
+6. 最后导出带图层和标注的课堂截图，作为本节课的证据链。
+
+更多课程场景：
+
+- 气候与地形：对比温度、降水、地形和区域差异。
+- 城市地理：检索学校、医院、交通站点等 POI，讨论公共服务设施布局。
+- GIS 方法入门：上传数据并运行缓冲区、裁剪、空间连接、分级设色等工作流。
+- 区域地理：围绕某一区域叠加素材、标注特征并生成读图讲解。
+
+## 技术栈
+
+- 前端：`React` + `TypeScript` + `Vite` + `Cesium` + `OpenLayers`
+- 地图入口：默认进入 `Cesium` 3D 数字地球，并可切换为 `OpenLayers` 2D 地图
+- 后端：`FastAPI`
+- GIS 工作流：`PyQGIS worker`
+- 状态模型：`projects / layers / jobs / artifacts / conversations / workflows`
+- 实时状态：`SSE job stream` / `SSE workflow stream`
+
+## 目录结构
+
+```text
+backend/
+  app/
+    main.py                 # FastAPI 入口
+    runtime.py              # WebGIS 运行时服务编排
+    config.py               # 环境变量、底图、LLM、路径配置
+    models.py               # 项目、图层、任务、工作流数据模型
+    services/               # 助教、知识库、POI、数据导入、工作流等服务
+    data/builtin/           # 内置知识库、课堂数据、课本地图注册
+  tests/                    # 后端单元测试
+frontend/
+  src/
+    App.tsx                 # 主课堂页面
+    api.ts                  # 前端 API 调用
+    components/             # 地图工具栏、助教、工作流、知识资料等组件
+    hooks/                  # 工作流 SSE hook
+    lib/                    # 共享前端工具
+scripts/
+  start_webgis_ai.ps1       # Windows 启动脚本
+start_webgis_ai.cmd         # 一键启动入口
+```
+
+## 快速启动
+
+### Windows 一键启动
 
 ```powershell
 .\start_webgis_ai.cmd
 ```
 
-首次缺依赖时自动安装并打开浏览器：
+首次缺依赖时可自动安装并打开浏览器：
 
 ```powershell
 .\start_webgis_ai.cmd -InstallIfMissing -OpenBrowser
 ```
 
-如果自动识别 Python 失败，可显式指定 `Python 3.12`：
+默认访问地址：
 
-```powershell
-.\start_webgis_ai.cmd -PythonExe "C:\Users\zcyxn\AppData\Local\Programs\Python\Python312\python.exe" -InstallIfMissing -OpenBrowser
+```text
+http://127.0.0.1:5173
 ```
 
 ### 手动启动
@@ -172,40 +206,92 @@ WebGIS-AI/
 后端：
 
 ```powershell
-& 'C:\Users\zcyxn\AppData\Local\Programs\Python\Python312\python.exe' -m pip install -r requirements.txt
-& 'C:\Users\zcyxn\AppData\Local\Programs\Python\Python312\python.exe' -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 18999
+python -m pip install -r requirements.txt
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 18999
 ```
 
 前端：
 
 ```powershell
-cd .\frontend
-& 'C:\Program Files\nodejs\node.exe' 'C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js' install
-& 'C:\Program Files\nodejs\node.exe' 'C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js' run dev
+cd frontend
+npm install
+npm run dev
 ```
 
-默认访问：
+## 常用环境变量
 
-```text
-http://127.0.0.1:5173
-```
+基础服务：
+
+- `WEBGIS_AI_HOST`
+- `WEBGIS_AI_PORT`
+- `WEBGIS_AI_DEFAULT_BASEMAP`
+- `WEBGIS_AI_AMAP_VECTOR_URL`
+- `WEBGIS_AI_AMAP_IMAGERY_URL`
+- `WEBGIS_AI_AMAP_ANNOTATION_URL`
+
+在线服务：
+
+- `WEBGIS_AI_AMAP_WEB_SERVICE_KEY`
+- `WEBGIS_AI_AMAP_POI_POLYGON_URL`
+- `WEBGIS_AI_OPENWEATHERMAP_API_KEY`
+- `WEBGIS_AI_OPENWEATHERMAP_LAYER`
+
+LLM / Vision：
+
+- `WEBGIS_AI_LLM_PROVIDER`：`mimo` 或 `minimax`
+- `WEBGIS_AI_MIMO_API_KEY`
+- `WEBGIS_AI_MIMO_BASE_URL`
+- `WEBGIS_AI_MIMO_MODEL`
+- `WEBGIS_AI_MINIMAX_API_KEY`
+- `WEBGIS_AI_MINIMAX_BASE_URL`
+- `WEBGIS_AI_MINIMAX_MODEL`
+- `WEBGIS_AI_VISION_ENABLED`
+- `WEBGIS_AI_VISION_PROVIDER`
+- `WEBGIS_AI_VISION_MODEL`
+- `WEBGIS_AI_MINIMAX_TOKEN_PLAN_KEY`
+
+GIS 工作流：
+
+- `QGIS_ROOT`
+- `WEBGIS_AI_QGIS_ROOT`
+- `WEBGIS_AI_QGIS_PREFIX_SUBPATH`
+
+资料搜索：
+
+- `WEBGIS_AI_RESOURCE_SEARCH_ENDPOINT`
 
 ## 关键接口
 
 - `GET /health`
+- `GET /llm/status`
 - `GET /basemaps`
+- `GET /teaching-maps`
 - `POST /projects`
 - `GET /projects/{project_id}`
 - `PATCH /projects/{project_id}/basemap`
 - `GET /layers?project_id=...`
 - `PATCH /layers`
 - `POST /assistant/messages`
+- `POST /assistant/confirm`
+- `GET /assistant/conversations/{conversation_id}`
 - `POST /templates/{template_id}/run`
 - `POST /datasets/upload`
 - `POST /search/poi`
 - `POST /exports/snapshot`
-- `GET /jobs/{job_id}`
-- `GET /jobs/{job_id}/stream`
+- `GET /kb/manifest`
+- `GET /kb/search`
+- `GET /kb/topics`
+- `POST /kb/items`
+- `POST /kb/layers/register`
+- `POST /kb/materials/upload`
+- `POST /kb/materials/link`
+- `GET /resources/search`
+- `GET /workflow/templates`
+- `POST /workflow/submit`
+- `GET /workflow/history`
+- `GET /workflow/{workflow_id}`
+- `GET /workflow/{workflow_id}/stream`
+- `GET /workflow/{workflow_id}/artifacts`
 - `GET /outputs`
 
 ## 测试
@@ -213,13 +299,21 @@ http://127.0.0.1:5173
 后端：
 
 ```powershell
-& 'C:\Users\zcyxn\AppData\Local\Programs\Python\Python312\python.exe' -m unittest discover backend/tests
+python -m unittest discover backend/tests
 ```
 
 前端：
 
 ```powershell
-cd .\frontend
-& 'C:\Program Files\nodejs\node.exe' 'C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js' run test
-& 'C:\Program Files\nodejs\node.exe' 'C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js' run build
+cd frontend
+npm run test
+npm run build
 ```
+
+## 当前边界
+
+- 图片覆盖层和课本地图依赖人工配准，`bounds` 不准时不应作为课堂证据主图层。
+- POI、天气、大模型和视觉读图均依赖外部 Key；未配置时系统会降级或提示不可用。
+- GIS 工作流以模板化分析为主，适合课堂常见空间分析，不等同于完整桌面 GIS。
+- 当前主课堂入口默认使用 Cesium 3D 数字地球，同时保留 OpenLayers 2D 模式切换能力。
+- 项目不再维护旧的 Word / PPT 教案产物链路、Electron 桌面壳和 OpenClaw 教学蓝图链路。
