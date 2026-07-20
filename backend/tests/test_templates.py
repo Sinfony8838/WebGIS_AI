@@ -37,14 +37,20 @@ class TemplateServiceTest(unittest.TestCase):
         self.assertIn("template_order", items[0])
         self.assertNotIn("generic_classroom_pack", {item["template_id"] for item in items})
 
-    def test_population_classroom_pack_contains_four_demo_layers(self) -> None:
+    def test_population_classroom_pack_contains_only_provenanced_demo_layers(self) -> None:
         _config, _store, service, project_id = self.build_service()
         result = service.apply_template(project_id, "population_classroom_pack")
         layer_names = [layer["name"] for layer in result["layers"]]
         self.assertIn("人口分布（省级）", layer_names)
         self.assertIn("人口密度（省级）", layer_names)
-        self.assertIn("人口迁移", layer_names)
+        self.assertNotIn("人口迁移", layer_names)
         self.assertIn("胡焕庸线对比", layer_names)
+
+    def test_population_migration_template_is_disabled_without_flow_provenance(self) -> None:
+        _config, _store, service, project_id = self.build_service()
+
+        with self.assertRaisesRegex(ValueError, "temporarily disabled"):
+            service.apply_template(project_id, "population_migration")
 
     def test_population_distribution_uses_real_province_boundaries(self) -> None:
         _config, store, service, project_id = self.build_service()
@@ -58,6 +64,18 @@ class TemplateServiceTest(unittest.TestCase):
         self.assertGreaterEqual(len(features), 30)
         names = {feature["properties"].get("name") for feature in features}
         self.assertIn("河南省", names)
+
+    def test_population_density_uses_polygon_choropleth_with_fixed_breaks(self) -> None:
+        _config, store, service, project_id = self.build_service()
+        service.apply_template(project_id, "population_density")
+        layer = next(
+            item for item in store.get_project(project_id).layers
+            if item.layer_id == "builtin_population_density"
+        )
+
+        self.assertEqual(layer.geometry_type, "MultiPolygon")
+        self.assertIn("固定阈值", layer.metadata["classification"])
+        self.assertTrue(all("density_class" in feature["properties"] for feature in layer.data["features"]))
 
     def test_template_report_path_is_unique_across_repeated_runs(self) -> None:
         _config, _store, service, project_id = self.build_service()

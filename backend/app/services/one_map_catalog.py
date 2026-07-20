@@ -21,6 +21,13 @@ JOINABLE_CATALOG_DEFAULTS: Dict[str, Dict[str, str]] = {
 }
 
 
+# Only datasets with a traceable source, year and licence may be rendered or
+# analysed as classroom maps.  Catalog rows that are intentionally retained as
+# acquisition leads (for example, schematic migration arrows) stay visible in
+# the data inventory, but cannot silently become map layers.
+RENDERABLE_DATASET_STATUS = "ready"
+
+
 class OneMapCatalogService:
     def __init__(self, config: AppConfig):
         self.config = config
@@ -44,6 +51,15 @@ class OneMapCatalogService:
             if item["id"] == target:
                 return item
         raise KeyError(f"Unknown one-map dataset: {dataset_id}")
+
+    @staticmethod
+    def is_renderable(item: Dict[str, Any]) -> bool:
+        """Whether an item meets the minimum provenance gate for mapping."""
+        return (
+            str(item.get("status") or "").lower() == RENDERABLE_DATASET_STATUS
+            and bool(str(item.get("source_url") or "").strip())
+            and bool(str(item.get("license") or "").strip())
+        )
 
     def resolve_item_path(self, item: Dict[str, Any]) -> Path:
         source = str(item.get("source") or "")
@@ -96,6 +112,12 @@ class OneMapCatalogService:
             "license": str(item.get("license") or ""),
             "includes_taiwan": bool(item.get("includes_taiwan")),
             "status": str(item.get("status") or "unknown"),
+            "renderable": (
+                str(item.get("status") or "").lower() == RENDERABLE_DATASET_STATUS
+                and bool(str(item.get("source_url") or "").strip())
+                and bool(str(item.get("license") or "").strip())
+            ),
+            "provenance_note": str(item.get("provenance_note") or ""),
             "geometry_type": str(item.get("geometry_type") or ""),
             "recommended_template": str(item.get("recommended_template") or ""),
             "population_fields": [str(field) for field in item.get("population_fields", []) if isinstance(field, str)],

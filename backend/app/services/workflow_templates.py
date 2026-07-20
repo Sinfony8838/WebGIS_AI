@@ -444,7 +444,7 @@ def _template_overlay_intersection(message: str, params: Dict[str, Any]) -> Temp
     input_dataset = str(
         params.get("input_dataset")
         or params.get("dataset")
-        or "builtin:population/migration_flows.geojson"
+        or "builtin:one_map/population/china_province_population_density.geojson"
     )
     overlay_dataset = str(
         params.get("overlay_dataset")

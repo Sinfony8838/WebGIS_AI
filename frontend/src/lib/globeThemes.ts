@@ -8,8 +8,6 @@
  *   - density_fill        人口密度分级设色（贴地面）
  *   - density_3d          人口密度高度映射（拉伸棱柱）
  *   - hu_line             胡焕庸线（发光墙体 + 两侧注记）
- *   - climate_zones       中国气候类型区划（着色面 + 注记）
- *   - migration_flows     人口迁徙弧线（发光弧 + 动态光点）
  *
  * Data is fetched through the read-only `/datasets/catalog/{id}/data`
  * endpoint (cached in api.ts) and is never written into project state,
@@ -23,9 +21,7 @@ export type GlobeThemeId =
   | "population_columns"
   | "density_fill"
   | "density_3d"
-  | "hu_line"
-  | "climate_zones"
-  | "migration_flows";
+  | "hu_line";
 
 export type GlobeLegendItem = { color: string; label: string };
 
@@ -53,11 +49,11 @@ export type ThemeTooltip = { title: string; lines: string[] };
 
 /** Density class breaks in persons/km², matched to textbook conventions. */
 const DENSITY_CLASSES: { max: number; color: string; label: string }[] = [
-  { max: 10, color: "#f5f7c4", label: "<10 人/km²" },
-  { max: 100, color: "#fed976", label: "10–100 人/km²" },
-  { max: 400, color: "#fd8d3c", label: "100–400 人/km²" },
-  { max: 800, color: "#e31a1c", label: "400–800 人/km²" },
-  { max: Infinity, color: "#800026", label: "≥800 人/km²" }
+  { max: 10, color: "#ffffd9", label: "<10 人/km²" },
+  { max: 100, color: "#c7e9b4", label: "10–99 人/km²" },
+  { max: 400, color: "#7fcdbb", label: "100–399 人/km²" },
+  { max: 800, color: "#41b6c4", label: "400–799 人/km²" },
+  { max: Infinity, color: "#225ea8", label: "≥800 人/km²" }
 ];
 
 function densityClass(density: number): { color: string; label: string } {
@@ -501,9 +497,7 @@ const THEME_BUILDERS: Record<GlobeThemeId, () => Promise<ThemeHandle>> = {
   population_columns: buildPopulationColumns,
   density_fill: () => buildDensityPolygons(false),
   density_3d: () => buildDensityPolygons(true),
-  hu_line: buildHuLine,
-  climate_zones: buildClimateZones,
-  migration_flows: buildMigrationFlows
+  hu_line: buildHuLine
 };
 
 // ── Theme metadata (panel + legend) ─────────────────────────────────
@@ -514,7 +508,8 @@ export const GLOBE_THEMES: GlobeThemeDef[] = [
     name: "人口密度设色",
     description: "省级人口密度分级设色，与教材图例一致",
     legendTitle: "人口密度（2020）",
-    legend: DENSITY_CLASSES.map((cls) => ({ color: cls.color, label: cls.label }))
+    legend: DENSITY_CLASSES.map((cls) => ({ color: cls.color, label: cls.label })),
+    legendNote: "固定阈值；数据：2020 年第七次全国人口普查（省级）。"
   },
   {
     id: "density_3d",
@@ -522,7 +517,7 @@ export const GLOBE_THEMES: GlobeThemeDef[] = [
     description: "人口密度拉伸为高度，直观呈现东密西疏",
     legendTitle: "人口密度 → 高度",
     legend: DENSITY_CLASSES.map((cls) => ({ color: cls.color, label: cls.label })),
-    legendNote: "高度按 √密度 缩放"
+    legendNote: "高度按 √密度 缩放，仅用于探索；精确比较请使用分级设色。数据：2020 年第七次全国人口普查。"
   },
   {
     id: "population_columns",
@@ -530,34 +525,14 @@ export const GLOBE_THEMES: GlobeThemeDef[] = [
     description: "省级人口总量柱体，高度=人口、颜色=密度",
     legendTitle: "柱高 = 常住人口",
     legend: DENSITY_CLASSES.map((cls) => ({ color: cls.color, label: cls.label })),
-    legendNote: "颜色表示人口密度分级"
+    legendNote: "柱高=常住人口；颜色=人口密度。数据：2020 年第七次全国人口普查。"
   },
   {
     id: "hu_line",
     name: "胡焕庸线",
-    description: "黑河—腾冲人口地理分界线及两侧对比",
+    description: "黑河—腾冲人口地理概念线及两侧对比",
     legendTitle: "胡焕庸线（1935）",
-    legendNote: "东南半壁约43%国土承载约94%人口"
-  },
-  {
-    id: "climate_zones",
-    name: "气候区划",
-    description: "中国主要气候类型分布（省级精度）",
-    legendTitle: "气候类型",
-    legend: [
-      { color: "#e05243", label: "热带季风气候" },
-      { color: "#f2a04e", label: "亚热带季风气候" },
-      { color: "#f5d95c", label: "温带季风气候" },
-      { color: "#b08a6a", label: "温带大陆性气候" },
-      { color: "#8f7bd8", label: "高山高原气候" }
-    ]
-  },
-  {
-    id: "migration_flows",
-    name: "人口迁徙",
-    description: "主要区域间人口流动方向与规模（示意）",
-    legendTitle: "人口迁徙流向",
-    legendNote: "弧线宽度与光点表示迁徙规模（万人）"
+    legendNote: "概念分界线，不是行政边界；用于说明人口空间格局。"
   }
 ];
 
@@ -591,22 +566,6 @@ export const GLOBE_SCENE_PRESETS: GlobeScenePreset[] = [
     themes: ["density_3d", "hu_line"],
     camera: { lon: 105, lat: 9, altitudeMeters: 5_200_000, pitchDeg: -50 }
   },
-  {
-    id: "migration",
-    name: "人口迁徙流动",
-    icon: "🔀",
-    description: "区域间迁徙弧线动画，理解人口流动方向",
-    themes: ["migration_flows", "density_fill"],
-    camera: { lon: 108, lat: 12, altitudeMeters: 5_600_000, pitchDeg: -52 }
-  },
-  {
-    id: "climate_pop",
-    name: "气候 × 人口",
-    icon: "🌦️",
-    description: "气候区划叠加胡焕庸线，探究自然因素影响",
-    themes: ["climate_zones", "hu_line"],
-    camera: { lon: 103.8, lat: 36, altitudeMeters: 7_200_000, pitchDeg: -90 }
-  }
 ];
 
 // ── Manager ─────────────────────────────────────────────────────────

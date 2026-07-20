@@ -51,13 +51,11 @@ const DEFAULT_STROKE = "#444444";
  */
 const BUILTIN_DATASETS: Array<{ source: string; label: string }> = [
   { source: "builtin:one_map/population/china_province_population_density.geojson", label: "一张图 · 中国省级人口密度（含台湾）" },
-  { source: "builtin:population/population_regions.geojson", label: "内置 · 中国 7 大区（演示数据）" },
-  { source: "builtin:population/population_centroids.geojson", label: "内置 · 大区中心点（点）" },
-  { source: "builtin:population/migration_flows.geojson", label: "内置 · 大区迁徙连线" }
+  { source: "builtin:one_map/population/world_population_density.geojson", label: "一张图 · 世界国家人口密度" }
 ];
 
 function catalogLabel(item: DatasetCatalogItem): string {
-  const prefix = item.status === "estimated" ? "估算" : "一张图";
+  const prefix = "一张图";
   const year = item.source_year ? ` · ${item.source_year}` : "";
   return `${prefix} · ${item.name}${year}`;
 }
@@ -191,7 +189,7 @@ export function WorkflowDock({
       .then((res) => setTemplates(res.items || []))
       .catch(() => setTemplates([]));
     fetchDatasetCatalog()
-      .then((res) => setCatalogItems(res.items || []))
+      .then((res) => setCatalogItems((res.items || []).filter((item) => item.renderable)))
       .catch(() => setCatalogItems([]));
   }, []);
 

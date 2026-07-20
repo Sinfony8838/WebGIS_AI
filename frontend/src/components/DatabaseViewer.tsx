@@ -151,6 +151,7 @@ function normalizeStatus(value: string): string {
 }
 
 function isLoadableCatalogItem(item: DatasetCatalogItem): boolean {
+  if (!item.renderable) return false;
   const format = item.format.toLowerCase();
   const isKnownJoinableCsv = item.id === "world_population_by_country";
   return format === "geojson" || (format === "csv" && (isKnownJoinableCsv || Boolean(item.geometry_source && item.join_key)));
@@ -263,7 +264,7 @@ export function DatabaseViewer({
       kind: "teaching-map",
     }));
 
-    const oneMapEntries: DatabaseEntry[] = datasetCatalogItems.map((item) => ({
+    const oneMapEntries: DatabaseEntry[] = datasetCatalogItems.filter((item) => item.renderable).map((item) => ({
       id: `one-map:${item.id}`,
       category: "one-map",
       title: item.name || item.id,

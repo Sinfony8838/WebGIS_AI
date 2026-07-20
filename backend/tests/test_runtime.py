@@ -150,6 +150,16 @@ class WebGISRuntimeTest(unittest.TestCase):
         self.assertEqual(world_csv["geometry_source"], "world_countries")
         self.assertEqual(world_csv["join_key"], "region_code")
 
+    def test_ungeoreferenced_teaching_images_are_not_exposed_as_map_layers(self) -> None:
+        runtime, _store, _project_id = self.build_runtime()
+
+        result = runtime.list_teaching_maps()
+
+        # The current registry consists of scans with approximate bounds.  A
+        # scan becomes available only after source, CRS and control points are
+        # documented in the registry.
+        self.assertEqual(result["items"], [])
+
     def test_get_catalog_dataset_data_serves_geojson_without_store_writes(self) -> None:
         runtime, store, project_id = self.build_runtime()
         layers_before = len(store.get_project(project_id).layers)  # type: ignore[union-attr]
@@ -162,14 +172,14 @@ class WebGISRuntimeTest(unittest.TestCase):
         self.assertGreater(len(result["data"]["features"]), 30)
         self.assertEqual(len(store.get_project(project_id).layers), layers_before)  # type: ignore[union-attr]
 
-    def test_get_catalog_dataset_data_exposes_migration_flows(self) -> None:
+    def test_get_catalog_dataset_data_blocks_unprovenanced_migration_flows(self) -> None:
         runtime, _store, _project_id = self.build_runtime()
 
-        result = runtime.get_catalog_dataset_data("china_migration_flows")
+        item = runtime.one_map_catalog_service.get_item("china_migration_flows")
+        self.assertFalse(item["renderable"])
 
-        features = result["data"]["features"]
-        self.assertEqual(len(features), 4)
-        self.assertTrue(all("migrants" in feature["properties"] for feature in features))
+        with self.assertRaisesRegex(ValueError, "not approved for map rendering"):
+            runtime.get_catalog_dataset_data("china_migration_flows")
 
     def test_get_catalog_dataset_data_rejects_unknown_dataset(self) -> None:
         runtime, _store, _project_id = self.build_runtime()
@@ -221,7 +231,7 @@ class WebGISRuntimeTest(unittest.TestCase):
     def test_add_catalog_dataset_layer_rejects_unjoined_csv_layer(self) -> None:
         runtime, _store, project_id = self.build_runtime()
 
-        with self.assertRaisesRegex(ValueError, "geometry_source and join_key"):
+        with self.assertRaisesRegex(ValueError, "not approved for map rendering"):
             runtime.add_catalog_dataset_layer(project_id, "china_city_population_2020")
 
     def test_builtin_world_population_csv_has_join_defaults_without_catalog_metadata(self) -> None:

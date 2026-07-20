@@ -69,7 +69,26 @@ TEMPLATE_SPECS: Dict[str, Dict[str, Any]] = {
     },
 }
 
-DISABLED_TEMPLATE_IDS: set[str] = set()
+# The bundled migration arrows are a teaching sketch, not an origin-
+# destination statistical matrix.  Do not expose them until a licensed,
+# documented flow dataset is imported.
+DISABLED_TEMPLATE_IDS: set[str] = {"population_migration"}
+
+
+DENSITY_CLASSES: List[Tuple[float, str, str]] = [
+    (10, "#ffffd9", "< 10 人/平方千米"),
+    (100, "#c7e9b4", "10–99 人/平方千米"),
+    (400, "#7fcdbb", "100–399 人/平方千米"),
+    (800, "#41b6c4", "400–799 人/平方千米"),
+    (float("inf"), "#225ea8", "≥ 800 人/平方千米"),
+]
+
+
+def _density_style(density: float) -> Tuple[str, str]:
+    for upper_bound, color, label in DENSITY_CLASSES:
+        if density < upper_bound:
+            return color, label
+    return DENSITY_CLASSES[-1][1], DENSITY_CLASSES[-1][2]
 
 
 def _quantile_thresholds(values: List[float], class_count: int) -> List[float]:
@@ -169,7 +188,9 @@ class TemplateService:
     def _load_province_collection(self) -> Dict[str, Any]:
         """Real province boundaries + 2020 census figures.  Replaces the old
         rectangular "region block" fixtures that only simulated regions."""
-        return self._clone_features(self._load_builtin_geojson("population", "china_provinces.geojson"))
+        return self._clone_features(
+            self._load_builtin_geojson("one_map", "population", "china_province_population_density.geojson")
+        )
 
     def _build_population_distribution(self, project_id: str) -> Dict[str, Any]:
         collection = self._load_province_collection()
@@ -204,7 +225,14 @@ class TemplateService:
             source="builtin",
             geometry_type="Polygon",
             data=collection,
-            metadata={"feature_count": len(collection["features"]), "template_id": "population_distribution"},
+            metadata={
+                "feature_count": len(collection["features"]),
+                "template_id": "population_distribution",
+                "source_name": "第七次全国人口普查（省级人口）",
+                "source_year": "2020",
+                "source_url": "https://www.stats.gov.cn/xxgk/sjfb/zxfb2020/202105/t20210511_1817198.html",
+                "classification": "五级分位数；变量：常住人口（人）",
+            },
             style={"labelField": "short_name", "strokeColor": "#432818"},
             z_index=30,
         )
@@ -217,46 +245,33 @@ class TemplateService:
         }
 
     def _build_population_density(self, project_id: str) -> Dict[str, Any]:
-        provinces = self._load_province_collection()
-        features = []
-        densities: List[float] = []
-        for feature in provinces["features"]:
+        collection = self._load_province_collection()
+        for feature in collection["features"]:
             properties = feature["properties"]
-            center = properties.get("center")
             density = float(properties.get("density") or 0)
-            if not center or density <= 0:
-                continue
-            densities.append(density)
-            features.append(
-                {
-                    "type": "Feature",
-                    "properties": {
-                        "name": properties.get("short_name") or properties.get("name"),
-                        "population": properties.get("population"),
-                        "density": density,
-                    },
-                    "geometry": {"type": "Point", "coordinates": [float(center[0]), float(center[1])]},
-                }
-            )
-        maximum = max(densities) if densities else 1.0
-        for feature in features:
-            density = float(feature["properties"]["density"])
-            ratio = (density / maximum) ** 0.5
-            feature["properties"]["__radius"] = round(5 + ratio * 20, 2)
-            feature["properties"]["__fillColor"] = "#1d4ed8"
-            feature["properties"]["__fillOpacity"] = round(0.25 + ratio * 0.5, 2)
-            feature["properties"]["__strokeColor"] = "#dbeafe"
-        collection = {"type": "FeatureCollection", "features": features}
+            color, label = _density_style(density)
+            properties["density_class"] = label
+            properties["__fillColor"] = color
+            properties["__fillOpacity"] = 0.78
+            properties["__strokeColor"] = "#2c3e50"
+            properties["__strokeWidth"] = 0.65
 
         layer = LayerRecord.create(
             layer_id="builtin_population_density",
             name="人口密度（省级）",
             kind="vector",
             source="builtin",
-            geometry_type="Point",
+            geometry_type="MultiPolygon",
             data=collection,
-            metadata={"feature_count": len(features), "template_id": "population_density"},
-            style={"labelField": "name", "radius": 10, "fillColor": "#1d4ed8"},
+            metadata={
+                "feature_count": len(collection["features"]),
+                "template_id": "population_density",
+                "source_name": "第七次全国人口普查（省级人口）",
+                "source_year": "2020",
+                "source_url": "https://www.stats.gov.cn/xxgk/sjfb/zxfb2020/202105/t20210511_1817198.html",
+                "classification": "固定阈值：10、100、400、800 人/平方千米；变量：人口密度",
+            },
+            style={"labelField": "short_name", "strokeColor": "#2c3e50"},
             opacity=0.9,
             z_index=34,
         )
@@ -338,7 +353,6 @@ class TemplateService:
         results = [
             self._build_population_distribution(project_id),
             self._build_population_density(project_id),
-            self._build_population_migration(project_id),
             self._build_hu_line_comparison(project_id),
         ]
         layers: List[LayerRecord] = []
@@ -348,8 +362,8 @@ class TemplateService:
             enabled_templates.extend(result.get("enabled_templates", []))
 
         return {
-            "summary": "已加载人口专题包，覆盖分布、密度、迁移与胡焕庸线四条课堂演示路径。",
-            "assistant_message": "人口专题包已就绪。现在可以从人口分布切入，再过渡到密度、迁移与胡焕庸线的综合解释。",
+            "summary": "已加载人口专题包，覆盖分布、密度与胡焕庸线三条可追溯的课堂演示路径。",
+            "assistant_message": "人口专题包已就绪。现在可以从人口分布切入，再过渡到密度与胡焕庸线的综合解释。人口迁移须先导入可追溯的流向—流量数据。",
             "layers": layers,
             "view": {"center": [104.0, 35.0], "zoom": 4, "extent": [78.0, 18.0, 132.0, 50.5]},
             "enabled_templates": enabled_templates,
