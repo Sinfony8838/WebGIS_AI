@@ -27,6 +27,19 @@ class TeachingMapService:
         self._registry: List[Dict[str, Any]] = []
         self._load_registry()
 
+    @staticmethod
+    def _is_renderable(item: Dict[str, Any]) -> bool:
+        """Image overlays need control points and explicit provenance.
+
+        A scanned textbook image with a hand-entered bounding box is a reading
+        material, not a georeferenced map layer.  Such assets are deliberately
+        kept out of the interactive map until an operator verifies them.
+        """
+        return bool(item.get("renderable")) and all(
+            str(item.get(field) or "").strip()
+            for field in ("source_name", "source_url", "source_year", "license", "crs")
+        ) and bool(item.get("control_points"))
+
     def _load_registry(self) -> None:
         registry_path = self.config.builtin_dir / "teaching_maps" / "registry.json"
         if not registry_path.exists():
@@ -38,7 +51,7 @@ class TeachingMapService:
         except (OSError, json.JSONDecodeError):
             self._registry = []
 
-        # Ensure images are present in the uploads directory for serving
+        # Ensure only verified, georeferenced images are served as map layers.
         self._ensure_images_available()
 
     def _ensure_images_available(self) -> None:
@@ -48,6 +61,8 @@ class TeachingMapService:
         target_dir.mkdir(parents=True, exist_ok=True)
 
         for item in self._registry:
+            if not self._is_renderable(item):
+                continue
             filename = item.get("filename", "")
             if not filename:
                 continue
@@ -68,6 +83,8 @@ class TeachingMapService:
         """Return all registered teaching map overlays, grouped by category."""
         items = []
         for item in self._registry:
+            if not self._is_renderable(item):
+                continue
             filename = item.get("filename", "")
             asset_url = f"/files/uploads/teaching_maps/{filename}" if filename else ""
             items.append({
@@ -88,7 +105,7 @@ class TeachingMapService:
     def get_map(self, map_id: str) -> Optional[Dict[str, Any]]:
         """Get a single teaching map by ID."""
         for item in self._registry:
-            if item.get("id") == map_id:
+            if item.get("id") == map_id and self._is_renderable(item):
                 filename = item.get("filename", "")
                 return {
                     **item,
@@ -195,6 +212,8 @@ class TeachingMapService:
         best_score = 0
 
         for item in self._registry:
+            if not self._is_renderable(item):
+                continue
             score = 0
             name = item.get("name", "").lower()
             if lowered in name:

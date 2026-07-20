@@ -891,6 +891,11 @@ class WebGISRuntime:
         anything to the runtime store — used by client-side visualizations
         (e.g. the 3D globe thematic layers) that only need read access."""
         item = self.one_map_catalog_service.get_item(dataset_id)
+        if not self.one_map_catalog_service.is_renderable(item):
+            raise ValueError(
+                f"Dataset is not approved for map rendering: {dataset_id}. "
+                "It needs a traceable source, year and licence."
+            )
         item_format = item.get("format", "").lower()
         if item_format == "geojson":
             payload = self._read_geojson_catalog_payload(item)
@@ -961,6 +966,11 @@ class WebGISRuntime:
     def add_catalog_dataset_layer(self, project_id: str, dataset_id: str) -> Dict[str, Any]:
         self._require_project(project_id)
         item = self.one_map_catalog_service.get_item(dataset_id)
+        if not self.one_map_catalog_service.is_renderable(item):
+            raise ValueError(
+                f"Dataset is not approved for map rendering: {dataset_id}. "
+                "It needs a traceable source, year and licence."
+            )
         item_format = item.get("format", "").lower()
         materialized_from_csv = False
         if item_format == "geojson":

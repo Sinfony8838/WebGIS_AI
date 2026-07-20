@@ -113,6 +113,9 @@ export type DatasetCatalogItem = {
   license: string;
   includes_taiwan: boolean;
   status: string;
+  /** True only when the backend provenance gate approves map rendering. */
+  renderable: boolean;
+  provenance_note: string;
   geometry_type: string;
   recommended_template: string;
   population_fields: string[];

@@ -537,7 +537,7 @@ export default function App() {
       transport: { label: "城市与交通", order: 6 }
     };
     return datasetCatalogItems
-      .filter((item) => item.format === "geojson" && item.status !== "missing")
+      .filter((item) => item.format === "geojson" && item.renderable)
       .map((item) => {
         const meta = categoryMeta[item.category] || { label: "其他", order: 99 };
         return {
