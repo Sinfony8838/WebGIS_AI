@@ -51,7 +51,6 @@ scripts/build_defense_ppt.py
 scripts/build_project_introduction_doc.py
 powershell
 tmp_dom*.txt
-agent/agent/temp_api.ts
 test_lesson_plan.txt
 
 # --- Editor / OS / IDE ---

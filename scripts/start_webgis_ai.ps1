@@ -159,50 +159,6 @@ function Ensure-FrontendDeps {
     }
 }
 
-function Ensure-AgentDeps {
-    param(
-        [string]$RepoRoot,
-        [string]$NodeExe,
-        [string]$NpmCli,
-        [bool]$AllowInstall
-    )
-
-    # The active agent package lives under agent\agent.
-    $agentRoot = Join-Path $RepoRoot "agent\agent"
-    if (-not (Test-Path (Join-Path $agentRoot "package.json"))) {
-        throw "Agent package was not found: $agentRoot\package.json"
-    }
-
-    $nodeModulesPath = Join-Path $agentRoot "node_modules"
-    $requiredPackages = @("tsx", "typescript")
-    $missing = @()
-    foreach ($package in $requiredPackages) {
-        if (-not (Test-Path (Join-Path $nodeModulesPath $package))) {
-            $missing += $package
-        }
-    }
-
-    if ($missing.Count -eq 0) {
-        return
-    }
-
-    if (-not $AllowInstall) {
-        throw "Agent dependencies are incomplete: $($missing -join ', '). Run npm install in $agentRoot or use -InstallIfMissing."
-    }
-
-    Write-Step "Missing agent dependencies detected. Installing now."
-    Push-Location $agentRoot
-    try {
-        & $NodeExe $NpmCli install
-        if ($LASTEXITCODE -ne 0) {
-            throw "Agent dependency installation failed with exit code $LASTEXITCODE."
-        }
-    }
-    finally {
-        Pop-Location
-    }
-}
-
 function Start-ServiceWindow {
     param(
         [string]$Title,
@@ -298,7 +254,6 @@ function Start-OrReuseService {
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $frontendRoot = Join-Path $repoRoot "frontend"
-$agentRoot = Join-Path $repoRoot "agent\agent"
 $stateDir = Join-Path $repoRoot "backend\data\state"
 $stateFile = Join-Path $stateDir "startup_processes.json"
 
@@ -320,12 +275,6 @@ $envNames = @(
     "MINIMAX_API_KEY",
     "MINIMAX_ANTHROPIC_BASE_URL",
     "MINIMAX_MODEL",
-    "AGENT_LLM_PROVIDER",
-    "WEBGIS_BACKEND_URL",
-    "AGENT_MAX_TURNS",
-    "AGENT_MAX_TOKENS",
-    "AGENT_TEMPERATURE",
-    "AGENT_AUTO_APPROVE",
     "QGIS_ROOT",
     "WEBGIS_AI_QGIS_ROOT",
     "WEBGIS_AI_QGIS_PYTHON"
@@ -346,19 +295,6 @@ if (-not $env:MIMO_BASE_URL -and $env:WEBGIS_AI_MIMO_BASE_URL) {
 if (-not $env:MIMO_MODEL -and $env:WEBGIS_AI_MIMO_MODEL) {
     $env:MIMO_MODEL = $env:WEBGIS_AI_MIMO_MODEL
 }
-# Mirror backend-style MiniMax settings into the agent process.
-if (-not $env:MINIMAX_API_KEY -and $env:WEBGIS_AI_MINIMAX_API_KEY) {
-    $env:MINIMAX_API_KEY = $env:WEBGIS_AI_MINIMAX_API_KEY
-}
-if (-not $env:MINIMAX_ANTHROPIC_BASE_URL -and $env:WEBGIS_AI_MINIMAX_BASE_URL) {
-    $env:MINIMAX_ANTHROPIC_BASE_URL = $env:WEBGIS_AI_MINIMAX_BASE_URL
-}
-if (-not $env:MINIMAX_MODEL -and $env:WEBGIS_AI_MINIMAX_MODEL) {
-    $env:MINIMAX_MODEL = $env:WEBGIS_AI_MINIMAX_MODEL
-}
-$env:WEBGIS_BACKEND_URL = "http://127.0.0.1:18999"
-$env:AGENT_WORKSPACE_DIR = $repoRoot
-$env:AGENT_SERVER_PORT = "19000"
 
 function Resolve-QgisRoot {
     # Already set by the user / environment? Trust it.
@@ -429,32 +365,25 @@ Write-Step "Using Node: $nodeExe"
 
 Ensure-BackendDeps -RepoRoot $repoRoot -PythonExe $pythonExe -AllowInstall:$InstallIfMissing
 Ensure-FrontendDeps -RepoRoot $repoRoot -NodeExe $nodeExe -NpmCli $npmCli -AllowInstall:$InstallIfMissing
-Ensure-AgentDeps -RepoRoot $repoRoot -NodeExe $nodeExe -NpmCli $npmCli -AllowInstall:$InstallIfMissing
 
 $backendUrl = "http://127.0.0.1:18999"
 $frontendUrl = "http://127.0.0.1:5173"
-$agentUrl = "http://127.0.0.1:19000"
 
 $backendCommand = "& '$pythonExe' -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 18999"
 $frontendCommand = "& '$nodeExe' '$npmCli' run dev"
-$agentCommand = "& '$nodeExe' '$npmCli' run server"
 
 $backendProcess = Start-OrReuseService -Name "backend" -Title "WebGIS-AI Backend" -WorkingDirectory $repoRoot -Command $backendCommand -HealthUrl "$backendUrl/health" -Port 18999
 $frontendProcess = Start-OrReuseService -Name "frontend" -Title "WebGIS-AI Frontend" -WorkingDirectory $frontendRoot -Command $frontendCommand -HealthUrl $frontendUrl -Port 5173
-$agentProcess = Start-OrReuseService -Name "agent" -Title "WebGIS-AI Agent Server" -WorkingDirectory $agentRoot -Command $agentCommand -HealthUrl "$agentUrl/health" -Port 19000
 
 $backendProcessId = if ($backendProcess) { $backendProcess.Id } else { $null }
 $frontendProcessId = if ($frontendProcess) { $frontendProcess.Id } else { $null }
-$agentProcessId = if ($agentProcess) { $agentProcess.Id } else { $null }
 
 New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
 @{
     backend_pid = $backendProcessId
     frontend_pid = $frontendProcessId
-    agent_pid = $agentProcessId
     backend_url = $backendUrl
     frontend_url = $frontendUrl
-    agent_url = $agentUrl
     started_at = (Get-Date).ToString("s")
 } | ConvertTo-Json | Set-Content -Path $stateFile -Encoding utf8
 
@@ -462,7 +391,6 @@ Write-Step "Startup complete."
 Write-Host ""
 Write-Host "Backend: $backendUrl" -ForegroundColor Green
 Write-Host "Frontend: $frontendUrl" -ForegroundColor Green
-Write-Host "Agent: $agentUrl" -ForegroundColor Green
 Write-Host "PID log: $stateFile" -ForegroundColor DarkGray
 
 if ($OpenBrowser) {

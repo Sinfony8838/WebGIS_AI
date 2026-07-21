@@ -71,12 +71,6 @@ Push-Location frontend
 & "C:\Program Files\nodejs\npm.cmd" run build
 Pop-Location
 
-# Coding agent service
-Push-Location agent\agent
-& "C:\Program Files\nodejs\npm.cmd" test
-& "C:\Program Files\nodejs\npm.cmd" run build
-Pop-Location
-
 git diff --check
 ```
 
