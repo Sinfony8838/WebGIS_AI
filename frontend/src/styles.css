@@ -2915,9 +2915,7 @@ button {
 .copilot-widget-header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    "identity actions"
-    "switch   switch";
+  grid-template-areas: "identity actions";
   align-items: center;
   gap: 10px 14px;
   cursor: move;
@@ -4505,50 +4503,6 @@ button {
     max-height: calc(100vh - var(--header-height) - 100px);
   }
 }
-.assistant-mode-switch {
-  grid-area: switch;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  justify-self: stretch;
-  padding: 3px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, rgba(8, 16, 26, 0.62), rgba(8, 16, 26, 0.4));
-  border: 1px solid rgba(132, 178, 220, 0.18);
-}
-
-.assistant-mode-chip {
-  flex: 1 1 0;
-  min-height: 28px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--text-soft);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-  cursor: pointer;
-  transition:
-    background 0.18s ease,
-    color 0.18s ease,
-    box-shadow 0.18s ease;
-}
-
-.assistant-mode-chip:hover {
-  background: rgba(255, 255, 255, 0.04);
-  color: #f1f7ff;
-}
-
-.assistant-mode-chip.active {
-  background: linear-gradient(180deg, #aee0ff, #5cbef0);
-  color: #061427;
-  box-shadow:
-    0 4px 12px rgba(10, 80, 140, 0.32),
-    inset 0 1px 0 rgba(255, 255, 255, 0.5);
-}
-
 .copilot-confirm-card,
 .copilot-plan-card {
   display: flex;

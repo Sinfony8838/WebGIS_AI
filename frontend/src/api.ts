@@ -48,7 +48,6 @@ import type {
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:18999";
-const AGENT_BASE = import.meta.env.VITE_AGENT_BASE_URL || "http://127.0.0.1:19000";
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
@@ -91,49 +90,6 @@ export function buildAuthenticatedUrl(path: string): string {
     return path;
   }
   return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
-}
-
-export type AgentChatEvent =
-  | { type: "status"; message: string }
-  | { type: "assistant"; message: string; progress: boolean }
-  | { type: "tool_call"; name: string; args: Record<string, unknown> }
-  | { type: "tool_result"; name: string; output: string; error: boolean };
-
-export type AgentChatResponse = {
-  status: string;
-  session_id: string;
-  reply: string;
-  events: AgentChatEvent[];
-  total_tokens: number;
-  tool_call_count: number;
-  auto_approve: boolean;
-  cwd: string;
-};
-
-export async function sendAgentMessage(message: string, sessionId = ""): Promise<AgentChatResponse> {
-  let response: Response;
-  try {
-    response = await fetch(`${AGENT_BASE}/agent/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, session_id: sessionId })
-    });
-  } catch {
-    throw new Error(`无法连接到内嵌 Agent 服务 (${AGENT_BASE})，请确认一键启动已启动 WebGIS-AI Agent Server。`);
-  }
-  if (!response.ok) {
-    let messageText = `Agent 请求失败 (${response.status})`;
-    try {
-      const body = await response.json();
-      if (body && typeof body.detail === "string") {
-        messageText = body.detail;
-      }
-    } catch {
-      // ignore
-    }
-    throw new Error(messageText);
-  }
-  return (await response.json()) as AgentChatResponse;
 }
 
 export async function fetchHealth(): Promise<HealthResponse> {

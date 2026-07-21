@@ -219,6 +219,115 @@ class AssistantV2RuntimeTest(unittest.TestCase):
         self.assertLessEqual(len(conversation.raw_messages), 8)
         self.assertIn("last_map_grounding", conversation.pinned_state)
 
+    def test_teaching_is_default_mode_for_empty_assistant_mode(self) -> None:
+        runtime, project_id = self.build_runtime(enable_v2=False)
+
+        response = runtime.submit_assistant_message(project_id, "什么是胡焕庸线")
+        job = self.wait_for_job(runtime, response["job_id"])
+
+        self.assertEqual(job["request"]["assistant_mode"], "teaching")
+        self.assertEqual(job["result"]["intent"], "teaching_explain")
+        message = job["result"]["assistant_message"]
+        self.assertIn("证据或观察点", message)
+        self.assertIn("给学生的问题", message)
+        self.assertIn("教师收束语或下一步", message)
+
+    def test_teaching_plain_question_never_suggests_switching_modes(self) -> None:
+        runtime, project_id = self.build_runtime()
+        runtime.llm_planner.plan_actions = lambda *args, **kwargs: {
+            "assistant_message": "Tool mode needs a concrete action. Please specify the operation or switch to knowledge mode.",
+            "target": "webgis",
+            "actions": [],
+            "planner": "clarification",
+        }
+
+        response = runtime.submit_assistant_message(project_id, "显示人口密度分布", assistant_mode="teaching")
+        job = self.wait_for_job(runtime, response["job_id"])
+
+        self.assertEqual(job["result"]["intent"], "teaching_explain")
+        self.assertEqual(job["result"]["actions_planned"], [])
+        message = job["result"]["assistant_message"]
+        self.assertNotIn("switch to knowledge mode", message)
+        self.assertNotIn("请切换", message)
+        self.assertIn("教学处理", message)
+
+    def test_teaching_action_executes_and_appends_teaching_explanation(self) -> None:
+        runtime, project_id = self.build_runtime()
+        runtime.llm_planner.plan_actions = lambda *args, **kwargs: {
+            "assistant_message": "先切换到浅色底图。",
+            "target": "webgis",
+            "actions": [{"tool_name": "switch_basemap", "tool_params": {"basemap_id": "amap_light"}}],
+            "planner": "test_stub",
+        }
+
+        response = runtime.submit_assistant_message(project_id, "切换到浅色底图", assistant_mode="teaching")
+        job = self.wait_for_job(runtime, response["job_id"])
+
+        self.assertEqual(job["result"]["intent"], "teaching_action")
+        self.assertTrue(job["result"]["actions_executed"])
+        self.assertIsNotNone(job["result"]["knowledge"])
+        message = job["result"]["assistant_message"]
+        self.assertIn("先切换到浅色底图。", message)
+        self.assertIn("教学处理", message)
+        self.assertIn("证据或观察点", message)
+        self.assertIn("给学生的问题", message)
+        self.assertIn("教师收束语或下一步", message)
+
+    def test_teaching_confirmation_executes_with_teaching_explanation(self) -> None:
+        runtime, project_id = self.build_runtime()
+        registry = runtime.session_engine.tool_executor.tool_registry
+        original_risk = registry["switch_basemap"]["risk_level"]
+        registry["switch_basemap"]["risk_level"] = "high"
+        self.addCleanup(lambda: registry["switch_basemap"].__setitem__("risk_level", original_risk))
+        runtime.llm_planner.plan_actions = lambda *args, **kwargs: {
+            "assistant_message": "先切换到浅色底图。",
+            "target": "webgis",
+            "actions": [{"tool_name": "switch_basemap", "tool_params": {"basemap_id": "amap_light"}}],
+            "planner": "test_stub",
+        }
+
+        response = runtime.submit_assistant_message(project_id, "切换到浅色底图", assistant_mode="teaching")
+        job = self.wait_for_job(runtime, response["job_id"])
+
+        self.assertEqual(job["result"]["intent"], "teaching_action")
+        self.assertTrue(job["result"]["requires_confirmation"])
+        confirmation_id = job["result"]["confirmation_id"]
+        self.assertTrue(confirmation_id)
+        self.assertEqual(job["result"]["actions_executed"], [])
+
+        confirm_response = runtime.confirm_assistant_action(confirmation_id)
+        confirm_job = self.wait_for_job(runtime, confirm_response["job_id"])
+
+        self.assertTrue(confirm_job["result"]["actions_executed"])
+        message = confirm_job["result"]["assistant_message"]
+        self.assertIn("教学处理", message)
+        self.assertIn("证据或观察点", message)
+        self.assertIn("给学生的问题", message)
+        self.assertIn("教师收束语或下一步", message)
+
+    def test_legacy_tool_mode_keeps_clarification_copy(self) -> None:
+        runtime, project_id = self.build_runtime()
+
+        response = runtime.submit_assistant_message(project_id, "hello there", assistant_mode="tool")
+        job = self.wait_for_job(runtime, response["job_id"])
+
+        self.assertEqual(job["result"]["planner"], "clarification")
+        self.assertIn("switch to knowledge mode", job["result"]["assistant_message"])
+
+    def test_teaching_reflect_states_missing_evidence_without_fabrication(self) -> None:
+        runtime, project_id = self.build_runtime()
+        runtime.session_engine.knowledge.minimax_client = None
+
+        response = runtime.submit_assistant_message(project_id, "帮我做本节课的课堂小结", assistant_mode="teaching")
+        job = self.wait_for_job(runtime, response["job_id"])
+
+        self.assertEqual(job["result"]["intent"], "teaching_reflect")
+        message = job["result"]["assistant_message"]
+        self.assertIn("教学处理", message)
+        self.assertIn("本回答缺少当前地图或素材证据", message)
+        self.assertNotIn("学生掌握率", message)
+        self.assertNotIn("正确率", message)
+
 
 if __name__ == "__main__":
     unittest.main()

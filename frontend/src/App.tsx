@@ -44,7 +44,6 @@ import {
   searchKb,
   searchPoi,
   searchResources,
-  sendAgentMessage,
   sendAssistantMessage,
   saveLessonResourceSet,
   switchBasemap,
@@ -257,7 +256,7 @@ function captureMapSnapshot(map: Map): Promise<string> {
   });
 }
 
-function shouldAttachMapSnapshot(message: string, mode: AssistantMode): boolean {
+function shouldAttachMapSnapshot(message: string): boolean {
   const text = message.trim().toLowerCase();
   if (!text) {
     return false;
@@ -265,7 +264,7 @@ function shouldAttachMapSnapshot(message: string, mode: AssistantMode): boolean 
   const currentMapIntent = /(当前|这张|这幅|此图|图中|图上|视图|画面|读图|判读)/.test(text);
   const visualGeoIntent = /(地形|地貌|地势|等高线|图例|空间格局|分布|高值|低值|降水|气温|人口|河流|水系|山地|平原|盆地)/.test(text);
   const analysisIntent = /(分析|讲解|解释|说明|特征|怎么看|如何看)/.test(text);
-  return mode === "knowledge" && (currentMapIntent || (visualGeoIntent && analysisIntent));
+  return currentMapIntent || (visualGeoIntent && analysisIntent);
 }
 
 function formatFeatureSummary(properties: Record<string, unknown>): string {
@@ -406,31 +405,16 @@ export default function App() {
   const [project, setProject] = useState<(ProjectRecord & { status: string }) | null>(null);
   const [layerState, setLayerState] = useState<LayersResponse | null>(null);
   const [outputs, setOutputs] = useState<ArtifactRecord[]>([]);
-  const [assistantMode, setAssistantMode] = useState<AssistantMode>("tool");
-  const [currentJobByMode, setCurrentJobByMode] = useState<Record<AssistantMode, JobRecord | null>>({
-    knowledge: null,
-    tool: null
-  });
-  const [chatLogByMode, setChatLogByMode] = useState<Record<AssistantMode, ChatMessage[]>>({
-    knowledge: [
-      {
-        role: "assistant",
-        text: "这里是知识助手，可以回答地理概念、区域地理、地图判读与 GIS 方法问题。",
-        timestamp: timestamp()
-      }
-    ],
-    tool: [
-      {
-        role: "assistant",
-        text: "这里是内嵌 Agent，可以像 coding agent 一样读取项目、调用工具、执行 WebGIS 后端能力。默认会自动批准工具调用；如需收紧权限，可将 AGENT_AUTO_APPROVE 设为 false。",
-        timestamp: timestamp()
-      }
-    ]
-  });
-  const [conversationIds, setConversationIds] = useState<Record<AssistantMode, string>>({
-    knowledge: "",
-    tool: ""
-  });
+  const assistantMode: AssistantMode = "teaching";
+  const [currentJob, setCurrentJob] = useState<JobRecord | null>(null);
+  const [chatLog, setChatLog] = useState<ChatMessage[]>([
+    {
+      role: "assistant",
+      text: "这里是专业教学智能体，可以讲解地理概念、判读当前地图、设计课堂追问、执行课堂地图操作，并在操作后给出教学解释。",
+      timestamp: timestamp()
+    }
+  ]);
+  const [conversationId, setConversationId] = useState("");
   const [assistantInput, setAssistantInput] = useState("");
   const [interactionMode, setInteractionMode] = useState<InteractionMode>("browse");
   const [measureText, setMeasureText] = useState("");
@@ -511,8 +495,6 @@ export default function App() {
   const [lessonWorkflowOpenSignal, setLessonWorkflowOpenSignal] = useState(0);
   const [initAttempt, setInitAttempt] = useState(0);
   const [initError, setInitError] = useState("");
-  const currentJob = currentJobByMode[assistantMode];
-  const chatLog = chatLogByMode[assistantMode];
   const connectionReady = Boolean(project && health && !initError);
 
   const onlinePoiEnabled = health?.online_services.amap_poi_enabled ?? false;
@@ -600,14 +582,11 @@ export default function App() {
     [dismissToast]
   );
 
-  const appendChat = useCallback((mode: AssistantMode, role: ChatMessage["role"], text: string) => {
+  const appendChat = useCallback((role: ChatMessage["role"], text: string) => {
     if (!text.trim()) {
       return;
     }
-    setChatLogByMode((previous) => ({
-      ...previous,
-      [mode]: [...previous[mode], { role, text, timestamp: timestamp() }]
-    }));
+    setChatLog((previous) => [...previous, { role, text, timestamp: timestamp() }]);
   }, []);
 
   const refreshProjectState = useCallback(async (projectId: string) => {
@@ -1030,7 +1009,7 @@ export default function App() {
   }, []);
 
   const subscribeToJob = useCallback(
-    (jobId: string, mode: AssistantMode) => {
+    (jobId: string) => {
       const source = new EventSource(`${getApiBase()}/jobs/${jobId}/stream`);
       jobStreamsRef.current.add(source);
       activeJobStreamsRef.current += 1;
@@ -1045,7 +1024,7 @@ export default function App() {
           }
           return;
         }
-        setCurrentJobByMode((previous) => ({ ...previous, [mode]: payload }));
+        setCurrentJob(payload);
         if (payload.status === "completed" || payload.status === "failed") {
           if (!closeJobStream(source)) {
             return;
@@ -1055,9 +1034,9 @@ export default function App() {
           const message = payload.result?.assistant_message || payload.result?.summary || payload.error || "";
           const nextConversationId = String(payload.result?.conversation_id || "");
           if (nextConversationId) {
-            setConversationIds((previous) => ({ ...previous, [mode]: nextConversationId }));
+            setConversationId(nextConversationId);
           }
-          appendChat(mode, payload.status === "failed" ? "system" : "assistant", message);
+          appendChat(payload.status === "failed" ? "system" : "assistant", message);
           const isAssistantAnswer = Boolean(payload.result?.assistant_message || payload.result?.conversation_id);
           if (payload.status === "failed") {
             pushToast("error", "任务失败", payload.error || message);
@@ -1089,32 +1068,14 @@ export default function App() {
       overrides?: Partial<MapContext>,
       target: AssistantTarget = "webgis",
       inputMode: AssistantInputMode = "text",
-      mode: AssistantMode = assistantMode,
       screenSnapshot?: ScreenSnapshot
     ) => {
       if (!project) {
         return;
       }
-      appendChat(mode, "user", message);
-      if (mode === "tool") {
-        setBusy(true);
-        try {
-          const response = await sendAgentMessage(message, conversationIds.tool);
-          if (response.session_id) {
-            setConversationIds((previous) => ({ ...previous, tool: response.session_id }));
-          }
-          appendChat("tool", "assistant", response.reply);
-        } catch (err) {
-          const detail = err instanceof Error ? err.message : String(err);
-          appendChat("tool", "system", detail);
-          pushToast("error", "Agent 调用失败", detail);
-        } finally {
-          setBusy(false);
-        }
-        return;
-      }
+      appendChat("user", message);
       let effectiveSnapshot = screenSnapshot;
-      if (!effectiveSnapshot && mapRef.current && shouldAttachMapSnapshot(message, mode)) {
+      if (!effectiveSnapshot && mapRef.current && shouldAttachMapSnapshot(message)) {
         const size = mapRef.current.getSize() || [0, 0];
         const imageDataUrl = await captureMapSnapshot(mapRef.current);
         if (imageDataUrl) {
@@ -1127,26 +1088,26 @@ export default function App() {
         }
       }
       const response = await sendAssistantMessage(project.project_id, message, buildMapContext(overrides), target, inputMode, {
-        assistantMode: mode,
-        conversationId: health?.ui.assistant_v2_enabled ? conversationIds[mode] : undefined,
-        history: health?.ui.assistant_v2_enabled ? chatLogByMode[mode] : undefined,
+        assistantMode,
+        conversationId: health?.ui.assistant_v2_enabled ? conversationId : undefined,
+        history: health?.ui.assistant_v2_enabled ? chatLog : undefined,
         screenSnapshot: effectiveSnapshot
       });
       if (response.conversation_id) {
-        setConversationIds((previous) => ({ ...previous, [mode]: response.conversation_id || previous[mode] }));
+        setConversationId(response.conversation_id);
       }
-      subscribeToJob(response.job_id, mode);
+      subscribeToJob(response.job_id);
     },
-    [appendChat, assistantMode, buildMapContext, chatLogByMode, conversationIds, health?.ui.assistant_v2_enabled, project, pushToast, subscribeToJob]
+    [appendChat, buildMapContext, chatLog, conversationId, health?.ui.assistant_v2_enabled, project, subscribeToJob]
   );
 
   assistantDispatchRef.current = (message, overrides) => {
-    void submitAssistantText(message, overrides, "webgis", "text", "tool");
+    void submitAssistantText(message, overrides);
   };
 
   const handleReadMapWithSnapshot = useCallback(async () => {
     if (!mapRef.current) {
-      void submitAssistantText(assistantActionPrompt, undefined, "webgis", "text", "knowledge");
+      void submitAssistantText(assistantActionPrompt);
       return;
     }
     const size = mapRef.current.getSize() || [0, 0];
@@ -1159,7 +1120,7 @@ export default function App() {
           captured_at: new Date().toISOString()
         }
       : undefined;
-    void submitAssistantText(assistantActionPrompt, undefined, "webgis", "text", "knowledge", snapshot);
+    void submitAssistantText(assistantActionPrompt, undefined, "webgis", "text", snapshot);
   }, [assistantActionPrompt, submitAssistantText]);
 
   const handleTemplateRun = useCallback(
@@ -1170,7 +1131,7 @@ export default function App() {
       setDrawerOpen(true);
       setDrawerTab("resource-search");
       const response = await runTemplate(project.project_id, templateId);
-      subscribeToJob(response.job_id, "tool");
+      subscribeToJob(response.job_id);
     },
     [project, subscribeToJob]
   );
@@ -1186,7 +1147,7 @@ export default function App() {
     }
     await exportSnapshot(project.project_id, "课堂截图", imageDataUrl, "由 WebGIS 实时交互系统导出");
     await refreshProjectState(project.project_id);
-    appendChat("tool", "system", "当前课堂画面已导出到课堂产物列表。");
+    appendChat("system", "当前课堂画面已导出到课堂产物列表。");
     pushToast("success", "导出完成", "课堂截图已进入左侧产物页。");
   }, [appendChat, project, pushToast, refreshProjectState]);
 
@@ -1258,7 +1219,7 @@ export default function App() {
         return;
       }
       const response = await uploadDataset(project.project_id, formData);
-      subscribeToJob(response.job_id, "tool");
+      subscribeToJob(response.job_id);
     },
     [project, subscribeToJob]
   );
@@ -1329,7 +1290,7 @@ export default function App() {
       setDrawerTab("search");
       setDrawerOpen(true);
       await refreshProjectState(project.project_id);
-      appendChat("tool", "system", response.summary);
+      appendChat("system", response.summary);
       pushToast("success", `${resolvedMode === "polygon" ? "区域" : "视域"}检索完成`, response.summary);
     },
     [appendChat, onlinePoiEnabled, project, pushToast, refreshProjectState, searchAreaGeometry, searchKeyword]
@@ -2823,8 +2784,8 @@ export default function App() {
                 setProject(null);
                 setLayerState(null);
                 setOutputs([]);
-                setCurrentJobByMode({ knowledge: null, tool: null });
-                setConversationIds({ knowledge: "", tool: "" });
+                setCurrentJob(null);
+                setConversationId("");
                 setSearchResults([]);
                 setSearchSummary("");
                 setKbItems([]);
@@ -2959,29 +2920,27 @@ export default function App() {
 
       {project ? (
         <CopilotWidget
-          assistantMode={assistantMode}
           chatLog={chatLog}
           currentJob={currentJob}
           inputValue={assistantInput}
           onInputChange={setAssistantInput}
-          onAssistantModeChange={setAssistantMode}
           onSubmit={() => {
             const message = assistantInput.trim();
             if (!message) {
               return;
             }
-            void submitAssistantText(message, undefined, "webgis", "text", assistantMode);
+            void submitAssistantText(message);
             setAssistantInput("");
           }}
           onConfirm={(confirmationId, decision = "approve") => {
-            void confirmAssistantAction(confirmationId, decision).then((response) => subscribeToJob(response.job_id, assistantMode));
+            void confirmAssistantAction(confirmationId, decision).then((response) => subscribeToJob(response.job_id));
           }}
           onVoiceSubmit={(message) => {
             const transcript = message.trim();
             if (!transcript) {
               return;
             }
-            void submitAssistantText(transcript, undefined, "webgis", "voice", assistantMode);
+            void submitAssistantText(transcript, undefined, "webgis", "voice");
           }}
           onVoiceNotice={(tone, title, detail) => {
             pushToast(tone, title, detail);

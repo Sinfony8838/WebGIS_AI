@@ -263,7 +263,7 @@ export type KnowledgeAnswer = {
   llm_used?: boolean;
 };
 
-export type AssistantMode = "knowledge" | "tool";
+export type AssistantMode = "teaching" | "knowledge" | "tool";
 export type AssistantTarget = "webgis" | "qgis";
 export type AssistantInputMode = "text" | "voice";
 

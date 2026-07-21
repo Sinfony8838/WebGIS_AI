@@ -724,7 +724,7 @@ class WebGISRuntime:
         project_id: str,
         message: str,
         map_context: Optional[Dict[str, Any]] = None,
-        assistant_mode: str = "tool",
+        assistant_mode: str = "teaching",
         conversation_id: str = "",
         history: Optional[List[Dict[str, Any]]] = None,
         target: str = "webgis",
@@ -734,8 +734,8 @@ class WebGISRuntime:
         # Heavy GIS work moved to /workflow/*; assistant actions are WebGIS-only.
         normalized_target = "webgis"
         normalized_input_mode = input_mode if input_mode in {"text", "voice"} else "text"
-        normalized_mode = assistant_mode if assistant_mode in {"knowledge", "tool"} else "tool"
-        use_v2 = self.config.assistant_v2_enabled or assistant_mode == "knowledge" or bool(conversation_id) or bool(history)
+        normalized_mode = assistant_mode if assistant_mode in {"teaching", "knowledge", "tool"} else "teaching"
+        use_v2 = self.config.assistant_v2_enabled or normalized_mode == "teaching" or assistant_mode == "knowledge" or bool(conversation_id) or bool(history)
         job = self.store.create_job(
             project_id=project_id,
             job_type="assistant",

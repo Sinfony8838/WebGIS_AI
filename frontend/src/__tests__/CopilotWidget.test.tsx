@@ -50,14 +50,12 @@ function setSpeechRecognitionSupport(enabled: boolean) {
 function renderWidget(overrides: Partial<ComponentProps<typeof CopilotWidget>> = {}) {
   const onSubmit = vi.fn();
   const onInputChange = vi.fn();
-  const onAssistantModeChange = vi.fn();
   const onConfirm = vi.fn();
   const onVoiceSubmit = vi.fn();
   const onVoiceNotice = vi.fn();
 
   render(
     <CopilotWidget
-      assistantMode="tool"
       busy={false}
       currentJob={null}
       chatLog={[
@@ -69,7 +67,6 @@ function renderWidget(overrides: Partial<ComponentProps<typeof CopilotWidget>> =
       ]}
       inputValue="搜索当前区域内港口"
       onInputChange={onInputChange}
-      onAssistantModeChange={onAssistantModeChange}
       onSubmit={onSubmit}
       onConfirm={onConfirm}
       onVoiceSubmit={onVoiceSubmit}
@@ -81,7 +78,7 @@ function renderWidget(overrides: Partial<ComponentProps<typeof CopilotWidget>> =
   // The widget defaults to minimized; expand so tests can exercise the panel.
   fireEvent.click(screen.getByLabelText("展开智能助教"));
 
-  return { onSubmit, onInputChange, onAssistantModeChange, onConfirm, onVoiceSubmit, onVoiceNotice };
+  return { onSubmit, onInputChange, onConfirm, onVoiceSubmit, onVoiceNotice };
 }
 
 describe("CopilotWidget", () => {
@@ -213,8 +210,7 @@ describe("CopilotWidget", () => {
             answer_type: "assistant_identity"
           }
         }
-      },
-      assistantMode: "knowledge"
+      }
     });
 
     expect(document.querySelector(".copilot-widget")).toHaveClass("compact");
@@ -223,9 +219,42 @@ describe("CopilotWidget", () => {
     expect(screen.getByTestId("copilot-input").closest(".copilot-widget-form")).toBeInTheDocument();
   });
 
+  it("renders the teaching agent without a mode switch or coding copy", () => {
+    renderWidget();
+
+    expect(screen.getByText("专业教学智能体")).toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.queryByText("知识助手")).not.toBeInTheDocument();
+    expect(screen.queryByText("Agent 助手")).not.toBeInTheDocument();
+    const placeholder = screen.getByTestId("copilot-input").getAttribute("placeholder") || "";
+    expect(placeholder).not.toMatch(/检查项目结构|coding agent|AGENT_AUTO_APPROVE/i);
+  });
+
+  it("shows the plan summary card for teaching actions", () => {
+    renderWidget({
+      currentJob: {
+        job_id: "job_plan",
+        project_id: "project_1",
+        job_type: "assistant",
+        title: "切换底图",
+        workflow_type: "assistant_message",
+        status: "completed",
+        updated_at: "1",
+        steps: [],
+        stages: { routing: { status: "success", summary: "Intent: teaching_action", detail: "" } },
+        result: {
+          actions_planned: [
+            { name: "switch_basemap", risk_level: "low", tool_params: { basemap_id: "amap_light" } }
+          ]
+        }
+      }
+    });
+
+    expect(screen.getByText("计划摘要")).toBeInTheDocument();
+  });
+
   it("renders v2 confirmation and citation cards", () => {
-    const { onConfirm, onAssistantModeChange } = renderWidget({
-      assistantMode: "knowledge",
+    const { onConfirm } = renderWidget({
       currentJob: {
         job_id: "job_1",
         project_id: "project_1",
@@ -263,16 +292,13 @@ describe("CopilotWidget", () => {
     expect(screen.queryByText(/置信度：/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^ROUTING$/i)).not.toBeInTheDocument();
     expect(screen.getByText("引用来源")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("知识助手"));
     fireEvent.click(screen.getByText("确认执行"));
-    expect(onAssistantModeChange).toHaveBeenCalledWith("knowledge");
     expect(onConfirm).toHaveBeenCalledWith("confirm_1", "approve");
   });
 
   it("shows a generic thinking indicator while busy and hides it when done", () => {
     const { rerender } = render(
       <CopilotWidget
-        assistantMode="knowledge"
         busy
         currentJob={{
           job_id: "job_pending",
@@ -295,7 +321,6 @@ describe("CopilotWidget", () => {
         ]}
         inputValue=""
         onInputChange={vi.fn()}
-        onAssistantModeChange={vi.fn()}
         onSubmit={vi.fn()}
         onConfirm={vi.fn()}
         onVoiceSubmit={vi.fn()}
@@ -313,13 +338,11 @@ describe("CopilotWidget", () => {
     // Re-render the same root with busy=false; the indicator must disappear.
     rerender(
       <CopilotWidget
-        assistantMode="knowledge"
         busy={false}
         currentJob={null}
         chatLog={[{ role: "assistant", text: "答复已生成。", timestamp: "1" }]}
         inputValue=""
         onInputChange={vi.fn()}
-        onAssistantModeChange={vi.fn()}
         onSubmit={vi.fn()}
         onConfirm={vi.fn()}
         onVoiceSubmit={vi.fn()}
@@ -332,13 +355,11 @@ describe("CopilotWidget", () => {
   it("falls back to generic 正在思考 when no stage is running but still busy", () => {
     render(
       <CopilotWidget
-        assistantMode="tool"
         busy
         currentJob={null}
         chatLog={[]}
         inputValue=""
         onInputChange={vi.fn()}
-        onAssistantModeChange={vi.fn()}
         onSubmit={vi.fn()}
         onConfirm={vi.fn()}
         onVoiceSubmit={vi.fn()}

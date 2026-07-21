@@ -45,7 +45,7 @@ describe("api.sendAssistantMessage", () => {
     expect(String(init?.body)).toContain('"input_mode":"voice"');
   });
 
-  it("sends assistant mode and conversation history in v2 requests", async () => {
+  it("sends teaching mode and conversation history in v2 requests", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ job_id: "job_tool_1", conversation_id: "conv_1" }), {
         status: 200,
@@ -66,16 +66,22 @@ describe("api.sendAssistantMessage", () => {
       "webgis",
       "text",
       {
-        assistantMode: "tool",
+        assistantMode: "teaching",
         conversationId: "conv_existing",
         history: [{ role: "user", text: "上一条消息", timestamp: "1" }]
       }
     );
 
     const [, init] = fetchMock.mock.calls[0];
-    expect(String(init?.body)).toContain('"assistant_mode":"tool"');
+    expect(String(init?.body)).toContain('"assistant_mode":"teaching"');
     expect(String(init?.body)).toContain('"conversation_id":"conv_existing"');
     expect(String(init?.body)).toContain("上一条消息");
+  });
+
+  it("does not export the deleted coding-agent client", async () => {
+    const apiModule = await import("../api");
+    expect("sendAgentMessage" in apiModule).toBe(false);
+    expect("AgentChatResponse" in apiModule).toBe(false);
   });
 
   it("sends screen snapshot in assistant request body", async () => {
@@ -99,7 +105,7 @@ describe("api.sendAssistantMessage", () => {
       "webgis",
       "text",
       {
-        assistantMode: "knowledge",
+        assistantMode: "teaching",
         screenSnapshot: {
           image_data_url: "data:image/png;base64,AAAA",
           width: 1920,

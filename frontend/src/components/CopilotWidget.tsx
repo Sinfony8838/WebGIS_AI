@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { getSpeechRecognitionConstructor, getSpeechRecognitionErrorMessage, type BrowserSpeechRecognition } from "../speechRecognition";
-import type { AssistantMode, ChatMessage, JobRecord } from "../types";
+import type { ChatMessage, JobRecord } from "../types";
 
 type PanelRect = {
   x: number;
@@ -18,12 +18,10 @@ type Point = {
 type VoiceStatus = "idle" | "listening" | "unsupported";
 
 type Props = {
-  assistantMode: AssistantMode;
   chatLog: ChatMessage[];
   currentJob: JobRecord | null;
   inputValue: string;
   onInputChange: (value: string) => void;
-  onAssistantModeChange: (mode: AssistantMode) => void;
   onSubmit: () => void;
   onConfirm: (confirmationId: string, decision?: "approve" | "reject") => void;
   onVoiceSubmit: (transcript: string) => void;
@@ -298,12 +296,10 @@ function initialVoiceText(supported: boolean): string {
 }
 
 export function CopilotWidget({
-  assistantMode = "tool",
   chatLog,
   currentJob,
   inputValue,
   onInputChange,
-  onAssistantModeChange = () => undefined,
   onSubmit,
   onConfirm = () => undefined,
   onVoiceSubmit,
@@ -351,10 +347,7 @@ export function CopilotWidget({
   const confirmationId = String(currentJob?.result?.confirmation_id || "");
   const requiresConfirmation = Boolean(currentJob?.result?.requires_confirmation && confirmationId);
   const compactLayout = panelRect.height < 560 || panelRect.width < 560;
-  const inputPlaceholder =
-    assistantMode === "tool"
-      ? "向内嵌 Agent 提问 - 例如：检查项目结构、修改代码、调用 WebGIS 后端工具。"
-      : "向智能助教提问 - 例如：解释当前视图的空间格局，或说明所选区域的区位特征。";
+  const inputPlaceholder = "向专业教学智能体提问 - 例如：讲解当前视图的空间格局，或切换底图并说明原因。";
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -706,8 +699,8 @@ export function CopilotWidget({
             <AssistantFace variant="avatar" />
           </div>
           <div className="copilot-title-copy">
-            <p className="copilot-eyebrow">AI Teaching Assistant</p>
-            <h2>智能助教</h2>
+            <p className="copilot-eyebrow">Professional Teaching Agent</p>
+            <h2>专业教学智能体</h2>
           </div>
         </div>
         <div className="copilot-widget-actions" onPointerDown={(event) => event.stopPropagation()}>
@@ -720,31 +713,6 @@ export function CopilotWidget({
             title="最小化"
           >
             <span aria-hidden="true">−</span>
-          </button>
-        </div>
-        <div
-          className="assistant-mode-switch"
-          role="tablist"
-          aria-label="assistant mode"
-          onPointerDown={(event) => event.stopPropagation()}
-        >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={assistantMode === "knowledge"}
-            className={`assistant-mode-chip ${assistantMode === "knowledge" ? "active" : ""}`}
-            onClick={() => onAssistantModeChange("knowledge")}
-          >
-            知识助手
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={assistantMode === "tool"}
-            className={`assistant-mode-chip ${assistantMode === "tool" ? "active" : ""}`}
-            onClick={() => onAssistantModeChange("tool")}
-          >
-            Agent 助手
           </button>
         </div>
       </header>
@@ -771,7 +739,7 @@ export function CopilotWidget({
             </div>
           ) : null}
 
-          {assistantMode === "tool" && plannedActions.length ? (
+          {plannedActions.length ? (
             <div className="copilot-plan-card">
               <strong>计划摘要</strong>
               {plannedActions.slice(0, 3).map((item) => (

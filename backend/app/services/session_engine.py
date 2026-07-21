@@ -78,6 +78,10 @@ CURRENT_MAP_HINTS = ("当前视图", "当前地图", "当前画面", "当前图�
 MAP_READING_HINTS = ("读图", "判读", "图上", "图中", "视图", "地图", "图例", "等高线", "地貌", "地形", "地势", "空间格局", "分布特征")
 TIME_SENSITIVE_HINTS = ("最新", "目前", "今天", "近年", "recent", "latest", "today")
 
+TEACHING_TASKS = ("teaching_explain", "teaching_question", "teaching_action", "teaching_reflect")
+TEACHING_QUESTION_HINTS = ("追问", "提问", "设计问题", "出几道题", "几个问题", "还有什么问题", "进一步问", "follow-up")
+TEACHING_REFLECT_HINTS = ("复盘", "课堂小结", "小结一下", "回顾一下", "总结本课", "总结这节课", "课后总结", "复习切口")
+
 
 def _contains_any(text: str, tokens: Sequence[str]) -> bool:
     lowered = (text or "").lower()
@@ -103,6 +107,32 @@ def _parse_timestamp(value: str) -> Optional[datetime]:
 
 def _utc_timestamp(minutes_from_now: int = 0) -> str:
     return (datetime.now(timezone.utc) + timedelta(minutes=minutes_from_now)).isoformat()
+
+
+def _teaching_scaffold(knowledge: Dict[str, Any], map_context: Dict[str, Any]) -> str:
+    """Deterministic three-line teaching contract appended to teaching answers.
+
+    Guarantees the 证据或观察点 / 给学生的问题 / 教师收束语或下一步 structure even
+    when the LLM is unavailable, and states missing evidence explicitly instead
+    of fabricating layer or student claims.
+    """
+    knowledge = knowledge or {}
+    grounding = str(knowledge.get("map_grounding") or "").strip()
+    has_evidence = grounding.startswith("基于当前地图")
+    evidence_line = grounding if has_evidence else "本回答缺少当前地图或素材证据，仅为一般性讲解。"
+    teaching_points = [str(item).strip() for item in list(knowledge.get("teaching_points") or []) if str(item).strip()]
+    question_line = (
+        teaching_points[0]
+        if teaching_points
+        else "请学生观察图中高值区与低值区的分布，并说明可能的影响因素。"
+    )
+    closing_line = "收束到区域认知方法：位置—格局—成因；下一步可切换图层或结合读图讲解继续验证。"
+    return (
+        "教学处理：\n"
+        f"- 证据或观察点：{evidence_line}\n"
+        f"- 给学生的问题：{question_line}\n"
+        f"- 教师收束语或下一步：{closing_line}"
+    )
 
 
 META_ANSWER_TYPES = {"assistant_identity", "assistant_model", "assistant_capability"}
@@ -199,6 +229,9 @@ class PromptRegistry:
             else "",
             "hybrid_mode": "Execute approved GIS actions first, then explain the spatial meaning."
             if mode == "hybrid"
+            else "",
+            "teaching_mode": "Act as a professional geography teaching agent: explain first, operate maps only through validated tools, always close with classroom guidance."
+            if mode.startswith("teaching")
             else "",
             "citation_policy": "Prefer authoritative sources, expose freshness, and never present timely facts as definitive without evidence.",
             "tool_safety_policy": "High-risk actions require confirmation; blocked or rejected actions must not execute.",
@@ -315,6 +348,8 @@ class AssistantRouter:
                 "ambiguity_reason": "",
                 "recommended_clarification": "",
             }
+        if assistant_mode == "teaching":
+            return self._route_teaching(message)
         has_tool_hint = _contains_any(message, TOOL_ACTION_HINTS)
         has_explanation_hint = _contains_any(message, EXPLANATION_HINTS)
         if has_tool_hint and has_explanation_hint:
@@ -349,6 +384,43 @@ class AssistantRouter:
             "recommended_clarification": "Provide a specific operation or switch to knowledge mode.",
         }
 
+    def _route_teaching(self, message: str) -> Dict[str, str]:
+        """Teaching mode never asks the teacher to switch modes: an explicit map
+        operation becomes a teaching action, reflection/question prompts keep
+        their classroom framing, and everything else defaults to a teaching
+        explanation."""
+        if _contains_any(message, TOOL_ACTION_HINTS):
+            return {
+                "intent": "teaching_action",
+                "reason": "explicit map operation in teaching mode",
+                "confidence": "0.88",
+                "ambiguity_reason": "",
+                "recommended_clarification": "",
+            }
+        if _contains_any(message, TEACHING_REFLECT_HINTS):
+            return {
+                "intent": "teaching_reflect",
+                "reason": "lesson wrap-up or review request",
+                "confidence": "0.82",
+                "ambiguity_reason": "",
+                "recommended_clarification": "",
+            }
+        if _contains_any(message, TEACHING_QUESTION_HINTS):
+            return {
+                "intent": "teaching_question",
+                "reason": "classroom follow-up question design",
+                "confidence": "0.76",
+                "ambiguity_reason": "",
+                "recommended_clarification": "",
+            }
+        return {
+            "intent": "teaching_explain",
+            "reason": "classroom question defaults to teaching explanation",
+            "confidence": "0.70",
+            "ambiguity_reason": "",
+            "recommended_clarification": "",
+        }
+
 
 class KnowledgeEngine:
     def __init__(
@@ -362,7 +434,12 @@ class KnowledgeEngine:
         self.resource_search = resource_search
         self.knowledge_units = self._load_units()
 
-    def answer(self, question: str, map_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def answer(
+        self,
+        question: str,
+        map_context: Optional[Dict[str, Any]] = None,
+        teaching_task: str = "",
+    ) -> Dict[str, Any]:
         map_context = map_context or {}
         answer_type = self._classify(question)
         if answer_type in {"assistant_identity", "assistant_model", "assistant_capability"}:
@@ -423,7 +500,7 @@ class KnowledgeEngine:
         llm_used = False
         if self.minimax_client is not None and self.config.minimax_enabled():
             try:
-                llm_answer = self._llm_answer(question, entry, answer_type, map_context, web_context)
+                llm_answer = self._llm_answer(question, entry, answer_type, map_context, web_context, teaching_task=teaching_task)
                 llm_used = True
                 retrieval_trace.append({"source": "llm_generation", "status": "success"})
                 direct_answer = llm_answer["direct_answer"]
@@ -494,6 +571,7 @@ class KnowledgeEngine:
         answer_type: str,
         map_context: Dict[str, Any],
         web_context: str = "",
+        teaching_task: str = "",
     ) -> Dict[str, Any]:
         """Call MiniMax LLM to generate a geography knowledge answer.
 
@@ -516,6 +594,22 @@ class KnowledgeEngine:
             "- 语言简洁专业，适合课堂直接朗读\n"
             "- 用中文回答\n"
         )
+        if teaching_task:
+            system_prompt += (
+                "\n你正在“专业教学智能体”模式下支持地理课堂。除上述结构外，“课堂要点”必须依次覆盖：\n"
+                "- 证据或观察点：只能引用参考上下文里真实存在的图层、选区、素材或视觉读图结果\n"
+                "- 给学生的问题：1-2 个可以在课堂上直接提问的问题\n"
+                "- 教师收束语或下一步\n"
+                "如果参考上下文里没有地图或素材证据，必须明确说明“本回答缺少当前地图或素材证据”，"
+                "不得编造图层名称、数据或学生表现。\n"
+            )
+            if teaching_task == "teaching_question":
+                system_prompt += "本次请求侧重课堂提问设计：问题要由浅入深，先观察描述，再比较分析，最后解释迁移，并给出常见误区。\n"
+            elif teaching_task == "teaching_reflect":
+                system_prompt += (
+                    "本次请求侧重课后复盘：以课堂小结口吻输出已讲要点、易错提醒和下一步建议；"
+                    "没有真实课堂记录时不得编造学生表现或掌握程度。\n"
+                )
 
         # Build context from local KB entry and web search
         context_parts: List[str] = []
@@ -927,8 +1021,19 @@ class ToolPlanner:
         map_context: Dict[str, Any],
         target: str,
         input_mode: str,
+        intent: str = "",
     ) -> Dict[str, Any]:
         if input_mode == "voice" and target == "webgis":
+            return self.llm_planner.plan_actions(
+                message,
+                project,
+                map_context=map_context,
+                target=target,
+                input_mode=input_mode,
+            )
+        if intent == "teaching_action":
+            # Teaching mode never answers with "switch to knowledge mode"; an
+            # explain-only plan is a legitimate teaching action.
             return self.llm_planner.plan_actions(
                 message,
                 project,
@@ -1070,7 +1175,7 @@ class ToolExecutor:
         requires_map_context = bool(metadata.get("requires_map_context"))
         if metadata.get("target") not in {target, "auto"}:
             validation_error = f"Tool target mismatch for {tool_name}: expected {metadata.get('target')}, got {target}"
-        elif assistant_mode not in metadata.get("visible_in_mode", ["tool", "hybrid", "knowledge"]):
+        elif assistant_mode not in metadata.get("visible_in_mode", ["tool", "hybrid", "knowledge", "teaching", "teaching_action"]):
             validation_error = f"Tool {tool_name} is not visible in {assistant_mode} mode"
         elif requires_map_context and not map_context:
             validation_error = f"Tool {tool_name} requires current map context"
@@ -1143,7 +1248,7 @@ class AssistantSessionEngine:
         input_mode: str,
         stage_callback: Callable[[str, str, str, str], None],
     ) -> Dict[str, Any]:
-        normalized_mode = assistant_mode if assistant_mode in {"knowledge", "tool"} else "tool"
+        normalized_mode = assistant_mode if assistant_mode in {"teaching", "knowledge", "tool"} else "teaching"
         # Heavy GIS work moved to /workflow/*; the in-classroom assistant is WebGIS-only.
         normalized_target = "webgis"
         effective_target = "webgis"
@@ -1165,11 +1270,12 @@ class AssistantSessionEngine:
         intent = route["intent"]
         stage_callback("routing", "success", f"Intent: {intent}", route["reason"])
 
-        if intent == "knowledge":
-            return self._handle_knowledge(project, conversation, message, map_context, stage_callback)
+        if intent == "knowledge" or (intent in TEACHING_TASKS and intent != "teaching_action"):
+            teaching_task = intent if intent.startswith("teaching") else ""
+            return self._handle_knowledge(project, conversation, message, map_context, stage_callback, teaching_task=teaching_task)
 
         stage_callback("planning", "running", "Planning GIS actions", "")
-        plan = self.tool_planner.plan(message, project, map_context, effective_target, input_mode)
+        plan = self.tool_planner.plan(message, project, map_context, effective_target, input_mode, intent=intent)
         stage_callback("planning", "success", f"Planner: {plan.get('planner', 'unknown')}", plan.get("assistant_message", ""))
 
         actions = list(plan.get("actions") or [])
@@ -1184,6 +1290,10 @@ class AssistantSessionEngine:
         prompt_parts = self.prompt_registry.build(intent, map_context, retrieval=None, conversation_context=context)
 
         if not actions:
+            if normalized_mode == "teaching":
+                # Teaching mode never surfaces "switch to knowledge mode"; a
+                # request without a concrete map action becomes an explanation.
+                return self._handle_knowledge(project, conversation, message, map_context, stage_callback, teaching_task="teaching_explain")
             assistant_message = str(plan.get("assistant_message") or "No action was planned.")
             self.memory.append(
                 conversation.conversation_id,
@@ -1347,11 +1457,17 @@ class AssistantSessionEngine:
         citations: List[Dict[str, Any]] = []
         assistant_message = str(plan.get("assistant_message") or "").strip()
 
-        if intent == "hybrid":
+        if intent == "hybrid" or normalized_mode == "teaching":
             stage_callback("grounding", "running", "Explaining executed result", "")
-            knowledge = self.knowledge.answer(message, map_context=map_context)
-            citations = knowledge["citations"]
-            grounding_text = self.knowledge.render_public_answer(knowledge, include_teaching_points=False)
+            if normalized_mode == "teaching":
+                knowledge = self.knowledge.answer(message, map_context=map_context, teaching_task="teaching_action")
+                citations = knowledge["citations"]
+                grounding_text = self.knowledge.render_public_answer(knowledge, include_teaching_points=True)
+                grounding_text = "\n\n".join(part for part in [grounding_text, _teaching_scaffold(knowledge, map_context)] if part).strip()
+            else:
+                knowledge = self.knowledge.answer(message, map_context=map_context)
+                citations = knowledge["citations"]
+                grounding_text = self.knowledge.render_public_answer(knowledge, include_teaching_points=False)
             assistant_message = "\n\n".join(part for part in [assistant_message, grounding_text] if part).strip()
             stage_callback("grounding", "success", "Explanation completed", "")
 
@@ -1449,14 +1565,23 @@ class AssistantSessionEngine:
         knowledge = None
         citations: List[Dict[str, Any]] = []
         assistant_message = "Confirmed action executed successfully."
-        if str((frozen_plan or payload).get("intent") or payload.get("intent") or "tool") == "hybrid":
+        confirmed_intent = str((frozen_plan or payload).get("intent") or payload.get("intent") or "tool")
+        if confirmed_intent == "hybrid" or confirmed_intent.startswith("teaching"):
             stage_callback("grounding", "running", "Explaining confirmed result", "")
-            knowledge = self.knowledge.answer(str((frozen_plan or payload).get("message") or ""), map_context=map_context)
-            citations = list(knowledge.get("citations") or [])
+            confirmed_message = str((frozen_plan or payload).get("message") or "")
+            if confirmed_intent.startswith("teaching"):
+                knowledge = self.knowledge.answer(confirmed_message, map_context=map_context, teaching_task="teaching_action")
+                citations = list(knowledge.get("citations") or [])
+                grounding_text = self.knowledge.render_public_answer(knowledge, include_teaching_points=True)
+                grounding_text = "\n\n".join(part for part in [grounding_text, _teaching_scaffold(knowledge, map_context)] if part).strip()
+            else:
+                knowledge = self.knowledge.answer(confirmed_message, map_context=map_context)
+                citations = list(knowledge.get("citations") or [])
+                grounding_text = self.knowledge.render_public_answer(knowledge, include_teaching_points=False)
             assistant_message = "\n\n".join(
                 [
                     "Confirmed action executed successfully.",
-                    self.knowledge.render_public_answer(knowledge, include_teaching_points=False),
+                    grounding_text,
                 ]
             ).strip()
             stage_callback("grounding", "success", "Confirmed explanation completed", "")
@@ -1488,12 +1613,12 @@ class AssistantSessionEngine:
                 target,
                 actions,
                 pinned_state=conversation.pinned_state if conversation else {},
-                assistant_mode=str((frozen_plan or payload).get("intent") or payload.get("intent") or "tool"),
+                assistant_mode=confirmed_intent,
                 project_state={"project_id": confirmation.project_id},
                 map_context=map_context,
             )["actions_planned"],
             "requires_confirmation": False,
-            "intent": str((frozen_plan or payload).get("intent") or payload.get("intent") or "tool"),
+            "intent": confirmed_intent,
             "citations": citations,
             "knowledge": knowledge,
             "planner": "confirmation",
@@ -1622,34 +1747,45 @@ class AssistantSessionEngine:
         message: str,
         map_context: Dict[str, Any],
         stage_callback: Callable[[str, str, str, str], None],
+        teaching_task: str = "",
     ) -> Dict[str, Any]:
         map_context = self._enrich_map_reading_with_vision(project, message, map_context, stage_callback)
         llm_available = self.knowledge.minimax_client is not None and self.config.minimax_enabled()
         stage_label = "AI 通用知识 + 在线检索" if llm_available else "本地知识库检索"
         stage_callback("retrieval", "running", stage_label, "")
-        knowledge = self.knowledge.answer(message, map_context=map_context)
+        knowledge = self.knowledge.answer(message, map_context=map_context, teaching_task=teaching_task)
+        if teaching_task:
+            knowledge["presentation"] = {
+                **dict(knowledge.get("presentation") or {}),
+                "teaching_points_title": "课堂教学要点",
+            }
         llm_used = knowledge.get("llm_used", False)
         source_label = "AI 回答" if llm_used else "本地知识库"
         stage_callback("retrieval", "success", f"{source_label} · {knowledge['answer_type']}", "")
         stage_callback("grounding", "running", "Composing grounded answer", "")
         assistant_message = self.knowledge.render_public_answer(knowledge, include_teaching_points=True)
+        if teaching_task:
+            assistant_message = "\n\n".join(
+                part for part in [assistant_message, _teaching_scaffold(knowledge, map_context)] if part
+            ).strip()
         stage_callback("grounding", "success", "Knowledge answer completed", "")
+        result_intent = teaching_task or "knowledge"
         self.memory.append(
             conversation.conversation_id,
             "assistant",
             assistant_message,
             conversation.assistant_mode,
-            metadata={"intent": "knowledge", "answer_type": knowledge["answer_type"], "llm_used": llm_used},
+            metadata={"intent": result_intent, "answer_type": knowledge["answer_type"], "llm_used": llm_used},
         )
         self.memory.update_task_memory(
             conversation,
-            {"last_intent": "knowledge"},
+            {"last_intent": result_intent},
             map_context,
             pinned_state_updates={"last_answer_type": knowledge["answer_type"]},
         )
         planner_label = "knowledge_llm" if llm_used else "knowledge_engine"
         return {
-            "intent": "knowledge",
+            "intent": result_intent,
             "assistant_message": assistant_message,
             "knowledge": knowledge,
             "citations": knowledge["citations"],
@@ -1661,7 +1797,7 @@ class AssistantSessionEngine:
             "retrieval_trace": knowledge["retrieval_trace"],
             "conversation_id": conversation.conversation_id,
             "prompt_parts": self.prompt_registry.build(
-                "knowledge",
+                result_intent,
                 map_context,
                 retrieval=knowledge["citations"],
                 conversation_context=self.memory.build_context(conversation),
