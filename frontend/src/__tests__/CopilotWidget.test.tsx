@@ -105,6 +105,38 @@ describe("CopilotWidget", () => {
     expect(screen.getByLabelText("展开智能助教")).toBeInTheDocument();
   });
 
+  it("renders the structured teaching contract as three visual blocks", () => {
+    renderWidget({
+      chatLog: [
+        {
+          role: "assistant",
+          text: "东部人口密集与自然条件、经济机会相关。\n\n教学处理：\n- 证据或观察点：基于当前地图：可见图层包括 人口密度。\n- 给学生的问题：观察高值区与低值区的分布。\n- 教师收束语或下一步：收束到区域认知方法。",
+          timestamp: "1",
+          teaching_contract: {
+            evidence: "基于当前地图：可见图层包括 人口密度。",
+            question: "观察高值区与低值区的分布。",
+            closing: "收束到区域认知方法：位置-格局-成因。"
+          }
+        }
+      ]
+    });
+
+    // The three contract parts render as labeled blocks.
+    expect(screen.getByText("证据或观察点")).toBeInTheDocument();
+    expect(screen.getByText("给学生的问题")).toBeInTheDocument();
+    expect(screen.getByText("教师收束语或下一步")).toBeInTheDocument();
+    // Structured values are rendered.
+    expect(screen.getByText("观察高值区与低值区的分布。")).toBeInTheDocument();
+    expect(screen.getByText("收束到区域认知方法：位置-格局-成因。")).toBeInTheDocument();
+    // The legacy "教学处理：" text block is stripped (not duplicated) when the
+    // structured contract is rendered.
+    expect(screen.queryByText(/教学处理/)).toBeNull();
+    // The answer body before the scaffold is still shown.
+    expect(screen.getByText(/东部人口密集与自然条件/)).toBeInTheDocument();
+    // The copy-question button is present.
+    expect(screen.getByRole("button", { name: "复制问题" })).toBeInTheDocument();
+  });
+
   it("submits the final transcript after clicking the microphone", async () => {
     const { onVoiceSubmit } = renderWidget();
 

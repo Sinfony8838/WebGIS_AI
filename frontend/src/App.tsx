@@ -106,6 +106,7 @@ import type {
   ResourceSearchResult,
   ScreenSnapshot,
   SlideContent,
+  TeachingContract,
   TeachingMaterial
 } from "./types";
 import "./styles.css";
@@ -581,12 +582,18 @@ export default function App() {
     [dismissToast]
   );
 
-  const appendChat = useCallback((role: ChatMessage["role"], text: string) => {
-    if (!text.trim()) {
-      return;
-    }
-    setChatLog((previous) => [...previous, { role, text, timestamp: timestamp() }]);
-  }, []);
+  const appendChat = useCallback(
+    (role: ChatMessage["role"], text: string, teachingContract?: TeachingContract | null) => {
+      if (!text.trim()) {
+        return;
+      }
+      setChatLog((previous) => [
+        ...previous,
+        { role, text, timestamp: timestamp(), teaching_contract: teachingContract ?? undefined }
+      ]);
+    },
+    []
+  );
 
   const refreshProjectState = useCallback(async (projectId: string) => {
       const [projectPayload, layerPayload, outputsPayload, lessonPayload, activeTeachingPayload] = await Promise.all([
@@ -1035,7 +1042,11 @@ export default function App() {
           if (nextConversationId) {
             setConversationId(nextConversationId);
           }
-          appendChat(payload.status === "failed" ? "system" : "assistant", message);
+          appendChat(
+            payload.status === "failed" ? "system" : "assistant",
+            message,
+            payload.result?.teaching_contract
+          );
           const isAssistantAnswer = Boolean(payload.result?.assistant_message || payload.result?.conversation_id);
           if (payload.status === "failed") {
             pushToast("error", "任务失败", payload.error || message);

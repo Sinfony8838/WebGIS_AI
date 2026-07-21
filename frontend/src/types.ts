@@ -208,6 +208,7 @@ export type JobRecord = {
     assistant_message?: string;
     intent?: string;
     knowledge?: KnowledgeAnswer | null;
+    teaching_contract?: TeachingContract | null;
     citations?: CitationRecord[];
     actions?: Array<{ tool_name: string; tool_params: Record<string, unknown> }>;
     actions_planned?: Array<{
@@ -245,6 +246,7 @@ export type ChatMessage = {
   role: "assistant" | "user" | "system";
   text: string;
   timestamp: string;
+  teaching_contract?: TeachingContract | null;
 };
 
 export type CitationRecord = {
@@ -261,6 +263,12 @@ export type KnowledgeAnswer = {
   confidence: number;
   answer_type: string;
   llm_used?: boolean;
+};
+
+export type TeachingContract = {
+  evidence: string;
+  question: string;
+  closing: string;
 };
 
 export type AssistantMode = "teaching" | "knowledge" | "tool";

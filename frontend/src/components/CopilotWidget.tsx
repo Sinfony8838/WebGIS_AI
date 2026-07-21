@@ -89,6 +89,25 @@ function roleLabel(role: string): string {
   return "系统";
 }
 
+// The backend appends a deterministic "教学处理：" text block to teaching
+// answers for voice/history/tests. When the structured teaching_contract is
+// rendered as visual blocks, strip that trailing text block so the contract
+// is not shown twice (once as blocks, once as plain text).
+function splitScaffoldBody(text: string): string {
+  const marker = "教学处理：";
+  const idx = text.indexOf(marker);
+  if (idx === -1) {
+    return text;
+  }
+  return text.slice(0, idx).trim();
+}
+
+function copyToClipboard(text: string): void {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).catch(() => undefined);
+  }
+}
+
 function MicrophoneIcon({ active }: { active: boolean }) {
   if (active) {
     // Active state: filled square indicates "stop"
@@ -762,12 +781,43 @@ export function CopilotWidget({
           ) : null}
 
           <div className="copilot-chat-log" data-testid="copilot-chat-log">
-            {chatLog.map((message) => (
-              <article key={`${message.timestamp}_${message.role}`} className={`copilot-bubble ${message.role}`}>
-                <span className="copilot-role">{roleLabel(message.role)}</span>
-                <p>{message.text}</p>
-              </article>
-            ))}
+            {chatLog.map((message) => {
+              const contract = message.teaching_contract;
+              const body = contract ? splitScaffoldBody(message.text) : message.text;
+              return (
+                <article key={`${message.timestamp}_${message.role}`} className={`copilot-bubble ${message.role}`}>
+                  <span className="copilot-role">{roleLabel(message.role)}</span>
+                  {contract ? (
+                    <>
+                      {body ? <p>{body}</p> : null}
+                      <div className="copilot-teaching-blocks" data-testid="copilot-teaching-blocks">
+                        <div className="copilot-teaching-block evidence">
+                          <span className="copilot-teaching-label">证据或观察点</span>
+                          <p>{contract.evidence}</p>
+                        </div>
+                        <div className="copilot-teaching-block question">
+                          <span className="copilot-teaching-label">给学生的问题</span>
+                          <p>{contract.question}</p>
+                          <button
+                            type="button"
+                            className="copilot-teaching-copy"
+                            onClick={() => copyToClipboard(contract.question)}
+                          >
+                            复制问题
+                          </button>
+                        </div>
+                        <div className="copilot-teaching-block closing">
+                          <span className="copilot-teaching-label">教师收束语或下一步</span>
+                          <p>{contract.closing}</p>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <p>{body}</p>
+                  )}
+                </article>
+              );
+            })}
             {busy ? (
               <div
                 className="copilot-thinking"

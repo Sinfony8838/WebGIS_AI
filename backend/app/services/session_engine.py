@@ -109,12 +109,13 @@ def _utc_timestamp(minutes_from_now: int = 0) -> str:
     return (datetime.now(timezone.utc) + timedelta(minutes=minutes_from_now)).isoformat()
 
 
-def _teaching_scaffold(knowledge: Dict[str, Any], map_context: Dict[str, Any]) -> str:
-    """Deterministic three-line teaching contract appended to teaching answers.
+def _teaching_scaffold_parts(knowledge: Dict[str, Any], map_context: Dict[str, Any]) -> Dict[str, str]:
+    """Deterministic three-part teaching contract (structured).
 
-    Guarantees the 证据或观察点 / 给学生的问题 / 教师收束语或下一步 structure even
-    when the LLM is unavailable, and states missing evidence explicitly instead
-    of fabricating layer or student claims.
+    Returns 证据或观察点 / 给学生的问题 / 教师收束语或下一步 as separate strings
+    so the frontend can render them as distinct visual blocks. Guarantees the
+    structure even when the LLM is unavailable, and states missing evidence
+    explicitly instead of fabricating layer or student claims.
     """
     knowledge = knowledge or {}
     grounding = str(knowledge.get("map_grounding") or "").strip()
@@ -126,14 +127,33 @@ def _teaching_scaffold(knowledge: Dict[str, Any], map_context: Dict[str, Any]) -
         if teaching_points
         else "请学生观察图中高值区与低值区的分布，并说明可能的影响因素。"
     )
-    closing_line = "收束到区域认知方法：位置—格局—成因；下一步可切换图层或结合读图讲解继续验证。"
+    closing_line = "收束到区域认知方法：位置-格局-成因；下一步可切换图层或结合读图讲解继续验证。"
+    return {
+        "evidence": evidence_line,
+        "question": question_line,
+        "closing": closing_line,
+    }
+
+
+def _format_scaffold_text(parts: Optional[Dict[str, str]]) -> str:
+    """Render the structured teaching contract as the legacy text block.
+
+    Kept for ``assistant_message`` (consumed by voice/history/tests) so the
+    textual contract stays byte-identical; the frontend renders the structured
+    ``teaching_contract`` field instead of parsing this text.
+    """
+    parts = parts or {}
     return (
         "教学处理：\n"
-        f"- 证据或观察点：{evidence_line}\n"
-        f"- 给学生的问题：{question_line}\n"
-        f"- 教师收束语或下一步：{closing_line}"
+        f"- 证据或观察点：{parts.get('evidence', '')}\n"
+        f"- 给学生的问题：{parts.get('question', '')}\n"
+        f"- 教师收束语或下一步：{parts.get('closing', '')}"
     )
 
+
+def _teaching_scaffold(knowledge: Dict[str, Any], map_context: Dict[str, Any]) -> str:
+    """Backward-compatible text scaffold; see ``_teaching_scaffold_parts``."""
+    return _format_scaffold_text(_teaching_scaffold_parts(knowledge, map_context))
 
 META_ANSWER_TYPES = {"assistant_identity", "assistant_model", "assistant_capability"}
 
@@ -1456,6 +1476,7 @@ class AssistantSessionEngine:
         knowledge = None
         citations: List[Dict[str, Any]] = []
         assistant_message = str(plan.get("assistant_message") or "").strip()
+        teaching_contract: Optional[Dict[str, str]] = None
 
         if intent == "hybrid" or normalized_mode == "teaching":
             stage_callback("grounding", "running", "Explaining executed result", "")
@@ -1463,7 +1484,9 @@ class AssistantSessionEngine:
                 knowledge = self.knowledge.answer(message, map_context=map_context, teaching_task="teaching_action")
                 citations = knowledge["citations"]
                 grounding_text = self.knowledge.render_public_answer(knowledge, include_teaching_points=True)
-                grounding_text = "\n\n".join(part for part in [grounding_text, _teaching_scaffold(knowledge, map_context)] if part).strip()
+                scaffold_parts = _teaching_scaffold_parts(knowledge, map_context)
+                teaching_contract = scaffold_parts
+                grounding_text = "\n\n".join(part for part in [grounding_text, _format_scaffold_text(scaffold_parts)] if part).strip()
             else:
                 knowledge = self.knowledge.answer(message, map_context=map_context)
                 citations = knowledge["citations"]
@@ -1506,6 +1529,7 @@ class AssistantSessionEngine:
             "retrieval_trace": knowledge["retrieval_trace"] if knowledge else [],
             "conversation_id": conversation.conversation_id,
             "prompt_parts": prompt_parts,
+            "teaching_contract": teaching_contract,
             "permission_context": assessment["permission_context"],
         }
 
@@ -1565,6 +1589,7 @@ class AssistantSessionEngine:
         knowledge = None
         citations: List[Dict[str, Any]] = []
         assistant_message = "Confirmed action executed successfully."
+        teaching_contract: Optional[Dict[str, str]] = None
         confirmed_intent = str((frozen_plan or payload).get("intent") or payload.get("intent") or "tool")
         if confirmed_intent == "hybrid" or confirmed_intent.startswith("teaching"):
             stage_callback("grounding", "running", "Explaining confirmed result", "")
@@ -1573,7 +1598,9 @@ class AssistantSessionEngine:
                 knowledge = self.knowledge.answer(confirmed_message, map_context=map_context, teaching_task="teaching_action")
                 citations = list(knowledge.get("citations") or [])
                 grounding_text = self.knowledge.render_public_answer(knowledge, include_teaching_points=True)
-                grounding_text = "\n\n".join(part for part in [grounding_text, _teaching_scaffold(knowledge, map_context)] if part).strip()
+                scaffold_parts = _teaching_scaffold_parts(knowledge, map_context)
+                teaching_contract = scaffold_parts
+                grounding_text = "\n\n".join(part for part in [grounding_text, _format_scaffold_text(scaffold_parts)] if part).strip()
             else:
                 knowledge = self.knowledge.answer(confirmed_message, map_context=map_context)
                 citations = list(knowledge.get("citations") or [])
@@ -1622,6 +1649,7 @@ class AssistantSessionEngine:
             "citations": citations,
             "knowledge": knowledge,
             "planner": "confirmation",
+            "teaching_contract": teaching_contract,
             "retrieval_trace": knowledge["retrieval_trace"] if knowledge else [],
         }
 
@@ -1764,9 +1792,12 @@ class AssistantSessionEngine:
         stage_callback("retrieval", "success", f"{source_label} · {knowledge['answer_type']}", "")
         stage_callback("grounding", "running", "Composing grounded answer", "")
         assistant_message = self.knowledge.render_public_answer(knowledge, include_teaching_points=True)
+        teaching_contract: Optional[Dict[str, str]] = None
         if teaching_task:
+            scaffold_parts = _teaching_scaffold_parts(knowledge, map_context)
+            teaching_contract = scaffold_parts
             assistant_message = "\n\n".join(
-                part for part in [assistant_message, _teaching_scaffold(knowledge, map_context)] if part
+                part for part in [assistant_message, _format_scaffold_text(scaffold_parts)] if part
             ).strip()
         stage_callback("grounding", "success", "Knowledge answer completed", "")
         result_intent = teaching_task or "knowledge"
@@ -1787,6 +1818,7 @@ class AssistantSessionEngine:
         return {
             "intent": result_intent,
             "assistant_message": assistant_message,
+            "teaching_contract": teaching_contract,
             "knowledge": knowledge,
             "citations": knowledge["citations"],
             "actions_planned": [],

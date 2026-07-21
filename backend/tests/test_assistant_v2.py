@@ -231,6 +231,9 @@ class AssistantV2RuntimeTest(unittest.TestCase):
         self.assertIn("证据或观察点", message)
         self.assertIn("给学生的问题", message)
         self.assertIn("教师收束语或下一步", message)
+        contract = job["result"]["teaching_contract"]
+        self.assertEqual(set(contract.keys()), {"evidence", "question", "closing"})
+        self.assertTrue(all(contract.values()))
 
     def test_teaching_plain_question_never_suggests_switching_modes(self) -> None:
         runtime, project_id = self.build_runtime()
@@ -272,6 +275,9 @@ class AssistantV2RuntimeTest(unittest.TestCase):
         self.assertIn("证据或观察点", message)
         self.assertIn("给学生的问题", message)
         self.assertIn("教师收束语或下一步", message)
+        contract = job["result"]["teaching_contract"]
+        self.assertEqual(set(contract.keys()), {"evidence", "question", "closing"})
+        self.assertTrue(all(contract.values()))
 
     def test_teaching_confirmation_executes_with_teaching_explanation(self) -> None:
         runtime, project_id = self.build_runtime()
@@ -304,6 +310,9 @@ class AssistantV2RuntimeTest(unittest.TestCase):
         self.assertIn("证据或观察点", message)
         self.assertIn("给学生的问题", message)
         self.assertIn("教师收束语或下一步", message)
+        contract = confirm_job["result"]["teaching_contract"]
+        self.assertEqual(set(contract.keys()), {"evidence", "question", "closing"})
+        self.assertTrue(all(contract.values()))
 
     def test_legacy_tool_mode_keeps_clarification_copy(self) -> None:
         runtime, project_id = self.build_runtime()
@@ -327,6 +336,9 @@ class AssistantV2RuntimeTest(unittest.TestCase):
         self.assertIn("本回答缺少当前地图或素材证据", message)
         self.assertNotIn("学生掌握率", message)
         self.assertNotIn("正确率", message)
+        contract = job["result"]["teaching_contract"]
+        self.assertEqual(set(contract.keys()), {"evidence", "question", "closing"})
+        self.assertEqual(contract["evidence"], "本回答缺少当前地图或素材证据，仅为一般性讲解。")
 
 
 if __name__ == "__main__":

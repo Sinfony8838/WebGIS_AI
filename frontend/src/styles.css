@@ -3287,6 +3287,74 @@ button {
   color: var(--text-main);
 }
 
+/* Structured three-part teaching contract (证据 / 问题 / 收束语) rendered as
+   distinct blocks inside an assistant bubble instead of a flat text blob. */
+.copilot-teaching-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.copilot-teaching-block {
+  border-radius: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(132, 178, 220, 0.18);
+  border-left-width: 3px;
+  background: rgba(12, 24, 40, 0.4);
+}
+
+.copilot-teaching-block.evidence {
+  border-left-color: #6bc1ff;
+}
+
+.copilot-teaching-block.question {
+  border-left-color: #8be0a8;
+}
+
+.copilot-teaching-block.closing {
+  border-left-color: #ffd17a;
+}
+
+.copilot-teaching-label {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  opacity: 0.72;
+  margin-bottom: 4px;
+  color: var(--text-main);
+}
+
+.copilot-teaching-block p {
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.copilot-teaching-copy {
+  margin-top: 6px;
+  padding: 3px 9px;
+  font-size: 11px;
+  line-height: 1.4;
+  border-radius: 6px;
+  border: 1px solid rgba(139, 224, 168, 0.45);
+  background: rgba(139, 224, 168, 0.12);
+  color: var(--text-main);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.copilot-teaching-copy:hover {
+  background: rgba(139, 224, 168, 0.22);
+}
+
+.copilot-widget.compact .copilot-teaching-block {
+  padding: 6px 8px;
+}
+
+.copilot-widget.compact .copilot-teaching-blocks {
+  gap: 6px;
+}
+
 .copilot-widget-form {
   flex-shrink: 0;
   display: flex;
