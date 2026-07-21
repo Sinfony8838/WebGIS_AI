@@ -49,7 +49,7 @@ export function ClassRunPanel({
   const [recordQuestionId, setRecordQuestionId] = useState("");
   const [savedFlash, setSavedFlash] = useState(false);
   const [expandedQuestionId, setExpandedQuestionId] = useState("");
-  const [scriptOpen, setScriptOpen] = useState(true);
+  const [scriptOpen, setScriptOpen] = useState(false);
   const [adhocText, setAdhocText] = useState("");
   const [adhocOptions, setAdhocOptions] = useState("");
 

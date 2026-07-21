@@ -22,9 +22,7 @@ export function GlobeThemePanel({
   onChangeThemes,
   onApplyScene
 }: GlobeThemePanelProps): JSX.Element {
-  const [collapsed, setCollapsed] = useState(() =>
-    typeof window !== "undefined" && window.innerWidth <= 640
-  );
+  const [collapsed, setCollapsed] = useState(true);
   const active = useMemo(() => new Set(activeThemeIds), [activeThemeIds]);
 
   const toggleTheme = (id: GlobeThemeId) => {

@@ -138,7 +138,7 @@ const MIN_WIDTH = 440;
 const MIN_HEIGHT = 420;
 const PANEL_STORAGE_KEY = "webgis-ai-copilot-panel-v2";
 const ORB_STORAGE_KEY = "webgis-ai-copilot-orb-v2";
-const STATE_STORAGE_KEY = "webgis-ai-copilot-minimized";
+const STATE_STORAGE_KEY = "webgis-ai-copilot-minimized-v2";
 const VOICE_IDLE_TEXT = "点击麦克风开始语音控制。";
 const VOICE_UNSUPPORTED_TEXT = "当前浏览器不支持语音控制，请使用桌面版 Chrome 或 Edge。";
 
@@ -312,7 +312,7 @@ export function CopilotWidget({
 }: Props) {
   const speechSupported = useMemo(() => Boolean(getSpeechRecognitionConstructor()), []);
   const [minimized, setMinimized] = useState<boolean>(() =>
-    safeWindowWidth() <= 640 ? true : readStorage(STATE_STORAGE_KEY, false)
+    safeWindowWidth() <= 640 ? true : readStorage(STATE_STORAGE_KEY, true)
   );
   const [panelRect, setPanelRect] = useState<PanelRect>(() =>
     normalizePanelRect(readStorage<PanelRect | null>(PANEL_STORAGE_KEY, null))

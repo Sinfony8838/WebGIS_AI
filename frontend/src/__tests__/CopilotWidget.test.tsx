@@ -78,6 +78,9 @@ function renderWidget(overrides: Partial<ComponentProps<typeof CopilotWidget>> =
     />
   );
 
+  // The widget defaults to minimized; expand so tests can exercise the panel.
+  fireEvent.click(screen.getByLabelText("展开智能助教"));
+
   return { onSubmit, onInputChange, onAssistantModeChange, onConfirm, onVoiceSubmit, onVoiceNotice };
 }
 
@@ -300,6 +303,8 @@ describe("CopilotWidget", () => {
       />
     );
 
+    fireEvent.click(screen.getByLabelText("展开智能助教"));
+
     const indicator = screen.getByTestId("copilot-thinking");
     expect(indicator).toBeInTheDocument();
     // Friendly verb picked from the running stage (retrieval → 正在检索知识库).
@@ -340,6 +345,7 @@ describe("CopilotWidget", () => {
         onVoiceNotice={vi.fn()}
       />
     );
+    fireEvent.click(screen.getByLabelText("展开智能助教"));
     expect(screen.getByTestId("copilot-thinking")).toHaveTextContent("正在思考");
   });
 });

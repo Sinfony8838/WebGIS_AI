@@ -22,7 +22,7 @@ interface CategoryGroup {
 }
 
 export function TeachingMapPanel({ items, activeIds, busy, onToggle }: Props) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
 
   const groups = useMemo<CategoryGroup[]>(() => {
     const map = new Map<string, CategoryGroup>();

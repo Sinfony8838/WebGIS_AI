@@ -476,9 +476,7 @@ export default function App() {
   const [databaseViewerOpen, setDatabaseViewerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [workflowDockOpen, setWorkflowDockOpen] = useState<boolean>(false);
-  const [drawerOpen, setDrawerOpen] = useState(() =>
-    typeof window === "undefined" || window.innerWidth > 640
-  );
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("resource-search");
   const [kbQuery, setKbQuery] = useState<KnowledgeQuery>({ query: "", topic: "", region: "", tag: "" });
     const [kbItems, setKbItems] = useState<KnowledgeBaseItem[]>([]);
