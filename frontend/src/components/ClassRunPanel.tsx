@@ -235,6 +235,10 @@ export function ClassRunPanel({
           <div className="class-panel-questions">
             {currentStage.questions.map((question) => {
               const expanded = expandedQuestionId === question.question_id;
+              const evidenceQuestion = question as typeof question & {
+                question_evidence_rules?: { required?: boolean; evidence_options?: Array<{ label: string }> };
+                argument_chain?: string[];
+              };
               return (
                 <article key={question.question_id} className={`class-question-card ${expanded ? "expanded" : ""}`}>
                   <button
@@ -270,6 +274,17 @@ export function ClassRunPanel({
                               {point}
                             </span>
                           ))}
+                        </div>
+                      ) : null}
+                      {evidenceQuestion.question_evidence_rules?.required ? (
+                        <div className="question-points">
+                          <span className="question-detail-label">学生取证</span>
+                          {evidenceQuestion.question_evidence_rules.evidence_options?.map((item) => (
+                            <span key={item.label} className="point-chip">{item.label}</span>
+                          ))}
+                          {evidenceQuestion.argument_chain?.length ? (
+                            <span className="point-chip">论证：{evidenceQuestion.argument_chain.join(" → ")}</span>
+                          ) : null}
                         </div>
                       ) : null}
                       {question.misconceptions.length ? (

@@ -48,6 +48,8 @@ class ReportService:
         stages = self._stage_durations(events, session, stage_lookup)
         questions = self._question_stats(events, session, question_lookup)
         observations = self._observation_stats(events)
+        evidence = self._evidence_stats(questions, session)
+        remediation_tasks = self._remediation_tasks(questions, observations)
         participants = self._participants(session)
         snapshots = [
             {"timestamp": event.get("timestamp", ""), **(event.get("payload") or {})}
@@ -78,6 +80,8 @@ class ReportService:
             "stages": stages,
             "questions": questions,
             "observations": observations,
+            "evidence": evidence,
+            "remediation_tasks": remediation_tasks,
             "snapshot_count": len(snapshots),
             "snapshots": snapshots,
             "assistant_exchange_count": len(assistant_exchanges),
@@ -139,12 +143,19 @@ class ReportService:
             responses = list(session.responses.get(question_id, []))
             counts = [0] * len(options)
             texts: List[str] = []
+            evidence_counts: Dict[str, int] = {}
+            evidence_response_count = 0
             for item in responses:
                 choice = item.get("choice_index")
                 if isinstance(choice, int) and 0 <= choice < len(counts):
                     counts[choice] += 1
                 elif str(item.get("text") or "").strip():
                     texts.append(str(item.get("text")))
+                evidence_ids = [str(value) for value in item.get("evidence_ids") or [] if str(value)]
+                if evidence_ids:
+                    evidence_response_count += 1
+                    for evidence_id in evidence_ids:
+                        evidence_counts[evidence_id] = evidence_counts.get(evidence_id, 0) + 1
             total = len(responses)
             correct_rate = None
             if isinstance(answer_index, int) and 0 <= answer_index < len(counts) and total:
@@ -162,14 +173,76 @@ class ReportService:
                     "correct_rate": correct_rate,
                     "sample_texts": texts[:10],
                     "misconceptions": defined.get("misconceptions", []),
+                    "question_evidence_rules": defined.get("question_evidence_rules", {}),
+                    "evidence_response_count": evidence_response_count,
+                    "evidence_coverage_rate": round(evidence_response_count / total, 4) if total else None,
+                    "evidence_counts": evidence_counts,
+                    "argument_chain": defined.get("argument_chain", []),
+                    "remediation_task": defined.get("remediation_task", ""),
                 }
             )
         return results
+
+    @staticmethod
+    def _evidence_stats(questions: List[Dict[str, Any]], session: ClassSessionRecord) -> Dict[str, Any]:
+        required = [item for item in questions if (item.get("question_evidence_rules") or {}).get("required")]
+        answered = sum(item.get("response_count", 0) for item in required)
+        cited = sum(item.get("evidence_response_count", 0) for item in required)
+        counts: Dict[str, int] = {}
+        student_evidence: Dict[str, Dict[str, Any]] = {}
+        for item in required:
+            for evidence_id, count in (item.get("evidence_counts") or {}).items():
+                counts[evidence_id] = counts.get(evidence_id, 0) + int(count)
+            for response in session.responses.get(str(item.get("question_id") or ""), []):
+                nickname = str(response.get("nickname") or "anonymous").strip() or "anonymous"
+                entry = student_evidence.setdefault(
+                    nickname, {"nickname": nickname, "required_question_answers": 0, "evidence_citations": 0, "evidence_ids": []}
+                )
+                entry["required_question_answers"] += 1
+                selected = [str(value) for value in response.get("evidence_ids") or [] if str(value)]
+                entry["evidence_citations"] += len(selected)
+                entry["evidence_ids"] = sorted(set(entry["evidence_ids"]).union(selected))
+        return {
+            "required_question_count": len(required),
+            "answered_count": answered,
+            "cited_count": cited,
+            "coverage_rate": round(cited / answered, 4) if answered else None,
+            "evidence_counts": sorted(counts.items(), key=lambda item: (-item[1], item[0])),
+            "student_evidence": sorted(student_evidence.values(), key=lambda item: item["nickname"]),
+        }
+
+    @staticmethod
+    def _remediation_tasks(questions: List[Dict[str, Any]], observations: Dict[str, Any]) -> List[Dict[str, Any]]:
+        misconception_tags = {str(tag) for tag, _count in observations.get("misconception_tags") or []}
+        tasks: List[Dict[str, Any]] = []
+        for question in questions:
+            weak_answer = question.get("correct_rate") is not None and question["correct_rate"] < 0.6
+            has_observed_misconception = any(
+                str(item.get("tag") or "") in misconception_tags
+                for item in question.get("misconceptions") or []
+            )
+            weak_evidence = (
+                (question.get("question_evidence_rules") or {}).get("required")
+                and question.get("evidence_coverage_rate") is not None
+                and question["evidence_coverage_rate"] < 0.8
+            )
+            task = str(question.get("remediation_task") or "").strip()
+            if task and (weak_answer or has_observed_misconception or weak_evidence):
+                tasks.append(
+                    {
+                        "question_id": question.get("question_id", ""),
+                        "question": question.get("text", ""),
+                        "task": task,
+                        "reason": "低正确率" if weak_answer else "证据引用不足" if weak_evidence else "出现对应误区",
+                    }
+                )
+        return tasks
 
     def _observation_stats(self, events: List[Dict[str, Any]]) -> Dict[str, Any]:
         observations = [event for event in events if event.get("type") == "teacher_observation"]
         verdict_counts = {"correct": 0, "partial": 0, "misconception": 0}
         tag_counts: Dict[str, int] = {}
+        question_tags: Dict[str, Dict[str, int]] = {}
         notes: List[Dict[str, Any]] = []
         for event in observations:
             payload = event.get("payload") or {}
@@ -179,6 +252,10 @@ class ReportService:
             tag = str(payload.get("tag") or "").strip()
             if tag:
                 tag_counts[tag] = tag_counts.get(tag, 0) + 1
+                question_id = str(payload.get("question_id") or "")
+                if question_id:
+                    per_question = question_tags.setdefault(question_id, {})
+                    per_question[tag] = per_question.get(tag, 0) + 1
             if str(payload.get("note") or "").strip():
                 notes.append(
                     {
@@ -194,6 +271,10 @@ class ReportService:
             "verdict_counts": verdict_counts,
             "misconception_tags": sorted(tag_counts.items(), key=lambda item: -item[1]),
             "notes": notes,
+            "by_question": [
+                {"question_id": question_id, "tags": sorted(tags.items(), key=lambda item: -item[1])}
+                for question_id, tags in sorted(question_tags.items())
+            ],
         }
 
     def _participants(self, session: ClassSessionRecord) -> set[str]:
@@ -231,6 +312,8 @@ class ReportService:
                 "stages",
                 "questions",
                 "observations",
+                "evidence",
+                "remediation_tasks",
                 "snapshot_count",
                 "assistant_exchange_count",
             )
@@ -292,6 +375,9 @@ class ReportService:
             lines.append(f"环节“{names}”明显超时，建议压缩讲解或将部分任务前置为课前预习。")
         if tags:
             lines.append(f"建议围绕“{tags[0][0]}”设计一道对比辨析题，在下节课导入环节即时检测。")
+        remediation_tasks = statistics.get("remediation_tasks") or []
+        if remediation_tasks:
+            lines.append(f"优先安排“{remediation_tasks[0].get('task', '')}”，以补足本节课暴露的证据链或概念漏洞。")
         if not overtime and not tags:
             lines.append("课堂节奏与理解情况总体正常，可按原计划推进下一课时，并适当增加学生自主读图任务。")
         return "\n".join(lines)
@@ -338,6 +424,13 @@ class ReportService:
                 lines.append(f"- {chr(65 + option_index)}. {option}：{count} 人（{count / total:.0%}）{marker}")
             if question.get("correct_rate") is not None:
                 lines.append(f"- 正确率：**{question['correct_rate']:.0%}**")
+            rules = question.get("question_evidence_rules") or {}
+            if rules.get("required"):
+                coverage = question.get("evidence_coverage_rate")
+                coverage_text = f"{coverage:.0%}" if coverage is not None else "暂无作答"
+                lines.append(f"- 地图证据引用覆盖率：**{coverage_text}**")
+                if question.get("argument_chain"):
+                    lines.append(f"- 标准论证链：{' → '.join(question['argument_chain'])}")
             for text in question.get("sample_texts") or []:
                 lines.append(f"- 「{text}」")
             lines.append("")
@@ -353,6 +446,25 @@ class ReportService:
             lines.append(f"- 误区标签「{tag}」：{count} 次")
         for note in observations.get("notes") or []:
             lines.append(f"- [{VERDICT_LABELS.get(note.get('verdict', ''), '记录')}] {note.get('note', '')}")
+
+        evidence = statistics.get("evidence") or {}
+        lines.extend(["", "## 题—图—证据回溯", ""])
+        coverage = evidence.get("coverage_rate")
+        coverage_text = f"{coverage:.0%}" if coverage is not None else "暂无需取证作答"
+        lines.append(f"- 需取证题目：{evidence.get('required_question_count', 0)} 道；证据引用覆盖率：{coverage_text}")
+        for evidence_id, count in evidence.get("evidence_counts") or []:
+            lines.append(f"- 证据点 {evidence_id}：{count} 次引用")
+        for student in evidence.get("student_evidence") or []:
+            lines.append(
+                f"- 学生 {student.get('nickname', '')}：{student.get('required_question_answers', 0)} 道取证题作答，"
+                f"引用 {student.get('evidence_citations', 0)} 条证据（{', '.join(student.get('evidence_ids') or []) or '无'}）"
+            )
+        tasks = statistics.get("remediation_tasks") or []
+        if tasks:
+            lines.append("")
+            lines.append("### 下一课补救任务")
+            for item in tasks:
+                lines.append(f"- [{item.get('reason', '')}] {item.get('task', '')}")
 
         lines.extend(["", "## 学情诊断与建议", "", diagnosis.get("text", ""), ""])
         generator = "AI 生成（MiniMax）" if diagnosis.get("generator") == "minimax" else "规则生成（离线兜底）"

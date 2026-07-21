@@ -310,11 +310,15 @@ class ClassroomWorkflowRuntime:
         active = dict(session.active_question or {})
         public_question = {}
         if active.get("question_id"):
+            evidence_rules = active.get("question_evidence_rules") or {}
             public_question = {
                 "question_id": active.get("question_id"),
                 "type": active.get("type"),
                 "text": active.get("text"),
                 "options": active.get("options", []),
+                "evidence_required": bool(evidence_rules.get("required")),
+                "minimum_evidence": int(evidence_rules.get("minimum") or 0),
+                "evidence_options": evidence_rules.get("evidence_options", []),
             }
         return {"status": "success", "session_status": session.status, "stage_title": stage_title, "active_question": public_question}
 
@@ -339,6 +343,24 @@ class ClassroomWorkflowRuntime:
             if not text:
                 raise ValueError("Answer text is required")
             response["text"] = text
+        evidence_rules = active.get("question_evidence_rules") or {}
+        allowed_evidence_ids = {
+            str(item.get("evidence_id") or "")
+            for item in evidence_rules.get("evidence_options") or []
+            if isinstance(item, dict)
+        }
+        selected_evidence = [
+            str(item).strip()
+            for item in payload.get("evidence_ids") or []
+            if str(item).strip() in allowed_evidence_ids
+        ]
+        # De-duplicate while preserving students' selection order.
+        selected_evidence = list(dict.fromkeys(selected_evidence))
+        minimum_evidence = int(evidence_rules.get("minimum") or 0)
+        if evidence_rules.get("required") and len(selected_evidence) < minimum_evidence:
+            raise ValueError("Please select the map evidence used in your answer")
+        if selected_evidence:
+            response["evidence_ids"] = selected_evidence
         entry = self.store.add_student_response(session.session_id, question_id, response)
         self._touch_presence(session.session_id, nickname)
         self.store.append_session_event(

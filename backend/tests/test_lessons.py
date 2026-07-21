@@ -41,6 +41,21 @@ class LessonServiceTest(unittest.TestCase):
         listing = runtime.classroom.list_lessons()
         self.assertTrue(any(item["lesson_id"] == BUILTIN_LESSON_ID for item in listing["items"]))
 
+    def test_population_topic_packs_are_seeded_with_evidence_rules(self) -> None:
+        runtime, store, _ = self.build_runtime()
+        expected = {
+            "lesson_population_topic_distribution",
+            "lesson_population_topic_structure",
+            "lesson_population_topic_migration",
+            "lesson_population_topic_environment",
+        }
+        self.assertTrue(expected.issubset({lesson.lesson_id for lesson in store.list_lessons()}))
+        lesson = store.get_lesson("lesson_population_topic_distribution")
+        self.assertEqual(lesson.metadata["topic_pack"]["pack_id"], "population_spatial_distribution")
+        question = lesson.find_stage("s1")["questions"][0]
+        self.assertTrue(question["question_evidence_rules"]["required"])
+        self.assertTrue(question["argument_chain"])
+
     def test_apply_stage_scene_sets_layers_view_and_basemap(self) -> None:
         runtime, store, project_id = self.build_runtime()
 

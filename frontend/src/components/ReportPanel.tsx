@@ -81,6 +81,10 @@ export function ReportPanel({ projectId, onClose }: Props) {
   }
 
   const statistics: SessionReportStatistics | null = report?.statistics || null;
+  const populationStatistics = statistics as (SessionReportStatistics & {
+    evidence?: { required_question_count: number; coverage_rate: number | null; evidence_counts: Array<[string, number]> };
+    remediation_tasks?: Array<{ question_id: string; task: string; reason: string }>;
+  }) | null;
 
   return (
     <section className="report-panel glass-panel" data-testid="report-panel">
@@ -211,6 +215,28 @@ export function ReportPanel({ projectId, onClose }: Props) {
             </div>
           ))}
           {!statistics.questions.length ? <p className="lesson-empty">本节课未通过系统发起提问。</p> : null}
+
+          {populationStatistics?.evidence?.required_question_count ? (
+            <>
+              <h3>题—图—证据回溯</h3>
+              <div className="report-observations">
+                <p>
+                  需取证题目 {populationStatistics.evidence.required_question_count} 道；证据引用覆盖率：
+                  {populationStatistics.evidence.coverage_rate === null ? "暂无作答" : `${(populationStatistics.evidence.coverage_rate * 100).toFixed(0)}%`}
+                </p>
+                <div className="report-tags">
+                  {populationStatistics.evidence.evidence_counts.map(([evidenceId, count]) => (
+                    <span key={evidenceId} className="tag-chip static">{evidenceId} ×{count}</span>
+                  ))}
+                </div>
+                {populationStatistics.remediation_tasks?.length ? (
+                  <div className="report-sample-texts">
+                    {populationStatistics.remediation_tasks.map((item) => <em key={item.question_id}>[{item.reason}] {item.task}</em>)}
+                  </div>
+                ) : null}
+              </div>
+            </>
+          ) : null}
 
           <h3>教师课堂观察</h3>
           <div className="report-observations">

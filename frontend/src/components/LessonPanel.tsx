@@ -1,6 +1,18 @@
 import { useState } from "react";
 import type { LessonRecord, LessonStage, SceneSnapshot } from "../types";
 
+type TopicMetadata = {
+  topic_pack?: { name?: string; teaching_mode?: string; source_policy?: string };
+  evidence_layer?: Array<{ evidence_id: string; label: string; type?: string }>;
+  visualizations?: Array<{ id: string; status: string; reason?: string }>;
+};
+
+type EvidenceQuestion = {
+  question_evidence_rules?: { required?: boolean; evidence_options?: Array<{ evidence_id: string; label: string }> };
+  argument_chain?: string[];
+  remediation_task?: string;
+};
+
 type Props = {
   lessons: LessonRecord[];
   activeLesson: LessonRecord | null;
@@ -56,6 +68,7 @@ export function LessonPanel({
   const [captureHint, setCaptureHint] = useState("");
 
   const totalMinutes = activeLesson?.stages.reduce((sum, stage) => sum + (stage.minutes || 0), 0) || 0;
+  const topicMetadata = (activeLesson?.metadata || {}) as TopicMetadata;
 
   function beginEdit(stage: LessonStage) {
     setEditingStageId(stage.stage_id);
@@ -162,6 +175,29 @@ export function LessonPanel({
             </span>
           </div>
 
+          {topicMetadata.topic_pack ? (
+            <div className="topic-pack-card">
+              <strong>{topicMetadata.topic_pack.name || "人口专题包"}</strong>
+              <p>{topicMetadata.topic_pack.teaching_mode}</p>
+              {topicMetadata.evidence_layer?.length ? (
+                <div className="topic-evidence-list">
+                  {topicMetadata.evidence_layer.map((item) => (
+                    <span key={item.evidence_id} title={item.type || "evidence"}>证据：{item.label}</span>
+                  ))}
+                </div>
+              ) : null}
+              {topicMetadata.visualizations?.length ? (
+                <div className="topic-visualization-list">
+                  {topicMetadata.visualizations.map((item) => (
+                    <span key={item.id} className={item.status === "ready" ? "ready" : "blocked"} title={item.reason || ""}>
+                      {item.status === "ready" ? "可用" : "待数据"}：{item.id}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
           <ol className="lesson-stage-list">
             {activeLesson.stages.map((stage, index) => {
               const expanded = expandedStageId === stage.stage_id;
@@ -205,7 +241,10 @@ export function LessonPanel({
                       {stage.questions.length ? (
                         <div className="lesson-stage-block">
                           <span className="lesson-block-label">课堂提问</span>
-                          {stage.questions.map((question) => (
+                          {stage.questions.map((question) => {
+                            const evidenceQuestion = question as typeof question & EvidenceQuestion;
+                            const evidenceRules = evidenceQuestion.question_evidence_rules;
+                            return (
                             <div key={question.question_id} className="lesson-question">
                               <p>
                                 {question.type === "choice" ? "🗳️" : "💬"} {question.text}
@@ -213,8 +252,16 @@ export function LessonPanel({
                               {question.misconceptions.length ? (
                                 <em>预设误区：{question.misconceptions.map((item) => item.tag).join("、")}</em>
                               ) : null}
+                              {evidenceRules?.required ? (
+                                <div className="lesson-question-evidence">
+                                  <strong>学生必须取证：</strong>{evidenceRules.evidence_options?.map((item) => item.label).join("；")}
+                                  {evidenceQuestion.argument_chain?.length ? <em>论证链：{evidenceQuestion.argument_chain.join(" → ")}</em> : null}
+                                  {evidenceQuestion.remediation_task ? <em>课后变式：{evidenceQuestion.remediation_task}</em> : null}
+                                </div>
+                              ) : null}
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       ) : null}
                       <div className="lesson-stage-actions">

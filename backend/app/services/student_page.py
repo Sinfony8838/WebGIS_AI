@@ -60,6 +60,10 @@ STUDENT_PAGE_TEMPLATE = """<!DOCTYPE html>
   }}
   .question-text {{ font-size: 16px; font-weight: 600; line-height: 1.55; margin-bottom: 4px; }}
   .done {{ color: #15803d; }}
+  .evidence {{ margin-top: 14px; padding: 11px; background: #fff8df; border-radius: 10px; }}
+  .evidence p {{ font-size: 13px; color: #745b10; margin-bottom: 6px; }}
+  .evidence-option {{ margin-top: 6px; padding: 9px 10px; font-size: 13px; background: #fff; color: #16324a; border: 1px solid #e4cf83; border-radius: 8px; }}
+  .evidence-option.selected {{ border-color: #b7791f; background: #fff1b8; color: #744210; }}
 </style>
 </head>
 <body>
@@ -83,6 +87,7 @@ STUDENT_PAGE_TEMPLATE = """<!DOCTYPE html>
   var nickname = localStorage.getItem("webgis-ai-student-nickname") || "";
   var currentQuestionId = "";
   var selectedIndex = -1;
+  var selectedEvidenceId = "";
   var answeredQuestionId = localStorage.getItem("webgis-ai-answered-" + JOIN_CODE) || "";
 
   var joinCard = document.getElementById("join-card");
@@ -114,6 +119,7 @@ STUDENT_PAGE_TEMPLATE = """<!DOCTYPE html>
   function renderQuestion(question) {{
     currentQuestionId = question.question_id;
     selectedIndex = -1;
+    selectedEvidenceId = "";
     var html = '<p class="question-text">' + escapeHtml(question.text) + "</p>";
     if (question.type === "choice") {{
       for (var i = 0; i < question.options.length; i++) {{
@@ -125,6 +131,14 @@ STUDENT_PAGE_TEMPLATE = """<!DOCTYPE html>
       html += '<textarea id="open-answer" maxlength="120" placeholder="写下你的回答（简短即可）"></textarea>';
       html += '<button id="submit-btn">提交答案</button>';
     }}
+    if (question.evidence_required && question.evidence_options && question.evidence_options.length) {{
+      html += '<div class="evidence"><p>请标出你作答所依据的地图证据（必选）</p>';
+      for (var e = 0; e < question.evidence_options.length; e++) {{
+        var evidence = question.evidence_options[e];
+        html += '<button type="button" class="evidence-option" data-evidence-id="' + escapeHtml(evidence.evidence_id) + '">' + escapeHtml(evidence.label) + '</button>';
+      }}
+      html += '</div>';
+    }}
     content.innerHTML = html;
 
     var optionButtons = content.querySelectorAll(".option");
@@ -134,7 +148,17 @@ STUDENT_PAGE_TEMPLATE = """<!DOCTYPE html>
         var all = content.querySelectorAll(".option");
         for (var k = 0; k < all.length; k++) {{ all[k].classList.remove("selected"); }}
         this.classList.add("selected");
-        document.getElementById("submit-btn").disabled = false;
+        document.getElementById("submit-btn").disabled = question.evidence_required && !selectedEvidenceId;
+      }});
+    }}
+    var evidenceButtons = content.querySelectorAll(".evidence-option");
+    for (var m = 0; m < evidenceButtons.length; m++) {{
+      evidenceButtons[m].addEventListener("click", function () {{
+        selectedEvidenceId = this.getAttribute("data-evidence-id") || "";
+        var allEvidence = content.querySelectorAll(".evidence-option");
+        for (var n = 0; n < allEvidence.length; n++) {{ allEvidence[n].classList.remove("selected"); }}
+        this.classList.add("selected");
+        if (selectedIndex >= 0) {{ document.getElementById("submit-btn").disabled = false; }}
       }});
     }}
     document.getElementById("submit-btn").addEventListener("click", submit);
@@ -149,6 +173,7 @@ STUDENT_PAGE_TEMPLATE = """<!DOCTYPE html>
       if (!text) {{ openAnswer.focus(); return; }}
       payload.text = text;
     }}
+    if (selectedEvidenceId) {{ payload.evidence_ids = [selectedEvidenceId]; }}
     var btn = document.getElementById("submit-btn");
     btn.disabled = true;
     btn.textContent = "提交中…";

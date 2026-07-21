@@ -491,6 +491,14 @@ class LessonService:
                             for item in question.get("misconceptions") or []
                             if isinstance(item, dict)
                         ],
+                        # A question may require students to name the map evidence
+                        # they used.  Keep this declarative so imported lessons and
+                        # built-in topic packs use the exact same classroom path.
+                        "question_evidence_rules": self._normalize_evidence_rules(
+                            question.get("question_evidence_rules")
+                        ),
+                        "argument_chain": [str(item) for item in question.get("argument_chain") or []],
+                        "remediation_task": str(question.get("remediation_task") or ""),
                     }
                 )
             normalized.append(
@@ -505,6 +513,26 @@ class LessonService:
                 }
             )
         return normalized
+
+    @staticmethod
+    def _normalize_evidence_rules(raw: Any) -> Dict[str, Any]:
+        if not isinstance(raw, dict):
+            return {"required": False, "minimum": 0, "evidence_options": []}
+        options = []
+        for item in raw.get("evidence_options") or []:
+            if not isinstance(item, dict):
+                continue
+            evidence_id = str(item.get("evidence_id") or "").strip()
+            label = str(item.get("label") or "").strip()
+            if evidence_id and label:
+                options.append({"evidence_id": evidence_id, "label": label})
+        required = bool(raw.get("required")) and bool(options)
+        minimum = int(raw.get("minimum") or (1 if required else 0))
+        return {
+            "required": required,
+            "minimum": max(1, min(minimum, len(options))) if required else 0,
+            "evidence_options": options,
+        }
 
 
 def _extract_json_payload(content: str) -> Dict[str, Any]:

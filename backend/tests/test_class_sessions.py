@@ -11,6 +11,7 @@ from backend.app.store import RuntimeStore
 
 
 BUILTIN_LESSON_ID = "lesson_builtin_population_distribution"
+TOPIC_LESSON_ID = "lesson_population_topic_distribution"
 
 
 class ClassSessionTest(unittest.TestCase):
@@ -169,6 +170,36 @@ class ClassSessionTest(unittest.TestCase):
         content = report_path.read_text(encoding="utf-8")
         self.assertIn("课堂报告", content)
         self.assertIn("只见城市不见格局", content)
+
+    def test_population_topic_requires_map_evidence_and_reports_coverage(self) -> None:
+        runtime, store, project_id = self.build_runtime()
+        runtime.classroom.report_service.minimax_client = None
+        session = runtime.classroom.create_class_session(TOPIC_LESSON_ID, project_id)["session"]
+        session_id = session["session_id"]
+        join_code = session["join_code"]
+        runtime.classroom.enter_session_stage(session_id, "s1")
+        runtime.classroom.launch_session_question(session_id, question_id="pd1q1")
+
+        public_question = runtime.classroom.student_state(join_code, nickname="学生甲")["active_question"]
+        self.assertTrue(public_question["evidence_required"])
+        self.assertTrue(public_question["evidence_options"])
+        with self.assertRaises(ValueError):
+            runtime.classroom.student_answer(join_code, {"nickname": "学生甲", "question_id": "pd1q1", "choice_index": 1})
+
+        runtime.classroom.student_answer(
+            join_code,
+            {
+                "nickname": "学生甲",
+                "question_id": "pd1q1",
+                "choice_index": 1,
+                "evidence_ids": ["east_dense"],
+            },
+        )
+        record = store.get_class_session(session_id)
+        statistics = runtime.classroom.report_service.build_statistics(record, store.get_lesson(TOPIC_LESSON_ID))
+        self.assertEqual(statistics["evidence"]["required_question_count"], 1)
+        self.assertEqual(statistics["evidence"]["coverage_rate"], 1.0)
+        self.assertEqual(statistics["questions"][0]["evidence_counts"]["east_dense"], 1)
 
 
 if __name__ == "__main__":

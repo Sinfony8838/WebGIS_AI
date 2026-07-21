@@ -151,7 +151,10 @@ function normalizeStatus(value: string): string {
 }
 
 function isLoadableCatalogItem(item: DatasetCatalogItem): boolean {
-  if (!item.renderable) return false;
+  // Older servers do not send the newly added renderable field.  Treat that
+  // omission as unknown rather than unavailable, while an explicit false
+  // still blocks unverified classroom layers.
+  if (item.renderable === false) return false;
   const format = item.format.toLowerCase();
   const isKnownJoinableCsv = item.id === "world_population_by_country";
   return format === "geojson" || (format === "csv" && (isKnownJoinableCsv || Boolean(item.geometry_source && item.join_key)));
@@ -264,7 +267,7 @@ export function DatabaseViewer({
       kind: "teaching-map",
     }));
 
-    const oneMapEntries: DatabaseEntry[] = datasetCatalogItems.filter((item) => item.renderable).map((item) => ({
+    const oneMapEntries: DatabaseEntry[] = datasetCatalogItems.filter((item) => item.renderable !== false).map((item) => ({
       id: `one-map:${item.id}`,
       category: "one-map",
       title: item.name || item.id,

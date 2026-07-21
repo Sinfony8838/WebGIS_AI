@@ -182,6 +182,57 @@
   font-size: 12px;
 }
 
+.topic-pack-card {
+  margin: 10px 0 14px;
+  padding: 11px;
+  border: 1px solid rgba(111, 161, 196, 0.35);
+  border-radius: 10px;
+  background: rgba(231, 244, 252, 0.64);
+  font-size: 12px;
+}
+
+.topic-pack-card p {
+  margin: 5px 0 8px;
+  color: #496879;
+  line-height: 1.45;
+}
+
+.topic-evidence-list,
+.topic-visualization-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.topic-evidence-list span,
+.topic-visualization-list span {
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: #fff;
+  color: #34566b;
+}
+
+.topic-visualization-list .ready { color: #17663b; background: #e6f7ed; }
+.topic-visualization-list .blocked { color: #875f10; background: #fff4d1; }
+
+.lesson-question-evidence {
+  margin-top: 7px;
+  padding: 7px;
+  border-left: 3px solid #d49b29;
+  background: #fff9e7;
+  color: #644a14;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.lesson-question-evidence em {
+  display: block;
+  margin-top: 3px;
+  color: #795b1b;
+  font-style: normal;
+}
+
 .lesson-stage-list {
   list-style: none;
   margin: 0;
