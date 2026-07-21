@@ -2364,17 +2364,17 @@ button {
 
 /* ── Teaching Map Panel ────────────────────────────────── */
 
-.teaching-map-panel {
+.visual-map-panel {
   position: relative;
 }
 
-.teaching-map-panel.expanded {
-  /* Expand to the left as an overlay so long names are readable */
+.visual-map-panel.expanded {
+  /* Expand to the left as an overlay so long lists stay readable */
   position: absolute;
   right: 0;
   top: auto;
-  width: 240px;
-  max-height: min(55vh, 480px);
+  width: 260px;
+  max-height: min(60vh, 520px);
   overflow-y: auto;
   z-index: 15;
   background: var(--glass-bg);
@@ -2384,17 +2384,25 @@ button {
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
 }
 
-.teaching-map-panel.collapsed {
+.visual-map-panel.collapsed {
   max-height: none;
   overflow: visible;
 }
 
-.teaching-map-header {
+.visual-map-header {
   cursor: pointer;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   user-select: none;
+}
+
+.visual-map-mode-hint {
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--text-soft);
+  opacity: 0.75;
 }
 
 .teaching-map-toggle-icon {
@@ -2402,13 +2410,26 @@ button {
   opacity: 0.6;
 }
 
-.teaching-map-body {
+.visual-map-body {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  padding-top: 4px;
 }
 
-.teaching-map-category-title {
+.visual-map-scenes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.visual-map-topic {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.visual-map-topic-title {
   font-size: 11px;
   color: var(--text-soft);
   font-weight: 600;
@@ -2416,6 +2437,35 @@ button {
   padding: 4px 0 2px;
   border-bottom: 1px solid rgba(230, 237, 244, 0.12);
   margin-bottom: 2px;
+}
+
+.visual-map-topic-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.visual-map-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  padding: 1px 4px;
+  border-radius: 5px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+
+.visual-map-badge-3d {
+  background: rgba(59, 130, 246, 0.22);
+  color: #aee0ff;
+}
+
+.visual-map-badge-2d {
+  background: rgba(34, 197, 94, 0.22);
+  color: #bbf7d0;
 }
 
 .teaching-map-item {
@@ -6325,91 +6375,11 @@ button {
 
 /* ── 3D globe thematic teaching panel ───────────────────────────────── */
 
-.globe-theme-panel {
-  position: absolute;
-  top: calc(var(--header-height) + 16px);
-  right: calc(var(--right-rail-width) + 18px);
-  z-index: 16;
-  width: 252px;
-  max-height: calc(100vh - var(--header-height) - 120px);
-  display: flex;
-  flex-direction: column;
-  border-radius: 14px;
-  overflow: hidden;
-}
-
-.globe-theme-panel.is-collapsed {
-  width: 200px;
-}
-
-.globe-theme-panel__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 10px 12px;
-  border-bottom: 1px solid rgba(140, 190, 235, 0.14);
-}
-
-.globe-theme-panel.is-collapsed .globe-theme-panel__header {
-  border-bottom: none;
-}
-
-.globe-theme-panel__header h4 {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: rgba(232, 242, 252, 0.94);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.globe-theme-panel__header-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.globe-theme-panel__clear,
-.globe-theme-panel__collapse {
-  border: 1px solid rgba(140, 190, 235, 0.24);
-  background: rgba(16, 34, 56, 0.55);
-  color: rgba(214, 231, 246, 0.85);
-  font-size: 11px;
-  line-height: 1;
-  padding: 4px 8px;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background 0.16s ease, color 0.16s ease;
-}
-
-.globe-theme-panel__clear:hover,
-.globe-theme-panel__collapse:hover {
-  background: rgba(52, 96, 146, 0.6);
-  color: #fff;
-}
-
-.globe-theme-panel__body {
-  padding: 10px 12px 12px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
 .globe-theme-panel__section-label {
   margin: 2px 0 0;
   font-size: 11px;
   letter-spacing: 0.14em;
   color: rgba(178, 205, 229, 0.6);
-}
-
-.globe-theme-panel__scenes {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
 }
 
 .globe-scene-chip {
@@ -6440,12 +6410,6 @@ button {
 
 .globe-scene-chip__icon {
   font-size: 15px;
-}
-
-.globe-theme-panel__toggles {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
 }
 
 .globe-theme-toggle {

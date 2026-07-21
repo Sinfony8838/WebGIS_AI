@@ -62,17 +62,16 @@ import { CopilotWidget } from "./components/CopilotWidget";
 import { DatabaseViewer } from "./components/DatabaseViewer";
 import { type KnowledgeQuery } from "./components/KnowledgePanel";
 import { Map3DGlobe, type CameraState, type Map3DGlobeHandle } from "./components/Map3DGlobe";
-import { GlobeThemePanel } from "./components/GlobeThemePanel";
 import { MapInstructionStrip } from "./components/MapInstructionStrip";
 import { MapStatusBar } from "./components/MapStatusBar";
 import { MapToolRail } from "./components/MapToolRail";
 import { LessonWorkflowShell } from "./components/LessonWorkflowShell";
 import { RegionFocusOverlay } from "./components/RegionFocusOverlay";
 import { SideDrawer, type DrawerTab } from "./components/SideDrawer";
-import { TeachingMapPanel } from "./components/TeachingMapPanel";
 import { TeachingMaterialViewer } from "./components/TeachingMaterialViewer";
 import { ToastStack, type ToastItem } from "./components/ToastStack";
 import { UploadDialog } from "./components/UploadDialog";
+import { VisualMapPanel } from "./components/VisualMapPanel";
 import { WorkflowDock } from "./components/WorkflowDock";
 import { PptViewer } from "./components/PptViewer";
 import { BrushOverlay, type BrushOverlayHandle, type BrushSettings } from "./components/BrushOverlay";
@@ -2552,22 +2551,6 @@ export default function App() {
           setViewMode("plane");
         }}
       />
-      {viewMode === "globe" ? (
-        <GlobeThemePanel
-          activeThemeIds={globeThemeIds}
-          onChangeThemes={setGlobeThemeIds}
-          onApplyScene={(preset) => {
-            setGlobeThemeIds(preset.themes);
-            globeRef.current?.flyTo(
-              preset.camera.lon,
-              preset.camera.lat,
-              preset.camera.altitudeMeters,
-              1.6,
-              preset.camera.pitchDeg
-            );
-          }}
-        />
-      ) : null}
       <BrushOverlay
         ref={brushRef}
         active={interactionMode === "brush"}
@@ -2898,11 +2881,33 @@ export default function App() {
             onClear={() => void handleClearWorkspace()}
           />
 
-          <TeachingMapPanel
-            items={textbookMapItems}
-            activeIds={textbookActiveIds}
+          <VisualMapPanel
+            viewMode={viewMode}
+            activeThemeIds={globeThemeIds}
+            onChangeThemes={(ids) => {
+              setGlobeThemeIds(ids);
+              if (ids.length) {
+                setViewMode("globe");
+              }
+            }}
+            onApplyScene={(preset) => {
+              setViewMode("globe");
+              setGlobeThemeIds(preset.themes);
+              globeRef.current?.flyTo(
+                preset.camera.lon,
+                preset.camera.lat,
+                preset.camera.altitudeMeters,
+                1.6,
+                preset.camera.pitchDeg
+              );
+            }}
+            textbookItems={textbookMapItems}
+            textbookActiveIds={textbookActiveIds}
             busy={busy}
-            onToggle={handleToggleTextbookMap}
+            onToggleTextbook={(id, visible) => {
+              setViewMode("plane");
+              void handleToggleTextbookMap(id, visible);
+            }}
           />
 
         </aside>
