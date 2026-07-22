@@ -7,6 +7,14 @@ from typing import Dict, Iterable, List, Sequence, Tuple
 Point = Tuple[float, float]
 WeightedPoint = Tuple[Point, float]
 
+# Heihe (NE) and Tengchong (SW) endpoints of the classic Hu Huanyong Line.
+# These anchors keep any fitted variation inside the same geographical corridor.
+CLASSIC_START: Point = (127.5, 50.2)
+CLASSIC_END: Point = (98.5, 25.0)
+# A reference point well inside the south-east half (Shanghai) so that
+# "same side as reference" consistently means the populated south-east side.
+REFERENCE_POINT: Point = (121.47, 31.23)
+
 
 def normalize_vector(dx: float, dy: float) -> Tuple[float, float]:
     length = math.hypot(dx, dy)
@@ -63,57 +71,62 @@ def segment_for_line(anchor: Point, direction: Tuple[float, float], weighted_poi
 def generate_dynamic_hu_line(
     weighted_points: Iterable[WeightedPoint],
     target_share: float = 0.94,
-    angle_range_degrees: float = 18.0,
-    angle_steps: int = 37,
-    shift_steps: int = 61,
+    shift_range_degrees: float = 4.0,
+    shift_steps: int = 81,
 ) -> Dict[str, object]:
+    """Fit a population-dividing line inside the Heihe-Tengchong corridor.
+
+    The classic Hu Line separates China into a south-east half with ~94% of the
+    population and a north-west half with ~6%.  The dynamic fitted line keeps
+    the same Heihe-Tengchong orientation and only shifts perpendicular to it,
+    so it remains geographically interpretable as a Hu-Line-like divider rather
+    than an arbitrary straight line somewhere over north-west China.
+    """
     points = list(weighted_points)
-    classic_start = (127.5, 50.2)
-    classic_end = (98.5, 25.0)
-    classic_direction = normalize_vector(classic_end[0] - classic_start[0], classic_end[1] - classic_start[1])
-    classic_anchor = ((classic_start[0] + classic_end[0]) / 2.0, (classic_start[1] + classic_end[1]) / 2.0)
-    reference_point = (121.47, 31.23)
-    classic_share = population_share_for_line(points, classic_anchor, classic_direction, reference_point)
+    classic_direction = normalize_vector(CLASSIC_END[0] - CLASSIC_START[0], CLASSIC_END[1] - CLASSIC_START[1])
+    classic_anchor = ((CLASSIC_START[0] + CLASSIC_END[0]) / 2.0, (CLASSIC_START[1] + CLASSIC_END[1]) / 2.0)
+    classic_share = population_share_for_line(points, classic_anchor, classic_direction, REFERENCE_POINT)
 
-    xs = [point[0] for point, _ in points]
-    ys = [point[1] for point, _ in points]
-    diagonal = max(math.hypot(max(xs) - min(xs), max(ys) - min(ys)), 1.0) if points else 1.0
-    shift_limit = diagonal * 0.35
-    angle_range_radians = math.radians(angle_range_degrees)
+    # Perpendicular direction: positive shifts move the line toward the
+    # south-east, negative shifts move it toward the north-west.
+    normal = (-classic_direction[1], classic_direction[0])
     best_candidate = None
+    shift_range = max(float(shift_range_degrees), 0.0)
+    steps = max(int(shift_steps), 2)
 
-    for angle_index in range(max(angle_steps, 2)):
-        angle_ratio = angle_index / float(max(angle_steps - 1, 1))
-        angle_delta = -angle_range_radians + 2.0 * angle_range_radians * angle_ratio
-        direction = rotate_vector(classic_direction[0], classic_direction[1], angle_delta)
-        direction = normalize_vector(direction[0], direction[1])
-        normal = (-direction[1], direction[0])
-        for shift_index in range(max(shift_steps, 2)):
-            shift_ratio = shift_index / float(max(shift_steps - 1, 1))
-            shift_value = -shift_limit + 2.0 * shift_limit * shift_ratio
-            anchor = (
-                classic_anchor[0] + normal[0] * shift_value,
-                classic_anchor[1] + normal[1] * shift_value,
-            )
-            share = population_share_for_line(points, anchor, direction, reference_point)
-            candidate = {
-                "score": abs(share - float(target_share)),
-                "share": share,
-                "anchor": anchor,
-                "direction": direction,
-                "angle_delta_degrees": math.degrees(angle_delta),
-                "shift_distance": shift_value,
-            }
-            if best_candidate is None or candidate["score"] < best_candidate["score"]:
-                best_candidate = candidate
+    for shift_index in range(steps):
+        shift_ratio = shift_index / float(steps - 1)
+        shift_value = -shift_range + 2.0 * shift_range * shift_ratio
+        shifted_start = (
+            CLASSIC_START[0] + normal[0] * shift_value,
+            CLASSIC_START[1] + normal[1] * shift_value,
+        )
+        shifted_end = (
+            CLASSIC_END[0] + normal[0] * shift_value,
+            CLASSIC_END[1] + normal[1] * shift_value,
+        )
+        anchor = ((shifted_start[0] + shifted_end[0]) / 2.0, (shifted_start[1] + shifted_end[1]) / 2.0)
+        share = population_share_for_line(points, anchor, classic_direction, REFERENCE_POINT)
+        # The primary objective is matching the target share.  A tiny
+        # regularisation term breaks ties in favour of the classic line.
+        score = abs(share - float(target_share)) + 1e-6 * abs(shift_value)
+        candidate = {
+            "score": score,
+            "share": share,
+            "anchor": anchor,
+            "shift_distance": shift_value,
+            "shifted_start": shifted_start,
+            "shifted_end": shifted_end,
+        }
+        if best_candidate is None or candidate["score"] < best_candidate["score"]:
+            best_candidate = candidate
 
     assert best_candidate is not None
-    classic_segment = segment_for_line(classic_anchor, classic_direction, points)
-    fitted_segment = segment_for_line(best_candidate["anchor"], best_candidate["direction"], points)
+    classic_segment = (CLASSIC_START, CLASSIC_END)
+    fitted_segment = (best_candidate["shifted_start"], best_candidate["shifted_end"])
     return {
         "classic_share": classic_share,
         "dynamic_share": best_candidate["share"],
-        "angle_delta_degrees": best_candidate["angle_delta_degrees"],
         "shift_distance": best_candidate["shift_distance"],
         "features": {
             "type": "FeatureCollection",
@@ -150,4 +163,3 @@ def generate_dynamic_hu_line(
             ]
         }
     }
-

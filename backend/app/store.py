@@ -24,6 +24,10 @@ from .models import (
 )
 
 
+LEGACY_REGION_LAYER_ID = "builtin_population_regions"
+LEGACY_REGION_TEMPLATE_ID = "population_distribution"
+
+
 class RuntimeStore:
     def __init__(self, state_file: Path):
         self.state_file = state_file
@@ -65,10 +69,13 @@ class RuntimeStore:
                 raise ValueError("Runtime state payload must be an object")
 
             self.projects = {}
+            migrated_legacy_projects = False
             for project_id, data in payload.get("projects", {}).items():
                 layers = [LayerRecord(**layer) for layer in data.pop("layers", [])]
                 project = ProjectRecord(**data)
                 project.layers = layers
+                if self._remove_legacy_region_demo_layers(project):
+                    migrated_legacy_projects = True
                 self.projects[project_id] = project
             self.jobs = {job_id: JobRecord(**data) for job_id, data in payload.get("jobs", {}).items()}
             self.artifacts = {
@@ -97,6 +104,8 @@ class RuntimeStore:
                 workflow_id: WorkflowRecord(**data)
                 for workflow_id, data in payload.get("workflows", {}).items()
             }
+            if migrated_legacy_projects:
+                self._save()
         except json.JSONDecodeError:
             self._quarantine_corrupt_state("invalid_json")
             self.projects = {}
@@ -119,6 +128,67 @@ class RuntimeStore:
             self.messages = {}
             self.confirmations = {}
             self.workflows = {}
+
+    @staticmethod
+    def _remove_legacy_region_demo_layers(project: ProjectRecord) -> bool:
+        """Discard the retired rectangular seven-region demo when restoring.
+
+        Projects created before the province-boundary population template was
+        introduced serialized the old, synthetic rectangles into runtime.json.
+        Leaving those layers in the saved project made them reappear in both
+        2D and 3D views after a page refresh.  A visual-query result in the
+        same old scene is transient as well, so it is cleared with the demo.
+        """
+        if not any(RuntimeStore._is_legacy_region_demo_layer(layer) for layer in project.layers):
+            return False
+
+        project.layers = [
+            layer
+            for layer in project.layers
+            if not RuntimeStore._is_legacy_region_demo_layer(layer)
+            and not layer.layer_id.startswith("visual_query_")
+        ]
+        project.enabled_templates = [
+            template_id
+            for template_id in project.enabled_templates
+            if template_id != LEGACY_REGION_TEMPLATE_ID
+        ]
+        remaining_layer_ids = {layer.layer_id for layer in project.layers}
+        if project.active_layer_id not in remaining_layer_ids:
+            project.active_layer_id = ""
+        return True
+
+    @staticmethod
+    def _is_legacy_region_demo_layer(layer: LayerRecord) -> bool:
+        if layer.layer_id != LEGACY_REGION_LAYER_ID:
+            return False
+        features = (layer.data or {}).get("features")
+        return bool(features) and all(RuntimeStore._is_axis_aligned_rectangle(feature) for feature in features)
+
+    @staticmethod
+    def _is_axis_aligned_rectangle(feature: Dict[str, Any]) -> bool:
+        geometry = (feature or {}).get("geometry") or {}
+        if geometry.get("type") != "Polygon":
+            return False
+        coordinates = geometry.get("coordinates") or []
+        if len(coordinates) != 1:
+            return False
+        ring = coordinates[0]
+        if not isinstance(ring, list) or len(ring) != 5 or ring[0] != ring[-1]:
+            return False
+        try:
+            corners = {(float(point[0]), float(point[1])) for point in ring[:-1]}
+        except (IndexError, TypeError, ValueError):
+            return False
+        if len(corners) != 4:
+            return False
+        x_values = {point[0] for point in corners}
+        y_values = {point[1] for point in corners}
+        return len(x_values) == 2 and len(y_values) == 2 and corners == {
+            (x_value, y_value)
+            for x_value in x_values
+            for y_value in y_values
+        }
 
     def _save(self) -> None:
         if self._batch_depth > 0:

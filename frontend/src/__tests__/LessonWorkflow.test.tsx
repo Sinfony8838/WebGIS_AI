@@ -97,11 +97,11 @@ function makeLesson(): LessonRecord {
             text: "为什么要看人口密度？",
             options: [],
             answer_index: null,
-            expected_points: [],
+            expected_points: ["面积不同不可直接比较", "密度反映单位面积人口"],
             misconceptions: [{ tag: "混淆数量与密度", description: "" }]
           }
         ],
-        assistant_prompts: []
+        assistant_prompts: ["请用密度概念解释东西部人口疏密差异。"]
       }
     ]
   };
@@ -242,6 +242,23 @@ describe("ClassRunPanel", () => {
     });
     fireEvent.click(screen.getByTestId("launch-adhoc"));
     expect(props.onLaunchAdhocQuestion).toHaveBeenCalledWith("临时问题？", ["甲", "乙"]);
+  });
+
+  it("toggles the oral-question read-aloud prompt card and primes the recorder", () => {
+    const props = renderPanel({ currentStageId: "s2" });
+    const toggle = screen.getByTestId("oral-toggle-s2q1");
+    fireEvent.click(toggle);
+    const card = screen.getByTestId("oral-prompt-s2q1");
+    expect(card.textContent).toContain("朗读提问卡");
+    expect(card.textContent).toContain("为什么要看人口密度？");
+    expect(card.textContent).toContain("面积不同不可直接比较");
+    expect(card.textContent).toContain("请用密度概念解释东西部人口疏密差异。");
+    // 朗读提问卡预置学情速记到 s2q1
+    fireEvent.click(screen.getByText("答对"));
+    expect(props.onObservation).toHaveBeenCalledWith("correct", "", "", "s2q1");
+    // 再次点击收起卡片
+    fireEvent.click(toggle);
+    expect(screen.queryByTestId("oral-prompt-s2q1")).toBeNull();
   });
 
   it("collapses to a slim tab and expands back", () => {

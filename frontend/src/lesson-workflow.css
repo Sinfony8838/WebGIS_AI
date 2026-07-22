@@ -753,6 +753,62 @@
   color: #f0bb78;
 }
 
+/* 朗读提问卡（口头提问展开） */
+.class-oral-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 6px 0 2px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  border: 1px solid rgba(240, 187, 120, 0.55);
+  background: linear-gradient(180deg, rgba(240, 187, 120, 0.16), rgba(240, 187, 120, 0.06));
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+}
+
+.class-oral-prompt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.class-oral-prompt-tag {
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: #f0bb78;
+  font-weight: 600;
+}
+
+.class-oral-prompt-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #f7fbff;
+  font-weight: 600;
+}
+
+.class-oral-prompt-lead {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  border-left: 2px solid rgba(240, 187, 120, 0.5);
+  padding-left: 8px;
+}
+
+.class-oral-prompt-note {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.class-oral-prompt .question-points,
+.class-oral-prompt .question-misconceptions {
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+
 /* 临时提问 */
 .class-panel-adhoc {
   display: flex;

@@ -49,6 +49,7 @@ export function ClassRunPanel({
   const [recordQuestionId, setRecordQuestionId] = useState("");
   const [savedFlash, setSavedFlash] = useState(false);
   const [expandedQuestionId, setExpandedQuestionId] = useState("");
+  const [oralQuestionId, setOralQuestionId] = useState("");
   const [scriptOpen, setScriptOpen] = useState(false);
   const [adhocText, setAdhocText] = useState("");
   const [adhocOptions, setAdhocOptions] = useState("");
@@ -61,6 +62,7 @@ export function ClassRunPanel({
   // 切换环节后回到默认展示状态
   useEffect(() => {
     setExpandedQuestionId("");
+    setOralQuestionId("");
     setScriptOpen(true);
     resetRecord();
   }, [currentStageId]);
@@ -116,6 +118,17 @@ export function ClassRunPanel({
   function flashSaved() {
     setSavedFlash(true);
     window.setTimeout(() => setSavedFlash(false), 1800);
+  }
+
+  function toggleOral(questionId: string) {
+    if (oralQuestionId === questionId) {
+      setOralQuestionId("");
+      setRecordQuestionId("");
+      return;
+    }
+    // 展开朗读提问卡，同时为学情速记预置该题，便于记录学生表现。
+    setOralQuestionId(questionId);
+    setRecordQuestionId(questionId);
   }
 
   function launchAdhoc() {
@@ -249,6 +262,43 @@ export function ClassRunPanel({
                     <span className="class-question-text">{question.text}</span>
                   </button>
 
+                  {oralQuestionId === question.question_id ? (
+                    <div className="class-oral-prompt" data-testid={`oral-prompt-${question.question_id}`}>
+                      <div className="class-oral-prompt-head">
+                        <span className="class-oral-prompt-tag">朗读提问卡 · 教师朗读</span>
+                        <button
+                          type="button"
+                          className="mini-control"
+                          onClick={() => toggleOral(question.question_id)}
+                          aria-label="结束朗读"
+                        >
+                          ×
+                        </button>
+                      </div>
+                      <p className="class-oral-prompt-text">{question.text}</p>
+                      {question.expected_points.length ? (
+                        <div className="question-points">
+                          <span className="question-detail-label">答案要点</span>
+                          {question.expected_points.map((point) => (
+                            <span key={point} className="point-chip">{point}</span>
+                          ))}
+                        </div>
+                      ) : null}
+                      {question.misconceptions.length ? (
+                        <div className="question-misconceptions">
+                          <span className="question-detail-label">易错提醒</span>
+                          {question.misconceptions.map((item) => (
+                            <span key={item.tag} className="tag-chip">{item.tag}</span>
+                          ))}
+                        </div>
+                      ) : null}
+                      {currentStage?.assistant_prompts.length ? (
+                        <p className="class-oral-prompt-lead">{currentStage.assistant_prompts[0]}</p>
+                      ) : null}
+                      <p className="class-oral-prompt-note">学情速记已就绪，下方可记录学生表现。</p>
+                    </div>
+                  ) : null}
+
                   {expanded ? (
                     <div className="class-question-detail">
                       {question.options.length ? (
@@ -305,11 +355,12 @@ export function ClassRunPanel({
                     ) : (
                       <button
                         type="button"
-                        className={`toolbar-button compact ${recordQuestionId === question.question_id ? "active" : ""}`}
-                        onClick={() => setRecordQuestionId(question.question_id)}
-                        title="口头提问后，用下方学情速记记录学生表现"
+                        className={`toolbar-button compact primary ${oralQuestionId === question.question_id ? "active" : ""}`}
+                        onClick={() => toggleOral(question.question_id)}
+                        data-testid={`oral-toggle-${question.question_id}`}
+                        title="展开朗读提问卡：教师朗读问题并按要点引导，学情速记自动就绪"
                       >
-                        口头提问
+                        {oralQuestionId === question.question_id ? "结束朗读" : "口头提问"}
                       </button>
                     )}
                   </div>

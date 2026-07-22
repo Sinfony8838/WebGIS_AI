@@ -299,16 +299,29 @@ class TemplateService:
             "enabled_templates": ["population_migration"],
         }
 
-    def _build_hu_line_comparison(self, project_id: str) -> Dict[str, Any]:
-        provinces = self._load_province_collection()
+    def _load_prefecture_weighted_points(self) -> List[Tuple[Tuple[float, float], float]]:
+        """Prefecture-level 2020 census data gives a much finer population
+        surface than province centres, so the fitted line stays close to the
+        classic Heihe-Tengchong corridor instead of being pulled into the
+        north-west by coarse province-centroid geometry."""
+        from shapely.geometry import shape  # type: ignore
+
+        collection = self._clone_features(self._load_builtin_geojson("population", "prefecture_population_2020.geojson"))
         weighted_points: List[Tuple[Tuple[float, float], float]] = []
-        for feature in provinces["features"]:
+        for feature in collection["features"]:
             properties = feature["properties"]
-            center = properties.get("center")
-            population = float(properties.get("population") or 0)
-            if not center or population <= 0:
+            population = float(properties.get("population_2020") or 0)
+            if population <= 0:
                 continue
-            weighted_points.append(((float(center[0]), float(center[1])), population))
+            geometry = feature.get("geometry")
+            if not geometry:
+                continue
+            centroid = shape(geometry).centroid
+            weighted_points.append(((float(centroid.x), float(centroid.y)), population))
+        return weighted_points
+
+    def _build_hu_line_comparison(self, project_id: str) -> Dict[str, Any]:
+        weighted_points = self._load_prefecture_weighted_points()
 
         dynamic_payload = generate_dynamic_hu_line(weighted_points)
         layer = LayerRecord.create(

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from ..config import AppConfig
 from ..models import LayerRecord, LessonRecord
@@ -36,6 +36,7 @@ LESSON_IMPORT_SCHEMA_HINT = {
                 "basemap_id": "amap_light",
                 "templates": ["population_distribution"],
                 "layer_visibility": {"builtin_population_regions": True},
+                "catalog_layers": ["china_climate_types"],
                 "view": {"center": [104.0, 35.0], "zoom": 4},
                 "annotations": [{"text": "string", "position": [104.0, 35.0]}],
                 "visual_query": None,
@@ -63,6 +64,7 @@ def default_scene() -> Dict[str, Any]:
         "basemap_id": "",
         "templates": [],
         "layer_visibility": {},
+        "catalog_layers": [],
         "view": {},
         "annotations": [],
         "visual_query": None,
@@ -77,12 +79,14 @@ class LessonService:
         template_service: TemplateService,
         visual_query_service: VisualQueryService,
         minimax_client: Optional[MiniMaxClient] = None,
+        catalog_layer_loader: Optional[Callable[[str, str], Any]] = None,
     ):
         self.config = config
         self.store = store
         self.template_service = template_service
         self.visual_query_service = visual_query_service
         self.minimax_client = minimax_client
+        self.catalog_layer_loader = catalog_layer_loader
         self.ensure_builtin_lessons()
 
     # ------------------------------------------------------------------
@@ -197,12 +201,34 @@ class LessonService:
             if isinstance(visual_query, dict) and visual_query:
                 applied["visualization"] = self._apply_visual_query(project_id, visual_query)
 
+            catalog_ids = [str(item) for item in (scene.get("catalog_layers") or [])]
+            if catalog_ids and self.catalog_layer_loader is not None:
+                project = self.store.get_project(project_id)
+                existing_catalog = {
+                    str((layer.metadata or {}).get("catalog_id") or "")
+                    for layer in (project.layers if project else [])
+                }
+                for dataset_id in catalog_ids:
+                    if dataset_id in existing_catalog:
+                        continue
+                    try:
+                        self.catalog_layer_loader(project_id, dataset_id)
+                    except (KeyError, ValueError, FileNotFoundError, OSError):
+                        # Unknown / unreadable dataset: skip without breaking the scene.
+                        continue
+
             project = self.store.get_project(project_id)
             existing_layer_ids = {layer.layer_id for layer in project.layers}
+            catalog_id_set = set(catalog_ids)
             for layer_id, visible in (scene.get("layer_visibility") or {}).items():
                 if layer_id not in existing_layer_ids:
                     continue
                 self.store.patch_layer(project_id, str(layer_id), {"visible": bool(visible)})
+            # Declared catalog layers are shown on top of whatever the reset left.
+            for layer in project.layers:
+                catalog_id = str((layer.metadata or {}).get("catalog_id") or "")
+                if catalog_id and catalog_id in catalog_id_set and not layer.visible:
+                    self.store.patch_layer(project_id, layer.layer_id, {"visible": True})
 
             self._write_stage_annotations(project_id, scene.get("annotations") or [])
 
@@ -226,6 +252,7 @@ class LessonService:
             "stage_title": stage.get("title", ""),
             "applied_templates": applied["templates"],
             "visualization": applied["visualization"],
+            "catalog_layers": catalog_ids,
             "view": project.view,
             "base_map": project.base_map,
         }
@@ -239,6 +266,7 @@ class LessonService:
         if project is None:
             return
         scene_templates = {str(item) for item in scene.get("templates") or []}
+        scene_catalog_ids = {str(item) for item in scene.get("catalog_layers") or []}
         for layer in list(project.layers):
             layer_id = layer.layer_id
             if layer_id.startswith("visual_query_"):
@@ -251,6 +279,9 @@ class LessonService:
                     self.store.patch_layer(project_id, layer_id, {"visible": desired})
                 continue
             if layer.source == "one_map_catalog" or layer_id.startswith("one_map_"):
+                catalog_id = str((layer.metadata or {}).get("catalog_id") or "")
+                if catalog_id and catalog_id in scene_catalog_ids:
+                    continue
                 if layer.visible:
                     self.store.patch_layer(project_id, layer_id, {"visible": False})
 
@@ -374,6 +405,10 @@ class LessonService:
             "builtin_population_regions / builtin_population_density / builtin_population_migration / "
             "generated_hu_line；"
             "basemap_id 只能用 amap_light / amap_vector / amap_imagery。"
+            "scene 中的 catalog_layers（可选）是一张图数据集 id 数组，常用："
+            "china_climate_types / china_province_gdp_per_capita / china_city_gdp_per_capita / "
+            "china_provinces / shanghai_population_density / shanghai_districts / hu_huanyong_line；"
+            "不确定时留空数组。"
         )
         content = self.minimax_client.chat_completion(
             [
@@ -464,6 +499,8 @@ class LessonService:
                 continue
             stage_id = str(raw.get("stage_id") or f"s{index}")
             scene = {**default_scene(), **(raw.get("scene") or {})}
+            raw_catalog = scene.get("catalog_layers")
+            scene["catalog_layers"] = [str(item) for item in raw_catalog] if isinstance(raw_catalog, list) else []
             questions = []
             for q_index, question in enumerate(raw.get("questions") or [], start=1):
                 if not isinstance(question, dict):

@@ -148,6 +148,88 @@ class LessonServiceTest(unittest.TestCase):
         self.assertEqual(store.lessons, {})
         self.assertEqual(store.class_sessions, {})
 
+    def test_apply_stage_scene_opens_declared_catalog_layers(self) -> None:
+        runtime, store, project_id = self.build_runtime()
+        lesson = runtime.classroom.lesson_service.create_lesson(
+            {
+                "title": "catalog scene test",
+                "stages": [
+                    {
+                        "stage_id": "s1",
+                        "title": "open catalog",
+                        "scene": {
+                            "basemap_id": "amap_light",
+                            "catalog_layers": ["china_climate_types"],
+                        },
+                    }
+                ],
+            }
+        )
+
+        result = runtime.classroom.apply_lesson_scene(project_id, lesson.lesson_id, "s1")
+
+        self.assertEqual(result["catalog_layers"], ["china_climate_types"])
+        project = store.get_project(project_id)
+        catalog_layers = [
+            layer
+            for layer in project.layers
+            if (layer.metadata or {}).get("catalog_id") == "china_climate_types"
+        ]
+        self.assertTrue(catalog_layers)
+        self.assertTrue(catalog_layers[0].visible)
+
+    def test_stage_switch_hides_undeclared_catalog_layers(self) -> None:
+        runtime, store, project_id = self.build_runtime()
+        lesson = runtime.classroom.lesson_service.create_lesson(
+            {
+                "title": "catalog hide test",
+                "stages": [
+                    {"stage_id": "s1", "title": "with catalog", "scene": {"catalog_layers": ["china_climate_types"]}},
+                    {"stage_id": "s2", "title": "without catalog", "scene": {"catalog_layers": []}},
+                ],
+            }
+        )
+
+        runtime.classroom.apply_lesson_scene(project_id, lesson.lesson_id, "s1")
+        project = store.get_project(project_id)
+        layer = next(
+            layer
+            for layer in project.layers
+            if (layer.metadata or {}).get("catalog_id") == "china_climate_types"
+        )
+        self.assertTrue(layer.visible)
+
+        runtime.classroom.apply_lesson_scene(project_id, lesson.lesson_id, "s2")
+        project = store.get_project(project_id)
+        layer = next(
+            layer
+            for layer in project.layers
+            if (layer.metadata or {}).get("catalog_id") == "china_climate_types"
+        )
+        self.assertFalse(layer.visible)
+
+    def test_catalog_layer_persists_across_stages_declaring_it(self) -> None:
+        runtime, store, project_id = self.build_runtime()
+        lesson = runtime.classroom.lesson_service.create_lesson(
+            {
+                "title": "catalog persist test",
+                "stages": [
+                    {"stage_id": "s1", "title": "a", "scene": {"catalog_layers": ["china_climate_types"]}},
+                    {"stage_id": "s2", "title": "b", "scene": {"catalog_layers": ["china_climate_types"]}},
+                ],
+            }
+        )
+
+        runtime.classroom.apply_lesson_scene(project_id, lesson.lesson_id, "s1")
+        runtime.classroom.apply_lesson_scene(project_id, lesson.lesson_id, "s2")
+        project = store.get_project(project_id)
+        layer = next(
+            layer
+            for layer in project.layers
+            if (layer.metadata or {}).get("catalog_id") == "china_climate_types"
+        )
+        self.assertTrue(layer.visible)
+
 
 if __name__ == "__main__":
     unittest.main()

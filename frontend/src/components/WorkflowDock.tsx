@@ -51,7 +51,6 @@ const DEFAULT_STROKE = "#444444";
  */
 const BUILTIN_DATASETS: Array<{ source: string; label: string }> = [
   { source: "builtin:one_map/population/china_province_population_density.geojson", label: "一张图 · 中国省级人口密度（含台湾）" },
-  { source: "builtin:population/population_regions.geojson", label: "内置 · 中国 7 大区（演示数据）" },
   { source: "builtin:population/population_centroids.geojson", label: "内置 · 大区中心点（点）" },
   { source: "builtin:population/migration_flows.geojson", label: "内置 · 大区迁徙连线" }
 ];

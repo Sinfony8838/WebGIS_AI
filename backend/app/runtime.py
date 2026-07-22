@@ -958,8 +958,16 @@ class WebGISRuntime:
         payload["features"] = joined_features
         return payload
 
-    def add_catalog_dataset_layer(self, project_id: str, dataset_id: str) -> Dict[str, Any]:
-        self._require_project(project_id)
+    def materialize_catalog_layer(self, project_id: str, dataset_id: str) -> LayerRecord:
+        """Materialize a one-map catalog dataset as a project vector layer.
+
+        Shared by the manual ``add_catalog_dataset_layer`` endpoint and by
+        lesson stage scenes that declaratively open catalog layers via
+        ``scene.catalog_layers``.  Only writes the layer itself - no view,
+        active-layer or recent-action side effects - so a scene apply can
+        compose several catalog layers and then set its own view/visibility.
+        """
+        project = self._require_project(project_id)
         item = self.one_map_catalog_service.get_item(dataset_id)
         item_format = item.get("format", "").lower()
         materialized_from_csv = False
@@ -984,7 +992,7 @@ class WebGISRuntime:
             "area_km2",
         ]
         catalog_fields = set(item.get("fields") or [])
-        style_field = next((field for field in numeric_candidates if field in catalog_fields), "")
+        style_field = str(item.get("style_field") or "") or next((field for field in numeric_candidates if field in catalog_fields), "")
         if style_field:
             _classify_colors(features, style_field)
         else:
@@ -1023,9 +1031,13 @@ class WebGISRuntime:
             },
         )
         self.store.upsert_layer(project_id, layer)
+        return layer
+
+    def add_catalog_dataset_layer(self, project_id: str, dataset_id: str) -> Dict[str, Any]:
+        layer = self.materialize_catalog_layer(project_id, dataset_id)
         self.store.set_active_layer(project_id, layer.layer_id)
 
-        bounds = _geojson_bounds(payload)
+        bounds = _geojson_bounds(layer.data or {})
         width = max(0.0, bounds[2] - bounds[0])
         height = max(0.0, bounds[3] - bounds[1])
         zoom = 2 if width > 120 or height > 70 else 4 if width > 35 or height > 25 else 7 if width > 5 else 10
@@ -1035,7 +1047,7 @@ class WebGISRuntime:
             "加载一张图数据",
             f"已加载“{layer.name}”到底图。",
             status="success",
-            metadata={"layer_id": layer.layer_id, "catalog_id": item["id"]},
+            metadata={"layer_id": layer.layer_id, "catalog_id": (layer.metadata or {}).get("catalog_id", "")},
         )
         return {"status": "success", "layer": layer.to_dict(), "view": view}
 

@@ -101,4 +101,5 @@ class OneMapCatalogService:
             "population_fields": [str(field) for field in item.get("population_fields", []) if isinstance(field, str)],
             "tags": [str(tag) for tag in tags],
             "description": str(item.get("description") or ""),
+            "style_field": str(item.get("style_field") or ""),
         }

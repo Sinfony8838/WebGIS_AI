@@ -7,14 +7,15 @@
   "objectives": [
     "借助人口专题图层，描述中国人口分布的基本特点",
     "掌握“总体格局-高低值区域-分界线-影响因素”的四步描述框架",
-    "结合自然与人文因素，解释中国人口东南多、西北少的原因",
+    "结合自然（水土气生）与人文因素，解释中国人口东南多、西北少的原因",
+    "以上海为城市案例，结合高考真题情境分析人口分布、密度差异与老龄化",
     "通过图层观察、指标查询、地图标注与截图输出，形成地理实践成果"
   ],
   "metadata": {
     "duration_minutes": 40,
     "reference": "人教版高中地理必修二《人口分布》",
-    "design_note": "免配准版：课堂证据只使用内置矢量图层、指标查询、标注与截图，不依赖图片覆盖层。",
-    "builtin_version": "2"
+    "design_note": "v3：环节场景声明式加载一张图专题图层（气候/地形/河流/植被/经济/上海人口/老龄化），因素归纳与上海案例均以可视化为证据；不依赖图片覆盖层。",
+    "builtin_version": "3"
   },
   "stages": [
     {
@@ -30,13 +31,14 @@
           "builtin_population_migration": false,
           "generated_hu_line": false
         },
+        "catalog_layers": [],
         "view": {"center": [104.0, 35.0], "zoom": 4},
         "annotations": [],
         "visual_query": null
       },
       "script": [
         "今天我们不先背结论，而是先看地图。请大家观察人口分布图：中国人口是均匀分布的吗？",
-        "如果人口是均匀分布的，这张地图应该是什么样子？"
+        "如果人口是均匀分布的，这张地图应该是什么样子？请用“区域 + 程度”描述你看到的不均匀。"
       ],
       "questions": [
         {
@@ -45,13 +47,25 @@
           "text": "观察当前人口分布图，中国人口分布的总体特征是？",
           "options": ["大致均匀分布", "东南部稠密、西北部稀疏", "西北部稠密、东南部稀疏", "只集中在沿海城市"],
           "answer_index": 1,
-          "expected_points": ["分布不均", "东多西少", "沿海、平原集中"],
+          "expected_points": ["分布不均", "东多西少、东南稠密西北稀疏", "沿海、平原集中", "呈东南-西北梯度差异"],
           "misconceptions": [
-            {"tag": "只见城市不见格局", "description": "只注意到个别大城市，没有形成东南-西北的整体格局认识"}
+            {"tag": "只见城市不见格局", "description": "只注意到个别大城市，没有形成东南-西北的整体格局认识"},
+            {"tag": "把不均当成无规律", "description": "只说“不均匀”，没有指出方向性（东多西少）"}
+          ]
+        },
+        {
+          "question_id": "s1q2",
+          "type": "open",
+          "text": "如果人口均匀分布，这张图应该是什么样？请用“区域+程度”描述实际看到的不均匀。",
+          "options": [],
+          "answer_index": null,
+          "expected_points": ["均匀则各地颜色深浅一致", "实际东南部颜色深、西北部浅", "沿海平原深、内陆高原浅", "方向上东多西少"],
+          "misconceptions": [
+            {"tag": "描述缺程度", "description": "只说“东多西少”，没有用稠密/稀疏等程度词细化"}
           ]
         }
       ],
-      "assistant_prompts": ["请结合当前人口分布图层，用一句课堂语言概括中国人口分布的总体特征。"]
+      "assistant_prompts": ["请结合当前人口分布图层，用一句课堂语言概括中国人口分布的总体特征，并强调“东多西少”的方向性。"]
     },
     {
       "stage_id": "s2",
@@ -66,6 +80,7 @@
           "builtin_population_migration": false,
           "generated_hu_line": false
         },
+        "catalog_layers": [],
         "view": {"center": [104.0, 35.0], "zoom": 4},
         "annotations": [
           {"text": "人口较稠密", "position": [117.2, 32.0]},
@@ -84,7 +99,7 @@
           "text": "为什么比较不同地区人口疏密时要看人口密度，而不能只看人口数量？",
           "options": [],
           "answer_index": null,
-          "expected_points": ["面积不同数量不可直接比较", "密度反映单位面积人口"],
+          "expected_points": ["面积不同时数量不可直接比较", "密度=人口÷面积，消除了面积影响", "密度反映单位面积人口疏密", "是相对量，便于横向比较"],
           "misconceptions": [
             {"tag": "混淆数量与密度", "description": "认为人口多的地区密度一定高，忽略区域面积差异"}
           ]
@@ -95,18 +110,29 @@
           "text": "甲区域人口 500 万、面积 50 万平方千米；乙区域人口 300 万、面积 10 万平方千米。下列说法正确的是？",
           "options": ["甲区域人口密度更高", "乙区域人口密度更高", "两区域人口密度相同", "人口多的区域密度一定高"],
           "answer_index": 1,
-          "expected_points": ["密度=人口÷面积", "乙 30 人/km² 大于甲 10 人/km²"],
+          "expected_points": ["密度=人口÷面积", "甲 10 人/km²，乙 30 人/km²", "乙密度更高", "人口总量大不代表密度高"],
           "misconceptions": [
             {"tag": "混淆数量与密度", "description": "直接用人口总数判断疏密，没有除以面积"}
           ]
+        },
+        {
+          "question_id": "s2q3",
+          "type": "open",
+          "text": "结合密度图，为什么青藏高原人口密度远低于长江中下游平原？用密度概念解释。",
+          "options": [],
+          "answer_index": null,
+          "expected_points": ["青藏高原高寒、人口稀少", "长江中下游平原水热充足、人口稠密", "密度差异反映环境承载力差异", "单位面积人口数悬殊"],
+          "misconceptions": [
+            {"tag": "只用面积解释", "description": "只比较面积大小，没有回到人口密度的定义和环境承载力"}
+          ]
         }
       ],
-      "assistant_prompts": ["请用高中生能听懂的方式解释人口数量与人口密度的区别，并结合当前密度图举一个例子。"]
+      "assistant_prompts": ["请用高中生能听懂的方式解释人口数量与人口密度的区别，并结合当前密度图举一个东西部对比的例子。"]
     },
     {
       "stage_id": "s3",
       "title": "数据探究：2020 年地级市人口 Top20",
-      "minutes": 6,
+      "minutes": 5,
       "scene": {
         "basemap_id": "amap_light",
         "templates": [],
@@ -116,6 +142,7 @@
           "builtin_population_migration": false,
           "generated_hu_line": false
         },
+        "catalog_layers": [],
         "view": {"center": [107.0, 33.0], "zoom": 4},
         "annotations": [],
         "visual_query": {
@@ -139,18 +166,40 @@
           "text": "人口 Top20 的地级市在空间分布上有哪些共同特征？",
           "options": [],
           "answer_index": null,
-          "expected_points": ["多位于东部沿海或平原", "多为省会/直辖市等经济中心", "基本都在胡焕庸线东南侧"],
+          "expected_points": ["多位于东部沿海或平原", "多为省会/直辖市等经济中心", "基本都在胡焕庸线东南侧", "地形低平、交通便利"],
           "misconceptions": [
             {"tag": "以行政级别代替区位", "description": "只回答“都是大城市/省会”，没有落到地形、沿海、经济区位等空间证据"}
           ]
+        },
+        {
+          "question_id": "s3q2",
+          "type": "choice",
+          "text": "这 20 个人口大城主要分布在胡焕庸线的？",
+          "options": ["东南侧", "西北侧", "两侧各约一半", "沿线的端点"],
+          "answer_index": 0,
+          "expected_points": ["几乎都在东南侧", "东南侧自然与经济条件好", "西北侧地级市人口规模小"],
+          "misconceptions": [
+            {"tag": "误判分布侧", "description": "凭印象认为大城市分布均衡，忽略东南侧集聚事实"}
+          ]
+        },
+        {
+          "question_id": "s3q3",
+          "type": "open",
+          "text": "为什么这些人口大城多集中在东部平原而非西部高原？",
+          "options": [],
+          "answer_index": null,
+          "expected_points": ["平原地势低平、便于农业与城建", "东部经济发达、交通便利", "西部高寒干旱、环境承载力低", "自然与人文因素叠加"],
+          "misconceptions": [
+            {"tag": "单因归因", "description": "只说“东部发达”，没有回到地形与承载力的自然基础"}
+          ]
         }
       ],
-      "assistant_prompts": ["请根据当前高亮的人口Top20城市，引导学生归纳它们的区位共性。"]
+      "assistant_prompts": ["请根据当前高亮的人口Top20城市，引导学生归纳区位共性，并追问“为什么集中在东南侧”。"]
     },
     {
       "stage_id": "s4",
       "title": "中国主案例：胡焕庸线两侧差异",
-      "minutes": 8,
+      "minutes": 7,
       "scene": {
         "basemap_id": "amap_light",
         "templates": ["population_distribution", "hu_line_comparison"],
@@ -160,6 +209,7 @@
           "builtin_population_migration": false,
           "generated_hu_line": true
         },
+        "catalog_layers": [],
         "view": {"center": [104.0, 35.0], "zoom": 4},
         "annotations": [
           {"text": "黑河", "position": [127.53, 50.24]},
@@ -180,7 +230,7 @@
           "text": "胡焕庸线东南侧约占国土面积 43%，人口大约占全国的多少？",
           "options": ["约 50%", "约 70%", "约 94%", "约 30%"],
           "answer_index": 2,
-          "expected_points": ["东南侧人口高度集中"],
+          "expected_points": ["东南侧人口高度集中", "约 94% 人口在 43% 国土上", "面积与人口严重不对称"],
           "misconceptions": [
             {"tag": "面积决定人口", "description": "认为面积越大的一侧人口一定越多，忽略自然与经济条件"}
           ]
@@ -191,17 +241,28 @@
           "text": "东南侧为什么更容易形成人口集聚？",
           "options": [],
           "answer_index": null,
-          "expected_points": ["地势低平、气候湿润", "农业基础好", "交通城市密集、经济发达"],
+          "expected_points": ["地势低平、气候湿润", "农业基础好、粮食充裕", "交通城市密集、经济发达", "自然+人文因素叠加"],
           "misconceptions": [
             {"tag": "单因素解释", "description": "只用一个因素（如只有气候）解释，缺少自然+人文的综合视角"}
           ]
+        },
+        {
+          "question_id": "s4q3",
+          "type": "open",
+          "text": "对比胡焕庸线西北侧与东南侧的自然环境差异（气候、地形、水源），说明这些差异如何导致人口分布差异。",
+          "options": [],
+          "answer_index": null,
+          "expected_points": ["西北干旱高寒、东南季风水热好", "西北高原盆地、东南平原丘陵", "西北水源稀缺、东南河网密布", "环境承载力差异导致人口差异"],
+          "misconceptions": [
+            {"tag": "只谈人口不谈环境", "description": "只描述人口多少，没有落到气候/地形/水源的自然证据"}
+          ]
         }
       ],
-      "assistant_prompts": ["请根据当前地图提出一个追问，引导学生解释胡焕庸线两侧人口差异。"]
+      "assistant_prompts": ["请根据当前地图提出一个追问，引导学生从气候、地形、水源三方面解释胡焕庸线两侧的人口差异。"]
     },
     {
       "stage_id": "s5",
-      "title": "影响因素归纳：自然与人文共同作用",
+      "title": "影响因素归纳：水土气生与人文要素的融合",
       "minutes": 8,
       "scene": {
         "basemap_id": "amap_light",
@@ -212,34 +273,73 @@
           "builtin_population_migration": false,
           "generated_hu_line": true
         },
+        "catalog_layers": ["china_climate_types", "china_terrain_steps", "china_major_rivers", "china_vegetation_zones", "china_province_gdp_per_capita"],
         "view": {"center": [104.0, 35.0], "zoom": 4},
-        "annotations": [],
+        "annotations": [
+          {"text": "西北干旱区", "position": [85.0, 41.0]},
+          {"text": "东南季风区", "position": [115.0, 28.0]},
+          {"text": "青藏高原", "position": [90.0, 32.0]},
+          {"text": "长江中下游", "position": [115.0, 31.0]}
+        ],
         "visual_query": null
       },
       "script": [
-        "影响人口分布的因素分两类：自然因素（气候、地形、水源、土壤、矿产）与人文因素（经济、交通、历史开发、政策、生产方式、文化）。",
-        "小组任务：每组选择一个因素，用“因素-地图证据-解释”的句式表达。"
+        "影响人口分布的因素分两类：自然因素（气候、地形、水源、土壤、生物）与人文因素（经济、交通、历史开发、政策、生产方式、文化）。",
+        "本环节已加载五张专题图：气候类型（气）、地形三级阶梯（土）、主要河流（水）、自然植被带（生）、省级人均GDP（人文）。建议按提问顺序依次开关图层，逐一找证据。",
+        "小组任务：每组选一个因素，用“因素-地图证据-解释”的句式表达，体会地理各要素的相互联系。"
       ],
       "questions": [
         {
           "question_id": "s5q1",
           "type": "open",
-          "text": "选择一个影响因素，用“因素-地图证据-解释”说明它如何影响中国人口分布。",
+          "text": "打开气候类型图，对比东南季风区与西北温带大陆/高山高原区的人口密度，说明气候如何制约人口分布。",
           "options": [],
           "answer_index": null,
-          "expected_points": ["气候：东部季风区水热好", "地形：平原开发难度小", "水源：干旱区沿河沿绿洲", "经济：就业机会吸引集聚", "交通：便利地区集聚"],
+          "expected_points": ["东南季风区水热充足、人口稠密", "西北温带大陆性气候干旱、人口稀疏", "高山高原气候高寒、人口稀少", "气候决定农业潜力与宜居性"],
           "misconceptions": [
-            {"tag": "结论无证据", "description": "直接背因素结论，没有指出地图上的对应空间证据"},
+            {"tag": "结论无证据", "description": "直接背“气候影响人口”，没有指出气候类型图上的对应区域"}
+          ]
+        },
+        {
+          "question_id": "s5q2",
+          "type": "open",
+          "text": "切换到地形三级阶梯图，人口主要集中在哪一级阶梯？为什么？",
+          "options": [],
+          "answer_index": null,
+          "expected_points": ["主要集中在第三级阶梯（东部平原丘陵）", "平原地势低平、开发难度小", "第一级阶梯青藏高原高寒、人口少", "地形影响交通与农业"],
+          "misconceptions": [
+            {"tag": "忽略阶梯概念", "description": "只说“东部人多”，没有用三级阶梯的语言落到地形证据"}
+          ]
+        },
+        {
+          "question_id": "s5q3",
+          "type": "open",
+          "text": "打开主要河流图，为什么西北干旱区人口多沿河流和绿洲分布？",
+          "options": [],
+          "answer_index": null,
+          "expected_points": ["干旱区水源是限制性因素", "河流沿岸水源充足", "绿洲农业支撑人口集聚", "水系格局塑造人口分布"],
+          "misconceptions": [
+            {"tag": "水源作用泛化", "description": "只说“有水有人”，没有说明干旱区水源稀缺使人口呈点状/线状集聚"}
+          ]
+        },
+        {
+          "question_id": "s5q4",
+          "type": "open",
+          "text": "打开人均GDP图，经济因素如何强化自然条件对人口分布的影响？这体现了怎样的地理思维？",
+          "options": [],
+          "answer_index": null,
+          "expected_points": ["东部经济发达、就业机会多，进一步吸引人口", "经济集聚强化了自然条件的优势", "自然与人文因素共同作用、相互叠加", "地理要素相互联系、综合作用"],
+          "misconceptions": [
             {"tag": "自然人文割裂", "description": "认为只有自然因素起作用，忽略经济、交通等人文因素的强化作用"}
           ]
         }
       ],
-      "assistant_prompts": ["请分别举一个自然因素和一个人文因素影响人口分布的中国实例，并说明地图上能看到的证据。"]
+      "assistant_prompts": ["请按气候→地形→河流→植被→经济的顺序，各举一个地图证据说明因素如何影响人口分布，最后收束到“自然与人文共同作用”的地理思维。"]
     },
     {
       "stage_id": "s6",
-      "title": "城市尺度补充：长三角为什么密",
-      "minutes": 5,
+      "title": "城市案例：上海人口分布、密度差异与老龄化",
+      "minutes": 8,
       "scene": {
         "basemap_id": "amap_light",
         "templates": ["population_density"],
@@ -249,34 +349,83 @@
           "builtin_population_migration": false,
           "generated_hu_line": false
         },
-        "view": {"center": [120.2, 31.3], "zoom": 7},
+        "catalog_layers": ["shanghai_population_density", "china_aging_rate_province"],
+        "view": {"center": [121.47, 31.23], "zoom": 8},
         "annotations": [
-          {"text": "长三角城市群", "position": [120.2, 31.3]}
+          {"text": "浦东新区（人口最多 568 万）", "position": [121.54, 31.22]},
+          {"text": "黄浦区（密度最高 3.2 万/km²）", "position": [121.49, 31.23]},
+          {"text": "崇明区（密度最低 451/km²）", "position": [121.4, 31.62]}
         ],
         "visual_query": null
       },
       "script": [
-        "我们把视角拉近到长三角。为什么上海及长三角地区能形成这么高的人口密度和人口吸引力？"
+        "我们把视角落到上海。上海是典型的高人口密度超大城市，七普常住人口约 2487 万。",
+        "读图要点：浦东新区人口最多（约 568 万），黄浦区密度最高（约 3.2 万人/km²），崇明区密度最低（约 451 人/km²，生态岛定位）。",
+        "本环节结合高考真题情境，在解题中学习、在学习中解题：先读分布，再析成因，最后看人口结构（老龄化）。"
       ],
       "questions": [
         {
           "question_id": "s6q1",
+          "type": "choice",
+          "text": "（高考情境）读上海市各区人口密度图，关于上海人口空间分布的描述，正确的是？",
+          "options": ["各区密度均匀、相差不大", "中心城区密度高、远郊低，呈圈层结构", "只有浦东人口多，其他区都很少", "由内陆向沿海递增"],
+          "answer_index": 1,
+          "expected_points": ["中心城区（黄浦等）密度最高", "远郊（崇明等）密度最低", "呈圈层结构", "沿地铁与新城多中心扩展"],
+          "misconceptions": [
+            {"tag": "误读分布模式", "description": "把多中心结构当成均匀或单向递变"}
+          ]
+        },
+        {
+          "question_id": "s6q2",
+          "type": "choice",
+          "text": "（高考情境）上海黄浦区人口密度远高于崇明区，其主要原因是？",
+          "options": ["黄浦区面积更大", "黄浦地处市中心、商业与公共服务高度集聚，崇明以生态岛为主", "黄浦区气候条件更好", "崇明区地形过于崎岖"],
+          "answer_index": 1,
+          "expected_points": ["黄浦为市中心、功能集聚", "崇明为生态岛、开发受限", "经济功能与规划定位决定密度", "非自然条件差异主导"],
+          "misconceptions": [
+            {"tag": "归因自然条件", "description": "用气候/地形解释中心城区与生态岛的密度差，忽略功能与规划"}
+          ]
+        },
+        {
+          "question_id": "s6q3",
           "type": "open",
-          "text": "长三角地区高人口密度的形成，主要有哪些人文原因？",
+          "text": "（高考情境）结合上海实际，简述上海常住人口规模大且持续增长的主要人文原因。",
           "options": [],
           "answer_index": null,
-          "expected_points": ["经济发达就业多", "交通便利对外联系强", "城市化水平高、公共服务完善", "历史开发基础好"],
+          "expected_points": ["经济发达、就业机会多", "综合交通枢纽、对外联系强", "城市化水平高、公共服务完善", "产业、教育、医疗资源吸引人口迁入"],
           "misconceptions": [
             {"tag": "只谈自然条件", "description": "只回答地形平坦、气候湿润，没有触及经济、交通、城市化等人文动力"}
           ]
+        },
+        {
+          "question_id": "s6q4",
+          "type": "open",
+          "text": "（高考情境）七普显示上海 65 岁及以上人口比重约 16.3%，高于全国平均水平（约 13.5%）。分析上海人口老龄化的主要原因及影响。",
+          "options": [],
+          "answer_index": null,
+          "expected_points": ["医疗水平高、人均寿命长", "出生率低、年轻人口比重下降", "虽有人口迁入但不抵消老龄结构", "影响：劳动力供给趋紧、养老与医疗压力增大、银发经济机遇"],
+          "misconceptions": [
+            {"tag": "迁移抵消老龄化", "description": "认为人口大量流入就不会老龄化，忽视流入以劳动年龄为主、不改变老龄基数"}
+          ]
+        },
+        {
+          "question_id": "s6q5",
+          "type": "open",
+          "text": "（高考情境）结合上海自然资源和人文经济条件，评价上海的人口容量。",
+          "options": [],
+          "answer_index": null,
+          "expected_points": ["自然：土地与水资源有限但气候宜居", "人文：经济科技强、交通开放、资源调配能力强", "开放区域人口容量大于封闭区域", "受资源、环境、经济、科技共同制约"],
+          "misconceptions": [
+            {"tag": "单因素估容量", "description": "只用土地或水资源单一估量，忽视科技与开放对容量的提升"}
+          ]
         }
       ],
-      "assistant_prompts": ["请结合当前长三角视图，说明经济、交通与城市化如何共同推高区域人口密度。"]
+      "assistant_prompts": ["请按“读分布→析密度差异成因→析老龄化→评人口容量”的顺序收束上海案例，每步都回到地图与数据证据，体现解题与学习的统一。"]
     },
     {
       "stage_id": "s7",
       "title": "课堂总结：证据链定格",
-      "minutes": 4,
+      "minutes": 3,
       "scene": {
         "basemap_id": "amap_light",
         "templates": ["population_distribution", "hu_line_comparison"],
@@ -286,6 +435,7 @@
           "builtin_population_migration": false,
           "generated_hu_line": true
         },
+        "catalog_layers": [],
         "view": {"center": [104.0, 35.0], "zoom": 4},
         "annotations": [
           {"text": "黑河", "position": [127.53, 50.24]},
@@ -294,11 +444,11 @@
         "visual_query": null
       },
       "script": [
-        "描述人口分布四步：先说总体是否均匀，再说哪里多哪里少，再找分界线或集聚区，最后从自然和人文因素解释。",
-        "现在导出当前地图截图，作为本节课共同完成的证据链：人口分布现象、胡焕庸线、东西差异和课堂标注都在里面。"
+        "描述人口分布四步：先说总体是否均匀，再说哪里多哪里少，再找分界线或集聚区，最后从自然（水土气生）和人文因素解释。",
+        "今天我们还用上海案例把“宏观格局—区域案例—人口结构”连了起来。现在导出当前地图截图，作为本节课共同完成的证据链。"
       ],
       "questions": [],
-      "assistant_prompts": ["请把本节课的四步描述法整理成一段可以直接抄在笔记上的总结。"]
+      "assistant_prompts": ["请把本节课的四步描述法整理成一段可以直接抄在笔记上的总结，并点出自然与人文共同作用的地理思维。"]
     },
     {
       "stage_id": "s8",
@@ -313,6 +463,7 @@
           "builtin_population_migration": false,
           "generated_hu_line": true
         },
+        "catalog_layers": [],
         "view": {"center": [104.0, 35.0], "zoom": 4},
         "annotations": [],
         "visual_query": null
