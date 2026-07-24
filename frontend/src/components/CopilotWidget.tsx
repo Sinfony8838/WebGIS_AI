@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { getSpeechRecognitionConstructor, getSpeechRecognitionErrorMessage, type BrowserSpeechRecognition } from "../speechRecognition";
 import type { ChatMessage, JobRecord } from "../types";
+import { TeachingPet } from "./TeachingPet";
 
 type PanelRect = {
   x: number;
@@ -53,30 +54,6 @@ function pickThinkingLabel(stages: Array<[string, { status: string; summary?: st
     return stageVerbs[running[0]] || "正在思考";
   }
   return "正在思考";
-}
-
-/**
- * Shared face artwork used in both the collapsed orb and the expanded
- * header avatar. Same DOM, identical class structure — the only
- * difference is the class prefix, which scopes the sizing rules in
- * styles.css. This keeps the assistant character visually identical
- * across states.
- */
-function AssistantFace({ variant }: { variant: "orb" | "avatar" }) {
-  const prefix = variant === "orb" ? "copilot-orb" : "copilot-avatar";
-  return (
-    <>
-      <span className={`${prefix}-ear left`} aria-hidden="true" />
-      <span className={`${prefix}-ear right`} aria-hidden="true" />
-      <span className={`${prefix}-face`}>
-        <span className={`${prefix}-sheen`} aria-hidden="true" />
-        <span className={`${prefix}-mouth`} aria-hidden="true" />
-        <span className={`${prefix}-blush left`} aria-hidden="true" />
-        <span className={`${prefix}-blush right`} aria-hidden="true" />
-        <span className={`${prefix}-pulse`} aria-hidden="true" />
-      </span>
-    </>
-  );
 }
 
 function roleLabel(role: string): string {
@@ -150,7 +127,8 @@ function MicrophoneIcon({ active }: { active: boolean }) {
   );
 }
 
-const ORB_SIZE = 72;
+const ORB_WIDTH = 96;
+const ORB_HEIGHT = 150;
 const MIN_WIDTH = 440;
 const MIN_HEIGHT = 420;
 const PANEL_STORAGE_KEY = "webgis-ai-copilot-panel-v2";
@@ -182,8 +160,8 @@ function defaultOrbPosition(): Point {
   const viewportWidth = safeWindowWidth();
   const viewportHeight = safeWindowHeight();
   return {
-    x: Math.max(24, viewportWidth - ORB_SIZE - 36),
-    y: Math.max(140, viewportHeight - ORB_SIZE - 120)
+    x: Math.max(24, viewportWidth - ORB_WIDTH - 36),
+    y: Math.max(140, viewportHeight - ORB_HEIGHT - 120)
   };
 }
 
@@ -259,12 +237,12 @@ function snapOrb(point: Point): Point {
   const viewportWidth = safeWindowWidth();
   const viewportHeight = safeWindowHeight();
   const margin = 14;
-  const maxX = Math.max(margin, viewportWidth - ORB_SIZE - margin);
-  const maxY = Math.max(margin, viewportHeight - ORB_SIZE - margin);
+  const maxX = Math.max(margin, viewportWidth - ORB_WIDTH - margin);
+  const maxY = Math.max(margin, viewportHeight - ORB_HEIGHT - margin);
   const distanceToLeft = point.x;
-  const distanceToRight = viewportWidth - point.x - ORB_SIZE;
+  const distanceToRight = viewportWidth - point.x - ORB_WIDTH;
   const distanceToTop = point.y;
-  const distanceToBottom = viewportHeight - point.y - ORB_SIZE;
+  const distanceToBottom = viewportHeight - point.y - ORB_HEIGHT;
   const nearestDistance = Math.min(distanceToLeft, distanceToRight, distanceToTop, distanceToBottom);
 
   if (nearestDistance === distanceToLeft) {
@@ -301,8 +279,8 @@ function snaplessOrb(point: Point): Point {
   const viewportHeight = safeWindowHeight();
   const margin = 14;
   return {
-    x: clamp(point.x, margin, Math.max(margin, viewportWidth - ORB_SIZE - margin)),
-    y: clamp(point.y, margin, Math.max(margin, viewportHeight - ORB_SIZE - margin))
+    x: clamp(point.x, margin, Math.max(margin, viewportWidth - ORB_WIDTH - margin)),
+    y: clamp(point.y, margin, Math.max(margin, viewportHeight - ORB_HEIGHT - margin))
   };
 }
 
@@ -336,6 +314,7 @@ export function CopilotWidget({
     snapOrb(normalizeOrbPosition(readStorage<Point | null>(ORB_STORAGE_KEY, null)))
   );
   const [unreadCount, setUnreadCount] = useState(0);
+  const [welcomeToken, setWelcomeToken] = useState(0);
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>(() => initialVoiceStatus(speechSupported));
   const [voiceStatusText, setVoiceStatusText] = useState<string>(() => initialVoiceText(speechSupported));
   const [lastTranscript, setLastTranscript] = useState("");
@@ -549,6 +528,7 @@ export function CopilotWidget({
     preventRestoreOnClickRef.current = false;
     setUnreadCount(0);
     setPanelRect((previous) => normalizePanelRect(previous));
+    setWelcomeToken((token) => token + 1);
     setMinimized(false);
   }
 
@@ -656,7 +636,7 @@ export function CopilotWidget({
       <div className="copilot-orb-shell" style={{ left: orbPosition.x, top: orbPosition.y }}>
         <button
           type="button"
-          className={`copilot-orb ${busy ? "busy" : ""}`}
+          className="copilot-orb"
           aria-label="展开智能助教"
           onClick={() => {
             if (preventRestoreOnClickRef.current) {
@@ -698,7 +678,7 @@ export function CopilotWidget({
           }}
         >
           <span className="copilot-orb-body">
-            <AssistantFace variant="orb" />
+            <TeachingPet busy={busy} requiresConfirmation={requiresConfirmation} stages={currentJob?.stages} variant="orb" welcomeToken={welcomeToken} />
           </span>
           <span className="copilot-orb-label">助教</span>
           {unreadCount ? <span className="copilot-unread">{unreadCount}</span> : null}
@@ -714,9 +694,7 @@ export function CopilotWidget({
     >
       <header className="copilot-widget-header" onPointerDown={(event) => startDrag("panel", event, panelRect)}>
         <div className="copilot-header-identity">
-          <div className={`copilot-avatar ${busy ? "busy" : ""}`} aria-hidden="true">
-            <AssistantFace variant="avatar" />
-          </div>
+          <TeachingPet busy={busy} requiresConfirmation={requiresConfirmation} stages={currentJob?.stages} variant="header" welcomeToken={welcomeToken} />
           <div className="copilot-title-copy">
             <p className="copilot-eyebrow">Professional Teaching Agent</p>
             <h2>专业教学智能体</h2>

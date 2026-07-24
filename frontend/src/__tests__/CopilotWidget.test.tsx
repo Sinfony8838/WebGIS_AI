@@ -96,6 +96,7 @@ describe("CopilotWidget", () => {
 
   it("renders messages, submits input, and can minimize", () => {
     const { onSubmit } = renderWidget();
+    expect(screen.getByTestId("teaching-pet")).toHaveAttribute("data-pose", "wave");
 
     expect(screen.getByText("课堂助教已准备就绪。")).toBeInTheDocument();
     fireEvent.submit(screen.getByTestId("copilot-input").closest("form")!);
