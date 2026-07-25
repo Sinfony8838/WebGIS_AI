@@ -315,6 +315,7 @@ export function CopilotWidget({
     snapOrb(normalizeOrbPosition(readStorage<Point | null>(ORB_STORAGE_KEY, null)))
   );
   const [unreadCount, setUnreadCount] = useState(0);
+  const [orbDragging, setOrbDragging] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>(() => initialVoiceStatus(speechSupported));
   const [voiceStatusText, setVoiceStatusText] = useState<string>(() => initialVoiceText(speechSupported));
   const [lastTranscript, setLastTranscript] = useState("");
@@ -413,6 +414,9 @@ export function CopilotWidget({
 
     if (!state.moved && exceedsDragThreshold({ x: state.startX, y: state.startY }, pointer)) {
       state.moved = true;
+      if (state.kind === "orb") {
+        setOrbDragging(true);
+      }
     }
 
     if (state.kind === "orb") {
@@ -455,12 +459,16 @@ export function CopilotWidget({
     if (pointer) {
       if (!state.moved && exceedsDragThreshold({ x: state.startX, y: state.startY }, pointer)) {
         state.moved = true;
+        if (state.kind === "orb") {
+          setOrbDragging(true);
+        }
       }
     }
 
     if (state.kind === "orb") {
       setOrbPosition((previous) => snapOrb(previous));
       preventRestoreOnClickRef.current = state.moved;
+      setOrbDragging(false);
     }
 
     dragStateRef.current = null;
@@ -512,6 +520,9 @@ export function CopilotWidget({
     event.preventDefault();
     const baseRect = rect || (kind === "orb" ? orbPosition : panelRect);
     const panelCandidate = baseRect as Partial<PanelRect>;
+    if (kind === "orb") {
+      setOrbDragging(false);
+    }
     dragStateRef.current = {
       kind,
       startX: event.clientX,
@@ -684,6 +695,7 @@ export function CopilotWidget({
               minimized={minimized}
               isListening={isListening}
               size="orb"
+              dragging={orbDragging}
               hasWelcomed={hasWelcomed}
             />
           </span>

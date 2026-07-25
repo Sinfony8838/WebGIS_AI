@@ -247,6 +247,14 @@ describe("TeachingPet", () => {
     expect(screen.getByTestId("teaching-pet-header")).toHaveAttribute("data-pose", "wave");
   });
 
+  it("uses the original idle sticker with walking motion while the orb is dragged", () => {
+    renderPet({ minimized: true, dragging: true }, "orb");
+
+    const pet = screen.getByTestId("teaching-pet-orb");
+    expect(pet).toHaveAttribute("data-pose", "idle");
+    expect(pet).toHaveClass("walking");
+  });
+
   it("does not add looping animation classes when reduced motion is preferred", () => {
     window.matchMedia = vi.fn().mockImplementation((query: string) => ({
       matches: query === "(prefers-reduced-motion: reduce)",

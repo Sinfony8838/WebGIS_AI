@@ -3068,7 +3068,15 @@ button {
   animation: petFloat 3.2s ease-in-out infinite;
 }
 
+.teaching-pet.walking {
+  animation: petWalk 0.34s steps(2, end) infinite;
+}
+
 .teaching-pet.animated.reduced {
+  animation: none;
+}
+
+.teaching-pet.walking.reduced {
   animation: none;
 }
 
@@ -3083,6 +3091,15 @@ button {
   }
   50% {
     transform: translateY(-4px);
+  }
+}
+
+@keyframes petWalk {
+  0%, 100% {
+    transform: translate(0, 0) rotate(-1deg);
+  }
+  50% {
+    transform: translate(3px, -5px) rotate(1deg);
   }
 }
 

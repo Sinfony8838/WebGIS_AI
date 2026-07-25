@@ -9,6 +9,8 @@ type Props = {
   minimized: boolean;
   isListening: boolean;
   size: "header" | "orb";
+  /** True only after the floating orb crosses the drag threshold. */
+  dragging?: boolean;
   /** Optional: override the default welcome wave on first expansion. */
   hasWelcomed?: boolean;
 };
@@ -40,10 +42,11 @@ function useReducedMotion(): boolean {
   return reduced;
 }
 
-function useStablePetState(target: PetState, reducedMotion: boolean): PetState {
+function useStablePetState(target: PetState, reducedMotion: boolean, forceImmediate = false): PetState {
   const [displayed, setDisplayed] = useState<PetState>(target);
   const lastChangeRef = useRef<number>(Date.now());
   const pendingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wasForcedRef = useRef(false);
 
   const isImmediatePose = (pose: PetPoseId) =>
     pose === "success" || pose === "error" || pose === "sleep";
@@ -61,11 +64,14 @@ function useStablePetState(target: PetState, reducedMotion: boolean): PetState {
     // Feedback poses (success / error) and sleep/wake transitions should be
     // immediate; the 450ms stability window only applies to work poses so
     // rapid stage switches do not cause flicker.
-    if (reducedMotion || isImmediatePose(target.pose) || isImmediatePose(displayed.pose)) {
+    if (reducedMotion || forceImmediate || wasForcedRef.current || isImmediatePose(target.pose) || isImmediatePose(displayed.pose)) {
       setDisplayed(target);
       lastChangeRef.current = Date.now();
+      wasForcedRef.current = forceImmediate;
       return;
     }
+
+    wasForcedRef.current = forceImmediate;
 
     const now = Date.now();
     const elapsed = now - lastChangeRef.current;
@@ -90,7 +96,7 @@ function useStablePetState(target: PetState, reducedMotion: boolean): PetState {
         pendingRef.current = null;
       }
     };
-  }, [target, reducedMotion]);
+  }, [target, reducedMotion, forceImmediate]);
 
   return displayed;
 }
@@ -205,6 +211,7 @@ export function TeachingPet({
   minimized,
   isListening,
   size,
+  dragging = false,
   hasWelcomed = true
 }: Props) {
   const reducedMotion = useReducedMotion();
@@ -212,6 +219,12 @@ export function TeachingPet({
   const canSleep = useSleepReady(minimized, busy, isListening);
 
   const targetState = useMemo(() => {
+    // The source sheet has no separate walking frame. Keep its original idle
+    // sticker and apply the walking motion class while the teacher drags it.
+    if (dragging && minimized) {
+      return { pose: "idle" as PetPoseId, label: "移动中" };
+    }
+
     // First expansion shows a welcome wave before falling back to normal logic.
     if (!hasWelcomed && !minimized && !busy) {
       return { pose: "wave" as PetPoseId, label: "你好" };
@@ -225,9 +238,9 @@ export function TeachingPet({
       lastOutcome: outcome,
       canSleep
     });
-  }, [busy, currentJob, minimized, isListening, outcome, canSleep, hasWelcomed]);
+  }, [busy, currentJob, minimized, isListening, outcome, canSleep, hasWelcomed, dragging]);
 
-  const displayedState = useStablePetState(targetState, reducedMotion);
+  const displayedState = useStablePetState(targetState, reducedMotion, dragging);
   const pose = getPoseById(displayedState.pose);
 
   const sizeClass = size === "orb" ? "teaching-pet-orb" : "teaching-pet-header";
@@ -241,7 +254,7 @@ export function TeachingPet({
 
   return (
     <span
-      className={`teaching-pet ${sizeClass} ${motionClass}`}
+      className={`teaching-pet ${sizeClass} ${motionClass}${dragging ? " walking" : ""}`}
       aria-hidden="true"
       draggable={false}
       data-pose={displayedState.pose}
