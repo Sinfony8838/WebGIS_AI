@@ -3025,15 +3025,10 @@ button {
   min-width: 0;
 }
 
-/* ── Assistant face — shared visual identity ──
-   Both the collapsed orb and the expanded header avatar render the
-   same `<AssistantFace>` DOM tree. Their visual identities are kept
-   in sync by mirroring the styling, only scaled down for the avatar. */
-
 .copilot-avatar {
   position: relative;
   width: 52px;
-  height: 52px;
+  height: 82px;
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
@@ -3047,8 +3042,13 @@ button {
 /* ── Teaching pet avatar / orb ───────────────────────────────────────── */
 
 .teaching-pet {
+  --pet-column: 0;
+  --pet-row: 0;
   display: block;
-  object-fit: contain;
+  background-position: calc(var(--pet-column) * 25%) calc(var(--pet-row) * 50%);
+  background-repeat: no-repeat;
+  background-size: 500% auto;
+  image-rendering: pixelated;
   pointer-events: none;
   user-select: none;
   transition: opacity 0.18s ease, transform 0.18s ease;
@@ -3056,12 +3056,12 @@ button {
 
 .teaching-pet-header {
   width: 48px;
-  height: 48px;
+  height: 80px;
 }
 
 .teaching-pet-orb {
-  width: 68px;
-  height: 68px;
+  width: 90px;
+  height: 150px;
 }
 
 .teaching-pet.animated {
@@ -3572,8 +3572,8 @@ button {
 
 .copilot-orb {
   position: relative;
-  width: 72px;
-  height: 72px;
+  width: 96px;
+  height: 150px;
   padding: 0;
   border-radius: 50%;
   border: 0;

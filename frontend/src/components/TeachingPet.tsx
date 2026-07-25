@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { JobRecord } from "../types";
 import { getPoseById, type PetPoseId } from "../assets/teaching-pet/manifest";
 import { deriveTeachingPetState, type PetState } from "./teachingPetState";
@@ -17,6 +17,7 @@ const SUCCESS_HOLD_MS = 1600;
 const ERROR_HOLD_MS = 3000;
 const SLEEP_DELAY_MS = 75000;
 const MIN_STABLE_MS = 450;
+const PET_SPRITE_URL = new URL("../assets/teaching-pet/cloud-teacher-sprite.png", import.meta.url).href;
 
 function useReducedMotion(): boolean {
   const [reduced, setReduced] = useState(() => {
@@ -232,15 +233,20 @@ export function TeachingPet({
   const sizeClass = size === "orb" ? "teaching-pet-orb" : "teaching-pet-header";
   const motionClass = reducedMotion ? "reduced" : "animated";
 
+  const style = {
+    backgroundImage: `url("${PET_SPRITE_URL}")`,
+    "--pet-column": pose.column,
+    "--pet-row": pose.row
+  } as CSSProperties;
+
   return (
-    <img
+    <span
       className={`teaching-pet ${sizeClass} ${motionClass}`}
-      src={pose.src}
-      alt=""
       aria-hidden="true"
       draggable={false}
       data-pose={displayedState.pose}
       data-testid={`teaching-pet-${size}`}
+      style={style}
       title={pose.alt}
     />
   );

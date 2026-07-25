@@ -47,7 +47,11 @@ describe("TeachingPet", () => {
 
   it("renders the header and orb variants", () => {
     const { rerender } = renderPet({}, "header");
-    expect(screen.getByTestId("teaching-pet-header")).toBeInTheDocument();
+    const headerPet = screen.getByTestId("teaching-pet-header");
+    expect(headerPet).toBeInTheDocument();
+    expect(headerPet.tagName).toBe("SPAN");
+    expect(headerPet).not.toHaveAttribute("src");
+    expect(headerPet.style.backgroundImage).toContain("cloud-teacher-sprite.png");
 
     rerender(
       <TeachingPet

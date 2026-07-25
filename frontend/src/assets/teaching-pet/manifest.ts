@@ -1,12 +1,8 @@
 /**
  * Teaching pet asset manifest.
  *
- * This file is the single source of truth for pose IDs, asset paths and
- * accessibility labels. Business logic lives in `teachingPetState.ts`; the
- * component only reads from this manifest.
- *
- * NOTE: The current assets are SVG placeholders. Replace them with the
- * production WebP/PNG frames delivered by design without touching the code.
+ * This file maps state IDs to cells in the user-supplied PNG sprite sheet.
+ * The artwork itself is never reconstructed or synthesized by the UI.
  */
 
 export type PetPoseId =
@@ -28,31 +24,27 @@ export type PetPoseId =
 
 export type PetPose = {
   id: PetPoseId;
-  src: string;
+  column: number;
+  row: number;
   alt: string;
 };
 
-function poseUrl(name: string): string {
-  // Vite resolves `new URL(..., import.meta.url)` to the final asset URL.
-  return new URL(`./${name}.svg`, import.meta.url).href;
-}
-
 export const PET_POSES: PetPose[] = [
-  { id: "idle", src: poseUrl("idle"), alt: "平静待命" },
-  { id: "wave", src: poseUrl("wave"), alt: "挥手" },
-  { id: "tablet", src: poseUrl("tablet"), alt: "平板规划" },
-  { id: "map", src: poseUrl("map"), alt: "看地图" },
-  { id: "search", src: poseUrl("search"), alt: "检索" },
-  { id: "laptop", src: poseUrl("laptop"), alt: "使用电脑" },
-  { id: "sleep", src: poseUrl("sleep"), alt: "睡眠" },
-  { id: "success", src: poseUrl("success"), alt: "完成" },
-  { id: "think", src: poseUrl("think"), alt: "思考" },
-  { id: "confirm", src: poseUrl("confirm"), alt: "待确认" },
-  { id: "idea", src: poseUrl("idea"), alt: "灵感" },
-  { id: "explain", src: poseUrl("explain"), alt: "讲解" },
-  { id: "turn", src: poseUrl("turn"), alt: "转身" },
-  { id: "error", src: poseUrl("error"), alt: "沮丧" },
-  { id: "celebrate", src: poseUrl("celebrate"), alt: "庆祝" }
+  { id: "idle", column: 0, row: 0, alt: "平静待命" },
+  { id: "wave", column: 1, row: 0, alt: "挥手" },
+  { id: "tablet", column: 2, row: 0, alt: "平板规划" },
+  { id: "map", column: 3, row: 0, alt: "看地图" },
+  { id: "search", column: 4, row: 0, alt: "检索" },
+  { id: "laptop", column: 0, row: 1, alt: "使用电脑" },
+  { id: "sleep", column: 1, row: 1, alt: "睡眠" },
+  { id: "success", column: 2, row: 1, alt: "完成" },
+  { id: "think", column: 3, row: 1, alt: "思考" },
+  { id: "confirm", column: 4, row: 1, alt: "待确认" },
+  { id: "idea", column: 0, row: 2, alt: "灵感" },
+  { id: "explain", column: 1, row: 2, alt: "讲解" },
+  { id: "turn", column: 2, row: 2, alt: "转身" },
+  { id: "error", column: 3, row: 2, alt: "沮丧" },
+  { id: "celebrate", column: 4, row: 2, alt: "庆祝" }
 ];
 
 const POSE_BY_ID: Record<PetPoseId, PetPose> = Object.fromEntries(

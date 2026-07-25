@@ -127,7 +127,8 @@ function MicrophoneIcon({ active }: { active: boolean }) {
   );
 }
 
-const ORB_SIZE = 72;
+const ORB_WIDTH = 96;
+const ORB_HEIGHT = 150;
 const MIN_WIDTH = 440;
 const MIN_HEIGHT = 420;
 const PANEL_STORAGE_KEY = "webgis-ai-copilot-panel-v2";
@@ -159,8 +160,8 @@ function defaultOrbPosition(): Point {
   const viewportWidth = safeWindowWidth();
   const viewportHeight = safeWindowHeight();
   return {
-    x: Math.max(24, viewportWidth - ORB_SIZE - 36),
-    y: Math.max(140, viewportHeight - ORB_SIZE - 120)
+    x: Math.max(24, viewportWidth - ORB_WIDTH - 36),
+    y: Math.max(140, viewportHeight - ORB_HEIGHT - 120)
   };
 }
 
@@ -236,12 +237,12 @@ function snapOrb(point: Point): Point {
   const viewportWidth = safeWindowWidth();
   const viewportHeight = safeWindowHeight();
   const margin = 14;
-  const maxX = Math.max(margin, viewportWidth - ORB_SIZE - margin);
-  const maxY = Math.max(margin, viewportHeight - ORB_SIZE - margin);
+  const maxX = Math.max(margin, viewportWidth - ORB_WIDTH - margin);
+  const maxY = Math.max(margin, viewportHeight - ORB_HEIGHT - margin);
   const distanceToLeft = point.x;
-  const distanceToRight = viewportWidth - point.x - ORB_SIZE;
+  const distanceToRight = viewportWidth - point.x - ORB_WIDTH;
   const distanceToTop = point.y;
-  const distanceToBottom = viewportHeight - point.y - ORB_SIZE;
+  const distanceToBottom = viewportHeight - point.y - ORB_HEIGHT;
   const nearestDistance = Math.min(distanceToLeft, distanceToRight, distanceToTop, distanceToBottom);
 
   if (nearestDistance === distanceToLeft) {
@@ -278,8 +279,8 @@ function snaplessOrb(point: Point): Point {
   const viewportHeight = safeWindowHeight();
   const margin = 14;
   return {
-    x: clamp(point.x, margin, Math.max(margin, viewportWidth - ORB_SIZE - margin)),
-    y: clamp(point.y, margin, Math.max(margin, viewportHeight - ORB_SIZE - margin))
+    x: clamp(point.x, margin, Math.max(margin, viewportWidth - ORB_WIDTH - margin)),
+    y: clamp(point.y, margin, Math.max(margin, viewportHeight - ORB_HEIGHT - margin))
   };
 }
 
