@@ -50,8 +50,9 @@ describe("TeachingPet", () => {
     const headerPet = screen.getByTestId("teaching-pet-header");
     expect(headerPet).toBeInTheDocument();
     expect(headerPet.tagName).toBe("SPAN");
-    expect(headerPet).not.toHaveAttribute("src");
-    expect(headerPet.style.backgroundImage).toContain("cloud-teacher-sprite.png");
+    const headerSprite = headerPet.querySelector("img.teaching-pet-sprite");
+    expect(headerSprite).toHaveAttribute("src", expect.stringContaining("cloud-teacher-sprite.png"));
+    expect(headerPet.querySelectorAll("img.teaching-pet-sprite")).toHaveLength(1);
 
     rerender(
       <TeachingPet

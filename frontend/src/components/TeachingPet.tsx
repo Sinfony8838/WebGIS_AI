@@ -300,10 +300,12 @@ export function TeachingPet({
   const sizeClass = size === "orb" ? "teaching-pet-orb" : "teaching-pet-header";
   const motionClass = reducedMotion ? "reduced" : "animated";
 
-  const style = {
-    backgroundImage: `url("${PET_SPRITE_URL}")`,
-    "--pet-column": pose.column,
-    "--pet-row": pose.row
+  // The outer element is the fixed-size viewport for one sheet cell.  Keeping
+  // the image as a child instead of a CSS background gives us an explicit
+  // clipping boundary: a neighbouring row or column can never be painted
+  // outside the selected pose.
+  const spriteStyle = {
+    transform: `translate(-${pose.column * 20}%, -${(pose.row * 100) / 3}%)`
   } as CSSProperties;
 
   return (
@@ -313,9 +315,10 @@ export function TeachingPet({
       draggable={false}
       data-pose={displayedState.pose}
       data-testid={`teaching-pet-${size}`}
-      style={style}
       title={pose.alt}
-    />
+    >
+      <img className="teaching-pet-sprite" src={PET_SPRITE_URL} alt="" draggable={false} style={spriteStyle} />
+    </span>
   );
 }
 

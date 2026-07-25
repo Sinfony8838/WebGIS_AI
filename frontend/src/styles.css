@@ -3042,16 +3042,28 @@ button {
 /* ── Teaching pet avatar / orb ───────────────────────────────────────── */
 
 .teaching-pet {
-  --pet-column: 0;
-  --pet-row: 0;
+  position: relative;
   display: block;
-  background-position: calc(var(--pet-column) * 25%) calc(var(--pet-row) * 50%);
-  background-repeat: no-repeat;
-  background-size: 500% auto;
+  overflow: hidden;
+  isolation: isolate;
+  contain: paint;
   image-rendering: pixelated;
   pointer-events: none;
   user-select: none;
   transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.teaching-pet-sprite {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  width: 500%;
+  height: auto;
+  max-width: none;
+  image-rendering: pixelated;
+  pointer-events: none;
+  user-select: none;
 }
 
 .teaching-pet-header {
