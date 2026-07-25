@@ -12,7 +12,7 @@ export type TeachingPetInput = {
   minimized: boolean;
   isListening: boolean;
   /** Force a feedback pose; cleared by the caller after its timer expires. */
-  lastOutcome: "success" | "error" | null;
+  lastOutcome: "success" | "celebrate" | "error" | null;
   /** True when the pet has been minimized and idle long enough to nap. */
   canSleep: boolean;
 };
@@ -54,7 +54,7 @@ export function getRunningStage(job: JobRecord | null): string | null {
  * Map the live teaching-agent state to a single pet pose.
  *
  * Priority (fixed):
- *   错误 > 等待确认 > 执行 > 规划/检索 > 完成反馈 > 睡眠 > 空闲
+ *   错误 > 等待确认 > 执行 > 规划/检索 > 完成/庆祝反馈 > 睡眠 > 空闲
  */
 export function deriveTeachingPetState(input: TeachingPetInput): PetState {
   const { busy, currentJob, minimized, isListening, lastOutcome, canSleep } = input;
@@ -62,6 +62,10 @@ export function deriveTeachingPetState(input: TeachingPetInput): PetState {
   // 1. Error feedback (highest priority).
   if (lastOutcome === "error") {
     return { pose: "error", label: "出错了" };
+  }
+
+  if (lastOutcome === "celebrate") {
+    return { pose: "celebrate", label: "完成，继续加油" };
   }
 
   // 2. Waiting for teacher confirmation.

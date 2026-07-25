@@ -16,8 +16,10 @@ type Props = {
 };
 
 const SUCCESS_HOLD_MS = 1600;
+const CELEBRATE_HOLD_MS = 1600;
 const ERROR_HOLD_MS = 3000;
 const SLEEP_DELAY_MS = 75000;
+const IDLE_POSE_INTERVAL_MS = 30000;
 const MIN_STABLE_MS = 450;
 const PET_SPRITE_URL = new URL("../assets/teaching-pet/cloud-teacher-sprite.png", import.meta.url).href;
 
@@ -110,8 +112,8 @@ function useStablePetState(target: PetState, reducedMotion: boolean, forceImmedi
 function useOutcomeFeedback(
   busy: boolean,
   currentJob: JobRecord | null
-): "success" | "error" | null {
-  const [outcome, setOutcome] = useState<"success" | "error" | null>(() =>
+): "success" | "celebrate" | "error" | null {
+  const [outcome, setOutcome] = useState<"success" | "celebrate" | "error" | null>(() =>
     currentJob?.error ? "error" : null
   );
   const prevBusyRef = useRef(busy);
@@ -141,8 +143,12 @@ function useOutcomeFeedback(
 
     if (outcome === "success") {
       timerRef.current = setTimeout(() => {
-        setOutcome((current) => (current === "success" ? null : current));
+        setOutcome((current) => (current === "success" ? "celebrate" : current));
       }, SUCCESS_HOLD_MS);
+    } else if (outcome === "celebrate") {
+      timerRef.current = setTimeout(() => {
+        setOutcome((current) => (current === "celebrate" ? null : current));
+      }, CELEBRATE_HOLD_MS);
     } else if (outcome === "error") {
       timerRef.current = setTimeout(() => {
         setOutcome((current) => (current === "error" ? null : current));
@@ -158,6 +164,33 @@ function useOutcomeFeedback(
   }, [outcome]);
 
   return outcome;
+}
+
+const IDLE_POSES: Array<{ pose: PetPoseId; label: string }> = [
+  { pose: "idle", label: "在线" },
+  { pose: "think", label: "静候思考" },
+  { pose: "idea", label: "有了教学灵感" },
+  { pose: "turn", label: "观察课堂" }
+];
+
+/** Rotate calm, source-sheet-only poses while the expanded pet is genuinely idle. */
+function useIdlePoseCycle(active: boolean): PetState {
+  const [index, setIndex] = useState(0);
+
+  useEffect(() => {
+    if (!active) {
+      setIndex(0);
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setIndex((current) => (current + 1) % IDLE_POSES.length);
+    }, IDLE_POSE_INTERVAL_MS);
+
+    return () => window.clearInterval(timer);
+  }, [active]);
+
+  return IDLE_POSES[index];
 }
 
 /**
@@ -217,6 +250,7 @@ export function TeachingPet({
   const reducedMotion = useReducedMotion();
   const outcome = useOutcomeFeedback(busy, currentJob);
   const canSleep = useSleepReady(minimized, busy, isListening);
+  const idlePose = useIdlePoseCycle(!busy && !minimized && !isListening && !dragging && !outcome && hasWelcomed);
 
   const targetState = useMemo(() => {
     // The source sheet has no separate walking frame. Keep its original idle
@@ -230,7 +264,7 @@ export function TeachingPet({
       return { pose: "wave" as PetPoseId, label: "你好" };
     }
 
-    return deriveTeachingPetState({
+    const derived = deriveTeachingPetState({
       busy,
       currentJob,
       minimized,
@@ -238,7 +272,9 @@ export function TeachingPet({
       lastOutcome: outcome,
       canSleep
     });
-  }, [busy, currentJob, minimized, isListening, outcome, canSleep, hasWelcomed, dragging]);
+
+    return derived.pose === "idle" && !minimized ? idlePose : derived;
+  }, [busy, currentJob, minimized, isListening, outcome, canSleep, hasWelcomed, dragging, idlePose]);
 
   const displayedState = useStablePetState(targetState, reducedMotion, dragging);
   const pose = getPoseById(displayedState.pose);

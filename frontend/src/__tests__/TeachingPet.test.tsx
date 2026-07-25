@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { TeachingPet } from "../components/TeachingPet";
 import type { JobRecord } from "../types";
 
@@ -168,7 +168,7 @@ describe("TeachingPet", () => {
     expect(screen.getByTestId("teaching-pet-header")).toHaveAttribute("data-pose", "confirm");
   });
 
-  it("shows success feedback after busy finishes and clears after a timeout", async () => {
+  it("shows success then celebrate feedback after busy finishes before returning to idle", async () => {
     const { rerender } = renderPet({
       busy: true,
       currentJob: makeJob({
@@ -189,7 +189,11 @@ describe("TeachingPet", () => {
 
     expect(screen.getByTestId("teaching-pet-header")).toHaveAttribute("data-pose", "success");
 
-    vi.advanceTimersByTime(2000);
+    act(() => vi.advanceTimersByTime(1700));
+
+    expect(screen.getByTestId("teaching-pet-header")).toHaveAttribute("data-pose", "celebrate");
+
+    act(() => vi.advanceTimersByTime(1700));
 
     await waitFor(() => {
       expect(screen.getByTestId("teaching-pet-header")).toHaveAttribute("data-pose", "idle");
@@ -245,6 +249,20 @@ describe("TeachingPet", () => {
   it("shows a welcome wave on first expansion", () => {
     renderPet({ minimized: false, hasWelcomed: false });
     expect(screen.getByTestId("teaching-pet-header")).toHaveAttribute("data-pose", "wave");
+  });
+
+  it("cycles appropriate original poses during a long expanded idle period", () => {
+    renderPet({ minimized: false, hasWelcomed: true });
+
+    const pet = screen.getByTestId("teaching-pet-header");
+    expect(pet).toHaveAttribute("data-pose", "idle");
+
+    act(() => vi.advanceTimersByTime(30000));
+    expect(pet).toHaveAttribute("data-pose", "think");
+    act(() => vi.advanceTimersByTime(30000));
+    expect(pet).toHaveAttribute("data-pose", "idea");
+    act(() => vi.advanceTimersByTime(30000));
+    expect(pet).toHaveAttribute("data-pose", "turn");
   });
 
   it("uses the original idle sticker with walking motion while the orb is dragged", () => {
