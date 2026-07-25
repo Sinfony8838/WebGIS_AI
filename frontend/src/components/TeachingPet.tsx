@@ -11,8 +11,8 @@ type Props = {
   size: "header" | "orb";
   /** True only after the floating orb crosses the drag threshold. */
   dragging?: boolean;
-  /** Optional: override the default welcome wave on first expansion. */
-  hasWelcomed?: boolean;
+  /** Increments each time the minimized assistant is restored. */
+  welcomeToken?: number;
 };
 
 const SUCCESS_HOLD_MS = 1600;
@@ -20,6 +20,7 @@ const CELEBRATE_HOLD_MS = 1600;
 const ERROR_HOLD_MS = 3000;
 const SLEEP_DELAY_MS = 75000;
 const IDLE_POSE_INTERVAL_MS = 30000;
+const WELCOME_HOLD_MS = 1400;
 const MIN_STABLE_MS = 450;
 const PET_SPRITE_URL = new URL("../assets/teaching-pet/cloud-teacher-sprite.png", import.meta.url).href;
 
@@ -245,12 +246,30 @@ export function TeachingPet({
   isListening,
   size,
   dragging = false,
-  hasWelcomed = true
+  welcomeToken = 0
 }: Props) {
   const reducedMotion = useReducedMotion();
   const outcome = useOutcomeFeedback(busy, currentJob);
   const canSleep = useSleepReady(minimized, busy, isListening);
-  const idlePose = useIdlePoseCycle(!busy && !minimized && !isListening && !dragging && !outcome && hasWelcomed);
+  const welcomedTokenRef = useRef(0);
+  const [welcoming, setWelcoming] = useState(false);
+
+  useEffect(() => {
+    if (welcomeToken <= welcomedTokenRef.current) {
+      return;
+    }
+    welcomedTokenRef.current = welcomeToken;
+    if (busy || minimized) {
+      setWelcoming(false);
+      return;
+    }
+
+    setWelcoming(true);
+    const timer = window.setTimeout(() => setWelcoming(false), WELCOME_HOLD_MS);
+    return () => window.clearTimeout(timer);
+  }, [busy, minimized, welcomeToken]);
+
+  const idlePose = useIdlePoseCycle(!busy && !minimized && !isListening && !dragging && !outcome && !welcoming);
 
   const targetState = useMemo(() => {
     // The source sheet has no separate walking frame. Keep its original idle
@@ -259,8 +278,7 @@ export function TeachingPet({
       return { pose: "idle" as PetPoseId, label: "移动中" };
     }
 
-    // First expansion shows a welcome wave before falling back to normal logic.
-    if (!hasWelcomed && !minimized && !busy) {
+    if (welcoming && !minimized && !busy) {
       return { pose: "wave" as PetPoseId, label: "你好" };
     }
 
@@ -274,9 +292,9 @@ export function TeachingPet({
     });
 
     return derived.pose === "idle" && !minimized ? idlePose : derived;
-  }, [busy, currentJob, minimized, isListening, outcome, canSleep, hasWelcomed, dragging, idlePose]);
+  }, [busy, currentJob, minimized, isListening, outcome, canSleep, welcoming, dragging, idlePose]);
 
-  const displayedState = useStablePetState(targetState, reducedMotion, dragging);
+  const displayedState = useStablePetState(targetState, reducedMotion, dragging || welcoming);
   const pose = getPoseById(displayedState.pose);
 
   const sizeClass = size === "orb" ? "teaching-pet-orb" : "teaching-pet-header";

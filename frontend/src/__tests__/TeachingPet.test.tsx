@@ -39,7 +39,7 @@ describe("TeachingPet", () => {
         minimized={false}
         isListening={false}
         size={size}
-        hasWelcomed={true}
+        welcomeToken={0}
         {...props}
       />
     );
@@ -60,7 +60,7 @@ describe("TeachingPet", () => {
         minimized={false}
         isListening={false}
         size="orb"
-        hasWelcomed={true}
+        welcomeToken={0}
       />
     );
     expect(screen.getByTestId("teaching-pet-orb")).toBeInTheDocument();
@@ -183,7 +183,7 @@ describe("TeachingPet", () => {
         minimized={false}
         isListening={false}
         size="header"
-        hasWelcomed={true}
+        welcomeToken={0}
       />
     );
 
@@ -239,20 +239,32 @@ describe("TeachingPet", () => {
         minimized={false}
         isListening={false}
         size="orb"
-        hasWelcomed={true}
+        welcomeToken={0}
       />
     );
 
     expect(screen.getByTestId("teaching-pet-orb")).toHaveAttribute("data-pose", "idle");
   });
 
-  it("shows a welcome wave on first expansion", () => {
-    renderPet({ minimized: false, hasWelcomed: false });
+  it("shows a short welcome wave when the assistant is restored", () => {
+    const { rerender } = renderPet({ minimized: false, welcomeToken: 0 });
+    rerender(
+      <TeachingPet
+        busy={false}
+        currentJob={null}
+        minimized={false}
+        isListening={false}
+        size="header"
+        welcomeToken={1}
+      />
+    );
     expect(screen.getByTestId("teaching-pet-header")).toHaveAttribute("data-pose", "wave");
+    act(() => vi.advanceTimersByTime(1400));
+    expect(screen.getByTestId("teaching-pet-header")).toHaveAttribute("data-pose", "idle");
   });
 
   it("cycles appropriate original poses during a long expanded idle period", () => {
-    renderPet({ minimized: false, hasWelcomed: true });
+    renderPet({ minimized: false, welcomeToken: 0 });
 
     const pet = screen.getByTestId("teaching-pet-header");
     expect(pet).toHaveAttribute("data-pose", "idle");

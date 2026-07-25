@@ -307,7 +307,7 @@ export function CopilotWidget({
   const [minimized, setMinimized] = useState<boolean>(() =>
     safeWindowWidth() <= 640 ? true : readStorage(STATE_STORAGE_KEY, true)
   );
-  const [hasWelcomed, setHasWelcomed] = useState(false);
+  const [welcomeToken, setWelcomeToken] = useState(0);
   const [panelRect, setPanelRect] = useState<PanelRect>(() =>
     normalizePanelRect(readStorage<PanelRect | null>(PANEL_STORAGE_KEY, null))
   );
@@ -540,7 +540,7 @@ export function CopilotWidget({
     setUnreadCount(0);
     setPanelRect((previous) => normalizePanelRect(previous));
     setMinimized(false);
-    setHasWelcomed(true);
+    setWelcomeToken((token) => token + 1);
   }
 
   function stopVoiceRecognition(manualStop = true) {
@@ -696,7 +696,7 @@ export function CopilotWidget({
               isListening={isListening}
               size="orb"
               dragging={orbDragging}
-              hasWelcomed={hasWelcomed}
+              welcomeToken={welcomeToken}
             />
           </span>
           <span className="copilot-orb-label">助教</span>
@@ -720,7 +720,7 @@ export function CopilotWidget({
               minimized={minimized}
               isListening={isListening}
               size="header"
-              hasWelcomed={hasWelcomed}
+              welcomeToken={welcomeToken}
             />
           </div>
           <div className="copilot-title-copy">
