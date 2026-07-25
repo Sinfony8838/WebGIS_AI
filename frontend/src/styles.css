@@ -3032,91 +3032,75 @@ button {
 
 .copilot-avatar {
   position: relative;
-  width: 44px;
-  height: 44px;
+  width: 52px;
+  height: 52px;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .copilot-avatar.busy {
-  animation: orbPulse 1.8s ease-in-out infinite;
+  /* Busy motion is handled by the inner .teaching-pet element. */
 }
 
-.copilot-avatar-ear {
-  position: absolute;
-  top: 12px;
-  width: 8px;
-  height: 14px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, rgba(171, 195, 255, 0.96), rgba(131, 160, 255, 0.74));
-  box-shadow: 0 0 12px rgba(151, 178, 255, 0.34);
+/* ── Teaching pet avatar / orb ───────────────────────────────────────── */
+
+.teaching-pet {
+  display: block;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
 }
 
-.copilot-avatar-ear.left {
-  left: 4px;
+.teaching-pet-header {
+  width: 48px;
+  height: 48px;
 }
 
-.copilot-avatar-ear.right {
-  right: 4px;
+.teaching-pet-orb {
+  width: 68px;
+  height: 68px;
 }
 
-.copilot-avatar-face {
-  position: absolute;
-  inset: 4px;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at 32% 24%, rgba(255, 255, 255, 0.98), rgba(239, 244, 255, 0.88) 44%, rgba(191, 208, 255, 0.78) 100%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(222, 233, 255, 0.82));
-  border: 1px solid rgba(186, 204, 255, 0.92);
-  box-shadow:
-    inset 0 0 0 2px rgba(255, 255, 255, 0.22),
-    0 10px 22px rgba(105, 134, 255, 0.22);
-  overflow: hidden;
+.teaching-pet.animated {
+  animation: petFloat 3.2s ease-in-out infinite;
 }
 
-.copilot-avatar-sheen {
-  position: absolute;
-  inset: 4px 6px auto 6px;
-  height: 14px;
-  border-radius: 50%;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0));
-  filter: blur(0.4px);
+.teaching-pet.animated.reduced {
+  animation: none;
 }
 
-.copilot-avatar-mouth {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: 11px;
-  width: 11px;
-  height: 4px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, rgba(111, 70, 35, 0.95), rgba(75, 42, 25, 0.96));
-  z-index: 1;
+.copilot-avatar.busy .teaching-pet.animated,
+.copilot-orb.busy .teaching-pet.animated {
+  animation: petBusyPulse 1.6s ease-in-out infinite;
 }
 
-.copilot-avatar-blush {
-  position: absolute;
-  bottom: 11px;
-  width: 6px;
-  height: 3px;
-  border-radius: 999px;
-  background: rgba(255, 176, 198, 0.42);
-  filter: blur(0.4px);
+@keyframes petFloat {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
 }
 
-.copilot-avatar-blush.left {
-  left: 8px;
+@keyframes petBusyPulse {
+  0%, 100% {
+    transform: scale(1);
+    filter: drop-shadow(0 6px 14px rgba(88, 199, 255, 0.22));
+  }
+  50% {
+    transform: scale(1.04);
+    filter: drop-shadow(0 8px 20px rgba(88, 199, 255, 0.38));
+  }
 }
 
-.copilot-avatar-blush.right {
-  right: 8px;
-}
-
-.copilot-avatar-pulse {
-  position: absolute;
-  inset: 2px;
-  border-radius: 50%;
-  border: 1px solid rgba(132, 163, 255, 0.34);
+@media (prefers-reduced-motion: reduce) {
+  .teaching-pet.animated {
+    animation: none;
+  }
 }
 
 .mini-control {
@@ -3598,94 +3582,15 @@ button {
 }
 
 .copilot-orb.busy {
-  animation: orbPulse 1.8s ease-in-out infinite;
+  /* Busy motion is handled by the inner .teaching-pet element. */
 }
 
 .copilot-orb-body {
   position: absolute;
   inset: 0;
-}
-
-.copilot-orb-ear {
-  position: absolute;
-  top: 20px;
-  width: 12px;
-  height: 24px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, rgba(171, 195, 255, 0.96), rgba(131, 160, 255, 0.74));
-  box-shadow: 0 0 16px rgba(151, 178, 255, 0.34);
-}
-
-.copilot-orb-ear.left {
-  left: 7px;
-}
-
-.copilot-orb-ear.right {
-  right: 7px;
-}
-
-.copilot-orb-face {
-  position: absolute;
-  inset: 7px;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at 32% 24%, rgba(255, 255, 255, 0.98), rgba(239, 244, 255, 0.88) 44%, rgba(191, 208, 255, 0.78) 100%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(222, 233, 255, 0.82));
-  border: 1px solid rgba(186, 204, 255, 0.92);
-  box-shadow:
-    inset 0 0 0 4px rgba(255, 255, 255, 0.22),
-    0 16px 34px rgba(105, 134, 255, 0.2);
-  overflow: hidden;
-}
-
-.copilot-orb-sheen {
-  position: absolute;
-  inset: 6px 9px auto 9px;
-  height: 22px;
-  border-radius: 50%;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0));
-  filter: blur(0.4px);
-}
-
-.copilot-orb-eye {
-  display: none;
-}
-
-.copilot-orb-mouth {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: 17px;
-  width: 18px;
-  height: 7px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, rgba(111, 70, 35, 0.95), rgba(75, 42, 25, 0.96));
-  z-index: 1;
-}
-
-.copilot-orb-blush {
-  position: absolute;
-  bottom: 18px;
-  width: 10px;
-  height: 5px;
-  border-radius: 999px;
-  background: rgba(255, 176, 198, 0.42);
-  filter: blur(0.4px);
-}
-
-.copilot-orb-blush.left {
-  left: 14px;
-}
-
-.copilot-orb-blush.right {
-  right: 14px;
-}
-
-.copilot-orb-pulse {
-  position: absolute;
-  inset: 3px;
-  border-radius: 50%;
-  border: 1px solid rgba(132, 163, 255, 0.34);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .copilot-orb-label {

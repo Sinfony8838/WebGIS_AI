@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { getSpeechRecognitionConstructor, getSpeechRecognitionErrorMessage, type BrowserSpeechRecognition } from "../speechRecognition";
 import type { ChatMessage, JobRecord } from "../types";
+import { TeachingPet } from "./TeachingPet";
 
 type PanelRect = {
   x: number;
@@ -53,30 +54,6 @@ function pickThinkingLabel(stages: Array<[string, { status: string; summary?: st
     return stageVerbs[running[0]] || "正在思考";
   }
   return "正在思考";
-}
-
-/**
- * Shared face artwork used in both the collapsed orb and the expanded
- * header avatar. Same DOM, identical class structure — the only
- * difference is the class prefix, which scopes the sizing rules in
- * styles.css. This keeps the assistant character visually identical
- * across states.
- */
-function AssistantFace({ variant }: { variant: "orb" | "avatar" }) {
-  const prefix = variant === "orb" ? "copilot-orb" : "copilot-avatar";
-  return (
-    <>
-      <span className={`${prefix}-ear left`} aria-hidden="true" />
-      <span className={`${prefix}-ear right`} aria-hidden="true" />
-      <span className={`${prefix}-face`}>
-        <span className={`${prefix}-sheen`} aria-hidden="true" />
-        <span className={`${prefix}-mouth`} aria-hidden="true" />
-        <span className={`${prefix}-blush left`} aria-hidden="true" />
-        <span className={`${prefix}-blush right`} aria-hidden="true" />
-        <span className={`${prefix}-pulse`} aria-hidden="true" />
-      </span>
-    </>
-  );
 }
 
 function roleLabel(role: string): string {
@@ -329,6 +306,7 @@ export function CopilotWidget({
   const [minimized, setMinimized] = useState<boolean>(() =>
     safeWindowWidth() <= 640 ? true : readStorage(STATE_STORAGE_KEY, true)
   );
+  const [hasWelcomed, setHasWelcomed] = useState(false);
   const [panelRect, setPanelRect] = useState<PanelRect>(() =>
     normalizePanelRect(readStorage<PanelRect | null>(PANEL_STORAGE_KEY, null))
   );
@@ -550,6 +528,7 @@ export function CopilotWidget({
     setUnreadCount(0);
     setPanelRect((previous) => normalizePanelRect(previous));
     setMinimized(false);
+    setHasWelcomed(true);
   }
 
   function stopVoiceRecognition(manualStop = true) {
@@ -698,7 +677,14 @@ export function CopilotWidget({
           }}
         >
           <span className="copilot-orb-body">
-            <AssistantFace variant="orb" />
+            <TeachingPet
+              busy={busy}
+              currentJob={currentJob}
+              minimized={minimized}
+              isListening={isListening}
+              size="orb"
+              hasWelcomed={hasWelcomed}
+            />
           </span>
           <span className="copilot-orb-label">助教</span>
           {unreadCount ? <span className="copilot-unread">{unreadCount}</span> : null}
@@ -715,7 +701,14 @@ export function CopilotWidget({
       <header className="copilot-widget-header" onPointerDown={(event) => startDrag("panel", event, panelRect)}>
         <div className="copilot-header-identity">
           <div className={`copilot-avatar ${busy ? "busy" : ""}`} aria-hidden="true">
-            <AssistantFace variant="avatar" />
+            <TeachingPet
+              busy={busy}
+              currentJob={currentJob}
+              minimized={minimized}
+              isListening={isListening}
+              size="header"
+              hasWelcomed={hasWelcomed}
+            />
           </div>
           <div className="copilot-title-copy">
             <p className="copilot-eyebrow">Professional Teaching Agent</p>

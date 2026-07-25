@@ -197,6 +197,50 @@ describe("CopilotWidget", () => {
     expect(onVoiceSubmit).not.toHaveBeenCalled();
   });
 
+  it("renders the teaching pet in both the collapsed orb and expanded header", () => {
+    renderWidget();
+    expect(screen.getByTestId("teaching-pet-header")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("最小化助教"));
+    expect(screen.getByTestId("teaching-pet-orb")).toBeInTheDocument();
+  });
+
+  it("shows the confirm pose while a high-risk confirmation is pending", () => {
+    renderWidget({
+      busy: true,
+      currentJob: {
+        job_id: "job_confirm",
+        project_id: "project_1",
+        job_type: "assistant",
+        title: "高风险操作",
+        workflow_type: "assistant_message",
+        status: "running",
+        updated_at: "1",
+        steps: [],
+        stages: { execution: { status: "running", summary: "", detail: "" } },
+        result: {
+          requires_confirmation: true,
+          confirmation_id: "confirm_pet",
+          actions_planned: [
+            {
+              name: "delete_layer",
+              target: "layer",
+              category: "map",
+              risk_level: "high",
+              reversible: false,
+              requires_confirmation: true,
+              requires_map_context: true,
+              tool_params: {}
+            }
+          ]
+        }
+      }
+    });
+
+    // Confirmation must outrank the map-execution busy state.
+    expect(screen.getByTestId("teaching-pet-header")).toHaveAttribute("data-pose", "confirm");
+  });
+
   it("treats orb movement beyond the threshold as a drag gesture", () => {
     expect(exceedsDragThreshold({ x: 20, y: 20 }, { x: 72, y: 96 })).toBe(true);
     expect(exceedsDragThreshold({ x: 20, y: 20 }, { x: 22, y: 23 })).toBe(false);

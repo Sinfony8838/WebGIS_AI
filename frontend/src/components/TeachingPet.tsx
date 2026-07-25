@@ -1,0 +1,250 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { JobRecord } from "../types";
+import { getPoseById, type PetPoseId } from "../assets/teaching-pet/manifest";
+import { deriveTeachingPetState, type PetState } from "./teachingPetState";
+
+type Props = {
+  busy: boolean;
+  currentJob: JobRecord | null;
+  minimized: boolean;
+  isListening: boolean;
+  size: "header" | "orb";
+  /** Optional: override the default welcome wave on first expansion. */
+  hasWelcomed?: boolean;
+};
+
+const SUCCESS_HOLD_MS = 1600;
+const ERROR_HOLD_MS = 3000;
+const SLEEP_DELAY_MS = 75000;
+const MIN_STABLE_MS = 450;
+
+function useReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(() => {
+    if (typeof window === "undefined" || !window.matchMedia) {
+      return false;
+    }
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) {
+      return;
+    }
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const handler = (event: MediaQueryListEvent) => setReduced(event.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+
+  return reduced;
+}
+
+function useStablePetState(target: PetState, reducedMotion: boolean): PetState {
+  const [displayed, setDisplayed] = useState<PetState>(target);
+  const lastChangeRef = useRef<number>(Date.now());
+  const pendingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const isImmediatePose = (pose: PetPoseId) =>
+    pose === "success" || pose === "error" || pose === "sleep";
+
+  useEffect(() => {
+    if (pendingRef.current) {
+      clearTimeout(pendingRef.current);
+      pendingRef.current = null;
+    }
+
+    if (displayed.pose === target.pose) {
+      return;
+    }
+
+    // Feedback poses (success / error) and sleep/wake transitions should be
+    // immediate; the 450ms stability window only applies to work poses so
+    // rapid stage switches do not cause flicker.
+    if (reducedMotion || isImmediatePose(target.pose) || isImmediatePose(displayed.pose)) {
+      setDisplayed(target);
+      lastChangeRef.current = Date.now();
+      return;
+    }
+
+    const now = Date.now();
+    const elapsed = now - lastChangeRef.current;
+    const remaining = Math.max(0, MIN_STABLE_MS - elapsed);
+
+    const apply = () => {
+      setDisplayed(target);
+      lastChangeRef.current = Date.now();
+      pendingRef.current = null;
+    };
+
+    if (remaining === 0) {
+      apply();
+      return;
+    }
+
+    pendingRef.current = setTimeout(apply, remaining);
+
+    return () => {
+      if (pendingRef.current) {
+        clearTimeout(pendingRef.current);
+        pendingRef.current = null;
+      }
+    };
+  }, [target, reducedMotion]);
+
+  return displayed;
+}
+
+/**
+ * Track transient success/error feedback triggered by job state transitions.
+ *
+ * Returns the current `lastOutcome` value and clears it automatically after
+ * the configured hold duration.
+ */
+function useOutcomeFeedback(
+  busy: boolean,
+  currentJob: JobRecord | null
+): "success" | "error" | null {
+  const [outcome, setOutcome] = useState<"success" | "error" | null>(() =>
+    currentJob?.error ? "error" : null
+  );
+  const prevBusyRef = useRef(busy);
+  const prevErrorRef = useRef(currentJob?.error);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const errorAppeared = Boolean(currentJob?.error) && !prevErrorRef.current;
+    const finished = prevBusyRef.current && !busy;
+
+    if (errorAppeared) {
+      setOutcome("error");
+    } else if (finished && !currentJob?.error) {
+      setOutcome("success");
+    }
+
+    prevBusyRef.current = busy;
+    prevErrorRef.current = currentJob?.error;
+  }, [busy, currentJob?.error]);
+
+  // Hold success/error feedback for the configured duration, then clear it.
+  useEffect(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+
+    if (outcome === "success") {
+      timerRef.current = setTimeout(() => {
+        setOutcome((current) => (current === "success" ? null : current));
+      }, SUCCESS_HOLD_MS);
+    } else if (outcome === "error") {
+      timerRef.current = setTimeout(() => {
+        setOutcome((current) => (current === "error" ? null : current));
+      }, ERROR_HOLD_MS);
+    }
+
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [outcome]);
+
+  return outcome;
+}
+
+/**
+ * Track whether the pet has been minimized and idle long enough to nap.
+ */
+function useSleepReady(minimized: boolean, busy: boolean, isListening: boolean): boolean {
+  const [ready, setReady] = useState(false);
+  const minimizedAtRef = useRef<number | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const clear = () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+
+    if (!minimized || busy || isListening) {
+      clear();
+      minimizedAtRef.current = null;
+      setReady(false);
+      return;
+    }
+
+    const now = Date.now();
+    const started = minimizedAtRef.current ?? now;
+    minimizedAtRef.current = started;
+    const elapsed = now - started;
+
+    if (elapsed >= SLEEP_DELAY_MS) {
+      setReady(true);
+      return;
+    }
+
+    setReady(false);
+    timerRef.current = setTimeout(() => {
+      setReady(true);
+      timerRef.current = null;
+    }, SLEEP_DELAY_MS - elapsed);
+
+    return clear;
+  }, [minimized, busy, isListening]);
+
+  return ready;
+}
+
+export function TeachingPet({
+  busy,
+  currentJob,
+  minimized,
+  isListening,
+  size,
+  hasWelcomed = true
+}: Props) {
+  const reducedMotion = useReducedMotion();
+  const outcome = useOutcomeFeedback(busy, currentJob);
+  const canSleep = useSleepReady(minimized, busy, isListening);
+
+  const targetState = useMemo(() => {
+    // First expansion shows a welcome wave before falling back to normal logic.
+    if (!hasWelcomed && !minimized && !busy) {
+      return { pose: "wave" as PetPoseId, label: "你好" };
+    }
+
+    return deriveTeachingPetState({
+      busy,
+      currentJob,
+      minimized,
+      isListening,
+      lastOutcome: outcome,
+      canSleep
+    });
+  }, [busy, currentJob, minimized, isListening, outcome, canSleep, hasWelcomed]);
+
+  const displayedState = useStablePetState(targetState, reducedMotion);
+  const pose = getPoseById(displayedState.pose);
+
+  const sizeClass = size === "orb" ? "teaching-pet-orb" : "teaching-pet-header";
+  const motionClass = reducedMotion ? "reduced" : "animated";
+
+  return (
+    <img
+      className={`teaching-pet ${sizeClass} ${motionClass}`}
+      src={pose.src}
+      alt=""
+      aria-hidden="true"
+      draggable={false}
+      data-pose={displayedState.pose}
+      data-testid={`teaching-pet-${size}`}
+      title={pose.alt}
+    />
+  );
+}
+
+export { deriveTeachingPetState };
+export type { PetState };
