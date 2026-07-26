@@ -2397,12 +2397,64 @@ button {
   user-select: none;
 }
 
-.visual-map-mode-hint {
+/* 头部的显式模式开关：取代旧的"地球模式/平面模式"文字提示
+   （那个提示长得像分组标题，是"分类混乱"观感的主要来源）。 */
+.visual-map-mode-switch {
   margin-left: auto;
-  font-size: 10px;
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 999px;
+  border: 1px solid rgba(132, 178, 220, 0.28);
+  background: rgba(12, 26, 44, 0.55);
+}
+
+.visual-map-mode-button {
+  padding: 2px 9px;
+  border: 0;
+  border-radius: 999px;
+  font-size: 10.5px;
   letter-spacing: 0.04em;
   color: var(--text-soft);
-  opacity: 0.75;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.visual-map-mode-button.is-active {
+  color: #0b1626;
+  background: linear-gradient(180deg, #9bd8ff, #58c7ff);
+  font-weight: 600;
+}
+
+.visual-map-caption {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.visual-map-caption b {
+  color: var(--text-soft);
+}
+
+/* 非测绘级数据徽标：示意/估算 */
+.visual-map-quality-badge {
+  flex-shrink: 0;
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  color: #ffd28a;
+  border: 1px solid rgba(240, 187, 120, 0.45);
+  background: rgba(240, 187, 120, 0.1);
+}
+
+.visual-map-empty {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  padding: 6px 2px;
 }
 
 .teaching-map-toggle-icon {
@@ -2986,18 +3038,44 @@ button {
 .copilot-title-copy {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 5px;
   min-width: 0;
 }
 
-.copilot-eyebrow {
-  margin: 0;
-  font-size: 10.5px;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: rgba(170, 200, 230, 0.62);
+.copilot-header-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* 课堂阶段徽标：智能体“知道自己在服务哪个阶段”的可见化。 */
+.copilot-phase-chip {
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  letter-spacing: 0.05em;
   font-weight: 600;
   white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.copilot-phase-chip.phase-prep {
+  color: #8ed0ff;
+  border-color: rgba(126, 178, 255, 0.45);
+  background: rgba(126, 178, 255, 0.12);
+}
+
+.copilot-phase-chip.phase-class {
+  color: #9ff0c4;
+  border-color: rgba(94, 222, 158, 0.45);
+  background: rgba(94, 222, 158, 0.12);
+}
+
+.copilot-phase-chip.phase-review {
+  color: #d9c2ff;
+  border-color: rgba(186, 148, 255, 0.45);
+  background: rgba(186, 148, 255, 0.12);
 }
 
 .copilot-widget-title h2,
@@ -3027,12 +3105,15 @@ button {
 
 .copilot-avatar {
   position: relative;
-  width: 52px;
-  height: 82px;
+  width: 50px;
+  height: 56px;
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  border-radius: 14px;
+  background: radial-gradient(120% 120% at 50% 20%, rgba(88, 199, 255, 0.14), rgba(20, 40, 66, 0.28));
+  border: 1px solid rgba(132, 178, 220, 0.18);
 }
 
 .copilot-avatar.busy {
@@ -3058,34 +3139,32 @@ button {
   top: 0;
   left: 0;
   display: block;
-  width: 500%;
-  height: auto;
+  /* width/height/transform are set inline per pose from the measured sprite
+     windows in assets/teaching-pet/manifest.ts — the sheet is not a uniform
+     5x3 grid, so no static percentage works for every pose. */
   max-width: none;
   image-rendering: pixelated;
   pointer-events: none;
   user-select: none;
 }
 
+/* Viewport aspect ratio must match the measured pose window (226:256). */
 .teaching-pet-header {
-  width: 48px;
-  height: 80px;
+  width: 46px;
+  height: 52px;
 }
 
 .teaching-pet-orb {
-  width: 90px;
-  height: 150px;
+  width: 84px;
+  height: 95px;
 }
 
-.teaching-pet.animated {
-  animation: petFloat 3.2s ease-in-out infinite;
-}
+/* The pet holds still while idle (no float/bob). Motion is reserved for
+   meaningful feedback only: petWalk while the teacher drags the orb, and
+   petBusyPulse while a job is running. */
 
 .teaching-pet.walking {
   animation: petWalk 0.34s steps(2, end) infinite;
-}
-
-.teaching-pet.animated.reduced {
-  animation: none;
 }
 
 .teaching-pet.walking.reduced {
@@ -3095,15 +3174,6 @@ button {
 .copilot-avatar.busy .teaching-pet.animated,
 .copilot-orb.busy .teaching-pet.animated {
   animation: petBusyPulse 1.6s ease-in-out infinite;
-}
-
-@keyframes petFloat {
-  0%, 100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-4px);
-  }
 }
 
 @keyframes petWalk {
@@ -3123,12 +3193,6 @@ button {
   50% {
     transform: scale(1.04);
     filter: drop-shadow(0 8px 20px rgba(88, 199, 255, 0.38));
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .teaching-pet.animated {
-    animation: none;
   }
 }
 
@@ -3761,7 +3825,7 @@ button {
 .copilot-orb {
   position: relative;
   width: 96px;
-  height: 150px;
+  height: 112px;
   padding: 0;
   border-radius: 50%;
   border: 0;

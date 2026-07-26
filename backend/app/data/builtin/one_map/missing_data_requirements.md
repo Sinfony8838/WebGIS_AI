@@ -1,6 +1,6 @@
 # One Map Missing Data Requirements
 
-Last updated: 2026-06-13
+Last updated: 2026-07-27
 
 | Data | Target format | Recommended source | Missing reason | Manual required | Status |
 | --- | --- | --- | --- | --- | --- |
@@ -15,6 +15,23 @@ Last updated: 2026-06-13
 | 世界夜间灯光数据 | GeoJSON/COG/TIF | EOG VIIRS annual VNL | large raster and download policy review required | no | open |
 | 上海市 GDP 数据 | CSV/GeoJSON | 上海统计年鉴/国家数据 | requires official table export | yes | open |
 | 上海轨道交通或中心城区范围 | GeoJSON | 上海开放数据/OSM | source/license not selected | no | open |
+
+## 非测绘级数据的真实数据替换计划（2026-07-27 审计）
+
+以下条目当前以 schematic/estimated 状态提供（前端"可视化地图"面板已显示"示意/估算"徽标），
+替换为真实数据的可行路径与优先级如下。生成脚本可复用 `scripts/ingest_natural_themes.py`
+的下载→裁剪→简化→写 catalog 范式（`_fetch_ne_rivers`/`build_climate_types`/`update_catalog`）。
+
+| 数据集 | 现状成因 | 真实替代源（免费/可离线） | 获取难度 | 优先级 |
+| --- | --- | --- | --- | --- |
+| `china_migration_flows`（estimated） | 4 条手绘直线连 7 大区中心，migrants 为整十估值 | **五普/六普/七普省际人口迁移 OD 矩阵**（普查长表公开统计），按省对绘制真实加权弧线；弧线渲染 `globeThemes.ts` 已就绪可直接复用 | 需数据整理（录入 OD 表） | **高**（教学含金量最高，一次把估算升为真实普查数据） |
+| `china_vegetation_zones`（schematic） | 省 adcode→植被带字典 + 省界 dissolve（`ingest_natural_themes.py` `_dissolve_provinces_by`） | **WWF Olson 陆地生态区/生物群系**（现成矢量，公开），裁剪中国 + 重分类到教学 6 带 | 可直接下载 | 中 |
+| `china_terrain_steps`（schematic） | 省 adcode→阶梯字典 + 省界 dissolve；东部省 fillna 一刀切 | SRTM/GEBCO 公开 DEM 重分类高程带（<500/500-2000/>3000m）后矢量化平滑；或据 DEM 晕渲手工数字化两条阶梯界线（昆仑-祁连-横断、大兴安岭-太行-巫山-雪峰） | 需矢量化 | 中 |
+| `teaching_maps` 16 张课本扫描图 | 仅 bbox bounds 目测配准（多张中国图共用粗框），无地面控制点 | 在现有 bounds 基础上为每张图加 2-3 对 GCP 做仿射配准（对照矢量底图可识别点） | 需人工点控制点 | 低（扫描图已从课程主路径退役） |
+| `china_major_rivers` 要素级 source_name 写 `ne_50m` 与 catalog 的 `ne_10m` 不一致 | 文档瑕疵 | 重跑 ingest 或批量改 properties | 一行修正 | 低 |
+
+注：`china_climate_types` 为真实气候矢量（5 类），无需替换——前端曾存在的"热带雨林"死配色
+与"（省级精度）"过时描述已于 2026-07-27 修正（`globeThemes.ts`）。
 
 ## Filled from 人口课程数据 (2026-06-13)
 

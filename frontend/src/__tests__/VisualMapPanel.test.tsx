@@ -8,12 +8,14 @@ function renderExpanded(props: Partial<ComponentProps<typeof VisualMapPanel>> = 
   const onChangeThemes = vi.fn();
   const onApplyScene = vi.fn();
   const onToggleTextbook = vi.fn();
+  const onSwitchViewMode = vi.fn();
   const result = render(
     <VisualMapPanel
       viewMode="globe"
       activeThemeIds={[]}
       onChangeThemes={onChangeThemes}
       onApplyScene={onApplyScene}
+      onSwitchViewMode={onSwitchViewMode}
       textbookItems={[]}
       textbookActiveIds={new Set<string>()}
       busy={false}
@@ -23,7 +25,7 @@ function renderExpanded(props: Partial<ComponentProps<typeof VisualMapPanel>> = 
   );
   // The panel defaults to collapsed; expand so tests can exercise its body.
   fireEvent.click(screen.getByTestId("visual-map-panel").querySelector(".visual-map-header")!);
-  return { ...result, onChangeThemes, onApplyScene, onToggleTextbook };
+  return { ...result, onChangeThemes, onApplyScene, onToggleTextbook, onSwitchViewMode };
 }
 
 describe("VisualMapPanel", () => {
@@ -53,6 +55,7 @@ describe("VisualMapPanel", () => {
         activeThemeIds={["hu_line"]}
         onChangeThemes={onChangeThemes}
         onApplyScene={vi.fn()}
+        onSwitchViewMode={vi.fn()}
         textbookItems={[]}
         textbookActiveIds={new Set<string>()}
         busy={false}
@@ -110,8 +113,53 @@ describe("VisualMapPanel", () => {
     expect(huLineToggle.querySelector(".visual-map-badge-3d")).toBeTruthy();
   });
 
-  it("shows the current view mode hint in the header", () => {
-    renderExpanded({ viewMode: "plane" });
-    expect(screen.getByText("平面模式")).toBeTruthy();
+  it("renders an explicit mode switch that reflects the current view mode", () => {
+    const { onSwitchViewMode } = renderExpanded({ viewMode: "plane" });
+
+    const globeButton = screen.getByTestId("visual-map-mode-globe");
+    const planeButton = screen.getByTestId("visual-map-mode-plane");
+    expect(planeButton.getAttribute("aria-pressed")).toBe("true");
+    expect(globeButton.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(globeButton);
+    expect(onSwitchViewMode).toHaveBeenCalledWith("globe");
+  });
+
+  it("marks schematic datasets with a quality badge", () => {
+    renderExpanded({
+      textbookItems: [
+        {
+          id: "china_terrain_steps",
+          name: "三级阶梯",
+          category: "专题",
+          category_order: 5,
+          status: "schematic",
+          source_name: "按省级区划归并"
+        }
+      ]
+    });
+
+    const badge = screen.getByTestId("quality-badge-china_terrain_steps");
+    expect(badge.textContent).toBe("示意");
+  });
+
+  it("keeps unknown-category datasets visible under the 其他 group", () => {
+    renderExpanded({
+      textbookItems: [{ id: "mystery_dataset", name: "神秘数据集", category: "其他", category_order: 99 }]
+    });
+
+    expect(screen.getByTestId("visual-map-topic-其他")).toBeTruthy();
+    expect(screen.getByText("神秘数据集")).toBeTruthy();
+  });
+
+  it("shows a loading empty state before the catalog arrives", () => {
+    renderExpanded({ textbookItems: [] });
+    expect(screen.getByTestId("visual-map-empty")).toBeTruthy();
+  });
+
+  it("marks the estimated 3D migration theme with a quality badge", () => {
+    renderExpanded();
+    const migrationToggle = screen.getByTestId("globe-theme-toggle-migration_flows");
+    expect(migrationToggle.querySelector(".visual-map-quality-badge")?.textContent).toBe("估算");
   });
 });

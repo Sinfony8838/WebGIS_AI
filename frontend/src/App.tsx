@@ -403,6 +403,8 @@ export default function App() {
   // 课堂工作流（课前/课中/课后）当前所处的 lesson/session/stage/phase，随每次
   // 助教请求发给后端，让智能体知道自己正在服务哪节课的哪个环节。
   const teachingContextRef = useRef<TeachingContext | null>(null);
+  // 同步一份 phase 到 state：助教面板头部的阶段徽标与能力芯片排序需要触发渲染。
+  const [teachingPhase, setTeachingPhase] = useState<TeachingContext["phase"]>("");
   const activeJobStreamsRef = useRef(0);
   const jobStreamsRef = useRef<Set<EventSource>>(new Set());
 
@@ -529,7 +531,9 @@ export default function App() {
           id: item.id,
           name: item.name.replace(/\s*GeoJSON$/i, ""),
           category: meta.label,
-          category_order: meta.order
+          category_order: meta.order,
+          status: item.status,
+          source_name: item.source_name
         };
       });
   }, [datasetCatalogItems]);
@@ -1383,13 +1387,13 @@ export default function App() {
         if (visible && !existing) {
           const response = await addCatalogDatasetLayer(project.project_id, datasetId);
           setViewMode("plane");
-          pushToast("success", "课本地图已加载", response.layer.name || datasetId);
+          pushToast("success", "专题图层已加载", response.layer.name || datasetId);
         } else if (existing) {
           await patchLayer(project.project_id, existing.layer_id, { visible });
         }
         await refreshProjectState(project.project_id);
       } catch (error) {
-        pushToast("error", "课本地图切换失败", error instanceof Error ? error.message : "请求失败");
+        pushToast("error", "专题图层切换失败", error instanceof Error ? error.message : "请求失败");
       }
     },
     [layerState?.items, project, pushToast, refreshProjectState]
@@ -2207,6 +2211,8 @@ export default function App() {
             visible: record.visible,
             opacity: record.opacity,
             zIndex: record.z_index,
+            // 标注抽稀：重叠的要素标签自动隐藏，省级/世界尺度不再一片叠字。
+            declutter: true,
             style: layerStyle(record)
           });
           vectorLayerByIdRef.current.set(record.layer_id, vectorLayer);
@@ -2882,10 +2888,12 @@ export default function App() {
           <VisualMapPanel
             viewMode={viewMode}
             activeThemeIds={globeThemeIds}
+            onSwitchViewMode={handleViewModeToggle}
             onChangeThemes={(ids) => {
               setGlobeThemeIds(ids);
-              if (ids.length) {
-                setViewMode("globe");
+              // 开启 3D 主题时经统一过渡切到地球（带相机同步），而非硬切。
+              if (ids.length && viewMode === "plane") {
+                transitionToGlobe({ reason: "manual" });
               }
             }}
             onApplyScene={(preset) => {
@@ -2903,7 +2911,11 @@ export default function App() {
             textbookActiveIds={textbookActiveIds}
             busy={busy}
             onToggleTextbook={(id, visible) => {
-              setViewMode("plane");
+              // 只有"显示"一个 2D 图层才需要切到平面模式；在地球模式下
+              // 取消勾选不再把用户踹回平面（修复既有反直觉行为）。
+              if (visible && viewMode === "globe") {
+                handleViewModeToggle("plane");
+              }
               void handleToggleTextbookMap(id, visible);
             }}
           />
@@ -2956,6 +2968,7 @@ export default function App() {
             pushToast(tone, title, detail);
           }}
           busy={busy}
+          teachingPhase={teachingPhase}
         />
       ) : null}
 
@@ -2967,6 +2980,7 @@ export default function App() {
           onRefresh={() => (project ? refreshProjectState(project.project_id) : undefined)}
           onTeachingContextChange={(ctx) => {
             teachingContextRef.current = ctx;
+            setTeachingPhase(ctx?.phase || "");
           }}
           onAssistantPrompt={(prompt) => assistantDispatchRef.current(prompt)}
           statusBar={

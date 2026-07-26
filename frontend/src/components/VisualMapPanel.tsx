@@ -14,7 +14,16 @@ export interface TeachingMapEntry {
   name: string;
   category: string;
   category_order: number;
+  /** 数据质量：ready=真实数据；schematic=教学示意；estimated=估算。 */
+  status?: string;
+  source_name?: string;
 }
+
+/** 非测绘级数据的用户可见标注（诚实展示数据边界，本身就是数据素养教学点）。 */
+const DATA_QUALITY_BADGES: Record<string, { label: string; hint: string }> = {
+  schematic: { label: "示意", hint: "教学示意数据（按省级区划归并近似），非测绘级边界" },
+  estimated: { label: "估算", hint: "估算数据，非普查/测绘级来源" }
+};
 
 type TopicGroup = {
   topic: string;
@@ -25,16 +34,19 @@ type TopicGroup = {
   category?: string;
 };
 
-/** 按地理主题重组：三维专题图层与二维目录图层归入同一主题组。 */
+/** 按地理主题重组：三维专题图层与二维目录图层归入同一主题组。
+ *  人口单元的三个子主题（人口/胡焕庸线/迁徙）保持相邻；"其他"组兜底，
+ *  保证目录里任何分类未命中的数据集都不会被静默丢弃。 */
 const TOPIC_GROUPS: TopicGroup[] = [
   { topic: "人口", order: 1, themeIds: ["density_fill", "density_3d", "population_columns"], category: "人口" },
-  { topic: "气候", order: 2, themeIds: ["climate_zones"], category: "气候" },
-  { topic: "胡焕庸线", order: 3, themeIds: ["hu_line"] },
-  { topic: "人口迁徙", order: 4, themeIds: ["migration_flows"] },
+  { topic: "胡焕庸线", order: 2, themeIds: ["hu_line"] },
+  { topic: "人口迁徙", order: 3, themeIds: ["migration_flows"] },
+  { topic: "气候", order: 4, themeIds: ["climate_zones"], category: "气候" },
   { topic: "行政边界", order: 5, themeIds: [], category: "行政边界" },
   { topic: "经济", order: 6, themeIds: [], category: "经济" },
   { topic: "城市与交通", order: 7, themeIds: [], category: "城市与交通" },
-  { topic: "专题", order: 8, themeIds: [], category: "专题" }
+  { topic: "专题", order: 8, themeIds: [], category: "专题" },
+  { topic: "其他", order: 9, themeIds: [], category: "其他" }
 ];
 
 type Props = {
@@ -42,6 +54,8 @@ type Props = {
   activeThemeIds: string[];
   onChangeThemes: (ids: string[]) => void;
   onApplyScene: (preset: GlobeScenePreset) => void;
+  /** 显式请求切换视图模式（走 App 的过渡动画与相机同步）。 */
+  onSwitchViewMode: (mode: ViewMode) => void;
   textbookItems: TeachingMapEntry[];
   textbookActiveIds: Set<string>;
   busy: boolean;
@@ -53,6 +67,7 @@ export function VisualMapPanel({
   activeThemeIds,
   onChangeThemes,
   onApplyScene,
+  onSwitchViewMode,
   textbookItems,
   textbookActiveIds,
   busy,
@@ -114,12 +129,39 @@ export function VisualMapPanel({
       >
         <span aria-hidden>🗺️</span>
         <span className="visual-map-title">可视化地图</span>
-        <span className="visual-map-mode-hint">{viewMode === "globe" ? "地球模式" : "平面模式"}</span>
+        <div
+          className="visual-map-mode-switch"
+          role="group"
+          aria-label="视图模式"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button
+            type="button"
+            className={`visual-map-mode-button ${viewMode === "globe" ? "is-active" : ""}`}
+            aria-pressed={viewMode === "globe"}
+            data-testid="visual-map-mode-globe"
+            onClick={() => onSwitchViewMode("globe")}
+          >
+            3D 地球
+          </button>
+          <button
+            type="button"
+            className={`visual-map-mode-button ${viewMode === "plane" ? "is-active" : ""}`}
+            aria-pressed={viewMode === "plane"}
+            data-testid="visual-map-mode-plane"
+            onClick={() => onSwitchViewMode("plane")}
+          >
+            2D 平面
+          </button>
+        </div>
         <span className="teaching-map-toggle-icon">{collapsed ? "▸" : "▾"}</span>
       </div>
 
       {!collapsed && (
         <div className="visual-map-body">
+          <p className="visual-map-caption">
+            按主题分组：<b>3D</b> 条目显示在地球模式，<b>2D</b> 条目显示在平面模式，点击会自动切换视图。
+          </p>
           <p className="globe-theme-panel__section-label">一键教学场景</p>
           <div className="visual-map-scenes" data-testid="visual-map-scenes">
             {GLOBE_SCENE_PRESETS.map((preset) => (
@@ -139,12 +181,20 @@ export function VisualMapPanel({
             ))}
           </div>
 
+          {textbookItems.length === 0 ? (
+            <p className="visual-map-empty" data-testid="visual-map-empty">
+              数据目录加载中，2D 专题图层稍后出现…
+            </p>
+          ) : null}
+
           {renderedGroups.map((group) => (
             <div key={group.topic} className="visual-map-topic" data-testid={`visual-map-topic-${group.topic}`}>
               <div className="visual-map-topic-title">{group.topic}</div>
               <div className="visual-map-topic-items">
                 {group.themes.map((theme) => {
                   const checked = active.has(theme.id);
+                  const quality = theme.dataQuality ? DATA_QUALITY_BADGES[theme.dataQuality] : null;
+                  const modeHint = viewMode === "plane" ? "（点击将切换到 3D 地球）" : "";
                   return (
                     <button
                       key={theme.id}
@@ -152,23 +202,30 @@ export function VisualMapPanel({
                       role="switch"
                       aria-checked={checked}
                       className={`globe-theme-toggle ${checked ? "is-active" : ""}`}
-                      title={theme.description}
+                      title={`${theme.description}${modeHint}`}
                       data-testid={`globe-theme-toggle-${theme.id}`}
                       onClick={() => toggleTheme(theme.id)}
                     >
                       <span className="visual-map-badge visual-map-badge-3d" aria-hidden>3D</span>
                       <span className="globe-theme-toggle__dot" aria-hidden />
                       {theme.name}
+                      {quality ? (
+                        <span className="visual-map-quality-badge" title={quality.hint}>
+                          {quality.label}
+                        </span>
+                      ) : null}
                     </button>
                   );
                 })}
                 {group.items.map((item) => {
                   const isActive = textbookActiveIds.has(item.id);
+                  const quality = item.status ? DATA_QUALITY_BADGES[item.status] : null;
+                  const modeHint = viewMode === "globe" ? "（勾选将切换到 2D 平面）" : "";
                   return (
                     <label
                       key={item.id}
                       className={`teaching-map-item ${isActive ? "active" : ""} ${busy ? "busy" : ""}`}
-                      title={item.name}
+                      title={`${item.name}${item.source_name ? ` · 来源：${item.source_name}` : ""}${modeHint}`}
                     >
                       <span className="visual-map-badge visual-map-badge-2d" aria-hidden>2D</span>
                       <input
@@ -178,6 +235,15 @@ export function VisualMapPanel({
                         onChange={() => onToggleTextbook(item.id, !isActive)}
                       />
                       <span className="teaching-map-item-name">{item.name}</span>
+                      {quality ? (
+                        <span
+                          className="visual-map-quality-badge"
+                          title={quality.hint}
+                          data-testid={`quality-badge-${item.id}`}
+                        >
+                          {quality.label}
+                        </span>
+                      ) : null}
                     </label>
                   );
                 })}

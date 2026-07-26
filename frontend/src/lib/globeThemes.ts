@@ -36,6 +36,8 @@ export type GlobeThemeDef = {
   legendTitle?: string;
   legend?: GlobeLegendItem[];
   legendNote?: string;
+  /** 数据质量标注：schematic=教学示意，estimated=估算；缺省为真实数据。 */
+  dataQuality?: "schematic" | "estimated";
 };
 
 export type GlobeScenePreset = {
@@ -76,8 +78,7 @@ const CLIMATE_COLORS: { match: string; color: string; label: string }[] = [
   { match: "温带季风", color: "#f5d95c", label: "温带季风气候" },
   { match: "温带大陆", color: "#b08a6a", label: "温带大陆性气候" },
   { match: "高山", color: "#8f7bd8", label: "高山高原气候" },
-  { match: "高原", color: "#8f7bd8", label: "高原山地气候" },
-  { match: "热带雨林", color: "#4caf7d", label: "热带雨林气候" }
+  { match: "高原", color: "#8f7bd8", label: "高原山地气候" }
 ];
 
 function climateColor(name: string): string {
@@ -542,8 +543,8 @@ export const GLOBE_THEMES: GlobeThemeDef[] = [
   {
     id: "climate_zones",
     name: "气候区划",
-    description: "中国主要气候类型分布（省级精度）",
-    legendTitle: "气候类型",
+    description: "中国五类主要气候类型分布（真实气候区划矢量）",
+    legendTitle: "气候类型（5 类）",
     legend: [
       { color: "#e05243", label: "热带季风气候" },
       { color: "#f2a04e", label: "亚热带季风气候" },
@@ -557,7 +558,8 @@ export const GLOBE_THEMES: GlobeThemeDef[] = [
     name: "人口迁徙",
     description: "主要区域间人口流动方向与规模（示意）",
     legendTitle: "人口迁徙流向",
-    legendNote: "弧线宽度与光点表示迁徙规模（万人）"
+    legendNote: "弧线宽度与光点表示迁徙规模（万人）。示意流线：教学演示用，非普查 OD 数据。",
+    dataQuality: "estimated"
   }
 ];
 
