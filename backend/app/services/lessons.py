@@ -40,6 +40,7 @@ LESSON_IMPORT_SCHEMA_HINT = {
                 "view": {"center": [104.0, 35.0], "zoom": 4},
                 "annotations": [{"text": "string", "position": [104.0, 35.0]}],
                 "visual_query": None,
+                "globe": {"enabled": True, "themes": ["string"], "camera": {"lon": 104.0, "lat": 35.0}},
             },
             "script": ["string"],
             "questions": [
@@ -68,7 +69,32 @@ def default_scene() -> Dict[str, Any]:
         "view": {},
         "annotations": [],
         "visual_query": None,
+        "globe": {},
     }
+
+
+def normalize_scene_globe(raw: Any) -> Dict[str, Any]:
+    """Normalize a stage's optional 3D scene declaration.
+
+    The backend only persists this intent.  A later frontend change will
+    interpret theme ids and camera fields when it applies a lesson scene.
+    """
+    if not isinstance(raw, dict) or "enabled" not in raw:
+        return {}
+    enabled = bool(raw.get("enabled"))
+    result: Dict[str, Any] = {"enabled": enabled}
+    if not enabled:
+        return result
+    result["themes"] = [str(item) for item in raw.get("themes") or []]
+    camera_raw = raw.get("camera") if isinstance(raw.get("camera"), dict) else {}
+    camera: Dict[str, float] = {}
+    for key in ("lon", "lat", "altitudeMeters", "pitchDeg"):
+        value = camera_raw.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            camera[key] = float(value)
+    if camera:
+        result["camera"] = camera
+    return result
 
 
 class LessonService:
@@ -255,6 +281,7 @@ class LessonService:
             "catalog_layers": catalog_ids,
             "view": project.view,
             "base_map": project.base_map,
+            "globe": normalize_scene_globe(scene.get("globe")),
         }
 
     def _reset_stage_layers(self, project_id: str, scene: Dict[str, Any]) -> None:
@@ -307,6 +334,8 @@ class LessonService:
             }
         if isinstance(snapshot.get("templates"), list):
             scene["templates"] = [str(item) for item in snapshot["templates"]]
+        if isinstance(snapshot.get("globe"), dict):
+            scene["globe"] = normalize_scene_globe(snapshot["globe"])
 
         stage["scene"] = scene
         self.store.upsert_lesson(lesson)
@@ -501,6 +530,7 @@ class LessonService:
             scene = {**default_scene(), **(raw.get("scene") or {})}
             raw_catalog = scene.get("catalog_layers")
             scene["catalog_layers"] = [str(item) for item in raw_catalog] if isinstance(raw_catalog, list) else []
+            scene["globe"] = normalize_scene_globe(scene.get("globe"))
             questions = []
             for q_index, question in enumerate(raw.get("questions") or [], start=1):
                 if not isinstance(question, dict):

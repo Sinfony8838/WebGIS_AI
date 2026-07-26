@@ -114,3 +114,19 @@ class RuntimeStoreTest(unittest.TestCase):
                 [layer["layer_id"] for layer in persisted["projects"][project.project_id]["layers"]],
                 ["kept_layer"],
             )
+
+    def test_reload_retains_all_projects_without_touching_runtime_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_file = Path(temp_dir) / "state" / "runtime.json"
+            store = RuntimeStore(state_file)
+            created_ids = {store.create_project(name=f"Project {index}").project_id for index in range(9)}
+
+            archive_dir = state_file.parent / "runtime_archive"
+            archive_dir.mkdir()
+            marker = archive_dir / "existing-archive.json"
+            marker.write_text('{"archived": true}', encoding="utf-8")
+
+            reloaded = RuntimeStore(state_file)
+
+            self.assertEqual(set(reloaded.projects), created_ids)
+            self.assertEqual(marker.read_text(encoding="utf-8"), '{"archived": true}')

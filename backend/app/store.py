@@ -58,7 +58,7 @@ class RuntimeStore:
                 self._batch_depth -= 1
                 if self._batch_depth == 0 and self._batch_dirty:
                     self._batch_dirty = False
-                    self._save()
+                    self._write_state_file()
 
     def _load(self) -> None:
         if not self.state_file.exists():
@@ -194,6 +194,15 @@ class RuntimeStore:
         if self._batch_depth > 0:
             self._batch_dirty = True
             return
+        self._write_state_file()
+
+    def _write_state_file(self) -> None:
+        """Persist the complete runtime state once.
+
+        Keeping the actual file write separate from ``_save`` makes the batch
+        contract testable: mutations may mark a batch dirty many times, but a
+        completed classroom action still reaches disk exactly once.
+        """
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "projects": {project_id: project.to_dict() for project_id, project in self.projects.items()},
@@ -217,7 +226,10 @@ class RuntimeStore:
                 for workflow_id, workflow in self.workflows.items()
             },
         }
-        serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+        # Runtime state can include large GeoJSON coordinate arrays.  Pretty
+        # printing multiplies that hot-path payload and every mutation rewrites
+        # the complete file, so retain readable Unicode but use compact JSON.
+        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         temp_path = self.state_file.with_suffix(f"{self.state_file.suffix}.{uuid4().hex}.tmp")
         try:
             temp_path.write_text(serialized, encoding="utf-8")
