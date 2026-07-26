@@ -110,6 +110,46 @@ class LessonServiceTest(unittest.TestCase):
         self.assertEqual(stage["scene"]["view"]["zoom"], 7)
         self.assertFalse(stage["scene"]["layer_visibility"]["builtin_population_regions"])
 
+    def test_scene_globe_is_normalized_for_legacy_apply_and_capture(self) -> None:
+        runtime, store, project_id = self.build_runtime()
+        lesson = runtime.classroom.lesson_service.create_lesson(
+            {
+                "title": "globe scene test",
+                "stages": [
+                    {"stage_id": "legacy", "title": "legacy scene", "scene": {}},
+                    {
+                        "stage_id": "globe",
+                        "title": "globe scene",
+                        "scene": {
+                            "globe": {
+                                "enabled": True,
+                                "themes": ["population_density", 7],
+                                "camera": {"lon": 104, "lat": 35.5, "altitudeMeters": 12000000, "pitchDeg": -35, "ignored": "x"},
+                            }
+                        },
+                    },
+                ],
+            }
+        )
+
+        legacy = runtime.classroom.apply_lesson_scene(project_id, lesson.lesson_id, "legacy")
+        applied = runtime.classroom.apply_lesson_scene(project_id, lesson.lesson_id, "globe")
+        captured = runtime.classroom.capture_lesson_scene(
+            lesson.lesson_id,
+            "globe",
+            {"globe": {"enabled": False, "themes": ["ignored"]}},
+        )
+
+        self.assertEqual(legacy["globe"], {})
+        self.assertEqual(applied["globe"], {
+            "enabled": True,
+            "themes": ["population_density", "7"],
+            "camera": {"lon": 104.0, "lat": 35.5, "altitudeMeters": 12000000.0, "pitchDeg": -35.0},
+        })
+        self.assertEqual(captured["scene"]["globe"], {"enabled": False})
+        stored_stage = store.get_lesson(lesson.lesson_id).find_stage("globe")
+        self.assertEqual(stored_stage["scene"]["globe"], {"enabled": False})
+
     def test_import_from_text_heuristic_fallback(self) -> None:
         runtime, store, _ = self.build_runtime()
         runtime.classroom.lesson_service.minimax_client = None

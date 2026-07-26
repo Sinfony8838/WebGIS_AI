@@ -4,6 +4,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from backend.app.config import AppConfig
 from backend.app.runtime import WebGISRuntime
@@ -105,6 +106,26 @@ class ClassSessionTest(unittest.TestCase):
             runtime.classroom.student_answer(join_code, {"nickname": "越界", "question_id": "s4q1", "choice_index": 9})
         with self.assertRaises(KeyError):
             runtime.classroom.student_answer("000000" if join_code != "000000" else "111111", {"question_id": "s4q1", "choice_index": 1})
+
+    def test_student_answer_persists_response_and_event_in_one_write(self) -> None:
+        runtime, store, project_id = self.build_runtime()
+        session_id = self.start_session(runtime, project_id)["session"]["session_id"]
+        runtime.classroom.enter_session_stage(session_id, "s4")
+        runtime.classroom.launch_session_question(session_id, question_id="s4q1")
+        join_code = store.get_class_session(session_id).join_code
+
+        with patch.object(store, "_write_state_file", wraps=store._write_state_file) as write_state:
+            runtime.classroom.student_answer(
+                join_code,
+                {"nickname": "Student A", "question_id": "s4q1", "choice_index": 2},
+            )
+
+        self.assertEqual(write_state.call_count, 1)
+        session = store.get_class_session(session_id)
+        self.assertEqual(len(session.responses["s4q1"]), 1)
+        answer_events = [event for event in session.events if event["type"] == "student_response"]
+        self.assertEqual(len(answer_events), 1)
+        self.assertEqual(answer_events[0]["payload"]["choice_index"], 2)
 
     def test_teacher_observation_and_adhoc_question(self) -> None:
         runtime, store, project_id = self.build_runtime()

@@ -123,20 +123,21 @@ class ClassroomWorkflowRuntime:
         self.runtime._require_project(project_id)
         lesson = self.lesson_service.get_lesson(lesson_id)
         join_code = self._generate_join_code()
-        session = self.store.create_class_session(
-            lesson_id=lesson_id,
-            project_id=project_id,
-            join_code=join_code,
-            metadata={"lesson_title": lesson.title},
-        )
-        self.store.append_session_event(session.session_id, "session_start", payload={"lesson_title": lesson.title})
-        self.store.add_recent_action(
-            project_id,
-            "Start class",
-            f"Class session started for {lesson.title}.",
-            status="success",
-            metadata={"session_id": session.session_id},
-        )
+        with self.store.batch():
+            session = self.store.create_class_session(
+                lesson_id=lesson_id,
+                project_id=project_id,
+                join_code=join_code,
+                metadata={"lesson_title": lesson.title},
+            )
+            self.store.append_session_event(session.session_id, "session_start", payload={"lesson_title": lesson.title})
+            self.store.add_recent_action(
+                project_id,
+                "Start class",
+                f"Class session started for {lesson.title}.",
+                status="success",
+                metadata={"session_id": session.session_id},
+            )
         return {"status": "success", "session": session.to_dict(), "student_join_url": self._student_join_url(join_code)}
 
     def get_class_session(self, session_id: str) -> Dict[str, Any]:
@@ -150,9 +151,10 @@ class ClassroomWorkflowRuntime:
     def end_class_session(self, session_id: str) -> Dict[str, Any]:
         session = self._require_session(session_id)
         if session.status == "running":
-            self.store.append_session_event(session_id, "session_end")
-            session = self.store.end_class_session(session_id)
-            self.store.add_recent_action(session.project_id, "End class", "Class session ended.", status="success")
+            with self.store.batch():
+                self.store.append_session_event(session_id, "session_end")
+                session = self.store.end_class_session(session_id)
+                self.store.add_recent_action(session.project_id, "End class", "Class session ended.", status="success")
         self._student_presence.pop(session_id, None)
         return {"status": "success", "session": session.to_dict()}
 
@@ -164,14 +166,15 @@ class ClassroomWorkflowRuntime:
         stage = lesson.find_stage(stage_id)
         if stage is None:
             raise KeyError(f"Unknown stage: {stage_id}")
-        self.store.set_session_stage(session_id, stage_id)
-        self.store.append_session_event(
-            session_id,
-            "stage_enter",
-            stage_id=stage_id,
-            payload={"stage_title": stage.get("title", ""), "planned_minutes": stage.get("minutes", 0)},
-        )
-        scene_result = self.apply_lesson_scene(session.project_id, session.lesson_id, stage_id)
+        with self.store.batch():
+            self.store.set_session_stage(session_id, stage_id)
+            self.store.append_session_event(
+                session_id,
+                "stage_enter",
+                stage_id=stage_id,
+                payload={"stage_title": stage.get("title", ""), "planned_minutes": stage.get("minutes", 0)},
+            )
+            scene_result = self.apply_lesson_scene(session.project_id, session.lesson_id, stage_id)
         return {"status": "success", "session_id": session_id, "stage": stage, "scene": scene_result}
 
     def launch_session_question(
@@ -212,18 +215,19 @@ class ClassroomWorkflowRuntime:
             raise ValueError("Question launch requires question_id or adhoc text")
 
         active = {**question, "stage_id": stage_id or session.current_stage_id, "launched_at": self._utc_now()}
-        self.store.set_active_question(session_id, active)
-        self.store.append_session_event(
-            session_id,
-            "question_launched",
-            stage_id=stage_id,
-            payload={
-                "question_id": active["question_id"],
-                "text": active["text"],
-                "type": active["type"],
-                "options": active["options"],
-            },
-        )
+        with self.store.batch():
+            self.store.set_active_question(session_id, active)
+            self.store.append_session_event(
+                session_id,
+                "question_launched",
+                stage_id=stage_id,
+                payload={
+                    "question_id": active["question_id"],
+                    "text": active["text"],
+                    "type": active["type"],
+                    "options": active["options"],
+                },
+            )
         return {"status": "success", "active_question": active}
 
     def close_session_question(self, session_id: str) -> Dict[str, Any]:
@@ -232,13 +236,14 @@ class ClassroomWorkflowRuntime:
         if not active.get("question_id"):
             return {"status": "success", "active_question": {}}
         tally = self._question_tally(session, str(active["question_id"]), active)
-        self.store.append_session_event(
-            session_id,
-            "question_closed",
-            stage_id=str(active.get("stage_id") or ""),
-            payload={"question_id": active["question_id"], "tally": tally},
-        )
-        self.store.set_active_question(session_id, {})
+        with self.store.batch():
+            self.store.append_session_event(
+                session_id,
+                "question_closed",
+                stage_id=str(active.get("stage_id") or ""),
+                payload={"question_id": active["question_id"], "tally": tally},
+            )
+            self.store.set_active_question(session_id, {})
         return {"status": "success", "tally": tally}
 
     def add_session_observation(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -340,14 +345,15 @@ class ClassroomWorkflowRuntime:
             if not text:
                 raise ValueError("Answer text is required")
             response["text"] = text
-        entry = self.store.add_student_response(session.session_id, question_id, response)
+        with self.store.batch():
+            entry = self.store.add_student_response(session.session_id, question_id, response)
+            self.store.append_session_event(
+                session.session_id,
+                "student_response",
+                stage_id=str(active.get("stage_id") or ""),
+                payload={"question_id": question_id, **response},
+            )
         self._touch_presence(session.session_id, nickname)
-        self.store.append_session_event(
-            session.session_id,
-            "student_response",
-            stage_id=str(active.get("stage_id") or ""),
-            payload={"question_id": question_id, **response},
-        )
         return {"status": "success", "recorded": entry}
 
     # ------------------------------------------------------------------
