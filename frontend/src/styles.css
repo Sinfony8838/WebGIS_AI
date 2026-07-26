@@ -2373,7 +2373,7 @@ button {
   position: absolute;
   right: 0;
   top: auto;
-  width: 260px;
+  width: min(292px, calc(100vw - 20px));
   max-height: min(60vh, 520px);
   overflow-y: auto;
   z-index: 15;
@@ -2397,37 +2397,16 @@ button {
   user-select: none;
 }
 
-/* 头部的显式模式开关：取代旧的"地球模式/平面模式"文字提示
-   （那个提示长得像分组标题，是"分类混乱"观感的主要来源）。 */
-.visual-map-mode-switch {
-  margin-left: auto;
-  display: inline-flex;
-  padding: 2px;
-  border-radius: 999px;
-  border: 1px solid rgba(132, 178, 220, 0.28);
-  background: rgba(12, 26, 44, 0.55);
-}
-
-.visual-map-mode-button {
-  padding: 2px 9px;
-  border: 0;
-  border-radius: 999px;
-  font-size: 10.5px;
-  letter-spacing: 0.04em;
-  color: var(--text-soft);
-  background: transparent;
-  cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-.visual-map-mode-button.is-active {
-  color: #0b1626;
-  background: linear-gradient(180deg, #9bd8ff, #58c7ff);
-  font-weight: 600;
+.visual-map-title {
+  flex: 1;
 }
 
 .visual-map-caption {
   margin: 0;
+  padding: 6px 8px;
+  border: 1px solid rgba(140, 190, 235, 0.14);
+  border-radius: 8px;
+  background: rgba(10, 25, 45, 0.28);
   font-size: 11px;
   line-height: 1.5;
   color: var(--text-dim);
@@ -2470,9 +2449,9 @@ button {
 }
 
 .visual-map-scenes {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
 }
 
 .visual-map-topic {
@@ -2492,9 +2471,9 @@ button {
 }
 
 .visual-map-topic-items {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
 }
 
 .visual-map-badge {
@@ -2530,6 +2509,22 @@ button {
   font-size: 12px;
   color: var(--text-main);
   transition: background 0.15s;
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid rgba(140, 190, 235, 0.12);
+  background: rgba(14, 30, 52, 0.32);
+}
+
+.visual-map-topic-items .globe-theme-toggle,
+.visual-map-topic-items .teaching-map-item {
+  width: 100%;
+}
+
+.visual-map-topic-items .teaching-map-item-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .teaching-map-item:hover {
@@ -6617,6 +6612,8 @@ button {
   background: rgba(14, 30, 52, 0.5);
   color: rgba(224, 238, 250, 0.92);
   font-size: 12.5px;
+  min-width: 0;
+  min-height: 38px;
   text-align: left;
   cursor: pointer;
   transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease;

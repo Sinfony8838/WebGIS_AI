@@ -2888,7 +2888,6 @@ export default function App() {
           <VisualMapPanel
             viewMode={viewMode}
             activeThemeIds={globeThemeIds}
-            onSwitchViewMode={handleViewModeToggle}
             onChangeThemes={(ids) => {
               setGlobeThemeIds(ids);
               // 开启 3D 主题时经统一过渡切到地球（带相机同步），而非硬切。

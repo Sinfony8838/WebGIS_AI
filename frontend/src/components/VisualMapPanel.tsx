@@ -54,8 +54,6 @@ type Props = {
   activeThemeIds: string[];
   onChangeThemes: (ids: string[]) => void;
   onApplyScene: (preset: GlobeScenePreset) => void;
-  /** 显式请求切换视图模式（走 App 的过渡动画与相机同步）。 */
-  onSwitchViewMode: (mode: ViewMode) => void;
   textbookItems: TeachingMapEntry[];
   textbookActiveIds: Set<string>;
   busy: boolean;
@@ -67,7 +65,6 @@ export function VisualMapPanel({
   activeThemeIds,
   onChangeThemes,
   onApplyScene,
-  onSwitchViewMode,
   textbookItems,
   textbookActiveIds,
   busy,
@@ -129,38 +126,13 @@ export function VisualMapPanel({
       >
         <span aria-hidden>🗺️</span>
         <span className="visual-map-title">可视化地图</span>
-        <div
-          className="visual-map-mode-switch"
-          role="group"
-          aria-label="视图模式"
-          onClick={(event) => event.stopPropagation()}
-        >
-          <button
-            type="button"
-            className={`visual-map-mode-button ${viewMode === "globe" ? "is-active" : ""}`}
-            aria-pressed={viewMode === "globe"}
-            data-testid="visual-map-mode-globe"
-            onClick={() => onSwitchViewMode("globe")}
-          >
-            3D 地球
-          </button>
-          <button
-            type="button"
-            className={`visual-map-mode-button ${viewMode === "plane" ? "is-active" : ""}`}
-            aria-pressed={viewMode === "plane"}
-            data-testid="visual-map-mode-plane"
-            onClick={() => onSwitchViewMode("plane")}
-          >
-            2D 平面
-          </button>
-        </div>
         <span className="teaching-map-toggle-icon">{collapsed ? "▸" : "▾"}</span>
       </div>
 
       {!collapsed && (
         <div className="visual-map-body">
           <p className="visual-map-caption">
-            按主题分组：<b>3D</b> 条目显示在地球模式，<b>2D</b> 条目显示在平面模式，点击会自动切换视图。
+            按主题选图：点选 <b>3D</b> 或 <b>2D</b> 条目会自动进入对应视图。
           </p>
           <p className="globe-theme-panel__section-label">一键教学场景</p>
           <div className="visual-map-scenes" data-testid="visual-map-scenes">

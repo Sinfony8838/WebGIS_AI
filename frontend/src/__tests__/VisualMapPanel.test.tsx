@@ -8,14 +8,12 @@ function renderExpanded(props: Partial<ComponentProps<typeof VisualMapPanel>> = 
   const onChangeThemes = vi.fn();
   const onApplyScene = vi.fn();
   const onToggleTextbook = vi.fn();
-  const onSwitchViewMode = vi.fn();
   const result = render(
     <VisualMapPanel
       viewMode="globe"
       activeThemeIds={[]}
       onChangeThemes={onChangeThemes}
       onApplyScene={onApplyScene}
-      onSwitchViewMode={onSwitchViewMode}
       textbookItems={[]}
       textbookActiveIds={new Set<string>()}
       busy={false}
@@ -25,7 +23,7 @@ function renderExpanded(props: Partial<ComponentProps<typeof VisualMapPanel>> = 
   );
   // The panel defaults to collapsed; expand so tests can exercise its body.
   fireEvent.click(screen.getByTestId("visual-map-panel").querySelector(".visual-map-header")!);
-  return { ...result, onChangeThemes, onApplyScene, onToggleTextbook, onSwitchViewMode };
+  return { ...result, onChangeThemes, onApplyScene, onToggleTextbook };
 }
 
 describe("VisualMapPanel", () => {
@@ -55,7 +53,6 @@ describe("VisualMapPanel", () => {
         activeThemeIds={["hu_line"]}
         onChangeThemes={onChangeThemes}
         onApplyScene={vi.fn()}
-        onSwitchViewMode={vi.fn()}
         textbookItems={[]}
         textbookActiveIds={new Set<string>()}
         busy={false}
@@ -113,16 +110,12 @@ describe("VisualMapPanel", () => {
     expect(huLineToggle.querySelector(".visual-map-badge-3d")).toBeTruthy();
   });
 
-  it("renders an explicit mode switch that reflects the current view mode", () => {
-    const { onSwitchViewMode } = renderExpanded({ viewMode: "plane" });
+  it("does not duplicate the global 2D/3D mode switch", () => {
+    renderExpanded({ viewMode: "plane" });
 
-    const globeButton = screen.getByTestId("visual-map-mode-globe");
-    const planeButton = screen.getByTestId("visual-map-mode-plane");
-    expect(planeButton.getAttribute("aria-pressed")).toBe("true");
-    expect(globeButton.getAttribute("aria-pressed")).toBe("false");
-
-    fireEvent.click(globeButton);
-    expect(onSwitchViewMode).toHaveBeenCalledWith("globe");
+    expect(screen.queryByTestId("visual-map-mode-globe")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("visual-map-mode-plane")).not.toBeInTheDocument();
+    expect(screen.getByText(/自动进入对应视图/)).toBeInTheDocument();
   });
 
   it("marks schematic datasets with a quality badge", () => {
