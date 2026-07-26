@@ -29,6 +29,8 @@ type Props = {
   onVoiceSubmit: (transcript: string) => void;
   onVoiceNotice: (tone: "info" | "success" | "error", title: string, detail?: string) => void;
   busy: boolean;
+  /** Current lesson-workflow phase; drives the header chip and chip ordering. */
+  teachingPhase?: "course_prep" | "in_class" | "post_class" | "";
 };
 
 // One-tap teaching capabilities. Each chip sends a templated prompt that the
@@ -58,6 +60,15 @@ const CAPABILITY_CHIPS: Array<{ key: string; label: string; prompt: string }> = 
     prompt: "请切换到更适合当前教学目标的底图，并说明选择原因。"
   }
 ];
+
+// The agent knows which workflow phase it is serving (teaching_context); the
+// header chip surfaces that awareness to the teacher, and the capability
+// chips are re-ordered so the most phase-relevant action always comes first.
+const PHASE_META: Record<string, { label: string; cls: string; chipOrder: string[] }> = {
+  course_prep: { label: "课前备课", cls: "phase-prep", chipOrder: ["follow-up", "read-map", "reflect", "switch-basemap"] },
+  in_class: { label: "课堂进行中", cls: "phase-class", chipOrder: ["read-map", "follow-up", "switch-basemap", "reflect"] },
+  post_class: { label: "课后复盘", cls: "phase-review", chipOrder: ["reflect", "follow-up", "read-map", "switch-basemap"] }
+};
 
 // Map the routed intent to a short badge so the teacher can see how the agent
 // understood the request - the most compact "agent" signal per message.
@@ -350,9 +361,18 @@ export function CopilotWidget({
   onConfirm = () => undefined,
   onVoiceSubmit,
   onVoiceNotice,
-  busy
+  busy,
+  teachingPhase = ""
 }: Props) {
   const speechSupported = useMemo(() => Boolean(getSpeechRecognitionConstructor()), []);
+  const phaseMeta = teachingPhase ? PHASE_META[teachingPhase] || null : null;
+  const orderedChips = useMemo(() => {
+    if (!phaseMeta) {
+      return CAPABILITY_CHIPS;
+    }
+    const order = phaseMeta.chipOrder;
+    return [...CAPABILITY_CHIPS].sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
+  }, [phaseMeta]);
   const [minimized, setMinimized] = useState<boolean>(() =>
     safeWindowWidth() <= 640 ? true : readStorage(STATE_STORAGE_KEY, true)
   );
@@ -774,12 +794,18 @@ export function CopilotWidget({
             />
           </div>
           <div className="copilot-title-copy">
-            <p className="copilot-eyebrow">Professional Teaching Agent</p>
             <h2>专业教学智能体</h2>
+            <div className="copilot-header-meta">
+              <span className={`status-pill ${busy ? "busy" : "ready"}`}>{busy ? "执行中" : "在线"}</span>
+              {phaseMeta ? (
+                <span className={`copilot-phase-chip ${phaseMeta.cls}`} data-testid="copilot-phase-chip">
+                  {phaseMeta.label}
+                </span>
+              ) : null}
+            </div>
           </div>
         </div>
         <div className="copilot-widget-actions" onPointerDown={(event) => event.stopPropagation()}>
-          <span className={`status-pill ${busy ? "busy" : "ready"}`}>{busy ? "执行中" : "在线"}</span>
           <button
             type="button"
             className="mini-control copilot-collapse"
@@ -939,7 +965,7 @@ export function CopilotWidget({
           }}
         >
           <div className="copilot-capability-chips" data-testid="copilot-capability-chips">
-            {CAPABILITY_CHIPS.map((chip) => (
+            {orderedChips.map((chip) => (
               <button
                 key={chip.key}
                 type="button"

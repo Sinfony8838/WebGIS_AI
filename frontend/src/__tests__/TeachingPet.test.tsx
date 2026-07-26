@@ -67,6 +67,20 @@ describe("TeachingPet", () => {
     expect(screen.getByTestId("teaching-pet-orb")).toBeInTheDocument();
   });
 
+  it("cuts each pose with the measured sprite window instead of uniform thirds", () => {
+    renderPet({}, "header");
+    const sprite = screen
+      .getByTestId("teaching-pet-header")
+      .querySelector("img.teaching-pet-sprite") as HTMLImageElement;
+    // idle = column 0, row 0. A uniform 5x3 grid would give translate(0, 0)
+    // and paint the top of the next artwork row inside the viewport (the
+    // "two overlapping pets" bug); the measured window shifts to the real
+    // artwork origin (x 33.5, y 167 on the 1254px sheet) instead.
+    expect(sprite.style.width).toBe("554.8673%");
+    expect(sprite.style.height).toBe("489.8438%");
+    expect(sprite.style.transform).toBe("translate(-2.6715%, -13.3174%)");
+  });
+
   it("maps routing / planning / execution / confirmation / error stages to poses", () => {
     const stages: Array<[string, string]> = [
       ["routing", "search"],

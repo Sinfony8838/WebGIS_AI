@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { JobRecord } from "../types";
-import { getPoseById, type PetPoseId } from "../assets/teaching-pet/manifest";
+import {
+  SPRITE_CELL_HEIGHT,
+  SPRITE_CELL_WIDTH,
+  SPRITE_SHEET_SIZE,
+  getPoseById,
+  getPoseWindow,
+  type PetPoseId
+} from "../assets/teaching-pet/manifest";
 import { deriveTeachingPetState, type PetState } from "./teachingPetState";
 
 type Props = {
@@ -300,12 +307,16 @@ export function TeachingPet({
   const sizeClass = size === "orb" ? "teaching-pet-orb" : "teaching-pet-header";
   const motionClass = reducedMotion ? "reduced" : "animated";
 
-  // The outer element is the fixed-size viewport for one sheet cell.  Keeping
-  // the image as a child instead of a CSS background gives us an explicit
-  // clipping boundary: a neighbouring row or column can never be painted
-  // outside the selected pose.
+  // The outer element is the fixed-size viewport for one pose. The artwork
+  // rows/columns are NOT on a uniform 5x3 grid (see manifest), so the sheet
+  // is scaled so the measured pose window exactly fills the viewport and is
+  // shifted to that window's measured origin. translate percentages refer to
+  // the img itself, so offsets are expressed as fractions of the full sheet.
+  const poseWindow = getPoseWindow(pose);
   const spriteStyle = {
-    transform: `translate(-${pose.column * 20}%, -${(pose.row * 100) / 3}%)`
+    width: `${((SPRITE_SHEET_SIZE / SPRITE_CELL_WIDTH) * 100).toFixed(4)}%`,
+    height: `${((SPRITE_SHEET_SIZE / SPRITE_CELL_HEIGHT) * 100).toFixed(4)}%`,
+    transform: `translate(-${((poseWindow.left / SPRITE_SHEET_SIZE) * 100).toFixed(4)}%, -${((poseWindow.top / SPRITE_SHEET_SIZE) * 100).toFixed(4)}%)`
   } as CSSProperties;
 
   return (

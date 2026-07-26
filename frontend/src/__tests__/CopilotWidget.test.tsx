@@ -150,6 +150,29 @@ describe("CopilotWidget", () => {
     expect(prompt).toContain("读图讲解");
   });
 
+  it("shows the teaching phase chip when a workflow phase is active", () => {
+    renderWidget({ teachingPhase: "in_class" });
+    expect(screen.getByTestId("copilot-phase-chip")).toHaveTextContent("课堂进行中");
+  });
+
+  it("hides the phase chip outside the lesson workflow", () => {
+    renderWidget();
+    expect(screen.queryByTestId("copilot-phase-chip")).toBeNull();
+  });
+
+  it("reorders capability chips by phase so the most relevant action comes first", () => {
+    renderWidget({ teachingPhase: "post_class" });
+    const chips = within(screen.getByTestId("copilot-capability-chips")).getAllByRole("button");
+    expect(chips[0]).toHaveTextContent("复盘");
+
+    cleanup();
+    window.localStorage.clear();
+    setSpeechRecognitionSupport(true);
+    renderWidget({ teachingPhase: "in_class" });
+    const inClassChips = within(screen.getByTestId("copilot-capability-chips")).getAllByRole("button");
+    expect(inClassChips[0]).toHaveTextContent("读图");
+  });
+
   it("shows an intent badge derived from the routed intent on assistant messages", () => {
     renderWidget({
       chatLog: [
