@@ -221,11 +221,7 @@ export type JobRecord = {
       requires_map_context: boolean;
       tool_params: Record<string, unknown>;
     }>;
-    actions_executed?: Array<{
-      action: { tool_name: string; tool_params: Record<string, unknown> };
-      risk_level?: string;
-      result?: Record<string, unknown>;
-    }>;
+    actions_executed?: ExecutedAction[];
     requires_confirmation?: boolean;
     confirmation_id?: string;
     confirmation_status?: string;
@@ -247,11 +243,26 @@ export type ChatMessage = {
   text: string;
   timestamp: string;
   teaching_contract?: TeachingContract | null;
+  /** Routed teaching intent (teaching_explain/question/action/reflect, knowledge, tool, hybrid) - drives the intent badge. */
+  intent?: string | null;
+  /** Tools the agent executed for this reply - drives the collapsible tool-use trace. */
+  actions_executed?: ExecutedAction[] | null;
 };
 
 export type CitationRecord = {
   title: string;
   url: string;
+};
+
+/**
+ * A tool call the agent actually executed on the map. Persisted per
+ * ChatMessage so the widget can render a collapsible tool-use trace under
+ * the assistant reply (the most "agent" affordance - visible tool use).
+ */
+export type ExecutedAction = {
+  action: { tool_name: string; tool_params: Record<string, unknown> };
+  risk_level?: string;
+  result?: Record<string, unknown>;
 };
 
 export type KnowledgeAnswer = {
@@ -275,6 +286,18 @@ export type AssistantMode = "teaching" | "knowledge" | "tool";
 export type AssistantTarget = "webgis" | "qgis";
 export type AssistantInputMode = "text" | "voice";
 
+/**
+ * Where the teacher currently is in the lesson workflow. Sent with every
+ * assistant request so the agent knows which lesson/session/stage it is
+ * serving and can adapt routing and answer strategy per phase.
+ */
+export type TeachingContext = {
+  lesson_id?: string;
+  session_id?: string;
+  stage_id?: string;
+  phase?: "course_prep" | "in_class" | "post_class" | "";
+};
+
 export type MapContext = {
   center: [number, number];
   zoom: number;
@@ -287,6 +310,7 @@ export type MapContext = {
     selected_feature_summary?: string;
     selected_region?: Record<string, unknown>;
     active_lesson_materials?: Array<{ id: string; title: string; type: string; region_binding?: RegionBinding }>;
+    teaching_context?: TeachingContext;
   };
 
 export type ScreenSnapshot = {

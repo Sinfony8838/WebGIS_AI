@@ -54,6 +54,11 @@ TOOL_ACTION_HINTS = (
     "计算",
     "统计",
     "渲染",
+    "发布",
+    "发给",
+    "发起",
+    "推送",
+    "记一下",
     "apply",
     "switch",
     "hide",
@@ -369,7 +374,7 @@ class AssistantRouter:
                 "recommended_clarification": "",
             }
         if assistant_mode == "teaching":
-            return self._route_teaching(message)
+            return self._route_teaching(message, map_context)
         has_tool_hint = _contains_any(message, TOOL_ACTION_HINTS)
         has_explanation_hint = _contains_any(message, EXPLANATION_HINTS)
         if has_tool_hint and has_explanation_hint:
@@ -404,7 +409,7 @@ class AssistantRouter:
             "recommended_clarification": "Provide a specific operation or switch to knowledge mode.",
         }
 
-    def _route_teaching(self, message: str) -> Dict[str, str]:
+    def _route_teaching(self, message: str, map_context: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
         """Teaching mode never asks the teacher to switch modes: an explicit map
         operation becomes a teaching action, reflection/question prompts keep
         their classroom framing, and everything else defaults to a teaching
@@ -430,6 +435,16 @@ class AssistantRouter:
                 "intent": "teaching_question",
                 "reason": "classroom follow-up question design",
                 "confidence": "0.76",
+                "ambiguity_reason": "",
+                "recommended_clarification": "",
+            }
+        teaching_context = (map_context or {}).get("teaching_context") if isinstance(map_context, dict) else {}
+        phase = str((teaching_context or {}).get("phase") or "") if isinstance(teaching_context, dict) else ""
+        if phase == "post_class":
+            return {
+                "intent": "teaching_reflect",
+                "reason": "phase_default: post-class message defaults to reflection",
+                "confidence": "0.72",
                 "ambiguity_reason": "",
                 "recommended_clarification": "",
             }
@@ -488,8 +503,12 @@ class KnowledgeEngine:
             retrieval_trace.extend(self._score_sources(citations, source_type="local_kb", timely=answer_type == "timely_fact"))
 
         # --- Phase 2: online search for supplementary context ---
+        teaching_context = map_context.get("teaching_context") if isinstance(map_context.get("teaching_context"), dict) else {}
+        teaching_phase = str((teaching_context or {}).get("phase") or "")
         web_context = ""
-        if self.resource_search is not None and answer_type != "map_reading":
+        # In-class requests skip online retrieval entirely: latency beats
+        # coverage while the teacher is standing in front of the class.
+        if self.resource_search is not None and answer_type != "map_reading" and teaching_phase != "in_class":
             try:
                 web_results = self.resource_search.search(query=question, scope="web", limit=5)
                 web_items = web_results.get("items", [])
@@ -631,6 +650,24 @@ class KnowledgeEngine:
                     "没有真实课堂记录时不得编造学生表现或掌握程度。\n"
                 )
 
+        teaching_context = map_context.get("teaching_context") if isinstance(map_context.get("teaching_context"), dict) else {}
+        phase = str((teaching_context or {}).get("phase") or "")
+        if phase == "in_class":
+            system_prompt += (
+                "\n当前正在课堂授课：全文控制在 150 字以内，第一句必须是教师可以直接口播的结论，"
+                "课堂要点最多保留 1 个给学生的问题，不要展开背景综述。\n"
+            )
+        elif phase == "course_prep":
+            system_prompt += (
+                "\n当前处于课前备课：可以输出较长的结构化内容（问题阶梯、地图证据路线、预演话术），"
+                "设计的问题要附预期答案要点和常见误区。\n"
+            )
+        elif phase == "post_class":
+            system_prompt += (
+                "\n当前处于课后复盘：必须优先引用参考上下文中“课堂真实记录”里的具体数字；"
+                "记录之外的学生表现一律不得推断或编造。\n"
+            )
+
         # Build context from local KB entry and web search
         context_parts: List[str] = []
         if entry:
@@ -647,6 +684,10 @@ class KnowledgeEngine:
         map_summary = self._map_context_brief(map_context)
         if map_summary:
             context_parts.append(f"当前地图状态：{map_summary}")
+
+        session_digest = str(map_context.get("session_digest") or "").strip()
+        if session_digest:
+            context_parts.append(f"课堂真实记录（可引用具体数字）：{session_digest}")
 
         user_content = question
         if context_parts:
@@ -1170,6 +1211,9 @@ class ToolExecutor:
             "search_poi": {"target": "webgis", "category": "search", "risk_level": "low", "reversible": True, "requires_confirmation": False, "requires_map_context": True},
             "toggle_teaching_map": {"target": "webgis", "category": "teaching_map", "risk_level": "low", "reversible": True, "requires_confirmation": False},
             "open_material": {"target": "webgis", "category": "material", "risk_level": "low", "reversible": True, "requires_confirmation": False},
+            "run_visual_query": {"target": "webgis", "category": "analysis", "risk_level": "medium", "reversible": True, "requires_confirmation": False},
+            "record_observation": {"target": "webgis", "category": "classroom", "risk_level": "medium", "reversible": False, "requires_confirmation": False, "validator": self._require_active_session},
+            "launch_question": {"target": "webgis", "category": "classroom", "risk_level": "high", "reversible": False, "requires_confirmation": True, "validator": self._require_active_session},
         }
         return registry
 
@@ -1226,6 +1270,16 @@ class ToolExecutor:
                 return ""
         return "an explicit output path is required for this action"
 
+    def _require_active_session(self, params: Dict[str, Any], project_state: Dict[str, Any], map_context: Dict[str, Any]) -> str:
+        teaching_context = map_context.get("teaching_context") if isinstance(map_context.get("teaching_context"), dict) else {}
+        session_id = str((teaching_context or {}).get("session_id") or "").strip()
+        if not session_id:
+            return "该操作需要正在进行的班课，请先在课中面板开始上课"
+        session = self.store.get_class_session(session_id)
+        if session is None or session.status != "running":
+            return "当前班课已结束，课堂工具（发布提问/记录学情）只在进行中的班课可用"
+        return ""
+
 
 class AssistantSessionEngine:
     def __init__(
@@ -1250,10 +1304,16 @@ class AssistantSessionEngine:
         self.tool_executor = ToolExecutor(store, execute_webgis)
         self.memory = ConversationMemory(store)
         self.vision_service = vision_service
+        self.session_stats_provider: Optional[Callable[[str], Dict[str, Any]]] = None
 
     def set_resource_search(self, resource_search: Any) -> None:
         """Wire the resource search service into the knowledge engine for online search."""
         self.knowledge.resource_search = resource_search
+
+    def set_session_stats_provider(self, provider: Callable[[str], Dict[str, Any]]) -> None:
+        """Wire a callable(session_id) -> statistics dict so reflection and
+        in-class commentary can quote real classroom records."""
+        self.session_stats_provider = provider
 
     def handle(
         self,
@@ -1394,13 +1454,25 @@ class AssistantSessionEngine:
             plan_fingerprint = _fingerprint(frozen_plan)
             expires_at = _utc_timestamp(minutes_from_now=15)
             stage_callback("confirmation", "running", "Waiting for user confirmation", "")
+            confirm_title = "High-risk GIS action"
+            confirm_reason = "One or more planned actions are high risk and require confirmation."
+            launch_action = next((item for item in actions if str(item.get("tool_name") or "") == "launch_question"), None)
+            if launch_action is not None:
+                launch_params = launch_action.get("tool_params") or {}
+                question_text = str(launch_params.get("text") or launch_params.get("question_id") or "").strip()
+                confirm_title = "向学生端发布提问"
+                confirm_reason = (
+                    f"即将向学生端发布提问：{question_text}。发送后全班学生立即可见，请确认。"
+                    if question_text
+                    else "即将向学生端发布提问，发送后全班学生立即可见，请确认。"
+                )
             confirmation = self.store.create_confirmation(
                 project.project_id,
                 conversation.conversation_id,
                 job_id,
                 normalized_mode,
-                title="High-risk GIS action",
-                reason="One or more planned actions are high risk and require confirmation.",
+                title=confirm_title,
+                reason=confirm_reason,
                 plan_fingerprint=plan_fingerprint,
                 payload={
                     "frozen_plan": frozen_plan,
@@ -1481,6 +1553,7 @@ class AssistantSessionEngine:
         if intent == "hybrid" or normalized_mode == "teaching":
             stage_callback("grounding", "running", "Explaining executed result", "")
             if normalized_mode == "teaching":
+                map_context = self._inject_session_digest(map_context, "teaching_action")
                 knowledge = self.knowledge.answer(message, map_context=map_context, teaching_task="teaching_action")
                 citations = knowledge["citations"]
                 grounding_text = self.knowledge.render_public_answer(knowledge, include_teaching_points=True)
@@ -1572,6 +1645,26 @@ class AssistantSessionEngine:
         actions = list((frozen_plan or payload).get("actions") or payload.get("actions") or [])
         target = str((frozen_plan or payload).get("target") or payload.get("target") or "webgis")
         map_context = dict((frozen_plan or payload).get("map_context") or payload.get("map_context") or {})
+        confirmed_plan_intent = str((frozen_plan or payload).get("intent") or payload.get("intent") or "tool")
+        revalidation = self.tool_executor.assess(
+            target,
+            actions,
+            pinned_state=conversation.pinned_state if conversation else {},
+            assistant_mode=confirmed_plan_intent,
+            project_state={"project_id": confirmation.project_id},
+            map_context=map_context,
+        )
+        if revalidation["risk_level"] == "blocked":
+            self.store.resolve_confirmation(confirmation_id, "invalidated")
+            if conversation:
+                self.memory.update_task_memory(
+                    conversation,
+                    {"pending_confirmation_id": ""},
+                    map_context,
+                    pinned_state_updates={"last_pending_confirmation": {}, "active_plan_fingerprint": ""},
+                )
+            blocked = next((item for item in revalidation["actions_planned"] if item.get("risk_level") == "blocked"), {})
+            raise ValueError(str(blocked.get("validation_error") or "计划已失效，无法执行"))
         self.store.resolve_confirmation(confirmation_id, "approved")
         stage_callback("execution", "running", "Executing confirmed action", "")
         executed = self.tool_executor.execute(
@@ -1595,6 +1688,7 @@ class AssistantSessionEngine:
             stage_callback("grounding", "running", "Explaining confirmed result", "")
             confirmed_message = str((frozen_plan or payload).get("message") or "")
             if confirmed_intent.startswith("teaching"):
+                map_context = self._inject_session_digest(map_context, "teaching_action")
                 knowledge = self.knowledge.answer(confirmed_message, map_context=map_context, teaching_task="teaching_action")
                 citations = list(knowledge.get("citations") or [])
                 grounding_text = self.knowledge.render_public_answer(knowledge, include_teaching_points=True)
@@ -1768,6 +1862,79 @@ class AssistantSessionEngine:
         )
         return enriched
 
+    def _inject_session_digest(self, map_context: Dict[str, Any], teaching_task: str) -> Dict[str, Any]:
+        """Attach a compact digest of the live class session so answers can
+        quote real tallies, misconceptions and stage timings.
+
+        Reflection (or any post-class message) gets the full statistics digest;
+        in-class messages get a much smaller brief (latest question tally and
+        observation counts). Without a session handle the context is returned
+        unchanged, preserving the existing "no records, say so" behaviour.
+        """
+        if self.session_stats_provider is None:
+            return map_context
+        teaching_context = map_context.get("teaching_context") if isinstance(map_context.get("teaching_context"), dict) else {}
+        session_id = str((teaching_context or {}).get("session_id") or "").strip()
+        phase = str((teaching_context or {}).get("phase") or "")
+        if not session_id:
+            return map_context
+        wants_full = teaching_task == "teaching_reflect" or phase == "post_class"
+        if not wants_full and phase != "in_class":
+            return map_context
+        try:
+            statistics = self.session_stats_provider(session_id)
+        except Exception:
+            return map_context
+        if not isinstance(statistics, dict):
+            return map_context
+        if wants_full:
+            question_rows = []
+            for item in list(statistics.get("questions") or []):
+                if not isinstance(item, dict):
+                    continue
+                question_rows.append(
+                    {
+                        "text": str(item.get("text") or "")[:60],
+                        "type": item.get("type"),
+                        "stage_id": item.get("stage_id"),
+                        "total": item.get("total"),
+                        "correct_rate": item.get("correct_rate"),
+                        "option_counts": item.get("option_counts"),
+                    }
+                )
+            stage_rows = [
+                {
+                    "stage_id": item.get("stage_id"),
+                    "title": item.get("title"),
+                    "planned_minutes": item.get("planned_minutes"),
+                    "actual_minutes": item.get("actual_minutes"),
+                }
+                for item in list(statistics.get("stages") or [])
+                if isinstance(item, dict)
+            ]
+            # Small, high-signal fields first so a trailing truncation can only
+            # ever drop the bulky per-question/per-stage rows.
+            digest = {
+                "lesson_title": statistics.get("lesson_title"),
+                "duration_minutes": statistics.get("duration_minutes"),
+                "participant_count": statistics.get("participant_count"),
+                "observations": statistics.get("observations"),
+                "assistant_exchange_count": statistics.get("assistant_exchange_count"),
+                "snapshot_count": statistics.get("snapshot_count"),
+                "questions": question_rows,
+                "stages": stage_rows,
+            }
+            payload = json.dumps(digest, ensure_ascii=False, default=str)
+            return {**map_context, "session_digest": payload[:4000]}
+        questions = list(statistics.get("questions") or [])
+        brief = {
+            "participant_count": statistics.get("participant_count"),
+            "last_question": questions[-1] if questions else None,
+            "observations": statistics.get("observations"),
+        }
+        payload = json.dumps(brief, ensure_ascii=False, default=str)
+        return {**map_context, "session_digest": payload[:600]}
+
     def _handle_knowledge(
         self,
         project: ProjectRecord,
@@ -1778,6 +1945,7 @@ class AssistantSessionEngine:
         teaching_task: str = "",
     ) -> Dict[str, Any]:
         map_context = self._enrich_map_reading_with_vision(project, message, map_context, stage_callback)
+        map_context = self._inject_session_digest(map_context, teaching_task)
         llm_available = self.knowledge.minimax_client is not None and self.config.minimax_enabled()
         stage_label = "AI 通用知识 + 在线检索" if llm_available else "本地知识库检索"
         stage_callback("retrieval", "running", stage_label, "")

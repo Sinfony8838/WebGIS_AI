@@ -73,6 +73,7 @@ class AssistantMessageRequest(BaseModel):
     target: str = "webgis"
     input_mode: str = "text"
     screen_snapshot: Dict[str, Any] = Field(default_factory=dict)
+    teaching_context: Dict[str, Any] = Field(default_factory=dict)
 
 
 class AssistantConfirmRequest(BaseModel):
@@ -452,6 +453,7 @@ def submit_assistant_message(request: AssistantMessageRequest) -> Dict[str, Any]
             request.target,
             request.input_mode,
             request.screen_snapshot,
+            request.teaching_context,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

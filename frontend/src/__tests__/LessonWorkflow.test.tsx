@@ -267,6 +267,30 @@ describe("ClassRunPanel", () => {
     fireEvent.click(tab);
     expect(props.onToggleCollapsed).toHaveBeenCalled();
   });
+
+  it("renders stage-level AI follow-up chips and dispatches the prompt to the agent", () => {
+    const onAssistantPrompt = vi.fn();
+    renderPanel({ currentStageId: "s2", onAssistantPrompt });
+    const chips = screen.getByTestId("stage-assistant-prompts");
+    fireEvent.click(within(chips).getByTestId("stage-assistant-prompt-0"));
+    expect(onAssistantPrompt).toHaveBeenCalledWith("请用密度概念解释东西部人口疏密差异。");
+  });
+
+  it("hides the AI follow-up section without prompts or without a dispatcher", () => {
+    renderPanel({ currentStageId: "s2" });
+    expect(screen.queryByTestId("stage-assistant-prompts")).toBeNull();
+    cleanup();
+    renderPanel({ currentStageId: "s1", onAssistantPrompt: vi.fn() });
+    expect(screen.queryByTestId("stage-assistant-prompts")).toBeNull();
+  });
+
+  it("dispatches oral-card assistant prompts to the agent", () => {
+    const onAssistantPrompt = vi.fn();
+    renderPanel({ currentStageId: "s2", onAssistantPrompt });
+    fireEvent.click(screen.getByTestId("oral-toggle-s2q1"));
+    fireEvent.click(screen.getByTestId("oral-assistant-prompt-0"));
+    expect(onAssistantPrompt).toHaveBeenCalledWith("请用密度概念解释东西部人口疏密差异。");
+  });
 });
 
 describe("QuizOverlay", () => {

@@ -92,6 +92,7 @@ import type {
   ChatMessage,
   DatasetCatalogItem,
   DatasetStatsResponse,
+  ExecutedAction,
   HealthResponse,
   JobRecord,
   KnowledgeBaseItem,
@@ -106,6 +107,7 @@ import type {
   ResourceSearchResult,
   ScreenSnapshot,
   SlideContent,
+  TeachingContext,
   TeachingContract,
   TeachingMaterial
 } from "./types";
@@ -398,6 +400,9 @@ export default function App() {
   const lastAppliedViewRef = useRef("");
   const lastPoiSignatureRef = useRef("");
   const assistantDispatchRef = useRef<(message: string, overrides?: Partial<MapContext>) => void>(() => undefined);
+  // 课堂工作流（课前/课中/课后）当前所处的 lesson/session/stage/phase，随每次
+  // 助教请求发给后端，让智能体知道自己正在服务哪节课的哪个环节。
+  const teachingContextRef = useRef<TeachingContext | null>(null);
   const activeJobStreamsRef = useRef(0);
   const jobStreamsRef = useRef<Set<EventSource>>(new Set());
 
@@ -562,10 +567,6 @@ export default function App() {
         })
         .map(({ material }) => material);
     }, [activeLessonResourceSet, allKnowledgeMaterials, focusedRegion]);
-  const assistantActionPrompt = useMemo(
-    () => "请结合当前视图进行课堂读图讲解，突出关键空间关系、层级结构与区位判断。",
-    []
-  );
 
   const dismissToast = useCallback((toastId: string) => {
     setToasts((previous) => previous.filter((item) => item.id !== toastId));
@@ -583,13 +584,26 @@ export default function App() {
   );
 
   const appendChat = useCallback(
-    (role: ChatMessage["role"], text: string, teachingContract?: TeachingContract | null) => {
+    (
+      role: ChatMessage["role"],
+      text: string,
+      teachingContract?: TeachingContract | null,
+      intent?: string | null,
+      actionsExecuted?: ExecutedAction[] | null
+    ) => {
       if (!text.trim()) {
         return;
       }
       setChatLog((previous) => [
         ...previous,
-        { role, text, timestamp: timestamp(), teaching_contract: teachingContract ?? undefined }
+        {
+          role,
+          text,
+          timestamp: timestamp(),
+          teaching_contract: teachingContract ?? undefined,
+          intent: intent ?? undefined,
+          actions_executed: actionsExecuted ?? undefined
+        }
       ]);
     },
     []
@@ -979,6 +993,7 @@ export default function App() {
             type: material.type,
             region_binding: material.region_binding
           })),
+          teaching_context: teachingContextRef.current || undefined,
           ...overrides
         };
       },
@@ -1045,7 +1060,9 @@ export default function App() {
           appendChat(
             payload.status === "failed" ? "system" : "assistant",
             message,
-            payload.result?.teaching_contract
+            payload.result?.teaching_contract,
+            payload.result?.intent,
+            payload.result?.actions_executed
           );
           const isAssistantAnswer = Boolean(payload.result?.assistant_message || payload.result?.conversation_id);
           if (payload.status === "failed") {
@@ -1101,7 +1118,8 @@ export default function App() {
         assistantMode,
         conversationId: health?.ui.assistant_v2_enabled ? conversationId : undefined,
         history: health?.ui.assistant_v2_enabled ? chatLog : undefined,
-        screenSnapshot: effectiveSnapshot
+        screenSnapshot: effectiveSnapshot,
+        teachingContext: teachingContextRef.current || undefined
       });
       if (response.conversation_id) {
         setConversationId(response.conversation_id);
@@ -1114,24 +1132,6 @@ export default function App() {
   assistantDispatchRef.current = (message, overrides) => {
     void submitAssistantText(message, overrides);
   };
-
-  const handleReadMapWithSnapshot = useCallback(async () => {
-    if (!mapRef.current) {
-      void submitAssistantText(assistantActionPrompt);
-      return;
-    }
-    const size = mapRef.current.getSize() || [0, 0];
-    const imageDataUrl = await captureMapSnapshot(mapRef.current);
-    const snapshot = imageDataUrl
-      ? {
-          image_data_url: imageDataUrl,
-          width: Number(size[0] || 0),
-          height: Number(size[1] || 0),
-          captured_at: new Date().toISOString()
-        }
-      : undefined;
-    void submitAssistantText(assistantActionPrompt, undefined, "webgis", "text", snapshot);
-  }, [assistantActionPrompt, submitAssistantText]);
 
   const handleTemplateRun = useCallback(
     async (templateId: string) => {
@@ -2836,19 +2836,6 @@ export default function App() {
         <section className="map-workspace" aria-hidden="true" />
 
         <aside className="right-rail">
-          <section className="tool-group glass-panel">
-            <div className="tool-group-header">
-              <span>课堂动作</span>
-            </div>
-            <button
-              type="button"
-              className="tool-button active"
-              onClick={() => void handleReadMapWithSnapshot()}
-            >
-              读图讲解
-            </button>
-          </section>
-
           <MapToolRail
             mode={interactionMode}
             viewMode={viewMode}
@@ -2948,6 +2935,13 @@ export default function App() {
             void submitAssistantText(message);
             setAssistantInput("");
           }}
+          onQuickPrompt={(prompt) => {
+            const message = prompt.trim();
+            if (!message) {
+              return;
+            }
+            void submitAssistantText(message);
+          }}
           onConfirm={(confirmationId, decision = "approve") => {
             void confirmAssistantAction(confirmationId, decision).then((response) => subscribeToJob(response.job_id));
           }}
@@ -2971,6 +2965,10 @@ export default function App() {
           busy={busy}
           openSignal={lessonWorkflowOpenSignal}
           onRefresh={() => (project ? refreshProjectState(project.project_id) : undefined)}
+          onTeachingContextChange={(ctx) => {
+            teachingContextRef.current = ctx;
+          }}
+          onAssistantPrompt={(prompt) => assistantDispatchRef.current(prompt)}
           statusBar={
             <MapStatusBar
               mode={viewMode}

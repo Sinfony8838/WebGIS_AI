@@ -37,6 +37,7 @@ import type {
   ScreenSnapshot,
   SceneSnapshot,
   SessionLiveState,
+  TeachingContext,
   TimelineData,
   TimelineGenerateResponse,
   TimelineSaveResponse,
@@ -231,6 +232,7 @@ export async function sendAssistantMessage(
     conversationId?: string;
     history?: ChatMessage[];
     screenSnapshot?: ScreenSnapshot;
+    teachingContext?: TeachingContext;
   }
 ): Promise<{ job_id: string; conversation_id?: string; assistant_mode?: AssistantMode }> {
   return requestJson<{ job_id: string; conversation_id?: string; assistant_mode?: AssistantMode }>("/assistant/messages", {
@@ -245,7 +247,8 @@ export async function sendAssistantMessage(
       history: options?.history || [],
       target,
       input_mode: inputMode,
-      screen_snapshot: options?.screenSnapshot || {}
+      screen_snapshot: options?.screenSnapshot || {},
+      teaching_context: options?.teachingContext || mapContext.teaching_context || {}
     })
   });
 }

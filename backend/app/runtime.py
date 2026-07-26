@@ -295,6 +295,7 @@ class WebGISRuntime:
         )
         self.timeline_service = TimelineService(self.minimax_client)
         self.classroom = ClassroomWorkflowRuntime(self)
+        self.session_engine.set_session_stats_provider(self._session_statistics_for_assistant)
         self._normalize_loaded_projects()
 
     # Compatibility entry points retained for callers built against the
@@ -730,6 +731,7 @@ class WebGISRuntime:
         target: str = "webgis",
         input_mode: str = "text",
         screen_snapshot: Optional[Dict[str, Any]] = None,
+        teaching_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         # Heavy GIS work moved to /workflow/*; assistant actions are WebGIS-only.
         normalized_target = "webgis"
@@ -750,6 +752,7 @@ class WebGISRuntime:
                 "target": normalized_target,
                 "input_mode": normalized_input_mode,
                 "screen_snapshot": screen_snapshot or {},
+                "teaching_context": teaching_context or {},
             },
             stages=build_assistant_v2_stages() if use_v2 else build_workflow_stages(),
         )
@@ -767,6 +770,7 @@ class WebGISRuntime:
                     normalized_target,
                     normalized_input_mode,
                     screen_snapshot or {},
+                    teaching_context or {},
                 ),
                 daemon=True,
             ).start()
@@ -1326,6 +1330,59 @@ class WebGISRuntime:
         except Exception as exc:  # pragma: no cover - defensive runtime branch
             self._fail_job(job_id, "template_run", str(exc))
 
+    def _session_statistics_for_assistant(self, session_id: str) -> Dict[str, Any]:
+        """Read-only session statistics used to ground assistant answers."""
+        session = self.store.get_class_session(session_id)
+        if session is None:
+            raise KeyError(f"Unknown class session: {session_id}")
+        try:
+            lesson = self.classroom.lesson_service.get_lesson(session.lesson_id)
+        except Exception:
+            lesson = None
+        return self.classroom.report_service.build_statistics(session, lesson)
+
+    def _log_assistant_exchange(
+        self,
+        job_id: str,
+        map_context: Dict[str, Any],
+        message: str,
+        result: Dict[str, Any],
+    ) -> None:
+        """Append the assistant round-trip to the running class session's event
+        stream so post-class reports can count and quote real usage."""
+        try:
+            teaching_context = map_context.get("teaching_context") if isinstance(map_context.get("teaching_context"), dict) else {}
+            session_id = str((teaching_context or {}).get("session_id") or "").strip()
+            if not session_id:
+                return
+            session = self.store.get_class_session(session_id)
+            if session is None or session.status != "running":
+                return
+            tools = []
+            for item in result.get("actions_executed") or []:
+                action = item.get("action") or {}
+                name = str(action.get("tool_name") or "").strip()
+                if name:
+                    tools.append(name)
+            self.store.append_session_event(
+                session_id,
+                "assistant_exchange",
+                stage_id=str(teaching_context.get("stage_id") or ""),
+                payload={
+                    "job_id": job_id,
+                    "conversation_id": str(result.get("conversation_id") or ""),
+                    "intent": str(result.get("intent") or ""),
+                    "planner": str(result.get("planner") or ""),
+                    "phase": str(teaching_context.get("phase") or ""),
+                    "user_message": str(message or "")[:120],
+                    "assistant_excerpt": str(result.get("assistant_message") or "")[:160],
+                    "tools": tools,
+                    "requires_confirmation": bool(result.get("requires_confirmation")),
+                },
+            )
+        except Exception:  # pragma: no cover - event logging must never break the reply
+            pass
+
     def _run_assistant_v2_job(
         self,
         job_id: str,
@@ -1338,11 +1395,14 @@ class WebGISRuntime:
         target: str = "webgis",
         input_mode: str = "text",
         screen_snapshot: Optional[Dict[str, Any]] = None,
+        teaching_context: Optional[Dict[str, Any]] = None,
     ) -> None:
         try:
             project = self._require_project(project_id)
             if screen_snapshot:
                 map_context = {**map_context, "screen_snapshot": screen_snapshot}
+            if teaching_context:
+                map_context = {**map_context, "teaching_context": teaching_context}
             self.store.set_job_status(job_id, "running")
             self.store.append_job_step(job_id, "route", "assistant session engine started", "running")
 
@@ -1361,6 +1421,8 @@ class WebGISRuntime:
                 input_mode=input_mode,
                 stage_callback=update_stage,
             )
+            if not result.get("requires_confirmation"):
+                self._log_assistant_exchange(job_id, map_context, message, result)
             registered_artifacts: Dict[str, Any] = {}
             for item in result.get("actions_executed", []):
                 action_result = item.get("result", {})
@@ -1432,6 +1494,13 @@ class WebGISRuntime:
             messages = [plan.get("assistant_message", "").strip()]
             for action in plan.get("actions", []):
                 self.store.append_job_step(job_id, action["tool_name"], json.dumps(action["tool_params"], ensure_ascii=False), "info")
+                if action["tool_name"] in {"launch_question", "record_observation"}:
+                    # The legacy path has no risk assessment or confirmation
+                    # gate, so classroom tools are teaching-mode only.
+                    refusal = "课堂工具（发布提问/记录学情）只在专业教学智能体模式下可用，且发布提问需要教师确认。"
+                    executed_actions.append({"action": action, "result": {"assistant_message": refusal, "artifacts": []}})
+                    messages.append(refusal)
+                    continue
                 action_result = self._execute_assistant_action(project_id, action, map_context)
                 executed_actions.append({"action": action, "result": action_result})
                 if action_result.get("assistant_message"):
@@ -1476,10 +1545,18 @@ class WebGISRuntime:
             def update_stage(stage_name: str, status: str, summary: str = "", detail: str = "") -> None:
                 self.store.update_job_stage(job_id, stage_name, status, summary, detail)
 
+            confirmation = self.store.get_confirmation(confirmation_id)
+            confirmation_payload = dict(confirmation.payload or {}) if confirmation is not None else {}
             if decision == "reject":
                 result = self.session_engine.reject_confirmation(confirmation_id)
             else:
                 result = self.session_engine.execute_confirmation(confirmation_id, stage_callback=update_stage)
+                self._log_assistant_exchange(
+                    job_id,
+                    dict(confirmation_payload.get("map_context") or {}),
+                    str(confirmation_payload.get("message") or ""),
+                    result,
+                )
             registered_artifacts: Dict[str, Any] = {}
             for item in result.get("actions_executed", []):
                 action_result = item.get("result", {})
@@ -1684,6 +1761,84 @@ class WebGISRuntime:
                 "ui_actions": [{"type": "open_material", "title": title, "materials": [material]}],
                 "artifacts": [],
             }
+        if tool_name == "record_observation":
+            teaching_context = map_context.get("teaching_context") if isinstance(map_context.get("teaching_context"), dict) else {}
+            session_id = str((teaching_context or {}).get("session_id") or "").strip()
+            if not session_id:
+                raise ValueError("record_observation requires an active class session")
+            raw_verdict = str(params.get("verdict") or "").strip().lower()
+            verdict_map = {
+                "correct": "correct",
+                "对": "correct",
+                "答对": "correct",
+                "正确": "correct",
+                "partial": "partial",
+                "部分": "partial",
+                "部分正确": "partial",
+                "misconception": "misconception",
+                "误区": "misconception",
+                "错误": "misconception",
+            }
+            verdict = verdict_map.get(raw_verdict, "")
+            if not verdict:
+                raise ValueError(
+                    "record_observation 需要明确的学生表现判定 verdict（correct/partial/misconception，即 答对/部分正确/存在误区）"
+                    + (f"，收到：{raw_verdict}" if raw_verdict else "")
+                )
+            observation = {
+                "verdict": verdict,
+                "tag": str(params.get("tag") or ""),
+                "note": str(params.get("note") or ""),
+                "question_id": str(params.get("question_id") or ""),
+                "stage_id": str(params.get("stage_id") or ""),
+            }
+            self.classroom.add_session_observation(session_id, observation)
+            verdict_text = {"correct": "答对", "partial": "部分正确", "misconception": "存在误区"}[verdict]
+            detail = str(observation["note"] or observation["tag"] or "").strip()
+            summary = f"已记录课堂学情（{verdict_text}）" + (f"：{detail}" if detail else "。")
+            self.store.add_recent_action(project_id, "记录学情", summary, status="success")
+            return {"assistant_message": summary, "artifacts": []}
+        if tool_name == "launch_question":
+            teaching_context = map_context.get("teaching_context") if isinstance(map_context.get("teaching_context"), dict) else {}
+            session_id = str((teaching_context or {}).get("session_id") or "").strip()
+            if not session_id:
+                raise ValueError("launch_question requires an active class session")
+            question_id = str(params.get("question_id") or "").strip()
+            # Deliberately no teaching_context.stage_id fallback: the class may
+            # advance between planning and confirmation, and an empty stage_id
+            # makes the classroom service attribute the question to the CURRENT
+            # stage at execution time.
+            stage_id = str(params.get("stage_id") or "")
+            if question_id:
+                result = self.classroom.launch_session_question(session_id, stage_id=stage_id, question_id=question_id)
+            else:
+                raw_options = params.get("options")
+                if isinstance(raw_options, str):
+                    options = [part.strip() for part in re.split(r"[/;；、\n]", raw_options) if part.strip()]
+                elif isinstance(raw_options, list):
+                    options = [str(option) for option in raw_options]
+                else:
+                    options = []
+                raw_index = params.get("answer_index")
+                answer_index: Optional[int] = None
+                if isinstance(raw_index, bool):
+                    answer_index = None
+                elif isinstance(raw_index, int):
+                    answer_index = raw_index
+                elif isinstance(raw_index, float) and float(raw_index).is_integer():
+                    answer_index = int(raw_index)
+                elif isinstance(raw_index, str) and raw_index.strip().isdigit():
+                    answer_index = int(raw_index.strip())
+                adhoc = {
+                    "text": str(params.get("text") or "").strip(),
+                    "options": options,
+                    "answer_index": answer_index,
+                }
+                result = self.classroom.launch_session_question(session_id, stage_id=stage_id, adhoc=adhoc)
+            active = result.get("active_question") or {}
+            summary = f"已向学生端发布提问：{active.get('text', '')}"
+            self.store.add_recent_action(project_id, "发布提问", summary, status="success")
+            return {"assistant_message": summary, "active_question": active, "artifacts": []}
         raise ValueError(f"Unsupported assistant tool: {tool_name}")
 
     def _register_artifacts(self, project_id: str, job_id: str, artifacts: List[Dict[str, Any]]) -> Dict[str, Any]:

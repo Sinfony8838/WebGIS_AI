@@ -24,11 +24,59 @@ type Props = {
   inputValue: string;
   onInputChange: (value: string) => void;
   onSubmit: () => void;
+  onQuickPrompt?: (prompt: string) => void;
   onConfirm: (confirmationId: string, decision?: "approve" | "reject") => void;
   onVoiceSubmit: (transcript: string) => void;
   onVoiceNotice: (tone: "info" | "success" | "error", title: string, detail?: string) => void;
   busy: boolean;
 };
+
+// One-tap teaching capabilities. Each chip sends a templated prompt that the
+// backend router maps to one of the four teaching intents; "读图" relies on
+// shouldAttachMapSnapshot auto-attaching the current view because the prompt
+// references "当前视图". Surfacing these as chips (rather than a sidebar
+// button) makes the agent's capabilities visible inside the agent itself.
+const CAPABILITY_CHIPS: Array<{ key: string; label: string; prompt: string }> = [
+  {
+    key: "read-map",
+    label: "读图",
+    prompt: "请结合当前视图进行课堂读图讲解，突出关键空间关系、层级结构与区位判断。"
+  },
+  {
+    key: "follow-up",
+    label: "追问",
+    prompt: "请围绕当前教学主题设计一组递进式课堂追问，并说明每问的认知层次。"
+  },
+  {
+    key: "reflect",
+    label: "复盘",
+    prompt: "请对本节课进行小结，指出可强化的区域认知方法与下一步建议。"
+  },
+  {
+    key: "switch-basemap",
+    label: "切换底图",
+    prompt: "请切换到更适合当前教学目标的底图，并说明选择原因。"
+  }
+];
+
+// Map the routed intent to a short badge so the teacher can see how the agent
+// understood the request - the most compact "agent" signal per message.
+const INTENT_BADGES: Record<string, { label: string; cls: string }> = {
+  teaching_explain: { label: "讲解", cls: "intent-explain" },
+  teaching_question: { label: "追问", cls: "intent-question" },
+  teaching_action: { label: "操作", cls: "intent-action" },
+  teaching_reflect: { label: "复盘", cls: "intent-reflect" },
+  knowledge: { label: "知识", cls: "intent-knowledge" },
+  tool: { label: "操作", cls: "intent-action" },
+  hybrid: { label: "操作", cls: "intent-action" }
+};
+
+function intentBadge(intent?: string | null): { label: string; cls: string } | null {
+  if (!intent) {
+    return null;
+  }
+  return INTENT_BADGES[intent] || null;
+}
 
 // Map workflow / assistant-v2 stage keys to short, human-friendly status
 // verbs used by the inline "AI 正在思考…" indicator. Anything not listed
@@ -298,6 +346,7 @@ export function CopilotWidget({
   inputValue,
   onInputChange,
   onSubmit,
+  onQuickPrompt = () => undefined,
   onConfirm = () => undefined,
   onVoiceSubmit,
   onVoiceNotice,
@@ -319,6 +368,7 @@ export function CopilotWidget({
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>(() => initialVoiceStatus(speechSupported));
   const [voiceStatusText, setVoiceStatusText] = useState<string>(() => initialVoiceText(speechSupported));
   const [lastTranscript, setLastTranscript] = useState("");
+  const [expandedTraces, setExpandedTraces] = useState<Record<string, boolean>>({});
   const preventRestoreOnClickRef = useRef(false);
   const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const manualVoiceStopRef = useRef(false);
@@ -787,12 +837,23 @@ export function CopilotWidget({
           ) : null}
 
           <div className="copilot-chat-log" data-testid="copilot-chat-log">
-            {chatLog.map((message) => {
+            {chatLog.map((message, index) => {
               const contract = message.teaching_contract;
               const body = contract ? splitScaffoldBody(message.text) : message.text;
+              const badge = message.role === "assistant" ? intentBadge(message.intent) : null;
+              const actions = message.actions_executed || [];
+              const traceKey = `trace-${index}`;
+              const traceOpen = Boolean(expandedTraces[traceKey]);
               return (
                 <article key={`${message.timestamp}_${message.role}`} className={`copilot-bubble ${message.role}`}>
-                  <span className="copilot-role">{roleLabel(message.role)}</span>
+                  <span className="copilot-role">
+                    {roleLabel(message.role)}
+                    {badge ? (
+                      <span className={`copilot-intent-badge ${badge.cls}`} data-testid="copilot-intent-badge">
+                        {badge.label}
+                      </span>
+                    ) : null}
+                  </span>
                   {contract ? (
                     <>
                       {body ? <p>{body}</p> : null}
@@ -821,6 +882,34 @@ export function CopilotWidget({
                   ) : (
                     <p>{body}</p>
                   )}
+                  {actions.length ? (
+                    <div className="copilot-tool-trace" data-testid={`copilot-tool-trace-${index}`}>
+                      <button
+                        type="button"
+                        className="copilot-tool-trace-toggle"
+                        onClick={() =>
+                          setExpandedTraces((prev) => ({ ...prev, [traceKey]: !prev[traceKey] }))
+                        }
+                        aria-expanded={traceOpen}
+                      >
+                        {traceOpen ? "▾" : "▸"} 工具调用 ({actions.length})
+                      </button>
+                      {traceOpen ? (
+                        <ul className="copilot-tool-trace-items">
+                          {actions.map((item, idx) => (
+                            <li
+                              key={`${item.action.tool_name}_${idx}`}
+                              className="copilot-tool-trace-item"
+                            >
+                              <span className="copilot-tool-name">{item.action.tool_name}</span>
+                              {item.risk_level ? <em>· 风险 {item.risk_level}</em> : null}
+                              <span className="copilot-tool-outcome">{item.result ? "✓" : "·"}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </article>
               );
             })}
@@ -849,6 +938,20 @@ export function CopilotWidget({
             onSubmit();
           }}
         >
+          <div className="copilot-capability-chips" data-testid="copilot-capability-chips">
+            {CAPABILITY_CHIPS.map((chip) => (
+              <button
+                key={chip.key}
+                type="button"
+                className="copilot-capability-chip"
+                data-testid={`copilot-chip-${chip.key}`}
+                onClick={() => onQuickPrompt(chip.prompt)}
+                disabled={busy}
+              >
+                {chip.label}
+              </button>
+            ))}
+          </div>
           <div className="copilot-composer">
             <textarea
               data-testid="copilot-input"

@@ -16,6 +16,8 @@ type Props = {
   onObservation: (verdict: ObservationVerdict, tag: string, note: string, questionId: string) => void;
   onSnapshot: () => void;
   onEndSession: () => void;
+  /** 把备课时预设的追问一键派发给教学智能体（不传则退化为纯展示）。 */
+  onAssistantPrompt?: (prompt: string) => void;
 };
 
 function formatElapsed(seconds: number): string {
@@ -40,7 +42,8 @@ export function ClassRunPanel({
   onLaunchAdhocQuestion,
   onObservation,
   onSnapshot,
-  onEndSession
+  onEndSession,
+  onAssistantPrompt
 }: Props) {
   const [nowTick, setNowTick] = useState(Date.now());
   const [recordVerdict, setRecordVerdict] = useState<ObservationVerdict | null>(null);
@@ -244,6 +247,27 @@ export function ClassRunPanel({
           </div>
         ) : null}
 
+        {currentStage?.assistant_prompts.length && onAssistantPrompt ? (
+          <div className="class-panel-assistant-prompts" data-testid="stage-assistant-prompts">
+            <span className="question-detail-label">AI 追问</span>
+            <div className="assistant-prompt-chips">
+              {currentStage.assistant_prompts.map((prompt, index) => (
+                <button
+                  key={index}
+                  type="button"
+                  className="assistant-prompt-chip"
+                  disabled={busy}
+                  onClick={() => onAssistantPrompt(prompt)}
+                  data-testid={`stage-assistant-prompt-${index}`}
+                  title={prompt}
+                >
+                  ✦ {prompt}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
         {currentStage?.questions.length ? (
           <div className="class-panel-questions">
             {currentStage.questions.map((question) => {
@@ -293,7 +317,28 @@ export function ClassRunPanel({
                         </div>
                       ) : null}
                       {currentStage?.assistant_prompts.length ? (
-                        <p className="class-oral-prompt-lead">{currentStage.assistant_prompts[0]}</p>
+                        <div className="class-oral-prompt-leads">
+                          {currentStage.assistant_prompts.map((prompt, index) =>
+                            onAssistantPrompt ? (
+                              <button
+                                key={index}
+                                type="button"
+                                className="class-oral-prompt-lead-button"
+                                disabled={busy}
+                                onClick={() => onAssistantPrompt(prompt)}
+                                data-testid={`oral-assistant-prompt-${index}`}
+                                title="一键把这条追问交给教学智能体展开"
+                              >
+                                <span className="assistant-prompt-icon">✦</span>
+                                {prompt}
+                              </button>
+                            ) : (
+                              <p key={index} className="class-oral-prompt-lead">
+                                {prompt}
+                              </p>
+                            )
+                          )}
+                        </div>
                       ) : null}
                       <p className="class-oral-prompt-note">学情速记已就绪，下方可记录学生表现。</p>
                     </div>

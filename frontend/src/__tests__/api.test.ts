@@ -84,6 +84,59 @@ describe("api.sendAssistantMessage", () => {
     expect("AgentChatResponse" in apiModule).toBe(false);
   });
 
+  it("sends teaching_context so the agent knows lesson/session/stage/phase", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ job_id: "job_ctx_1" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+
+    await sendAssistantMessage(
+      "project_1",
+      "点评一下刚才的投票",
+      {
+        center: [104, 35],
+        zoom: 4,
+        extent: [78, 18, 132, 50],
+        visible_layers: [],
+        recent_actions: []
+      },
+      "webgis",
+      "text",
+      {
+        assistantMode: "teaching",
+        teachingContext: { lesson_id: "lesson_1", session_id: "session_1", stage_id: "s3", phase: "in_class" }
+      }
+    );
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(String(init?.body)).toContain(
+      '"teaching_context":{"lesson_id":"lesson_1","session_id":"session_1","stage_id":"s3","phase":"in_class"}'
+    );
+  });
+
+  it("falls back to map_context.teaching_context when options omit it", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ job_id: "job_ctx_2" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+
+    await sendAssistantMessage("project_1", "什么是胡焕庸线", {
+      center: [104, 35],
+      zoom: 4,
+      extent: [78, 18, 132, 50],
+      visible_layers: [],
+      recent_actions: [],
+      teaching_context: { lesson_id: "lesson_1", phase: "course_prep" }
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(String(init?.body)).toContain('"teaching_context":{"lesson_id":"lesson_1","phase":"course_prep"}');
+  });
+
   it("sends screen snapshot in assistant request body", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ job_id: "job_screen_1" }), {

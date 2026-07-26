@@ -1,6 +1,6 @@
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { CopilotWidget, exceedsDragThreshold, normalizePanelRect } from "../components/CopilotWidget";
 
 class MockSpeechRecognition {
@@ -53,6 +53,7 @@ function renderWidget(overrides: Partial<ComponentProps<typeof CopilotWidget>> =
   const onConfirm = vi.fn();
   const onVoiceSubmit = vi.fn();
   const onVoiceNotice = vi.fn();
+  const onQuickPrompt = vi.fn();
 
   render(
     <CopilotWidget
@@ -71,6 +72,7 @@ function renderWidget(overrides: Partial<ComponentProps<typeof CopilotWidget>> =
       onConfirm={onConfirm}
       onVoiceSubmit={onVoiceSubmit}
       onVoiceNotice={onVoiceNotice}
+      onQuickPrompt={onQuickPrompt}
       {...overrides}
     />
   );
@@ -78,7 +80,7 @@ function renderWidget(overrides: Partial<ComponentProps<typeof CopilotWidget>> =
   // The widget defaults to minimized; expand so tests can exercise the panel.
   fireEvent.click(screen.getByLabelText("展开智能助教"));
 
-  return { onSubmit, onInputChange, onConfirm, onVoiceSubmit, onVoiceNotice };
+  return { onSubmit, onInputChange, onConfirm, onVoiceSubmit, onVoiceNotice, onQuickPrompt };
 }
 
 describe("CopilotWidget", () => {
@@ -135,6 +137,63 @@ describe("CopilotWidget", () => {
     expect(screen.getByText(/东部人口密集与自然条件/)).toBeInTheDocument();
     // The copy-question button is present.
     expect(screen.getByRole("button", { name: "复制问题" })).toBeInTheDocument();
+  });
+
+  it("fires onQuickPrompt with the map-reading prompt when the 读图 chip is clicked", () => {
+    const { onQuickPrompt } = renderWidget();
+
+    expect(screen.getByTestId("copilot-capability-chips")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("copilot-chip-read-map"));
+
+    expect(onQuickPrompt).toHaveBeenCalledTimes(1);
+    const prompt = onQuickPrompt.mock.calls[0][0] as string;
+    expect(prompt).toContain("读图讲解");
+  });
+
+  it("shows an intent badge derived from the routed intent on assistant messages", () => {
+    renderWidget({
+      chatLog: [
+        {
+          role: "assistant",
+          text: "已切换到地形底图。",
+          timestamp: "1",
+          intent: "teaching_action"
+        }
+      ]
+    });
+
+    const badge = screen.getByTestId("copilot-intent-badge");
+    expect(badge).toHaveTextContent("操作");
+  });
+
+  it("renders a collapsible tool-use trace when actions_executed is present", () => {
+    renderWidget({
+      chatLog: [
+        {
+          role: "assistant",
+          text: "已切换到地形底图。",
+          timestamp: "1",
+          intent: "teaching_action",
+          actions_executed: [
+            {
+              action: { tool_name: "switch_basemap", tool_params: { basemap_id: "terrain" } },
+              risk_level: "low",
+              result: { basemap_id: "terrain" }
+            }
+          ]
+        }
+      ]
+    });
+
+    const trace = screen.getByTestId("copilot-tool-trace-0");
+    // Collapsed by default: the toggle is visible but the tool name is hidden.
+    expect(trace).toHaveTextContent("工具调用 (1)");
+    expect(within(trace).queryByText("switch_basemap")).toBeNull();
+
+    // Expand the trace.
+    fireEvent.click(screen.getByText(/工具调用 \(1\)/));
+    expect(trace).toHaveTextContent("switch_basemap");
+    expect(trace).toHaveTextContent("✓");
   });
 
   it("submits the final transcript after clicking the microphone", async () => {

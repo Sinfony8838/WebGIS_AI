@@ -21,7 +21,8 @@ import type {
   LessonStage,
   ObservationVerdict,
   ProjectRecord,
-  SceneSnapshot
+  SceneSnapshot,
+  TeachingContext
 } from "../types";
 import { ClassRunPanel } from "./ClassRunPanel";
 import { LessonPanel } from "./LessonPanel";
@@ -40,6 +41,10 @@ type Props = {
   statusBar?: ReactNode;
   /** 每次递增时打开课堂工作流：有进行中课堂则展开课中面板，否则打开课前备课。 */
   openSignal?: number;
+  /** 课堂工作流状态（lesson/session/stage/phase）变化时上报给 App，随助教请求发往后端。 */
+  onTeachingContextChange?: (ctx: TeachingContext | null) => void;
+  /** 课中一键把预设追问派发给教学智能体。 */
+  onAssistantPrompt?: (prompt: string) => void;
 };
 
 function currentLayerSnapshot(layerState: LayersResponse | null): SceneSnapshot {
@@ -71,7 +76,16 @@ async function waitForLessonImport(jobId: string): Promise<LessonRecord | null> 
   throw new Error("Lesson import timed out");
 }
 
-export function LessonWorkflowShell({ project, layerState, busy = false, onRefresh, statusBar, openSignal = 0 }: Props) {
+export function LessonWorkflowShell({
+  project,
+  layerState,
+  busy = false,
+  onRefresh,
+  statusBar,
+  openSignal = 0,
+  onTeachingContextChange,
+  onAssistantPrompt
+}: Props) {
   const [lessonMode, setLessonMode] = useState<LessonMode>("off");
   const [lessons, setLessons] = useState<LessonRecord[]>([]);
   const [activeLesson, setActiveLesson] = useState<LessonRecord | null>(null);
@@ -100,6 +114,34 @@ export function LessonWorkflowShell({ project, layerState, busy = false, onRefre
     // openSignal 是单调递增的触发器，activeSession 仅作为打开瞬间的判据。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openSignal]);
+
+  // 把课堂工作流状态上报给 App：备课=course_prep、上课中=in_class、复盘=post_class。
+  // session_id 在课堂结束后仍保留（课后复盘需要用它读取真实课堂记录）。
+  useEffect(() => {
+    if (!onTeachingContextChange) {
+      return;
+    }
+    if (!activeLesson && !activeSession) {
+      onTeachingContextChange(null);
+      return;
+    }
+    const running = activeSession?.status === "running";
+    // phase 以课堂事实为准：只要班课在进行就是 in_class（即使教师收起了课中面板）；
+    // 班课已结束则进入 post_class；否则跟随面板模式。
+    const phase: TeachingContext["phase"] = running
+      ? "in_class"
+      : lessonMode === "prep"
+        ? "course_prep"
+        : activeSession || lessonMode === "review"
+          ? "post_class"
+          : "";
+    onTeachingContextChange({
+      lesson_id: activeLesson?.lesson_id || undefined,
+      session_id: activeSession?.session_id || undefined,
+      stage_id: running ? activeSession?.current_stage_id || undefined : undefined,
+      phase
+    });
+  }, [lessonMode, activeLesson, activeSession, onTeachingContextChange]);
 
   const visualQueryLayer = useMemo(() => {
     return (
@@ -316,6 +358,7 @@ export function LessonWorkflowShell({ project, layerState, busy = false, onRefre
           onObservation={recordObservation}
           onSnapshot={() => void onRefresh()}
           onEndSession={() => void endSession()}
+          onAssistantPrompt={onAssistantPrompt}
         />
       ) : null}
       <div className="bottom-stack">
