@@ -74,6 +74,21 @@ class LessonServiceTest(unittest.TestCase):
         # 已启用过的模板不重复应用
         self.assertNotIn("population_distribution", result["applied_templates"])
 
+    def test_builtin_population_lesson_declares_2d_and_3d_stage_intent(self) -> None:
+        runtime, _store, project_id = self.build_runtime()
+
+        s1 = runtime.classroom.apply_lesson_scene(project_id, BUILTIN_LESSON_ID, "s1")
+        s4 = runtime.classroom.apply_lesson_scene(project_id, BUILTIN_LESSON_ID, "s4")
+        s5 = runtime.classroom.apply_lesson_scene(project_id, BUILTIN_LESSON_ID, "s5")
+        s7 = runtime.classroom.apply_lesson_scene(project_id, BUILTIN_LESSON_ID, "s7")
+        s8 = runtime.classroom.apply_lesson_scene(project_id, BUILTIN_LESSON_ID, "s8")
+
+        self.assertEqual(s1["globe"], {"enabled": False})
+        self.assertEqual(s4["globe"]["themes"], ["density_fill", "hu_line"])
+        self.assertEqual(s5["globe"]["themes"], ["density_fill", "climate_zones"])
+        self.assertEqual(s7["globe"]["themes"], ["density_3d", "hu_line"])
+        self.assertEqual(s8["globe"], {"enabled": False})
+
     def test_apply_stage_scene_runs_visual_query(self) -> None:
         runtime, store, project_id = self.build_runtime()
 

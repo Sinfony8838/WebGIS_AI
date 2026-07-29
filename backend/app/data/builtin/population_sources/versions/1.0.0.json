@@ -1,0 +1,131 @@
+{
+  "version": "1.0.0",
+  "title": "GeoBot 人口地理示范单元来源包",
+  "released_at": "2026-07-29",
+  "items": [
+    {
+      "id": "population_density_china_2020",
+      "source_type": "dataset",
+      "dataset_id": "china_province_population_density",
+      "title": "2020 年中国省级人口密度",
+      "field_unit": "人/平方千米",
+      "teaching_usage": ["描述中国人口东南稠密、西北稀疏的总体格局", "区分人口总量与人口密度"],
+      "limitations": ["省级统计尺度会掩盖省内差异", "比较时必须保持统计年份和空间尺度一致"],
+      "sort_order": 10
+    },
+    {
+      "id": "hu_line_1935",
+      "source_type": "dataset",
+      "dataset_id": "hu_huanyong_line",
+      "title": "胡焕庸线教学几何",
+      "teaching_usage": ["定位黑河—腾冲分界线", "组织线两侧人口与环境条件的区域比较"],
+      "limitations": ["教学几何用于空间参照，不是行政边界", "不能把分界线解释为人口突然变化的绝对边界"],
+      "sort_order": 20
+    },
+    {
+      "id": "china_climate_types",
+      "source_type": "dataset",
+      "dataset_id": "china_climate_types",
+      "title": "中国气候类型教学图",
+      "teaching_usage": ["比较东南季风区与西北干旱、高寒地区", "解释气候对农业潜力与宜居性的影响"],
+      "limitations": ["教学分区为概化表达，不能代替精细气候区划"],
+      "sort_order": 30
+    },
+    {
+      "id": "china_terrain_steps",
+      "source_type": "dataset",
+      "dataset_id": "china_terrain_steps",
+      "title": "中国地形三级阶梯教学图",
+      "teaching_usage": ["比较不同地形阶梯的人口密度", "解释地形对农业、交通和城市建设的影响"],
+      "limitations": ["按省级区划归并的教学示意图，边界不等同于真实地貌界线"],
+      "sort_order": 40
+    },
+    {
+      "id": "china_major_rivers",
+      "source_type": "dataset",
+      "dataset_id": "china_major_rivers",
+      "title": "中国主要河流",
+      "teaching_usage": ["解释干旱区人口沿河流和绿洲集聚", "说明水源的限制性作用"],
+      "limitations": ["只包含主要河流，不能据此判断所有区域的可用水量"],
+      "sort_order": 50
+    },
+    {
+      "id": "china_vegetation_zones",
+      "source_type": "dataset",
+      "dataset_id": "china_vegetation_zones",
+      "title": "中国自然植被带教学图",
+      "teaching_usage": ["作为水热条件的综合表征", "辅助解释不同区域的生态环境差异"],
+      "limitations": ["教学示意图，不用于精细植被边界判读"],
+      "sort_order": 60
+    },
+    {
+      "id": "china_gdp_per_capita",
+      "source_type": "dataset",
+      "dataset_id": "china_province_gdp_per_capita",
+      "title": "中国省级人均 GDP",
+      "teaching_usage": ["解释经济机会对人口集聚的强化作用", "组织自然因素与人文因素的综合分析"],
+      "limitations": ["人均 GDP 不能单独代表就业、公共服务或人口吸引力"],
+      "sort_order": 70
+    },
+    {
+      "id": "shanghai_population_density_2020",
+      "source_type": "dataset",
+      "dataset_id": "shanghai_population_density",
+      "title": "2020 年上海区县人口密度",
+      "field_unit": "人/平方千米",
+      "teaching_usage": ["分析中心城区、近郊和远郊的人口密度差异", "联系城市功能与规划定位解释圈层结构"],
+      "limitations": ["区县尺度不能直接反映街镇内部差异"],
+      "sort_order": 80
+    },
+    {
+      "id": "china_aging_rate_2020",
+      "source_type": "dataset",
+      "dataset_id": "china_aging_rate_province",
+      "title": "2020 年中国省级人口老龄化率",
+      "field_unit": "%",
+      "teaching_usage": ["比较区域人口年龄结构", "分析老龄化原因、影响与区域差异"],
+      "limitations": ["省级比例不代表各城市或城乡内部结构"],
+      "sort_order": 90
+    },
+    {
+      "id": "kb_hu_line",
+      "source_type": "knowledge",
+      "knowledge_id": "kb_hu_line",
+      "title": "胡焕庸线教学知识卡",
+      "teaching_usage": ["为胡焕庸线读图和成因解释提供教师参考"],
+      "limitations": ["知识卡必须与指定年份、尺度的地图数据配合使用"],
+      "sort_order": 100
+    },
+    {
+      "id": "kb_population_density",
+      "source_type": "knowledge",
+      "knowledge_id": "kb_population_density",
+      "title": "人口密度概念知识卡",
+      "teaching_usage": ["解释人口密度含义、单位和比较条件"],
+      "limitations": ["概念解释不能替代对具体地图的证据引用"],
+      "sort_order": 110
+    },
+    {
+      "id": "kb_population_pattern",
+      "source_type": "knowledge",
+      "knowledge_id": "china_population_pattern_summary",
+      "title": "中国人口分布特点与成因知识卡",
+      "teaching_usage": ["形成总体格局—区域差异—综合成因的教师归纳"],
+      "limitations": ["结论必须回扣课堂实际展示的地图和数据"],
+      "sort_order": 120
+    },
+    {
+      "id": "lesson_population_distribution_v4",
+      "source_type": "lesson",
+      "lesson_id": "lesson_builtin_population_distribution",
+      "title": "《中国人口分布》内置示范课",
+      "source_name": "GeoBot 内置教师示范课",
+      "source_year": "2026",
+      "license": "project internal",
+      "status": "ready",
+      "teaching_usage": ["作为题—图—证据备课变更集的基线课时", "提供课堂问题、易错点和地图场景"],
+      "limitations": ["题目为项目内置教学示例，不宣称为授权高考真题"],
+      "sort_order": 130
+    }
+  ]
+}

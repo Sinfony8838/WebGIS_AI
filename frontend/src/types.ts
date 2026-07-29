@@ -555,6 +555,34 @@ export type LessonMisconception = {
   description: string;
 };
 
+export type LessonEvidenceRef = {
+  source_id: string;
+  title?: string;
+  source_year?: string;
+  fingerprint?: string;
+};
+
+export type LessonGlobeScene = {
+  enabled?: boolean;
+  themes?: string[];
+  camera?: {
+    lon?: number;
+    lat?: number;
+    altitudeMeters?: number;
+    pitchDeg?: number;
+  };
+};
+
+export type LessonTeacherGuidance = {
+  observation_prompt?: string;
+  evidence_points?: string[];
+  oral_question?: string;
+  expected_response?: string;
+  misconception_cue?: string;
+  closing?: string;
+  fallback?: string;
+};
+
 export type LessonQuestion = {
   question_id: string;
   type: "choice" | "open";
@@ -563,15 +591,20 @@ export type LessonQuestion = {
   answer_index: number | null;
   expected_points: string[];
   misconceptions: LessonMisconception[];
+  evidence_refs?: LessonEvidenceRef[];
+  argument_chain?: string[];
+  remediation_task?: string;
 };
 
 export type LessonScene = {
   basemap_id: string;
   templates: string[];
   layer_visibility: Record<string, boolean>;
+  catalog_layers?: string[];
   view: { center?: [number, number]; zoom?: number; extent?: [number, number, number, number] };
   annotations: Array<{ text: string; position: [number, number] }>;
   visual_query: Record<string, unknown> | null;
+  globe?: LessonGlobeScene;
 };
 
 export type LessonStage = {
@@ -582,6 +615,8 @@ export type LessonStage = {
   script: string[];
   questions: LessonQuestion[];
   assistant_prompts: string[];
+  evidence_refs?: LessonEvidenceRef[];
+  teacher_guidance?: LessonTeacherGuidance;
 };
 
 export type LessonRecord = {
@@ -653,6 +688,84 @@ export type SceneSnapshot = {
   view?: { center: [number, number]; zoom: number };
   layer_visibility?: Record<string, boolean>;
   templates?: string[];
+  globe?: LessonGlobeScene;
+};
+
+export type PopulationSourceCard = {
+  id: string;
+  title: string;
+  source_type: "dataset" | "knowledge" | "lesson";
+  source_name: string;
+  source_url: string;
+  source_year: string;
+  spatial_scale: string;
+  field_unit: string;
+  license: string;
+  status: string;
+  dataset_id: string;
+  knowledge_id: string;
+  lesson_id: string;
+  version: string;
+  teaching_usage: string[];
+  limitations: string[];
+  summary: string;
+  fingerprint: string;
+};
+
+export type PopulationSourceVersion = {
+  version: string;
+  manifest: string;
+  released_at: string;
+  summary: string;
+};
+
+export type PopulationLessonPrepInput = {
+  objective: string;
+  grade: string;
+  duration_minutes: number;
+  region: string;
+  years?: string[];
+  source_ids?: string[];
+  source_version?: string;
+};
+
+export type PopulationLessonPrepChange = {
+  stage_id: string;
+  title: string;
+  change_types: string[];
+  before_fingerprint: string;
+  after_fingerprint: string;
+  evidence_count: number;
+  question_count: number;
+};
+
+export type PopulationLessonPrepChangeSet = {
+  change_set_id: string;
+  status: "pending" | "applied" | "rejected";
+  lesson_id: string;
+  base_lesson_fingerprint: string;
+  source_version: string;
+  source_pack_fingerprint: string;
+  source_refs: LessonEvidenceRef[];
+  changes: PopulationLessonPrepChange[];
+  proposed_lesson: LessonRecord;
+  created_at: string;
+  resolved_at?: string;
+  applied_stage_ids?: string[];
+};
+
+export type PopulationLessonPrepResult = {
+  status: string;
+  capability: "population_lesson_prep";
+  job_id: string;
+  warnings: string[];
+  rehearsal: {
+    status: "passed" | "failed";
+    errors: string[];
+    warnings: string[];
+    checks: Record<string, number | boolean>;
+  };
+  change_set: PopulationLessonPrepChangeSet;
 };
 
 export type ReportStageStat = {

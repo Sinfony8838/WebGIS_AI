@@ -5,7 +5,10 @@ import {
   fetchDatasetCatalog,
   fetchKbManifest,
   fetchKbTopics,
+  fetchPopulationSources,
+  preparePopulationLesson,
   registerKbLayer,
+  resolvePopulationLessonPrep,
   searchKb,
   sendAssistantMessage,
   summarizeCatalogLayers,
@@ -213,6 +216,30 @@ describe("api.sendAssistantMessage", () => {
     await fetchDatasetCatalog();
     const [url] = fetchMock.mock.calls[0];
     expect(String(url)).toContain("/datasets/catalog");
+  });
+
+  it("uses teacher-only population source and lesson-prep endpoints", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({ status: "success", items: [], job_id: "job_prep_1" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+
+    await fetchPopulationSources("project_1");
+    await preparePopulationLesson("project_1", "lesson_1", {
+      objective: "解释中国人口分布",
+      grade: "高一",
+      duration_minutes: 40,
+      region: "中国"
+    });
+    await resolvePopulationLessonPrep("job_prep_1", "apply", ["s4"]);
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/population-sources?project_id=project_1");
+    expect(String(fetchMock.mock.calls[1][0])).toContain("/lesson-prep/population");
+    expect(String(fetchMock.mock.calls[1][1]?.body)).toContain('"lesson_id":"lesson_1"');
+    expect(String(fetchMock.mock.calls[2][0])).toContain("/lesson-prep/change-sets/job_prep_1/resolve");
+    expect(String(fetchMock.mock.calls[2][1]?.body)).toContain('"accepted_stage_ids":["s4"]');
   });
 
   it("loads one-map catalog datasets as map layers", async () => {

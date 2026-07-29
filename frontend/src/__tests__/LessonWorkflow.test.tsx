@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { ClassRunPanel } from "../components/ClassRunPanel";
 import { LessonPanel } from "../components/LessonPanel";
 import { QuizOverlay } from "../components/QuizOverlay";
-import type { ClassSessionRecord, LessonRecord } from "../types";
+import type { ClassSessionRecord, LessonRecord, PopulationLessonPrepResult } from "../types";
 
 vi.mock("qrcode", () => ({
   default: { toDataURL: vi.fn().mockResolvedValue("data:image/png;base64,stub") }
@@ -171,6 +171,78 @@ describe("LessonPanel", () => {
       />
     );
     expect((screen.getByTestId("start-class") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("collects population prep constraints and keeps generated changes behind teacher confirmation", async () => {
+    const onPrepareLesson = vi.fn();
+    const onResolvePrepChangeSet = vi.fn();
+    const lesson = makeLesson();
+    const prepResult: PopulationLessonPrepResult = {
+      status: "success",
+      capability: "population_lesson_prep",
+      job_id: "job_prep_1",
+      warnings: ["地形图为教学示意数据"],
+      rehearsal: {
+        status: "passed",
+        errors: [],
+        warnings: ["地形图为教学示意数据"],
+        checks: { stage_count: 2 }
+      },
+      change_set: {
+        change_set_id: "job_prep_1",
+        status: "pending",
+        lesson_id: lesson.lesson_id,
+        base_lesson_fingerprint: "before",
+        source_version: "1.0.0",
+        source_pack_fingerprint: "pack",
+        source_refs: [{ source_id: "population_density_china_2020", title: "人口密度" }],
+        changes: lesson.stages.map((stage) => ({
+          stage_id: stage.stage_id,
+          title: stage.title,
+          change_types: ["证据引用", "教师环节指导"],
+          before_fingerprint: "a",
+          after_fingerprint: "b",
+          evidence_count: 2,
+          question_count: stage.questions.length
+        })),
+        proposed_lesson: lesson,
+        created_at: "2026-07-29T00:00:00Z"
+      }
+    };
+    render(
+      <LessonPanel
+        lessons={[lesson]}
+        activeLesson={lesson}
+        busy={false}
+        onSelectLesson={vi.fn()}
+        onApplyScene={vi.fn()}
+        onCaptureScene={vi.fn().mockResolvedValue(null)}
+        onSaveStages={vi.fn()}
+        onImportText={vi.fn()}
+        prepResult={prepResult}
+        prepProgress="预演通过"
+        onPrepareLesson={onPrepareLesson}
+        onResolvePrepChangeSet={onResolvePrepChangeSet}
+        onStartClass={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId("population-prep-toggle"));
+    fireEvent.click(screen.getByTestId("population-prep-submit"));
+    expect(onPrepareLesson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        objective: expect.stringContaining("人口分布"),
+        duration_minutes: 10,
+        region: "中国"
+      })
+    );
+
+    expect(screen.getByTestId("population-change-set").textContent).toContain("教师确认式变更草稿");
+    expect(screen.getByText("1 条来源或教学限制提示")).toBeTruthy();
+    await waitFor(() => expect((screen.getByTestId("population-prep-apply") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByTestId("population-prep-apply"));
+    expect(onResolvePrepChangeSet).toHaveBeenCalledWith("apply", ["s1", "s2"]);
   });
 });
 

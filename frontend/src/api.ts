@@ -29,6 +29,10 @@ import type {
   LayersResponse,
   MapContext,
   PoiSearchResponse,
+  PopulationLessonPrepInput,
+  PopulationLessonPrepResult,
+  PopulationSourceCard,
+  PopulationSourceVersion,
   PptRenderResponse,
   ProjectRecord,
   QgisStatusResponse,
@@ -346,8 +350,8 @@ export async function applyLessonScene(
   lessonId: string,
   stageId: string,
   projectId: string
-): Promise<{ status: string; visualization?: unknown }> {
-  return requestJson<{ status: string; visualization?: unknown }>(
+): Promise<{ status: string; visualization?: unknown; globe?: import("./types").LessonGlobeScene }> {
+  return requestJson<{ status: string; visualization?: unknown; globe?: import("./types").LessonGlobeScene }>(
     `/lessons/${encodeURIComponent(lessonId)}/stages/${encodeURIComponent(stageId)}/scene/apply`,
     {
       method: "POST",
@@ -401,12 +405,73 @@ export async function endClassSession(sessionId: string): Promise<ClassSessionRe
 export async function enterSessionStage(
   sessionId: string,
   stageId: string
-): Promise<{ status: string; session_id: string }> {
-  return requestJson<{ status: string; session_id: string }>(`/class-sessions/${encodeURIComponent(sessionId)}/stage`, {
+): Promise<{ status: string; session_id: string; scene?: { globe?: import("./types").LessonGlobeScene } }> {
+  return requestJson<{ status: string; session_id: string; scene?: { globe?: import("./types").LessonGlobeScene } }>(`/class-sessions/${encodeURIComponent(sessionId)}/stage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ stage_id: stageId })
   });
+}
+
+export async function fetchPopulationSources(
+  projectId: string,
+  version = ""
+): Promise<{ status: string; version: string; pack_fingerprint: string; items: PopulationSourceCard[] }> {
+  const query = new URLSearchParams({ project_id: projectId });
+  if (version) query.set("version", version);
+  return requestJson(`/population-sources?${query.toString()}`);
+}
+
+export async function fetchPopulationSourceVersions(
+  projectId: string
+): Promise<{ status: string; active_version: string; versions: PopulationSourceVersion[] }> {
+  return requestJson(`/population-sources/versions?project_id=${encodeURIComponent(projectId)}`);
+}
+
+export async function activatePopulationSourceVersion(
+  projectId: string,
+  version: string
+): Promise<{ status: string; active_version: string; pack_fingerprint: string }> {
+  return requestJson(`/projects/${encodeURIComponent(projectId)}/population-source-version`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ version })
+  });
+}
+
+export async function preparePopulationLesson(
+  projectId: string,
+  lessonId: string,
+  input: PopulationLessonPrepInput
+): Promise<{ status: string; capability: string; job_id: string; lesson_id: string }> {
+  return requestJson("/lesson-prep/population", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project_id: projectId,
+      lesson_id: lessonId,
+      ...input
+    })
+  });
+}
+
+export async function resolvePopulationLessonPrep(
+  changeSetId: string,
+  decision: "apply" | "reject",
+  acceptedStageIds: string[] = []
+): Promise<{ status: string; decision: string; lesson?: LessonRecord }> {
+  return requestJson(`/lesson-prep/change-sets/${encodeURIComponent(changeSetId)}/resolve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ decision, accepted_stage_ids: acceptedStageIds })
+  });
+}
+
+export function populationLessonPrepResult(job: JobRecord): PopulationLessonPrepResult | null {
+  if (job.status !== "completed" || !job.result?.change_set) {
+    return null;
+  }
+  return job.result as unknown as PopulationLessonPrepResult;
 }
 
 export async function launchSessionQuestion(

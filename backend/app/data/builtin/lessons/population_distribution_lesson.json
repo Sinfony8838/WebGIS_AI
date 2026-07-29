@@ -14,8 +14,8 @@
   "metadata": {
     "duration_minutes": 40,
     "reference": "人教版高中地理必修二《人口分布》",
-    "design_note": "v3：环节场景声明式加载一张图专题图层（气候/地形/河流/植被/经济/上海人口/老龄化），因素归纳与上海案例均以可视化为证据；不依赖图片覆盖层。",
-    "builtin_version": "3"
+    "design_note": "v4：教师端人口专题题—图—证据示范课；胡焕庸线、影响因素与证据总结环节声明式绑定三维主题和机位，其余环节保持二维规范专题图。",
+    "builtin_version": "4"
   },
   "stages": [
     {
@@ -34,7 +34,8 @@
         "catalog_layers": [],
         "view": {"center": [104.0, 35.0], "zoom": 4},
         "annotations": [],
-        "visual_query": null
+        "visual_query": null,
+        "globe": {"enabled": false}
       },
       "script": [
         "今天我们不先背结论，而是先看地图。请大家观察人口分布图：中国人口是均匀分布的吗？",
@@ -86,7 +87,8 @@
           {"text": "人口较稠密", "position": [117.2, 32.0]},
           {"text": "人口较稀疏", "position": [85.0, 40.5]}
         ],
-        "visual_query": null
+        "visual_query": null,
+        "globe": {"enabled": false}
       },
       "script": [
         "人口分布是集散状况，人口密度是平均每平方千米的人口数。",
@@ -153,7 +155,8 @@
           "limit": 20,
           "order": "desc",
           "geo_level": "prefecture"
-        }
+        },
+        "globe": {"enabled": false}
       },
       "script": [
         "现在系统按七普数据查询出 2020 年人口最多的 20 个地级市，并在地图上高亮。",
@@ -217,7 +220,12 @@
           {"text": "东南稠密区", "position": [113.0, 28.5]},
           {"text": "西北稀疏区", "position": [88.0, 41.5]}
         ],
-        "visual_query": null
+        "visual_query": null,
+        "globe": {
+          "enabled": true,
+          "themes": ["density_fill", "hu_line"],
+          "camera": {"lon": 103.8, "lat": 36.0, "altitudeMeters": 7200000, "pitchDeg": -90}
+        }
       },
       "script": [
         "现在我们打开胡焕庸线。请注意，这条线不是孤立的人口线，它背后反映了自然环境和区域发展的长期差异。",
@@ -281,7 +289,12 @@
           {"text": "青藏高原", "position": [90.0, 32.0]},
           {"text": "长江中下游", "position": [115.0, 31.0]}
         ],
-        "visual_query": null
+        "visual_query": null,
+        "globe": {
+          "enabled": true,
+          "themes": ["density_fill", "climate_zones"],
+          "camera": {"lon": 104.0, "lat": 8.0, "altitudeMeters": 4800000, "pitchDeg": -48}
+        }
       },
       "script": [
         "影响人口分布的因素分两类：自然因素（气候、地形、水源、土壤、生物）与人文因素（经济、交通、历史开发、政策、生产方式、文化）。",
@@ -356,7 +369,8 @@
           {"text": "黄浦区（密度最高 3.2 万/km²）", "position": [121.49, 31.23]},
           {"text": "崇明区（密度最低 451/km²）", "position": [121.4, 31.62]}
         ],
-        "visual_query": null
+        "visual_query": null,
+        "globe": {"enabled": false}
       },
       "script": [
         "我们把视角落到上海。上海是典型的高人口密度超大城市，七普常住人口约 2487 万。",
@@ -441,7 +455,12 @@
           {"text": "黑河", "position": [127.53, 50.24]},
           {"text": "腾冲", "position": [98.49, 25.02]}
         ],
-        "visual_query": null
+        "visual_query": null,
+        "globe": {
+          "enabled": true,
+          "themes": ["density_3d", "hu_line"],
+          "camera": {"lon": 105.0, "lat": 9.0, "altitudeMeters": 5200000, "pitchDeg": -50}
+        }
       },
       "script": [
         "描述人口分布四步：先说总体是否均匀，再说哪里多哪里少，再找分界线或集聚区，最后从自然（水土气生）和人文因素解释。",
@@ -466,7 +485,8 @@
         "catalog_layers": [],
         "view": {"center": [104.0, 35.0], "zoom": 4},
         "annotations": [],
-        "visual_query": null
+        "visual_query": null,
+        "globe": {"enabled": false}
       },
       "script": [
         "最后一道检测题，用今天学的四步法判断哪一个描述最规范。"

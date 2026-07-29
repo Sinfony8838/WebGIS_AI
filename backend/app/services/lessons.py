@@ -97,6 +97,51 @@ def normalize_scene_globe(raw: Any) -> Dict[str, Any]:
     return result
 
 
+def normalize_evidence_refs(raw: Any) -> List[Dict[str, str]]:
+    refs: List[Dict[str, str]] = []
+    seen = set()
+    for item in raw if isinstance(raw, list) else []:
+        if isinstance(item, str):
+            source_id = item.strip()
+            payload = {"source_id": source_id}
+        elif isinstance(item, dict):
+            source_id = str(item.get("source_id") or item.get("id") or "").strip()
+            payload = {
+                "source_id": source_id,
+                "title": str(item.get("title") or ""),
+                "source_year": str(item.get("source_year") or ""),
+                "fingerprint": str(item.get("fingerprint") or ""),
+            }
+        else:
+            continue
+        if not source_id or source_id in seen:
+            continue
+        seen.add(source_id)
+        refs.append(payload)
+    return refs
+
+
+def normalize_teacher_guidance(raw: Any) -> Dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    result = {
+        key: str(raw.get(key) or "")
+        for key in (
+            "observation_prompt",
+            "oral_question",
+            "expected_response",
+            "misconception_cue",
+            "closing",
+            "fallback",
+        )
+        if str(raw.get(key) or "")
+    }
+    points = raw.get("evidence_points")
+    if isinstance(points, list):
+        result["evidence_points"] = [str(item) for item in points if str(item)]
+    return result
+
+
 class LessonService:
     def __init__(
         self,
@@ -558,6 +603,9 @@ class LessonService:
                             for item in question.get("misconceptions") or []
                             if isinstance(item, dict)
                         ],
+                        "evidence_refs": normalize_evidence_refs(question.get("evidence_refs")),
+                        "argument_chain": [str(item) for item in question.get("argument_chain") or [] if str(item)],
+                        "remediation_task": str(question.get("remediation_task") or ""),
                     }
                 )
             normalized.append(
@@ -569,6 +617,8 @@ class LessonService:
                     "script": [str(item) for item in raw.get("script") or []],
                     "questions": questions,
                     "assistant_prompts": [str(item) for item in raw.get("assistant_prompts") or []],
+                    "evidence_refs": normalize_evidence_refs(raw.get("evidence_refs")),
+                    "teacher_guidance": normalize_teacher_guidance(raw.get("teacher_guidance")),
                 }
             )
         return normalized

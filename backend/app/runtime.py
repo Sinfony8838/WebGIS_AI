@@ -23,6 +23,7 @@ from .services.knowledge_base import KnowledgeBaseService
 from .services.llm_planner import LLMPlanner
 from .services.minimax_client import MiniMaxClient
 from .services.one_map_catalog import OneMapCatalogService
+from .services.population_sources import PopulationSourceRegistryService
 from .services.timeline_service import TimelineService
 from .services.poi import PoiService
 from .services.resource_search import ResourceSearchService
@@ -271,6 +272,12 @@ class WebGISRuntime:
         self.knowledge_service = KnowledgeService(self.config)
         self.knowledge_base_service = KnowledgeBaseService(self.config)
         self.one_map_catalog_service = OneMapCatalogService(self.config)
+        self.population_source_registry_service = PopulationSourceRegistryService(
+            self.config,
+            self.store,
+            self.one_map_catalog_service,
+            self.knowledge_base_service,
+        )
         self.resource_search_service = ResourceSearchService(self.config, self.knowledge_base_service)
         self.poi_service = PoiService(self.config, self.store)
         self.vision_service = MapVisionService(self.config)
@@ -458,6 +465,36 @@ class WebGISRuntime:
 
     def resource_search(self, query: str = "", scope: str = "all", limit: int = 12) -> Dict[str, Any]:
         return self.resource_search_service.search(query=query, scope=scope, limit=limit)
+
+    def list_population_source_versions(self, project_id: str = "") -> Dict[str, Any]:
+        return self.population_source_registry_service.list_versions(project_id=project_id)
+
+    def list_population_sources(
+        self,
+        project_id: str = "",
+        version: str = "",
+    ) -> Dict[str, Any]:
+        return self.population_source_registry_service.list_sources(project_id=project_id, version=version)
+
+    def get_population_source(
+        self,
+        source_id: str,
+        project_id: str = "",
+        version: str = "",
+        expected_fingerprint: str = "",
+    ) -> Dict[str, Any]:
+        return self.population_source_registry_service.get_source(
+            source_id,
+            project_id=project_id,
+            version=version,
+            expected_fingerprint=expected_fingerprint,
+        )
+
+    def compare_population_source_versions(self, from_version: str, to_version: str) -> Dict[str, Any]:
+        return self.population_source_registry_service.compare_versions(from_version, to_version)
+
+    def activate_population_source_version(self, project_id: str, version: str) -> Dict[str, Any]:
+        return self.population_source_registry_service.activate_version(project_id, version)
 
     def list_lesson_resources(self, project_id: str) -> Dict[str, Any]:
         project = self._require_project(project_id)

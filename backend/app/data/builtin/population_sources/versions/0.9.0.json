@@ -1,0 +1,57 @@
+{
+  "version": "0.9.0",
+  "title": "GeoBot 人口分布核心来源基线",
+  "released_at": "2026-07-28",
+  "items": [
+    {
+      "id": "population_density_china_2020",
+      "source_type": "dataset",
+      "dataset_id": "china_province_population_density",
+      "title": "2020 年中国省级人口密度",
+      "field_unit": "人/平方千米",
+      "teaching_usage": ["描述中国人口东南稠密、西北稀疏的总体格局", "区分人口总量与人口密度"],
+      "limitations": ["省级统计尺度会掩盖省内差异", "比较时必须保持统计年份和空间尺度一致"],
+      "sort_order": 10
+    },
+    {
+      "id": "hu_line_1935",
+      "source_type": "dataset",
+      "dataset_id": "hu_huanyong_line",
+      "title": "胡焕庸线教学几何",
+      "teaching_usage": ["定位黑河—腾冲分界线", "组织线两侧人口与环境条件的区域比较"],
+      "limitations": ["教学几何用于空间参照，不是行政边界", "不能把分界线解释为人口突然变化的绝对边界"],
+      "sort_order": 20
+    },
+    {
+      "id": "china_climate_types",
+      "source_type": "dataset",
+      "dataset_id": "china_climate_types",
+      "title": "中国气候类型教学图",
+      "teaching_usage": ["比较东南季风区与西北干旱、高寒地区", "解释气候对农业潜力与宜居性的影响"],
+      "limitations": ["教学分区为概化表达，不能代替精细气候区划"],
+      "sort_order": 30
+    },
+    {
+      "id": "kb_population_density",
+      "source_type": "knowledge",
+      "knowledge_id": "kb_population_density",
+      "title": "人口密度概念知识卡",
+      "teaching_usage": ["解释人口密度含义、单位和比较条件"],
+      "limitations": ["概念解释不能替代对具体地图的证据引用"],
+      "sort_order": 40
+    },
+    {
+      "id": "lesson_population_distribution_v3",
+      "source_type": "lesson",
+      "lesson_id": "lesson_builtin_population_distribution",
+      "title": "《中国人口分布》内置示范课",
+      "source_name": "GeoBot 内置教师示范课",
+      "source_year": "2026",
+      "license": "project internal",
+      "status": "ready",
+      "teaching_usage": ["作为题—图—证据备课变更集的基线课时"],
+      "limitations": ["题目为项目内置教学示例，不宣称为授权高考真题"],
+      "sort_order": 50
+    }
+  ]
+}

@@ -170,6 +170,27 @@ class LessonImportRequest(BaseModel):
     text: str
 
 
+class PopulationSourceVersionRequest(BaseModel):
+    version: str
+
+
+class PopulationLessonPrepRequest(BaseModel):
+    project_id: str
+    lesson_id: str
+    objective: str = ""
+    grade: str = ""
+    duration_minutes: Optional[int] = None
+    region: str = "中国"
+    years: list[str] = Field(default_factory=list)
+    source_ids: list[str] = Field(default_factory=list)
+    source_version: str = ""
+
+
+class PopulationChangeSetResolveRequest(BaseModel):
+    decision: str = "apply"
+    accepted_stage_ids: list[str] = Field(default_factory=list)
+
+
 class SceneApplyRequest(BaseModel):
     project_id: str
 
@@ -599,6 +620,102 @@ def export_snapshot(request: ExportSnapshotRequest) -> Dict[str, Any]:
 @app.get("/lessons")
 def list_lessons() -> Dict[str, Any]:
     return runtime.classroom.list_lessons()
+
+
+@app.get("/population-sources/versions")
+def list_population_source_versions(project_id: str = Query("")) -> Dict[str, Any]:
+    try:
+        return runtime.list_population_source_versions(project_id=project_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/population-sources/versions/compare")
+def compare_population_source_versions(
+    from_version: str = Query(...),
+    to_version: str = Query(...),
+) -> Dict[str, Any]:
+    try:
+        return runtime.compare_population_source_versions(from_version, to_version)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/population-sources")
+def list_population_sources(
+    project_id: str = Query(""),
+    version: str = Query(""),
+) -> Dict[str, Any]:
+    try:
+        return runtime.list_population_sources(project_id=project_id, version=version)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/population-sources/{source_id}")
+def get_population_source(
+    source_id: str,
+    project_id: str = Query(""),
+    version: str = Query(""),
+    expected_fingerprint: str = Query(""),
+) -> Dict[str, Any]:
+    try:
+        return runtime.get_population_source(
+            source_id,
+            project_id=project_id,
+            version=version,
+            expected_fingerprint=expected_fingerprint,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/projects/{project_id}/population-source-version")
+def activate_population_source_version(
+    project_id: str,
+    request: PopulationSourceVersionRequest,
+) -> Dict[str, Any]:
+    try:
+        return runtime.activate_population_source_version(project_id, request.version)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/lesson-prep/population")
+def prepare_population_lesson(request: PopulationLessonPrepRequest) -> Dict[str, Any]:
+    try:
+        return runtime.classroom.submit_population_lesson_prep(request.project_id, request.model_dump())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/lesson-prep/change-sets/{job_id}/resolve")
+def resolve_population_lesson_change_set(
+    job_id: str,
+    request: PopulationChangeSetResolveRequest,
+) -> Dict[str, Any]:
+    try:
+        return runtime.classroom.resolve_population_lesson_prep(
+            job_id,
+            request.decision,
+            accepted_stage_ids=request.accepted_stage_ids,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/lessons")

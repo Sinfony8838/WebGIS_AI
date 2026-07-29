@@ -9,6 +9,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from .lessons import LessonService
+from .population_lesson_prep import PopulationLessonPrepService
 from .reports import ReportService
 from .visual_query import VisualQueryService
 
@@ -37,6 +38,11 @@ class ClassroomWorkflowRuntime:
         self.report_service = ReportService(
             self.config,
             minimax_client=runtime.minimax_client if self.config.minimax_enabled() else None,
+        )
+        self.population_lesson_prep = PopulationLessonPrepService(
+            self.store,
+            self.lesson_service,
+            runtime.population_source_registry_service,
         )
         self._student_presence: Dict[str, Dict[str, float]] = {}
 
@@ -87,6 +93,21 @@ class ClassroomWorkflowRuntime:
         )
         threading.Thread(target=self._run_lesson_import_job, args=(job.job_id, text), daemon=True).start()
         return {"status": "accepted", "job_id": job.job_id, "project_id": project_id}
+
+    def submit_population_lesson_prep(self, project_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self.population_lesson_prep.submit(project_id, payload)
+
+    def resolve_population_lesson_prep(
+        self,
+        job_id: str,
+        decision: str,
+        accepted_stage_ids: Any = None,
+    ) -> Dict[str, Any]:
+        return self.population_lesson_prep.resolve_change_set(
+            job_id,
+            decision,
+            accepted_stage_ids=accepted_stage_ids,
+        )
 
     def _run_lesson_import_job(self, job_id: str, text: str) -> None:
         try:

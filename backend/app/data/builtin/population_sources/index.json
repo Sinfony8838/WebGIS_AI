@@ -1,0 +1,17 @@
+{
+  "active_version": "1.0.0",
+  "versions": [
+    {
+      "version": "0.9.0",
+      "manifest": "versions/0.9.0.json",
+      "released_at": "2026-07-28",
+      "summary": "人口分布示范课核心来源基线，可用于版本回滚验证"
+    },
+    {
+      "version": "1.0.0",
+      "manifest": "versions/1.0.0.json",
+      "released_at": "2026-07-29",
+      "summary": "GeoBot 人口地理示范单元首个教师端证据来源包"
+    }
+  ]
+}

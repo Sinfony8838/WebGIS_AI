@@ -71,6 +71,8 @@ type Props = {
   themeIds?: string[];
   /** Called when a thematic layer fails to load its dataset. */
   onThemeError?: (themeId: string, message: string) => void;
+  /** Releases a lesson-scene mode pin when the teacher manually operates the globe. */
+  onUserInteraction?: () => void;
 };
 
 const DEFAULT_INITIAL_VIEW = {
@@ -102,7 +104,8 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
     onDoubleClickGlobe,
     onWebGLError,
     themeIds,
-    onThemeError
+    onThemeError,
+    onUserInteraction
   },
   ref
 ) {
@@ -554,6 +557,8 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
       className={`map-3d-globe ${visible ? "is-visible" : "is-hidden"}`}
       data-testid="map-3d-globe"
       aria-hidden={!visible}
+      onPointerDown={onUserInteraction}
+      onWheel={onUserInteraction}
     >
       <div ref={tooltipRef} className="globe-theme-tooltip" style={{ display: "none" }} />
     </div>

@@ -83,6 +83,7 @@ import {
   zoomToAltitude
 } from "./lib/altitudeZoom";
 import { parsePptxFile, releaseSlideObjectUrls } from "./lib/pptxRenderer";
+import { decideLessonGlobeScene } from "./lib/lessonGlobeScene";
 import type { ViewMode } from "./lib/viewMode";
 import type {
   AssistantInputMode,
@@ -97,6 +98,7 @@ import type {
   JobRecord,
   KnowledgeBaseItem,
   KnowledgeTopicSummary,
+  LessonGlobeScene,
   LessonResourceSet,
   LayerRecord,
   LayersResponse,
@@ -457,6 +459,13 @@ export default function App() {
   } | null>(null);
   const globeRef = useRef<Map3DGlobeHandle | null>(null);
   const planeAutoArmedRef = useRef(true);
+  const lessonGlobePinnedRef = useRef(false);
+  const lessonGlobeRestoreRef = useRef<{
+    viewMode: ViewMode;
+    themeIds: string[];
+    camera: CameraState | null;
+    plane: { lon: number; lat: number; zoom: number } | null;
+  } | null>(null);
   const [searchKeyword, setSearchKeyword] = useState("");
   const [searchDropdownOpen, setSearchDropdownOpen] = useState(false);
   const [searchResults, setSearchResults] = useState<PoiSearchItem[]>([]);
@@ -1620,6 +1629,8 @@ export default function App() {
 
   const handleViewModeToggle = useCallback(
     (next: ViewMode) => {
+      lessonGlobePinnedRef.current = false;
+      lessonGlobeRestoreRef.current = null;
       if (next === "plane") {
         const cam = globeCamera;
         transitionToPlane({
@@ -1637,6 +1648,8 @@ export default function App() {
 
   const handleGlobeDoubleClick = useCallback(
     (lon: number, lat: number) => {
+      lessonGlobePinnedRef.current = false;
+      lessonGlobeRestoreRef.current = null;
       transitionToPlane({ lon, lat, zoom: altitudeToZoom(DOUBLE_CLICK_LANDING_ALTITUDE), reason: "dblclick" });
     },
     [transitionToPlane]
@@ -1644,6 +1657,9 @@ export default function App() {
 
   const handleGlobeAltitudeThreshold = useCallback(
     (state: CameraState) => {
+      if (lessonGlobePinnedRef.current) {
+        return;
+      }
       transitionToPlane({
         lon: state.lon,
         lat: state.lat,
@@ -1653,6 +1669,105 @@ export default function App() {
     },
     [transitionToPlane]
   );
+
+  const handleApplyLessonGlobeScene = useCallback(
+    (globe: LessonGlobeScene) => {
+      const decision = decideLessonGlobeScene(
+        globe,
+        lessonGlobePinnedRef.current,
+        Boolean(lessonGlobeRestoreRef.current)
+      );
+      if (decision.kind === "apply-globe") {
+        if (decision.rememberCurrent) {
+          lessonGlobeRestoreRef.current = {
+            viewMode,
+            themeIds: [...globeThemeIds],
+            camera: globeCamera ? { ...globeCamera } : null,
+            plane: planeViewState ? { ...planeViewState } : null
+          };
+        }
+        lessonGlobePinnedRef.current = true;
+        setGlobeThemeIds([...(decision.globe.themes || [])]);
+        setViewMode("globe");
+        const camera = decision.globe.camera;
+        if (camera) {
+          window.setTimeout(() => {
+            globeRef.current?.flyTo(
+              camera.lon ?? 104,
+              camera.lat ?? 35,
+              camera.altitudeMeters ?? 12_000_000,
+              1.0,
+              camera.pitchDeg ?? -90
+            );
+          }, 30);
+        }
+        return;
+      }
+
+      if (decision.kind === "apply-plane") {
+        lessonGlobePinnedRef.current = false;
+        lessonGlobeRestoreRef.current = null;
+        setGlobeThemeIds([]);
+        transitionToPlane({
+          lon: globeCamera?.lon ?? 104,
+          lat: globeCamera?.lat ?? 35,
+          zoom: globeCamera ? altitudeToZoom(globeCamera.altitudeMeters) : 4,
+          reason: "manual"
+        });
+        return;
+      }
+
+      if (decision.kind === "none") {
+        return;
+      }
+      const restore = lessonGlobeRestoreRef.current;
+      if (!restore) return;
+      lessonGlobePinnedRef.current = false;
+      lessonGlobeRestoreRef.current = null;
+      setGlobeThemeIds(restore.themeIds);
+      if (restore.viewMode === "plane") {
+        transitionToPlane({
+          lon: restore.plane?.lon ?? 104,
+          lat: restore.plane?.lat ?? 35,
+          zoom: restore.plane?.zoom ?? 4,
+          reason: "manual"
+        });
+      } else {
+        setViewMode("globe");
+        if (restore.camera) {
+          window.setTimeout(() => {
+            globeRef.current?.flyTo(
+              restore.camera!.lon,
+              restore.camera!.lat,
+              restore.camera!.altitudeMeters,
+              0.8,
+              restore.camera!.pitchDeg
+            );
+          }, 30);
+        }
+      }
+    },
+    [globeCamera, globeThemeIds, planeViewState, transitionToPlane, viewMode]
+  );
+
+  const getLessonGlobeSceneSnapshot = useCallback((): LessonGlobeScene => {
+    if (viewMode !== "globe") {
+      return { enabled: false };
+    }
+    const camera = globeRef.current?.getCameraState() || globeCamera;
+    return {
+      enabled: true,
+      themes: [...globeThemeIds],
+      camera: camera
+        ? {
+            lon: camera.lon,
+            lat: camera.lat,
+            altitudeMeters: camera.altitudeMeters,
+            pitchDeg: camera.pitchDeg
+          }
+        : undefined
+    };
+  }, [globeCamera, globeThemeIds, viewMode]);
 
   // Toggle the OL graticule layer in sync with `showGraticule`. The layer
   // is created during map init; we just flip its visibility here.
@@ -2563,7 +2678,15 @@ export default function App() {
         onCameraChange={setGlobeCamera}
         onAltitudeThreshold={handleGlobeAltitudeThreshold}
         onDoubleClickGlobe={handleGlobeDoubleClick}
+        onUserInteraction={() => {
+          if (lessonGlobePinnedRef.current) {
+            lessonGlobePinnedRef.current = false;
+            lessonGlobeRestoreRef.current = null;
+          }
+        }}
         onWebGLError={(message) => {
+          lessonGlobePinnedRef.current = false;
+          lessonGlobeRestoreRef.current = null;
           pushToast("error", "3D 引擎初始化失败", `${message}。已自动切换到 2D 平面地图。`);
           setViewMode("plane");
         }}
@@ -2889,6 +3012,8 @@ export default function App() {
             viewMode={viewMode}
             activeThemeIds={globeThemeIds}
             onChangeThemes={(ids) => {
+              lessonGlobePinnedRef.current = false;
+              lessonGlobeRestoreRef.current = null;
               setGlobeThemeIds(ids);
               // 开启 3D 主题时经统一过渡切到地球（带相机同步），而非硬切。
               if (ids.length && viewMode === "plane") {
@@ -2896,6 +3021,8 @@ export default function App() {
               }
             }}
             onApplyScene={(preset) => {
+              lessonGlobePinnedRef.current = false;
+              lessonGlobeRestoreRef.current = null;
               setViewMode("globe");
               setGlobeThemeIds(preset.themes);
               globeRef.current?.flyTo(
@@ -2982,6 +3109,8 @@ export default function App() {
             setTeachingPhase(ctx?.phase || "");
           }}
           onAssistantPrompt={(prompt) => assistantDispatchRef.current(prompt)}
+          onApplyGlobeScene={handleApplyLessonGlobeScene}
+          getGlobeSceneSnapshot={getLessonGlobeSceneSnapshot}
           statusBar={
             <MapStatusBar
               mode={viewMode}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   addSessionObservation,
+  activatePopulationSourceVersion,
   applyLessonScene,
   captureLessonScene,
   closeSessionQuestion,
@@ -10,16 +11,26 @@ import {
   fetchJob,
   fetchLesson,
   fetchLessons,
+  fetchPopulationSources,
+  fetchPopulationSourceVersions,
   importLesson,
   launchSessionQuestion,
+  populationLessonPrepResult,
+  preparePopulationLesson,
+  resolvePopulationLessonPrep,
   updateLesson
 } from "../api";
 import type {
   ClassSessionRecord,
   LayersResponse,
   LessonRecord,
+  LessonGlobeScene,
   LessonStage,
   ObservationVerdict,
+  PopulationLessonPrepInput,
+  PopulationLessonPrepResult,
+  PopulationSourceCard,
+  PopulationSourceVersion,
   ProjectRecord,
   SceneSnapshot,
   TeachingContext
@@ -45,9 +56,16 @@ type Props = {
   onTeachingContextChange?: (ctx: TeachingContext | null) => void;
   /** 课中一键把预设追问派发给教学智能体。 */
   onAssistantPrompt?: (prompt: string) => void;
+  /** 应用课时场景返回的 3D 意图；空对象表示离开课时固定场景并恢复进入前状态。 */
+  onApplyGlobeScene?: (globe: LessonGlobeScene) => void;
+  /** 捕获当前课堂场景时同时读取 3D 模式、主题和相机。 */
+  getGlobeSceneSnapshot?: () => LessonGlobeScene;
 };
 
-function currentLayerSnapshot(layerState: LayersResponse | null): SceneSnapshot {
+function currentLayerSnapshot(
+  layerState: LayersResponse | null,
+  globe?: LessonGlobeScene
+): SceneSnapshot {
   const visibility: Record<string, boolean> = {};
   layerState?.items.forEach((layer) => {
     visibility[layer.layer_id] = layer.visible;
@@ -58,7 +76,8 @@ function currentLayerSnapshot(layerState: LayersResponse | null): SceneSnapshot 
       ? { center: layerState.view.center, zoom: layerState.view.zoom }
       : undefined,
     layer_visibility: visibility,
-    templates: layerState?.enabled_templates || []
+    templates: layerState?.enabled_templates || [],
+    globe
   };
 }
 
@@ -76,6 +95,31 @@ async function waitForLessonImport(jobId: string): Promise<LessonRecord | null> 
   throw new Error("Lesson import timed out");
 }
 
+async function waitForPopulationPrep(
+  jobId: string,
+  onProgress: (label: string) => void
+): Promise<PopulationLessonPrepResult> {
+  for (let attempt = 0; attempt < 240; attempt += 1) {
+    const job = await fetchJob(jobId);
+    const activeStage = Object.values(job.stages || {}).find((stage) => stage.status === "running");
+    if (activeStage?.summary) {
+      onProgress(activeStage.summary);
+    }
+    if (job.status === "completed") {
+      const result = populationLessonPrepResult(job);
+      if (!result?.change_set) {
+        throw new Error("智能备课未返回可确认的教案变更草稿");
+      }
+      return result;
+    }
+    if (job.status === "failed") {
+      throw new Error(job.error || "人口专题智能备课失败");
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 500));
+  }
+  throw new Error("人口专题智能备课超时");
+}
+
 export function LessonWorkflowShell({
   project,
   layerState,
@@ -84,7 +128,9 @@ export function LessonWorkflowShell({
   statusBar,
   openSignal = 0,
   onTeachingContextChange,
-  onAssistantPrompt
+  onAssistantPrompt,
+  onApplyGlobeScene,
+  getGlobeSceneSnapshot
 }: Props) {
   const [lessonMode, setLessonMode] = useState<LessonMode>("off");
   const [lessons, setLessons] = useState<LessonRecord[]>([]);
@@ -97,6 +143,11 @@ export function LessonWorkflowShell({
   const [localBusy, setLocalBusy] = useState(false);
   const [error, setError] = useState("");
   const [visualQueryDismissed, setVisualQueryDismissed] = useState(false);
+  const [prepResult, setPrepResult] = useState<PopulationLessonPrepResult | null>(null);
+  const [prepProgress, setPrepProgress] = useState("");
+  const [populationSources, setPopulationSources] = useState<PopulationSourceCard[]>([]);
+  const [populationSourceVersions, setPopulationSourceVersions] = useState<PopulationSourceVersion[]>([]);
+  const [populationSourceVersion, setPopulationSourceVersion] = useState("");
   const visualQuerySignatureRef = useRef("");
 
   // 侧栏“上课模式”入口：有进行中课堂直接展开课中面板，否则进入课前备课。
@@ -180,6 +231,24 @@ export function LessonWorkflowShell({
     void loadLessons();
   }, [loadLessons]);
 
+  const loadPopulationSources = useCallback(async () => {
+    if (!project) return;
+    const [sourcePayload, versionPayload] = await Promise.all([
+      fetchPopulationSources(project.project_id),
+      fetchPopulationSourceVersions(project.project_id)
+    ]);
+    setPopulationSources(sourcePayload.items);
+    setPopulationSourceVersion(sourcePayload.version || versionPayload.active_version);
+    setPopulationSourceVersions(versionPayload.versions);
+  }, [project]);
+
+  useEffect(() => {
+    if (lessonMode !== "prep" || !project) return;
+    void loadPopulationSources().catch((exc) => {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    });
+  }, [lessonMode, loadPopulationSources, project]);
+
   const runWithBusy = useCallback(async (operation: () => Promise<void>) => {
     setLocalBusy(true);
     setError("");
@@ -206,17 +275,21 @@ export function LessonWorkflowShell({
     async (stageId: string, viaSession = false) => {
       if (!project || !activeLesson) return;
       await runWithBusy(async () => {
+        let globe: LessonGlobeScene = {};
         if (viaSession && activeSession) {
-          await enterSessionStage(activeSession.session_id, stageId);
+          const response = await enterSessionStage(activeSession.session_id, stageId);
+          globe = response.scene?.globe || {};
           setActiveSession((previous) => (previous ? { ...previous, current_stage_id: stageId } : previous));
           setStageEnteredAt(Date.now());
         } else {
-          await applyLessonScene(activeLesson.lesson_id, stageId, project.project_id);
+          const response = await applyLessonScene(activeLesson.lesson_id, stageId, project.project_id);
+          globe = response.globe || {};
         }
+        onApplyGlobeScene?.(globe);
         await onRefresh();
       });
     },
-    [activeLesson, activeSession, onRefresh, project, runWithBusy]
+    [activeLesson, activeSession, onApplyGlobeScene, onRefresh, project, runWithBusy]
   );
 
   const captureScene = useCallback(
@@ -224,7 +297,7 @@ export function LessonWorkflowShell({
       if (!activeLesson) return null;
       let snapshot: SceneSnapshot | null = null;
       await runWithBusy(async () => {
-        snapshot = currentLayerSnapshot(layerState);
+        snapshot = currentLayerSnapshot(layerState, getGlobeSceneSnapshot?.());
         await captureLessonScene(activeLesson.lesson_id, stageId, snapshot);
         const lesson = await fetchLesson(activeLesson.lesson_id);
         setActiveLesson(lesson);
@@ -232,7 +305,7 @@ export function LessonWorkflowShell({
       });
       return snapshot;
     },
-    [activeLesson, layerState, runWithBusy]
+    [activeLesson, getGlobeSceneSnapshot, layerState, runWithBusy]
   );
 
   const saveStages = useCallback(
@@ -261,6 +334,60 @@ export function LessonWorkflowShell({
       });
     },
     [loadLessons, project, runWithBusy]
+  );
+
+  const prepareLesson = useCallback(
+    async (input: PopulationLessonPrepInput) => {
+      if (!project || !activeLesson) return;
+      await runWithBusy(async () => {
+        setPrepResult(null);
+        setPrepProgress("正在建立人口专题备课任务…");
+        const accepted = await preparePopulationLesson(project.project_id, activeLesson.lesson_id, input);
+        const result = await waitForPopulationPrep(accepted.job_id, setPrepProgress);
+        setPrepResult(result);
+        setPrepProgress("预演通过，等待教师确认。");
+      });
+    },
+    [activeLesson, project, runWithBusy]
+  );
+
+  const changePopulationSourceVersion = useCallback(
+    async (version: string) => {
+      if (!project) return;
+      await runWithBusy(async () => {
+        await activatePopulationSourceVersion(project.project_id, version);
+        await loadPopulationSources();
+        setPrepResult(null);
+        setPrepProgress(`已切换人口来源包 ${version}，后续草稿将使用该版本。`);
+      });
+    },
+    [loadPopulationSources, project, runWithBusy]
+  );
+
+  const resolvePrepChangeSet = useCallback(
+    async (decision: "apply" | "reject", acceptedStageIds: string[]) => {
+      if (!prepResult?.change_set) return;
+      await runWithBusy(async () => {
+        const response = await resolvePopulationLessonPrep(
+          prepResult.change_set.change_set_id,
+          decision,
+          acceptedStageIds
+        );
+        if (decision === "apply") {
+          const updated = response.lesson || (activeLesson ? await fetchLesson(activeLesson.lesson_id) : null);
+          if (updated) {
+            setActiveLesson(updated);
+            setLessons((previous) =>
+              previous.map((item) => (item.lesson_id === updated.lesson_id ? updated : item))
+            );
+          }
+          await onRefresh();
+        }
+        setPrepResult(null);
+        setPrepProgress(decision === "apply" ? "已应用教师选中的环节。" : "已放弃本次备课草稿。");
+      });
+    },
+    [activeLesson, onRefresh, prepResult, runWithBusy]
   );
 
   const startClass = useCallback(async () => {
@@ -403,6 +530,14 @@ export function LessonWorkflowShell({
           onCaptureScene={captureScene}
           onSaveStages={(stages) => void saveStages(stages)}
           onImportText={(text) => void importLessonText(text)}
+          prepResult={prepResult}
+          prepProgress={prepProgress}
+          populationSources={populationSources}
+          populationSourceVersions={populationSourceVersions}
+          populationSourceVersion={populationSourceVersion}
+          onPrepareLesson={(input) => void prepareLesson(input)}
+          onChangePopulationSourceVersion={(version) => void changePopulationSourceVersion(version)}
+          onResolvePrepChangeSet={(decision, stageIds) => void resolvePrepChangeSet(decision, stageIds)}
           onStartClass={() => void startClass()}
           onClose={() => setLessonMode("off")}
         />

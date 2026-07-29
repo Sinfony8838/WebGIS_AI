@@ -1,0 +1,133 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { LessonWorkflowShell } from "../components/LessonWorkflowShell";
+import type { LessonRecord } from "../types";
+
+const apiMocks = vi.hoisted(() => ({
+  fetchLessons: vi.fn(),
+  fetchLesson: vi.fn(),
+  applyLessonScene: vi.fn(),
+  captureLessonScene: vi.fn(),
+  fetchPopulationSources: vi.fn(),
+  fetchPopulationSourceVersions: vi.fn(),
+  updateLesson: vi.fn(),
+  fetchJob: vi.fn(),
+  preparePopulationLesson: vi.fn(),
+  resolvePopulationLessonPrep: vi.fn()
+}));
+
+vi.mock("../api", async () => {
+  const actual = await vi.importActual<typeof import("../api")>("../api");
+  return { ...actual, ...apiMocks };
+});
+
+function lesson(): LessonRecord {
+  return {
+    lesson_id: "lesson_population",
+    title: "中国人口分布",
+    subject: "地理",
+    grade: "高一",
+    objectives: ["解释人口分布格局"],
+    source: "builtin",
+    metadata: {},
+    created_at: "",
+    updated_at: "",
+    stages: [
+      {
+        stage_id: "s4",
+        title: "胡焕庸线",
+        minutes: 7,
+        scene: {
+          basemap_id: "amap_light",
+          templates: [],
+          layer_visibility: {},
+          catalog_layers: [],
+          view: { center: [104, 35], zoom: 4 },
+          annotations: [],
+          visual_query: null,
+          globe: {
+            enabled: true,
+            themes: ["density_fill", "hu_line"],
+            camera: { lon: 103.8, lat: 36, altitudeMeters: 7_200_000, pitchDeg: -90 }
+          }
+        },
+        script: [],
+        questions: [],
+        assistant_prompts: []
+      }
+    ]
+  };
+}
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
+
+describe("LessonWorkflowShell globe scene orchestration", () => {
+  it("forwards the backend globe scene and captures the current globe snapshot", async () => {
+    const item = lesson();
+    apiMocks.fetchLessons.mockResolvedValue({ status: "success", items: [item] });
+    apiMocks.fetchLesson.mockResolvedValue(item);
+    apiMocks.applyLessonScene.mockResolvedValue({
+      status: "success",
+      globe: item.stages[0].scene.globe
+    });
+    apiMocks.captureLessonScene.mockResolvedValue({ status: "success", scene: item.stages[0].scene });
+    apiMocks.fetchPopulationSources.mockResolvedValue({
+      status: "success",
+      version: "1.0.0",
+      pack_fingerprint: "pack",
+      items: []
+    });
+    apiMocks.fetchPopulationSourceVersions.mockResolvedValue({
+      status: "success",
+      active_version: "1.0.0",
+      versions: []
+    });
+    const onApplyGlobeScene = vi.fn();
+    const getGlobeSceneSnapshot = vi.fn().mockReturnValue({
+      enabled: true,
+      themes: ["density_fill"],
+      camera: { lon: 104, lat: 35, altitudeMeters: 8_000_000, pitchDeg: -90 }
+    });
+
+    render(
+      <LessonWorkflowShell
+        project={{ project_id: "project_1" } as never}
+        layerState={{
+          status: "success",
+          project_id: "project_1",
+          items: [],
+          base_map: { id: "amap_light" },
+          view: { center: [104, 35], zoom: 4 },
+          enabled_templates: []
+        } as never}
+        openSignal={1}
+        onRefresh={vi.fn()}
+        onApplyGlobeScene={onApplyGlobeScene}
+        getGlobeSceneSnapshot={getGlobeSceneSnapshot}
+      />
+    );
+
+    await waitFor(() => expect(screen.getByText("胡焕庸线")).toBeTruthy());
+    fireEvent.click(screen.getByText("胡焕庸线"));
+    fireEvent.click(screen.getByTestId("apply-scene-s4"));
+    await waitFor(() =>
+      expect(onApplyGlobeScene).toHaveBeenCalledWith(
+        expect.objectContaining({ enabled: true, themes: ["density_fill", "hu_line"] })
+      )
+    );
+
+    fireEvent.click(screen.getByText("存当前地图为场景"));
+    await waitFor(() =>
+      expect(apiMocks.captureLessonScene).toHaveBeenCalledWith(
+        "lesson_population",
+        "s4",
+        expect.objectContaining({
+          globe: expect.objectContaining({ enabled: true, themes: ["density_fill"] })
+        })
+      )
+    );
+  });
+});
