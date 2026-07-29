@@ -277,14 +277,39 @@ class RuntimeStore:
     def create_project(
         self,
         name: Optional[str] = None,
+        owner_user_id: str = "",
         metadata: Optional[Dict[str, Any]] = None,
         base_map: Optional[Dict[str, Any]] = None,
     ) -> ProjectRecord:
         with self._lock:
-            project = ProjectRecord.create(name=name, metadata=metadata, base_map=base_map)
+            project = ProjectRecord.create(
+                name=name,
+                owner_user_id=owner_user_id,
+                metadata=metadata,
+                base_map=base_map,
+            )
             self.projects[project.project_id] = project
             self._save()
             return project
+
+    def assign_unowned_records(self, owner_user_id: str) -> Dict[str, int]:
+        """Idempotently attach legacy teacher-created records to bootstrap admin."""
+        projects = 0
+        lessons = 0
+        with self.batch():
+            for project in self.projects.values():
+                if not project.owner_user_id:
+                    project.owner_user_id = owner_user_id
+                    project.updated_at = utc_now()
+                    projects += 1
+                    self._save()
+            for lesson in self.lessons.values():
+                if lesson.source != "builtin" and not lesson.owner_user_id:
+                    lesson.owner_user_id = owner_user_id
+                    lesson.touch()
+                    lessons += 1
+                    self._save()
+        return {"projects": projects, "lessons": lessons}
 
     def get_project(self, project_id: str) -> Optional[ProjectRecord]:
         with self._lock:

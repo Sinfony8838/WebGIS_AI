@@ -196,8 +196,15 @@ class LessonService:
             )
             self.store.upsert_lesson(lesson)
 
-    def list_lessons(self) -> Dict[str, Any]:
-        return {"status": "success", "items": [lesson.to_dict() for lesson in self.store.list_lessons()]}
+    def list_lessons(self, owner_user_id: str = "", include_all: bool = False) -> Dict[str, Any]:
+        lessons = self.store.list_lessons()
+        if owner_user_id and not include_all:
+            lessons = [
+                lesson
+                for lesson in lessons
+                if lesson.source == "builtin" or lesson.owner_user_id == owner_user_id
+            ]
+        return {"status": "success", "items": [lesson.to_dict() for lesson in lessons]}
 
     def get_lesson(self, lesson_id: str) -> LessonRecord:
         lesson = self.store.get_lesson(lesson_id)
@@ -205,9 +212,15 @@ class LessonService:
             raise KeyError(f"Unknown lesson: {lesson_id}")
         return lesson
 
-    def create_lesson(self, payload: Dict[str, Any], source: str = "manual") -> LessonRecord:
+    def create_lesson(
+        self,
+        payload: Dict[str, Any],
+        source: str = "manual",
+        owner_user_id: str = "",
+    ) -> LessonRecord:
         lesson = LessonRecord.create(
             title=str(payload.get("title") or "未命名课时"),
+            owner_user_id=owner_user_id,
             subject=str(payload.get("subject") or "地理"),
             grade=str(payload.get("grade") or ""),
             objectives=[str(item) for item in payload.get("objectives", [])],
@@ -447,7 +460,7 @@ class LessonService:
     # Import from pasted lesson-plan text
     # ------------------------------------------------------------------
 
-    def import_from_text(self, text: str) -> Dict[str, Any]:
+    def import_from_text(self, text: str, owner_user_id: str = "") -> Dict[str, Any]:
         cleaned = (text or "").strip()
         if not cleaned:
             raise ValueError("Lesson import requires non-empty text")
@@ -461,7 +474,11 @@ class LessonService:
                 parsed = None
         if parsed is None:
             parsed = self._parse_heuristically(cleaned)
-        lesson = self.create_lesson(parsed, source="imported")
+        lesson = self.create_lesson(
+            parsed,
+            source="imported",
+            owner_user_id=owner_user_id,
+        )
         return {"status": "success", "parser": parser, "lesson": lesson.to_dict()}
 
     def _parse_with_llm(self, text: str) -> Dict[str, Any]:

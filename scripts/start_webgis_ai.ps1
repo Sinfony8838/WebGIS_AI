@@ -97,7 +97,7 @@ function Ensure-BackendDeps {
         [bool]$AllowInstall
     )
 
-    $requiredModules = @("fastapi", "uvicorn", "multipart", "pptx", "fitz", "docx", "pyproj", "shapely")
+    $requiredModules = @("fastapi", "uvicorn", "multipart", "pptx", "fitz", "docx", "pyproj", "shapely", "argon2")
     $missing = @()
     foreach ($module in $requiredModules) {
         if (-not (Test-PythonModule -PythonExe $PythonExe -ModuleName $module)) {

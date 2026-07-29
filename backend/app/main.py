@@ -15,18 +15,44 @@ from .config import AppConfig
 from .runtime import WebGISRuntime
 from .services.student_page import render_student_page
 from .services.ppt_renderer import PptRenderError, render_pptx_to_images
+from .services.auth import AuthContext, AuthError, AuthService
 
 
 config = AppConfig()
 runtime = WebGISRuntime(config=config)
+auth_service = (
+    AuthService(
+        config.auth_db_path,
+        idle_minutes=config.session_idle_minutes,
+        max_hours=config.session_max_hours,
+    )
+    if config.auth_mode == "users"
+    else None
+)
 
 app = FastAPI(title="WebGIS-AI Runtime", version="1.1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.cors_origins(),
     allow_methods=["*"],
-    allow_headers=["Authorization", "Content-Type", "X-WebGIS-AI-Token"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-WebGIS-AI-Token",
+        "X-WebGIS-CSRF",
+        "X-WebGIS-Bootstrap-Key",
+    ],
+    allow_credentials=True,
 )
+
+SESSION_COOKIE = "webgis_ai_session"
+PUBLIC_AUTH_PATHS = {
+    "/health",
+    "/auth/bootstrap-status",
+    "/auth/bootstrap",
+    "/auth/login",
+}
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
 def _extract_access_token(request: Request) -> str:
@@ -39,22 +65,275 @@ def _extract_access_token(request: Request) -> str:
     return request.query_params.get("access_token", "").strip()
 
 
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else ""
+
+
+def _local_user() -> Dict[str, Any]:
+    return {
+        "user_id": "local_admin",
+        "username": "local",
+        "display_name": "本机管理员",
+        "email": "",
+        "role": "admin",
+        "status": "active",
+        "must_change_password": False,
+    }
+
+
+def _auth_error_response(error: AuthError) -> JSONResponse:
+    return JSONResponse({"detail": error.detail()}, status_code=error.status_code)
+
+
 @app.middleware("http")
 async def require_access_token(request: Request, call_next):
-    if request.method == "OPTIONS" or not config.auth_enabled():
-        return await call_next(request)
-    if request.url.path in config.auth_exempt_path_set():
+    if request.method == "OPTIONS":
         return await call_next(request)
 
-    supplied = _extract_access_token(request)
-    if not supplied or not secrets.compare_digest(supplied, config.auth_token.strip()):
-        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    if config.auth_mode == "disabled":
+        request.state.auth = AuthContext(
+            user=_local_user(),
+            session_id="",
+            csrf_hash="",
+        )
+        return await call_next(request)
+
+    if config.auth_mode == "legacy_token":
+        if request.url.path in config.auth_exempt_path_set():
+            return await call_next(request)
+        supplied = _extract_access_token(request)
+        if not supplied or not secrets.compare_digest(supplied, config.auth_token.strip()):
+            return JSONResponse(
+                {"detail": {"code": "AUTH_REQUIRED", "message": "请先登录。"}},
+                status_code=401,
+            )
+        request.state.auth = AuthContext(
+            user=_local_user(),
+            session_id="",
+            csrf_hash="",
+        )
+        return await call_next(request)
+
+    if request.url.path in PUBLIC_AUTH_PATHS:
+        return await call_next(request)
+
+    service = auth_service
+    if service is None:
+        return JSONResponse(
+            {"detail": {"code": "AUTH_UNAVAILABLE", "message": "鉴权服务未初始化。"}},
+            status_code=503,
+        )
+
+    context = service.authenticate(request.cookies.get(SESSION_COOKIE, ""))
+    if context is None:
+        return JSONResponse(
+            {"detail": {"code": "AUTH_REQUIRED", "message": "登录已失效，请重新登录。"}},
+            status_code=401,
+        )
+    request.state.auth = context
+
+    if context.user.get("must_change_password") and request.url.path not in {
+        "/auth/me",
+        "/auth/change-password",
+        "/auth/logout",
+        "/auth/logout-all",
+    }:
+        return JSONResponse(
+            {
+                "detail": {
+                    "code": "PASSWORD_CHANGE_REQUIRED",
+                    "message": "请先修改临时密码。",
+                }
+            },
+            status_code=403,
+        )
+
+    if request.method not in SAFE_METHODS:
+        origin = request.headers.get("Origin", "").rstrip("/")
+        if origin and origin not in {item.rstrip("/") for item in config.cors_origins()}:
+            return JSONResponse(
+                {"detail": {"code": "ORIGIN_REJECTED", "message": "请求来源不受信任。"}},
+                status_code=403,
+            )
+        if not service.verify_csrf(context, request.headers.get("X-WebGIS-CSRF", "")):
+            return JSONResponse(
+                {"detail": {"code": "CSRF_FAILED", "message": "安全令牌失效，请刷新页面。"}},
+                status_code=403,
+            )
     return await call_next(request)
+
+
+def _current_auth(request: Request) -> AuthContext:
+    context = getattr(request.state, "auth", None)
+    if context is None:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "AUTH_REQUIRED", "message": "请先登录。"},
+        )
+    return context
+
+
+def _require_admin(request: Request) -> AuthContext:
+    context = _current_auth(request)
+    if context.user.get("role") != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "FORBIDDEN", "message": "需要管理员权限。"},
+        )
+    return context
+
+
+def _require_project_access(request: Request, project_id: str) -> Any:
+    project = runtime.store.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Unknown project")
+    context = _current_auth(request)
+    if context.user.get("role") != "admin" and project.owner_user_id != context.user.get("user_id"):
+        raise HTTPException(status_code=404, detail="Unknown project")
+    return project
+
+
+def _require_lesson_access(request: Request, lesson_id: str) -> Any:
+    lesson = runtime.store.get_lesson(lesson_id)
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="Unknown lesson")
+    context = _current_auth(request)
+    if (
+        lesson.source != "builtin"
+        and context.user.get("role") != "admin"
+        and lesson.owner_user_id != context.user.get("user_id")
+    ):
+        raise HTTPException(status_code=404, detail="Unknown lesson")
+    return lesson
+
+
+def _require_job_access(request: Request, job_id: str) -> Any:
+    job = runtime.store.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown job")
+    _require_project_access(request, job.project_id)
+    return job
+
+
+def _require_workflow_access(request: Request, workflow_id: str) -> Any:
+    workflow = runtime.store.get_workflow(workflow_id)
+    if workflow is None:
+        raise HTTPException(status_code=404, detail="Unknown workflow")
+    _require_project_access(request, workflow.project_id)
+    return workflow
+
+
+def _require_artifact_access(request: Request, artifact_id: str) -> Any:
+    artifact = runtime.store.get_artifact(artifact_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Unknown artifact")
+    _require_project_access(request, artifact.project_id)
+    return artifact
+
+
+def _require_session_access(request: Request, session_id: str) -> Any:
+    session = runtime.store.get_class_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Unknown class session")
+    _require_project_access(request, session.project_id)
+    return session
+
+
+def _require_conversation_access(request: Request, conversation_id: str) -> Any:
+    conversation = runtime.store.get_conversation(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Unknown conversation")
+    _require_project_access(request, conversation.project_id)
+    return conversation
+
+
+def _require_confirmation_access(request: Request, confirmation_id: str) -> Any:
+    confirmation = runtime.store.get_confirmation(confirmation_id)
+    if confirmation is None:
+        raise HTTPException(status_code=404, detail="Unknown confirmation")
+    _require_project_access(request, confirmation.project_id)
+    return confirmation
+
+
+def _session_cookie(response: Response, session_token: str) -> None:
+    response.set_cookie(
+        SESSION_COOKIE,
+        session_token,
+        max_age=max(3600, config.session_max_hours * 3600),
+        httponly=True,
+        secure=config.cookie_secure,
+        samesite="lax",
+        path="/",
+    )
+
+
+def _clear_session_cookie(response: Response) -> None:
+    response.delete_cookie(
+        SESSION_COOKIE,
+        path="/",
+        httponly=True,
+        secure=config.cookie_secure,
+        samesite="lax",
+    )
+
+
+def _grant_response_files(request: Request, payload: Any) -> None:
+    if auth_service is None:
+        return
+    context = _current_auth(request)
+    user_id = str(context.user.get("user_id") or "")
+    if not user_id:
+        return
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            for nested in value.values():
+                visit(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                visit(nested)
+        elif isinstance(value, str) and value.startswith("/files/"):
+            try:
+                auth_service.grant_file(user_id, config.resolve_public_path(value[len("/files/"):]))
+            except (AuthError, ValueError):
+                pass
+
+    visit(payload)
 
 
 class CreateProjectRequest(BaseModel):
     name: str = ""
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AuthBootstrapRequest(BaseModel):
+    username: str
+    display_name: str = ""
+    password: str
+
+
+class AuthLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class AdminUserCreateRequest(BaseModel):
+    username: str
+    display_name: str = ""
+    email: str = ""
+    role: str = "teacher"
+
+
+class AdminUserPatchRequest(BaseModel):
+    display_name: Optional[str] = None
+    email: Optional[str] = None
+    role: Optional[str] = None
+    status: Optional[str] = None
 
 
 class LayerPatchRequest(BaseModel):
@@ -240,19 +519,308 @@ def health() -> Dict[str, Any]:
     return runtime.health()
 
 
+@app.get("/auth/bootstrap-status")
+def auth_bootstrap_status() -> Dict[str, Any]:
+    if config.auth_mode != "users" or auth_service is None:
+        return {
+            "status": "success",
+            "auth_mode": config.auth_mode,
+            "required": False,
+        }
+    return {
+        "status": "success",
+        "auth_mode": "users",
+        "required": not auth_service.has_users(),
+    }
+
+
+@app.post("/auth/bootstrap")
+def auth_bootstrap(request: Request, payload: AuthBootstrapRequest) -> Response:
+    if config.auth_mode != "users" or auth_service is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "AUTH_MODE_DISABLED", "message": "当前未启用用户模式。"},
+        )
+    client_ip = _client_ip(request)
+    local = client_ip in {"127.0.0.1", "::1", "localhost", "testclient"}
+    supplied_key = request.headers.get("X-WebGIS-Bootstrap-Key", "")
+    key_ok = bool(config.bootstrap_key) and secrets.compare_digest(
+        supplied_key,
+        config.bootstrap_key,
+    )
+    if not local and not key_ok:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "BOOTSTRAP_FORBIDDEN",
+                "message": "远程初始化需要启动密钥。",
+            },
+        )
+    try:
+        result = auth_service.bootstrap(
+            payload.username,
+            payload.display_name,
+            payload.password,
+            ip_address=client_ip,
+            user_agent=request.headers.get("User-Agent", ""),
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+    try:
+        migration = runtime.store.assign_unowned_records(result["user"]["user_id"])
+    except Exception as exc:
+        migration = {
+            "projects": 0,
+            "lessons": 0,
+            "pending": True,
+            "message": f"Legacy ownership migration will be retried: {exc}",
+        }
+    response = JSONResponse(
+        {
+            "status": "success",
+            "user": result["user"],
+            "csrf_token": result["csrf_token"],
+            "expires_at": result["expires_at"],
+            "migration": migration,
+        }
+    )
+    _session_cookie(response, result["session_token"])
+    return response
+
+
+@app.post("/auth/login")
+def auth_login(request: Request, payload: AuthLoginRequest) -> Response:
+    if config.auth_mode != "users" or auth_service is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "AUTH_MODE_DISABLED", "message": "当前未启用用户模式。"},
+        )
+    try:
+        result = auth_service.login(
+            payload.username,
+            payload.password,
+            ip_address=_client_ip(request),
+            user_agent=request.headers.get("User-Agent", ""),
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+    try:
+        migration = runtime.store.assign_unowned_records(
+            auth_service.bootstrap_owner_user_id()
+        )
+    except Exception:
+        migration = {"projects": 0, "lessons": 0, "pending": True}
+    response = JSONResponse(
+        {
+            "status": "success",
+            "user": result["user"],
+            "csrf_token": result["csrf_token"],
+            "expires_at": result["expires_at"],
+            "migration": migration,
+        }
+    )
+    _session_cookie(response, result["session_token"])
+    return response
+
+
+@app.get("/auth/me")
+def auth_me(request: Request) -> Dict[str, Any]:
+    context = _current_auth(request)
+    csrf_token = auth_service.rotate_csrf(context.session_id) if auth_service and context.session_id else ""
+    if auth_service:
+        try:
+            runtime.store.assign_unowned_records(auth_service.bootstrap_owner_user_id())
+        except Exception:
+            pass
+    return {
+        "status": "success",
+        "user": context.user,
+        "csrf_token": csrf_token,
+    }
+
+
+@app.post("/auth/logout")
+def auth_logout(request: Request) -> Response:
+    context = _current_auth(request)
+    if auth_service and context.session_id:
+        auth_service.logout(
+            context.session_id,
+            actor_user_id=str(context.user["user_id"]),
+            ip_address=_client_ip(request),
+        )
+    response = JSONResponse({"status": "success"})
+    _clear_session_cookie(response)
+    return response
+
+
+@app.post("/auth/logout-all")
+def auth_logout_all(request: Request) -> Response:
+    context = _current_auth(request)
+    if auth_service:
+        auth_service.revoke_user_sessions(
+            str(context.user["user_id"]),
+            actor_user_id=str(context.user["user_id"]),
+            action="logout_all",
+            ip_address=_client_ip(request),
+        )
+    response = JSONResponse({"status": "success"})
+    _clear_session_cookie(response)
+    return response
+
+
+@app.post("/auth/change-password")
+def auth_change_password(request: Request, payload: PasswordChangeRequest) -> Dict[str, Any]:
+    context = _current_auth(request)
+    if auth_service is None:
+        raise HTTPException(status_code=409, detail="Password management is unavailable")
+    try:
+        user = auth_service.change_password(
+            str(context.user["user_id"]),
+            payload.current_password,
+            payload.new_password,
+            current_session_id=context.session_id,
+            ip_address=_client_ip(request),
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+    return {"status": "success", "user": user}
+
+
+@app.get("/admin/users")
+def admin_list_users(
+    request: Request,
+    query: str = "",
+    role: str = "",
+    status: str = "",
+) -> Dict[str, Any]:
+    _require_admin(request)
+    if auth_service is None:
+        return {"status": "success", "items": []}
+    return {
+        "status": "success",
+        "items": auth_service.list_users(query=query, role=role, status=status),
+    }
+
+
+@app.post("/admin/users")
+def admin_create_user(request: Request, payload: AdminUserCreateRequest) -> Dict[str, Any]:
+    context = _require_admin(request)
+    if auth_service is None:
+        raise HTTPException(status_code=409, detail="User management is unavailable")
+    try:
+        result = auth_service.create_user(
+            actor_user_id=str(context.user["user_id"]),
+            username=payload.username,
+            display_name=payload.display_name,
+            email=payload.email,
+            role=payload.role,
+            ip_address=_client_ip(request),
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+    return {"status": "success", **result}
+
+
+@app.patch("/admin/users/{user_id}")
+def admin_update_user(
+    user_id: str,
+    request: Request,
+    payload: AdminUserPatchRequest,
+) -> Dict[str, Any]:
+    context = _require_admin(request)
+    if auth_service is None:
+        raise HTTPException(status_code=409, detail="User management is unavailable")
+    patch = {key: value for key, value in payload.model_dump().items() if value is not None}
+    try:
+        user = auth_service.update_user(
+            user_id,
+            patch,
+            actor_user_id=str(context.user["user_id"]),
+            ip_address=_client_ip(request),
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+    return {"status": "success", "user": user}
+
+
+@app.post("/admin/users/{user_id}/reset-password")
+def admin_reset_password(user_id: str, request: Request) -> Dict[str, Any]:
+    context = _require_admin(request)
+    if auth_service is None:
+        raise HTTPException(status_code=409, detail="User management is unavailable")
+    try:
+        result = auth_service.reset_password(
+            user_id,
+            actor_user_id=str(context.user["user_id"]),
+            ip_address=_client_ip(request),
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+    return {"status": "success", **result}
+
+
+@app.post("/admin/users/{user_id}/revoke-sessions")
+def admin_revoke_sessions(user_id: str, request: Request) -> Dict[str, Any]:
+    context = _require_admin(request)
+    if auth_service is None:
+        raise HTTPException(status_code=409, detail="User management is unavailable")
+    try:
+        auth_service.get_user(user_id)
+        count = auth_service.revoke_user_sessions(
+            user_id,
+            actor_user_id=str(context.user["user_id"]),
+            ip_address=_client_ip(request),
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+    return {"status": "success", "revoked": count}
+
+
+@app.get("/admin/audit-logs")
+def admin_audit_logs(request: Request, limit: int = 100) -> Dict[str, Any]:
+    _require_admin(request)
+    return {
+        "status": "success",
+        "items": auth_service.list_audit_logs(limit=limit) if auth_service else [],
+    }
+
+
 @app.get("/llm/status")
 def llm_status() -> Dict[str, Any]:
     return runtime.llm_status()
 
 
 @app.get("/files/{file_path:path}")
-def get_public_file(file_path: str) -> FileResponse:
+def get_public_file(file_path: str, request: Request) -> FileResponse:
     try:
         resolved = config.resolve_public_path(file_path)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     if not resolved.is_file():
         raise HTTPException(status_code=404, detail="File not found")
+    context = _current_auth(request)
+    if context.user.get("role") != "admin":
+        relative = file_path.replace("\\", "/").lstrip("/")
+        globally_visible = relative.startswith("uploads/teaching_maps/")
+        matching = [
+            artifact
+            for artifact in runtime.store.artifacts.values()
+            if Path(artifact.path).resolve() == resolved.resolve()
+        ]
+        project_owned = bool(matching) and any(
+            (
+                runtime.store.get_project(item.project_id) is not None
+                and runtime.store.get_project(item.project_id).owner_user_id
+                == context.user.get("user_id")
+            )
+            for item in matching
+        )
+        explicitly_owned = bool(
+            auth_service
+            and auth_service.can_access_file(str(context.user["user_id"]), resolved)
+        )
+        if not globally_visible and not project_owned and not explicitly_owned:
+            raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(resolved)
 
 
@@ -262,7 +830,13 @@ def list_teaching_maps() -> Dict[str, Any]:
 
 
 @app.post("/projects/{project_id}/teaching-maps/{map_id}/toggle")
-def toggle_teaching_map(project_id: str, map_id: str, body: TeachingMapToggleRequest) -> Dict[str, Any]:
+def toggle_teaching_map(
+    project_id: str,
+    map_id: str,
+    body: TeachingMapToggleRequest,
+    request: Request,
+) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
     try:
         return runtime.toggle_teaching_map(project_id, map_id, body.visible)
     except KeyError as exc:
@@ -270,7 +844,8 @@ def toggle_teaching_map(project_id: str, map_id: str, body: TeachingMapToggleReq
 
 
 @app.get("/projects/{project_id}/teaching-maps/active")
-def get_active_teaching_maps(project_id: str) -> Dict[str, Any]:
+def get_active_teaching_maps(project_id: str, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
     try:
         return runtime.get_active_teaching_maps(project_id)
     except KeyError as exc:
@@ -278,38 +853,69 @@ def get_active_teaching_maps(project_id: str) -> Dict[str, Any]:
 
 
 @app.get("/kb/manifest")
-def get_kb_manifest() -> Dict[str, Any]:
-    return runtime.kb_manifest()
+def get_kb_manifest(request: Request) -> Dict[str, Any]:
+    context = _current_auth(request)
+    return runtime.kb_manifest(
+        owner_user_id=str(context.user["user_id"]),
+        include_all=context.user.get("role") == "admin",
+    )
 
 
 @app.get("/kb/search")
 def search_kb(
+    request: Request,
     query: str = Query(""),
     topic: str = Query(""),
     region: str = Query(""),
     tag: str = Query(""),
     limit: int = Query(20),
 ) -> Dict[str, Any]:
-    return runtime.kb_search(query=query, topic=topic, region=region, tag=tag, limit=limit)
+    context = _current_auth(request)
+    return runtime.kb_search(
+        query=query,
+        topic=topic,
+        region=region,
+        tag=tag,
+        limit=limit,
+        owner_user_id=str(context.user["user_id"]),
+        include_all=context.user.get("role") == "admin",
+    )
 
 
 @app.get("/kb/topics")
-def get_kb_topics() -> Dict[str, Any]:
-    return runtime.kb_topics()
+def get_kb_topics(request: Request) -> Dict[str, Any]:
+    context = _current_auth(request)
+    return runtime.kb_topics(
+        owner_user_id=str(context.user["user_id"]),
+        include_all=context.user.get("role") == "admin",
+    )
 
 
 @app.post("/kb/items")
-def upsert_kb_item(request: KnowledgeItemRequest) -> Dict[str, Any]:
+def upsert_kb_item(payload: KnowledgeItemRequest, request: Request) -> Dict[str, Any]:
+    context = _current_auth(request)
     try:
-        return runtime.kb_upsert_item(request.item)
+        return runtime.kb_upsert_item(
+            payload.item,
+            owner_user_id=str(context.user["user_id"]),
+            include_all=context.user.get("role") == "admin",
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/kb/layers/register")
-def register_kb_layer(request: KnowledgeLayerRegisterRequest) -> Dict[str, Any]:
+def register_kb_layer(payload: KnowledgeLayerRegisterRequest, request: Request) -> Dict[str, Any]:
+    context = _current_auth(request)
+    _require_project_access(request, payload.project_id)
     try:
-        return runtime.kb_register_layer(request.project_id, request.layer_id, request.metadata)
+        return runtime.kb_register_layer(
+            payload.project_id,
+            payload.layer_id,
+            payload.metadata,
+            owner_user_id=str(context.user["user_id"]),
+            include_all=context.user.get("role") == "admin",
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -318,6 +924,7 @@ def register_kb_layer(request: KnowledgeLayerRegisterRequest) -> Dict[str, Any]:
 
 @app.post("/kb/materials/upload")
 async def upload_kb_material(
+    request: Request,
     kb_item_id: str = Form(...),
     file: UploadFile = File(...),
     title: str = Form(""),
@@ -325,12 +932,13 @@ async def upload_kb_material(
     material_type: str = Form(""),
     region_binding: str = Form("{}"),
 ) -> Dict[str, Any]:
+    context = _current_auth(request)
     try:
         raw_binding = json.loads(region_binding or "{}")
         if not isinstance(raw_binding, dict):
             raise ValueError("region_binding must be an object")
         raw = await file.read()
-        return runtime.kb_upload_material(
+        result = runtime.kb_upload_material(
             kb_item_id=kb_item_id,
             filename=file.filename or "material.dat",
             raw_bytes=raw,
@@ -338,7 +946,11 @@ async def upload_kb_material(
             description=description,
             material_type=material_type,
             region_binding=raw_binding,
+            owner_user_id=str(context.user["user_id"]),
+            include_all=context.user.get("role") == "admin",
         )
+        _grant_response_files(request, result)
+        return result
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="region_binding must be valid JSON") from exc
     except ValueError as exc:
@@ -346,16 +958,19 @@ async def upload_kb_material(
 
 
 @app.post("/kb/materials/link")
-def link_kb_material(request: KnowledgeMaterialLinkRequest) -> Dict[str, Any]:
+def link_kb_material(payload: KnowledgeMaterialLinkRequest, request: Request) -> Dict[str, Any]:
+    context = _current_auth(request)
     try:
         return runtime.kb_link_material(
-            kb_item_id=request.kb_item_id,
-            url=request.url,
-            title=request.title,
-            description=request.description,
-            material_type=request.material_type,
-            thumbnail_url=request.thumbnail_url,
-            region_binding=request.region_binding,
+            kb_item_id=payload.kb_item_id,
+            url=payload.url,
+            title=payload.title,
+            description=payload.description,
+            material_type=payload.material_type,
+            thumbnail_url=payload.thumbnail_url,
+            region_binding=payload.region_binding,
+            owner_user_id=str(context.user["user_id"]),
+            include_all=context.user.get("role") == "admin",
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -363,11 +978,19 @@ def link_kb_material(request: KnowledgeMaterialLinkRequest) -> Dict[str, Any]:
 
 @app.get("/resources/search")
 def search_resources(
+    request: Request,
     query: str = Query(""),
     scope: str = Query("all"),
     limit: int = Query(12),
 ) -> Dict[str, Any]:
-    return runtime.resource_search(query=query, scope=scope, limit=limit)
+    context = _current_auth(request)
+    return runtime.resource_search(
+        query=query,
+        scope=scope,
+        limit=limit,
+        owner_user_id=str(context.user["user_id"]),
+        include_all=context.user.get("role") == "admin",
+    )
 
 
 @app.get("/basemaps")
@@ -392,17 +1015,27 @@ def get_default_weather_tile(z: int, x: int, y: int) -> Response:
 
 
 @app.post("/projects")
-def create_project(request: CreateProjectRequest) -> Dict[str, Any]:
-    return runtime.create_project(name=request.name or None, metadata=request.metadata)
+def create_project(request: Request, payload: CreateProjectRequest) -> Dict[str, Any]:
+    context = _current_auth(request)
+    return runtime.create_project(
+        name=payload.name or None,
+        metadata=payload.metadata,
+        owner_user_id=str(context.user["user_id"]),
+    )
 
 
 @app.get("/projects")
-def list_projects() -> Dict[str, Any]:
-    return runtime.list_projects()
+def list_projects(request: Request) -> Dict[str, Any]:
+    context = _current_auth(request)
+    return runtime.list_projects(
+        owner_user_id=str(context.user["user_id"]),
+        include_all=context.user.get("role") == "admin",
+    )
 
 
 @app.get("/projects/{project_id}")
-def get_project(project_id: str) -> Dict[str, Any]:
+def get_project(project_id: str, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
     try:
         return runtime.get_project(project_id)
     except KeyError as exc:
@@ -410,7 +1043,8 @@ def get_project(project_id: str) -> Dict[str, Any]:
 
 
 @app.get("/projects/{project_id}/lesson-resources")
-def list_lesson_resources(project_id: str) -> Dict[str, Any]:
+def list_lesson_resources(project_id: str, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
     try:
         return runtime.list_lesson_resources(project_id)
     except KeyError as exc:
@@ -418,25 +1052,41 @@ def list_lesson_resources(project_id: str) -> Dict[str, Any]:
 
 
 @app.post("/projects/{project_id}/lesson-resources")
-def save_lesson_resource_set(project_id: str, request: LessonResourceSetRequest) -> Dict[str, Any]:
+def save_lesson_resource_set(
+    project_id: str,
+    payload: LessonResourceSetRequest,
+    request: Request,
+) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
     try:
-        return runtime.save_lesson_resource_set(project_id, request.item)
+        return runtime.save_lesson_resource_set(project_id, payload.item)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.patch("/projects/{project_id}/lesson-resources/{set_id}")
-def patch_lesson_resource_set(project_id: str, set_id: str, request: LessonResourceSetPatchRequest) -> Dict[str, Any]:
+def patch_lesson_resource_set(
+    project_id: str,
+    set_id: str,
+    payload: LessonResourceSetPatchRequest,
+    request: Request,
+) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
     try:
-        return runtime.activate_lesson_resource_set(project_id, set_id, request.patch)
+        return runtime.activate_lesson_resource_set(project_id, set_id, payload.patch)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.patch("/projects/{project_id}/basemap")
-def patch_project_basemap(project_id: str, request: SetBasemapRequest) -> Dict[str, Any]:
+def patch_project_basemap(
+    project_id: str,
+    payload: SetBasemapRequest,
+    request: Request,
+) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
     try:
-        return runtime.set_basemap(project_id, request.basemap_id)
+        return runtime.set_basemap(project_id, payload.basemap_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -444,7 +1094,8 @@ def patch_project_basemap(project_id: str, request: SetBasemapRequest) -> Dict[s
 
 
 @app.get("/layers")
-def list_layers(project_id: str = Query(...)) -> Dict[str, Any]:
+def list_layers(request: Request, project_id: str = Query(...)) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
     try:
         return runtime.list_layers(project_id)
     except KeyError as exc:
@@ -452,9 +1103,10 @@ def list_layers(project_id: str = Query(...)) -> Dict[str, Any]:
 
 
 @app.patch("/layers")
-def patch_layer(request: LayerPatchRequest) -> Dict[str, Any]:
+def patch_layer(payload: LayerPatchRequest, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, payload.project_id)
     try:
-        return runtime.patch_layer(request.project_id, request.layer_id, request.patch)
+        return runtime.patch_layer(payload.project_id, payload.layer_id, payload.patch)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -462,28 +1114,36 @@ def patch_layer(request: LayerPatchRequest) -> Dict[str, Any]:
 
 
 @app.post("/assistant/messages")
-def submit_assistant_message(request: AssistantMessageRequest) -> Dict[str, Any]:
+def submit_assistant_message(
+    payload: AssistantMessageRequest,
+    request: Request,
+) -> Dict[str, Any]:
+    _require_project_access(request, payload.project_id)
     try:
         return runtime.submit_assistant_message(
-            request.project_id,
-            request.message,
-            request.map_context,
-            request.assistant_mode,
-            request.conversation_id,
-            request.history,
-            request.target,
-            request.input_mode,
-            request.screen_snapshot,
-            request.teaching_context,
+            payload.project_id,
+            payload.message,
+            payload.map_context,
+            payload.assistant_mode,
+            payload.conversation_id,
+            payload.history,
+            payload.target,
+            payload.input_mode,
+            payload.screen_snapshot,
+            payload.teaching_context,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/assistant/confirm")
-def confirm_assistant_action(request: AssistantConfirmRequest) -> Dict[str, Any]:
+def confirm_assistant_action(
+    payload: AssistantConfirmRequest,
+    request: Request,
+) -> Dict[str, Any]:
+    _require_confirmation_access(request, payload.confirmation_id)
     try:
-        return runtime.confirm_assistant_action(request.confirmation_id, decision=request.decision)
+        return runtime.confirm_assistant_action(payload.confirmation_id, decision=payload.decision)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -491,7 +1151,8 @@ def confirm_assistant_action(request: AssistantConfirmRequest) -> Dict[str, Any]
 
 
 @app.get("/assistant/conversations/{conversation_id}")
-def get_assistant_conversation(conversation_id: str) -> Dict[str, Any]:
+def get_assistant_conversation(conversation_id: str, request: Request) -> Dict[str, Any]:
+    _require_conversation_access(request, conversation_id)
     try:
         return runtime.get_conversation(conversation_id)
     except KeyError as exc:
@@ -499,9 +1160,14 @@ def get_assistant_conversation(conversation_id: str) -> Dict[str, Any]:
 
 
 @app.post("/templates/{template_id}/run")
-def run_template(template_id: str, request: TemplateRunRequest) -> Dict[str, Any]:
+def run_template(
+    template_id: str,
+    payload: TemplateRunRequest,
+    request: Request,
+) -> Dict[str, Any]:
+    _require_project_access(request, payload.project_id)
     try:
-        return runtime.submit_template(request.project_id, template_id, request.payload)
+        return runtime.submit_template(payload.project_id, template_id, payload.payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -510,6 +1176,7 @@ def run_template(template_id: str, request: TemplateRunRequest) -> Dict[str, Any
 
 @app.post("/datasets/upload")
 async def upload_dataset(
+    request: Request,
     project_id: str = Form(...),
     file: UploadFile = File(...),
     dataset_name: str = Form(""),
@@ -520,10 +1187,11 @@ async def upload_dataset(
     east: str = Form(""),
     north: str = Form(""),
 ) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
     try:
         bounds = [float(value) for value in (west, south, east, north) if str(value).strip()]
         raw = await file.read()
-        return runtime.upload_dataset(
+        result = runtime.upload_dataset(
             project_id=project_id,
             filename=file.filename or "upload.dat",
             raw_bytes=raw,
@@ -532,6 +1200,8 @@ async def upload_dataset(
             lon_field=lon_field,
             image_bounds=bounds or None,
         )
+        _grant_response_files(request, result)
+        return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -554,9 +1224,10 @@ def get_dataset_catalog_data(dataset_id: str) -> Dict[str, Any]:
 
 
 @app.post("/datasets/catalog/layers")
-def add_dataset_catalog_layer(request: CatalogLayerRequest) -> Dict[str, Any]:
+def add_dataset_catalog_layer(payload: CatalogLayerRequest, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, payload.project_id)
     try:
-        return runtime.add_catalog_dataset_layer(request.project_id, request.dataset_id)
+        return runtime.add_catalog_dataset_layer(payload.project_id, payload.dataset_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (FileNotFoundError, ValueError) as exc:
@@ -564,12 +1235,16 @@ def add_dataset_catalog_layer(request: CatalogLayerRequest) -> Dict[str, Any]:
 
 
 @app.post("/datasets/catalog/statistics")
-def summarize_dataset_catalog_layers(request: CatalogStatisticsRequest) -> Dict[str, Any]:
+def summarize_dataset_catalog_layers(
+    payload: CatalogStatisticsRequest,
+    request: Request,
+) -> Dict[str, Any]:
+    _require_project_access(request, payload.project_id)
     try:
         return runtime.summarize_catalog_layers(
-            request.project_id,
-            geometry=request.geometry,
-            layer_id=request.layer_id,
+            payload.project_id,
+            geometry=payload.geometry,
+            layer_id=payload.layer_id,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -578,23 +1253,26 @@ def summarize_dataset_catalog_layers(request: CatalogStatisticsRequest) -> Dict[
 
 
 @app.post("/ppt/render")
-async def render_ppt(file: UploadFile = File(...)) -> Dict[str, Any]:
+async def render_ppt(request: Request, file: UploadFile = File(...)) -> Dict[str, Any]:
     try:
         raw = await file.read()
-        return render_pptx_to_images(config, file.filename or "presentation.pptx", raw)
+        result = render_pptx_to_images(config, file.filename or "presentation.pptx", raw)
+        _grant_response_files(request, result)
+        return result
     except PptRenderError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.to_dict()) from exc
 
 
 @app.post("/search/poi")
-def search_poi(request: PoiSearchRequest) -> Dict[str, Any]:
+def search_poi(payload: PoiSearchRequest, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, payload.project_id)
     try:
         return runtime.search_poi(
-            request.project_id,
-            keyword=request.keyword,
-            mode=request.mode,
-            extent=request.extent,
-            geometry=request.geometry,
+            payload.project_id,
+            keyword=payload.keyword,
+            mode=payload.mode,
+            extent=payload.extent,
+            geometry=payload.geometry,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -603,13 +1281,14 @@ def search_poi(request: PoiSearchRequest) -> Dict[str, Any]:
 
 
 @app.post("/exports/snapshot")
-def export_snapshot(request: ExportSnapshotRequest) -> Dict[str, Any]:
+def export_snapshot(payload: ExportSnapshotRequest, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, payload.project_id)
     try:
         return runtime.export_snapshot(
-            request.project_id,
-            title=request.title,
-            image_data_url=request.image_data_url,
-            note=request.note,
+            payload.project_id,
+            title=payload.title,
+            image_data_url=payload.image_data_url,
+            note=payload.note,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -618,12 +1297,18 @@ def export_snapshot(request: ExportSnapshotRequest) -> Dict[str, Any]:
 
 
 @app.get("/lessons")
-def list_lessons() -> Dict[str, Any]:
-    return runtime.classroom.list_lessons()
+def list_lessons(request: Request) -> Dict[str, Any]:
+    context = _current_auth(request)
+    return runtime.classroom.list_lessons(
+        owner_user_id=str(context.user["user_id"]),
+        include_all=context.user.get("role") == "admin",
+    )
 
 
 @app.get("/population-sources/versions")
-def list_population_source_versions(project_id: str = Query("")) -> Dict[str, Any]:
+def list_population_source_versions(request: Request, project_id: str = Query("")) -> Dict[str, Any]:
+    if project_id:
+        _require_project_access(request, project_id)
     try:
         return runtime.list_population_source_versions(project_id=project_id)
     except KeyError as exc:
@@ -647,9 +1332,12 @@ def compare_population_source_versions(
 
 @app.get("/population-sources")
 def list_population_sources(
+    request: Request,
     project_id: str = Query(""),
     version: str = Query(""),
 ) -> Dict[str, Any]:
+    if project_id:
+        _require_project_access(request, project_id)
     try:
         return runtime.list_population_sources(project_id=project_id, version=version)
     except KeyError as exc:
@@ -661,10 +1349,13 @@ def list_population_sources(
 @app.get("/population-sources/{source_id}")
 def get_population_source(
     source_id: str,
+    request: Request,
     project_id: str = Query(""),
     version: str = Query(""),
     expected_fingerprint: str = Query(""),
 ) -> Dict[str, Any]:
+    if project_id:
+        _require_project_access(request, project_id)
     try:
         return runtime.get_population_source(
             source_id,
@@ -681,10 +1372,12 @@ def get_population_source(
 @app.post("/projects/{project_id}/population-source-version")
 def activate_population_source_version(
     project_id: str,
-    request: PopulationSourceVersionRequest,
+    payload: PopulationSourceVersionRequest,
+    request: Request,
 ) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
     try:
-        return runtime.activate_population_source_version(project_id, request.version)
+        return runtime.activate_population_source_version(project_id, payload.version)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -692,9 +1385,14 @@ def activate_population_source_version(
 
 
 @app.post("/lesson-prep/population")
-def prepare_population_lesson(request: PopulationLessonPrepRequest) -> Dict[str, Any]:
+def prepare_population_lesson(
+    payload: PopulationLessonPrepRequest,
+    request: Request,
+) -> Dict[str, Any]:
+    _require_project_access(request, payload.project_id)
+    _require_lesson_access(request, payload.lesson_id)
     try:
-        return runtime.classroom.submit_population_lesson_prep(request.project_id, request.model_dump())
+        return runtime.classroom.submit_population_lesson_prep(payload.project_id, payload.model_dump())
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -704,13 +1402,15 @@ def prepare_population_lesson(request: PopulationLessonPrepRequest) -> Dict[str,
 @app.post("/lesson-prep/change-sets/{job_id}/resolve")
 def resolve_population_lesson_change_set(
     job_id: str,
-    request: PopulationChangeSetResolveRequest,
+    payload: PopulationChangeSetResolveRequest,
+    request: Request,
 ) -> Dict[str, Any]:
+    _require_job_access(request, job_id)
     try:
         return runtime.classroom.resolve_population_lesson_prep(
             job_id,
-            request.decision,
-            accepted_stage_ids=request.accepted_stage_ids,
+            payload.decision,
+            accepted_stage_ids=payload.accepted_stage_ids,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -719,12 +1419,17 @@ def resolve_population_lesson_change_set(
 
 
 @app.post("/lessons")
-def create_lesson(request: LessonPayloadRequest) -> Dict[str, Any]:
-    return runtime.classroom.create_lesson(request.model_dump())
+def create_lesson(payload: LessonPayloadRequest, request: Request) -> Dict[str, Any]:
+    context = _current_auth(request)
+    return runtime.classroom.create_lesson(
+        payload.model_dump(),
+        owner_user_id=str(context.user["user_id"]),
+    )
 
 
 @app.get("/lessons/{lesson_id}")
-def get_lesson(lesson_id: str) -> Dict[str, Any]:
+def get_lesson(lesson_id: str, request: Request) -> Dict[str, Any]:
+    _require_lesson_access(request, lesson_id)
     try:
         return runtime.classroom.get_lesson(lesson_id)
     except KeyError as exc:
@@ -732,15 +1437,21 @@ def get_lesson(lesson_id: str) -> Dict[str, Any]:
 
 
 @app.put("/lessons/{lesson_id}")
-def update_lesson(lesson_id: str, request: LessonPayloadRequest) -> Dict[str, Any]:
+def update_lesson(lesson_id: str, payload: LessonPayloadRequest, request: Request) -> Dict[str, Any]:
+    lesson = _require_lesson_access(request, lesson_id)
+    if lesson.source == "builtin":
+        raise HTTPException(status_code=403, detail="Built-in lessons are read-only")
     try:
-        return runtime.classroom.update_lesson(lesson_id, request.model_dump())
+        return runtime.classroom.update_lesson(lesson_id, payload.model_dump())
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.delete("/lessons/{lesson_id}")
-def delete_lesson(lesson_id: str) -> Dict[str, Any]:
+def delete_lesson(lesson_id: str, request: Request) -> Dict[str, Any]:
+    lesson = _require_lesson_access(request, lesson_id)
+    if lesson.source == "builtin":
+        raise HTTPException(status_code=403, detail="Built-in lessons are read-only")
     try:
         return runtime.classroom.delete_lesson(lesson_id)
     except KeyError as exc:
@@ -748,17 +1459,25 @@ def delete_lesson(lesson_id: str) -> Dict[str, Any]:
 
 
 @app.post("/lessons/import")
-def import_lesson(request: LessonImportRequest) -> Dict[str, Any]:
+def import_lesson(payload: LessonImportRequest, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, payload.project_id)
+    context = _current_auth(request)
     try:
-        return runtime.classroom.submit_lesson_import(request.project_id, request.text)
+        return runtime.classroom.submit_lesson_import(
+            payload.project_id,
+            payload.text,
+            owner_user_id=str(context.user["user_id"]),
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/lessons/{lesson_id}/stages/{stage_id}/scene/apply")
-def apply_lesson_scene(lesson_id: str, stage_id: str, request: SceneApplyRequest) -> Dict[str, Any]:
+def apply_lesson_scene(lesson_id: str, stage_id: str, payload: SceneApplyRequest, request: Request) -> Dict[str, Any]:
+    _require_lesson_access(request, lesson_id)
+    _require_project_access(request, payload.project_id)
     try:
-        return runtime.classroom.apply_lesson_scene(request.project_id, lesson_id, stage_id)
+        return runtime.classroom.apply_lesson_scene(payload.project_id, lesson_id, stage_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -766,28 +1485,53 @@ def apply_lesson_scene(lesson_id: str, stage_id: str, request: SceneApplyRequest
 
 
 @app.post("/lessons/{lesson_id}/stages/{stage_id}/scene/capture")
-def capture_lesson_scene(lesson_id: str, stage_id: str, request: SceneCaptureRequest) -> Dict[str, Any]:
+def capture_lesson_scene(lesson_id: str, stage_id: str, payload: SceneCaptureRequest, request: Request) -> Dict[str, Any]:
+    lesson = _require_lesson_access(request, lesson_id)
+    if lesson.source == "builtin":
+        raise HTTPException(status_code=403, detail="Built-in lessons are read-only")
     try:
-        return runtime.classroom.capture_lesson_scene(lesson_id, stage_id, request.snapshot)
+        return runtime.classroom.capture_lesson_scene(lesson_id, stage_id, payload.snapshot)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/class-sessions")
-def create_class_session(request: ClassSessionCreateRequest) -> Dict[str, Any]:
+def create_class_session(payload: ClassSessionCreateRequest, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, payload.project_id)
+    _require_lesson_access(request, payload.lesson_id)
     try:
-        return runtime.classroom.create_class_session(request.lesson_id, request.project_id)
+        return runtime.classroom.create_class_session(payload.lesson_id, payload.project_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/class-sessions")
-def list_class_sessions(lesson_id: Optional[str] = None, project_id: Optional[str] = None) -> Dict[str, Any]:
-    return runtime.classroom.list_class_sessions(lesson_id=lesson_id, project_id=project_id)
+def list_class_sessions(
+    request: Request,
+    lesson_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    if project_id:
+        _require_project_access(request, project_id)
+    if lesson_id:
+        _require_lesson_access(request, lesson_id)
+    response = runtime.classroom.list_class_sessions(lesson_id=lesson_id, project_id=project_id)
+    context = _current_auth(request)
+    if context.user.get("role") != "admin" and not project_id:
+        response["items"] = [
+            item
+            for item in response.get("items", [])
+            if (
+                (project := runtime.store.get_project(str(item.get("project_id") or ""))) is not None
+                and project.owner_user_id == context.user.get("user_id")
+            )
+        ]
+    return response
 
 
 @app.get("/class-sessions/{session_id}")
-def get_class_session(session_id: str) -> Dict[str, Any]:
+def get_class_session(session_id: str, request: Request) -> Dict[str, Any]:
+    _require_session_access(request, session_id)
     try:
         return runtime.classroom.get_class_session(session_id)
     except KeyError as exc:
@@ -795,7 +1539,8 @@ def get_class_session(session_id: str) -> Dict[str, Any]:
 
 
 @app.post("/class-sessions/{session_id}/end")
-def end_class_session(session_id: str) -> Dict[str, Any]:
+def end_class_session(session_id: str, request: Request) -> Dict[str, Any]:
+    _require_session_access(request, session_id)
     try:
         return runtime.classroom.end_class_session(session_id)
     except KeyError as exc:
@@ -803,9 +1548,10 @@ def end_class_session(session_id: str) -> Dict[str, Any]:
 
 
 @app.post("/class-sessions/{session_id}/stage")
-def enter_session_stage(session_id: str, request: SessionStageRequest) -> Dict[str, Any]:
+def enter_session_stage(session_id: str, payload: SessionStageRequest, request: Request) -> Dict[str, Any]:
+    _require_session_access(request, session_id)
     try:
-        return runtime.classroom.enter_session_stage(session_id, request.stage_id)
+        return runtime.classroom.enter_session_stage(session_id, payload.stage_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -813,13 +1559,14 @@ def enter_session_stage(session_id: str, request: SessionStageRequest) -> Dict[s
 
 
 @app.post("/class-sessions/{session_id}/questions/launch")
-def launch_session_question(session_id: str, request: QuestionLaunchRequest) -> Dict[str, Any]:
+def launch_session_question(session_id: str, payload: QuestionLaunchRequest, request: Request) -> Dict[str, Any]:
+    _require_session_access(request, session_id)
     try:
         return runtime.classroom.launch_session_question(
             session_id,
-            stage_id=request.stage_id,
-            question_id=request.question_id,
-            adhoc=request.adhoc,
+            stage_id=payload.stage_id,
+            question_id=payload.question_id,
+            adhoc=payload.adhoc,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -828,7 +1575,8 @@ def launch_session_question(session_id: str, request: QuestionLaunchRequest) -> 
 
 
 @app.post("/class-sessions/{session_id}/questions/close")
-def close_session_question(session_id: str) -> Dict[str, Any]:
+def close_session_question(session_id: str, request: Request) -> Dict[str, Any]:
+    _require_session_access(request, session_id)
     try:
         return runtime.classroom.close_session_question(session_id)
     except KeyError as exc:
@@ -836,9 +1584,10 @@ def close_session_question(session_id: str) -> Dict[str, Any]:
 
 
 @app.post("/class-sessions/{session_id}/observations")
-def add_session_observation(session_id: str, request: ObservationRequest) -> Dict[str, Any]:
+def add_session_observation(session_id: str, payload: ObservationRequest, request: Request) -> Dict[str, Any]:
+    _require_session_access(request, session_id)
     try:
-        return runtime.classroom.add_session_observation(session_id, request.model_dump())
+        return runtime.classroom.add_session_observation(session_id, payload.model_dump())
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -846,13 +1595,14 @@ def add_session_observation(session_id: str, request: ObservationRequest) -> Dic
 
 
 @app.post("/class-sessions/{session_id}/events")
-def log_session_event(session_id: str, request: SessionEventRequest) -> Dict[str, Any]:
+def log_session_event(session_id: str, payload: SessionEventRequest, request: Request) -> Dict[str, Any]:
+    _require_session_access(request, session_id)
     try:
         return runtime.classroom.log_session_event(
             session_id,
-            event_type=request.event_type,
-            stage_id=request.stage_id,
-            payload=request.payload,
+            event_type=payload.event_type,
+            stage_id=payload.stage_id,
+            payload=payload.payload,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -861,7 +1611,8 @@ def log_session_event(session_id: str, request: SessionEventRequest) -> Dict[str
 
 
 @app.post("/class-sessions/{session_id}/report")
-def generate_session_report(session_id: str) -> Dict[str, Any]:
+def generate_session_report(session_id: str, request: Request) -> Dict[str, Any]:
+    _require_session_access(request, session_id)
     try:
         return runtime.classroom.submit_session_report(session_id)
     except KeyError as exc:
@@ -869,7 +1620,8 @@ def generate_session_report(session_id: str) -> Dict[str, Any]:
 
 
 @app.get("/class-sessions/{session_id}/live")
-def session_live(session_id: str) -> Dict[str, Any]:
+def session_live(session_id: str, request: Request) -> Dict[str, Any]:
+    _require_session_access(request, session_id)
     try:
         return runtime.classroom.session_live(session_id)
     except KeyError as exc:
@@ -900,7 +1652,8 @@ def student_answer(join_code: str, request: StudentAnswerRequest) -> Dict[str, A
 
 
 @app.get("/jobs/{job_id}")
-def get_job(job_id: str) -> Dict[str, Any]:
+def get_job(job_id: str, request: Request) -> Dict[str, Any]:
+    _require_job_access(request, job_id)
     try:
         return runtime.get_job(job_id)
     except KeyError as exc:
@@ -908,7 +1661,8 @@ def get_job(job_id: str) -> Dict[str, Any]:
 
 
 @app.get("/jobs/{job_id}/stream")
-def stream_job(job_id: str):
+def stream_job(job_id: str, request: Request):
+    _require_job_access(request, job_id)
     def event_stream():
         last_version: Optional[str] = None
         started = time.time()
@@ -930,7 +1684,8 @@ def stream_job(job_id: str):
 
 
 @app.get("/artifacts/{artifact_id}")
-def get_artifact(artifact_id: str) -> Dict[str, Any]:
+def get_artifact(artifact_id: str, request: Request) -> Dict[str, Any]:
+    _require_artifact_access(request, artifact_id)
     try:
         return runtime.get_artifact(artifact_id)
     except KeyError as exc:
@@ -938,8 +1693,21 @@ def get_artifact(artifact_id: str) -> Dict[str, Any]:
 
 
 @app.get("/outputs")
-def list_outputs(project_id: Optional[str] = None) -> Dict[str, Any]:
-    return runtime.list_outputs(project_id=project_id)
+def list_outputs(request: Request, project_id: Optional[str] = None) -> Dict[str, Any]:
+    if project_id:
+        _require_project_access(request, project_id)
+    response = runtime.list_outputs(project_id=project_id)
+    context = _current_auth(request)
+    if context.user.get("role") != "admin" and not project_id:
+        response["items"] = [
+            item
+            for item in response.get("items", [])
+            if (
+                (project := runtime.store.get_project(str(item.get("project_id") or ""))) is not None
+                and project.owner_user_id == context.user.get("user_id")
+            )
+        ]
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -953,9 +1721,10 @@ def list_workflow_templates() -> Dict[str, Any]:
 
 
 @app.post("/workflow/submit")
-def submit_workflow(payload: WorkflowSubmitRequest) -> Dict[str, Any]:
+def submit_workflow(payload: WorkflowSubmitRequest, request: Request) -> Dict[str, Any]:
     if not payload.project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
+    _require_project_access(request, payload.project_id)
     try:
         return runtime.submit_workflow(
             project_id=payload.project_id,
@@ -969,12 +1738,26 @@ def submit_workflow(payload: WorkflowSubmitRequest) -> Dict[str, Any]:
 
 
 @app.get("/workflow/history")
-def workflow_history(project_id: Optional[str] = None) -> Dict[str, Any]:
-    return runtime.list_workflows(project_id=project_id)
+def workflow_history(request: Request, project_id: Optional[str] = None) -> Dict[str, Any]:
+    if project_id:
+        _require_project_access(request, project_id)
+    response = runtime.list_workflows(project_id=project_id)
+    context = _current_auth(request)
+    if context.user.get("role") != "admin" and not project_id:
+        response["items"] = [
+            item
+            for item in response.get("items", [])
+            if (
+                (project := runtime.store.get_project(str(item.get("project_id") or ""))) is not None
+                and project.owner_user_id == context.user.get("user_id")
+            )
+        ]
+    return response
 
 
 @app.get("/workflow/{workflow_id}")
-def get_workflow(workflow_id: str) -> Dict[str, Any]:
+def get_workflow(workflow_id: str, request: Request) -> Dict[str, Any]:
+    _require_workflow_access(request, workflow_id)
     try:
         return runtime.get_workflow(workflow_id)
     except KeyError as exc:
@@ -982,7 +1765,8 @@ def get_workflow(workflow_id: str) -> Dict[str, Any]:
 
 
 @app.get("/workflow/{workflow_id}/artifacts")
-def get_workflow_artifacts(workflow_id: str) -> Dict[str, Any]:
+def get_workflow_artifacts(workflow_id: str, request: Request) -> Dict[str, Any]:
+    _require_workflow_access(request, workflow_id)
     try:
         return runtime.list_workflow_artifacts(workflow_id)
     except KeyError as exc:
@@ -990,7 +1774,8 @@ def get_workflow_artifacts(workflow_id: str) -> Dict[str, Any]:
 
 
 @app.get("/workflow/{workflow_id}/stream")
-def stream_workflow(workflow_id: str):
+def stream_workflow(workflow_id: str, request: Request):
+    _require_workflow_access(request, workflow_id)
     def event_stream():
         for event in runtime.stream_workflow_events(workflow_id):
             event_type = str(event.get("type") or "message")
@@ -1001,7 +1786,8 @@ def stream_workflow(workflow_id: str):
 
 
 @app.get("/workflow-files/{workflow_id}/{relative_path:path}")
-def serve_workflow_file(workflow_id: str, relative_path: str):
+def serve_workflow_file(workflow_id: str, relative_path: str, request: Request):
+    _require_workflow_access(request, workflow_id)
     try:
         path = runtime.resolve_workflow_file(workflow_id, relative_path)
     except (ValueError, KeyError) as exc:
@@ -1033,8 +1819,10 @@ class TimelinePatchRequest(BaseModel):
 @app.post("/projects/{project_id}/timeline/generate")
 async def generate_timeline(
     project_id: str,
+    request: Request,
     file: UploadFile = File(...),
 ) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
     try:
         raw = await file.read()
         return runtime.generate_timeline(
@@ -1051,7 +1839,8 @@ async def generate_timeline(
 
 
 @app.get("/projects/{project_id}/timeline")
-def get_timeline(project_id: str) -> Dict[str, Any]:
+def get_timeline(project_id: str, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
     try:
         return runtime.get_timeline(project_id)
     except KeyError as exc:
@@ -1059,8 +1848,9 @@ def get_timeline(project_id: str) -> Dict[str, Any]:
 
 
 @app.patch("/projects/{project_id}/timeline")
-def update_timeline(project_id: str, request: TimelinePatchRequest) -> Dict[str, Any]:
+def update_timeline(project_id: str, payload: TimelinePatchRequest, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
     try:
-        return runtime.update_timeline(project_id, request.patch)
+        return runtime.update_timeline(project_id, payload.patch)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

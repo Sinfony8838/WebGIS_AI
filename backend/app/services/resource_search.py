@@ -52,19 +52,26 @@ class ResourceSearchService:
         self.config = config
         self.knowledge_base = knowledge_base
 
-    def search(self, query: str = "", scope: str = "all", limit: int = 12) -> Dict[str, Any]:
+    def search(
+        self,
+        query: str = "",
+        scope: str = "all",
+        limit: int = 12,
+        owner_user_id: str = "",
+        include_all: bool = False,
+    ) -> Dict[str, Any]:
         normalized_scope = scope if scope in {"all", "kb", "web", "materials"} else "all"
         max_limit = max(1, min(int(limit or 12), 50))
         results: List[Dict[str, Any]] = []
         trace: List[Dict[str, str]] = []
 
         if normalized_scope in {"all", "kb"}:
-            kb_results = self._search_kb(query, max_limit)
+            kb_results = self._search_kb(query, max_limit, owner_user_id, include_all)
             results.extend(kb_results)
             trace.append({"source": "kb", "status": "success", "count": str(len(kb_results))})
 
         if normalized_scope in {"all", "materials"}:
-            material_results = self._search_materials(query, max_limit)
+            material_results = self._search_materials(query, max_limit, owner_user_id, include_all)
             results.extend(material_results)
             trace.append({"source": "materials", "status": "success", "count": str(len(material_results))})
 
@@ -86,8 +93,19 @@ class ResourceSearchService:
             "trace": trace,
         }
 
-    def _search_kb(self, query: str, limit: int) -> List[Dict[str, Any]]:
-        payload = self.knowledge_base.search(query=query, limit=limit)
+    def _search_kb(
+        self,
+        query: str,
+        limit: int,
+        owner_user_id: str,
+        include_all: bool,
+    ) -> List[Dict[str, Any]]:
+        payload = self.knowledge_base.search(
+            query=query,
+            limit=limit,
+            owner_user_id=owner_user_id,
+            include_all=include_all,
+        )
         rows = []
         for item in payload.get("items", []):
             title = _as_text(item.get("title"))
@@ -107,10 +125,19 @@ class ResourceSearchService:
             )
         return rows
 
-    def _search_materials(self, query: str, limit: int) -> List[Dict[str, Any]]:
+    def _search_materials(
+        self,
+        query: str,
+        limit: int,
+        owner_user_id: str,
+        include_all: bool,
+    ) -> List[Dict[str, Any]]:
         terms = [part.lower() for part in query.split() if part.strip()]
         rows = []
-        manifest = self.knowledge_base.get_manifest()
+        manifest = self.knowledge_base.get_manifest(
+            owner_user_id=owner_user_id,
+            include_all=include_all,
+        )
         for item in manifest.get("items", []):
             for material in item.get("materials", []):
                 haystack = " ".join(

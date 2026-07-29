@@ -15,6 +15,8 @@ def _request(method: str = "GET", path: str = "/health", headers: dict[str, str]
         url=SimpleNamespace(path=path),
         headers=headers or {},
         query_params=query or {},
+        cookies={},
+        state=SimpleNamespace(),
     )
 
 
@@ -27,12 +29,15 @@ class MainSecurityTest(unittest.TestCase):
     def setUp(self) -> None:
         self.previous_token = app_main.config.auth_token
         self.previous_exempt_paths = app_main.config.auth_exempt_paths
+        self.previous_auth_mode = app_main.config.auth_mode
 
     def tearDown(self) -> None:
         app_main.config.auth_token = self.previous_token
         app_main.config.auth_exempt_paths = self.previous_exempt_paths
+        app_main.config.auth_mode = self.previous_auth_mode
 
     def test_auth_disabled_keeps_local_runtime_compatible(self) -> None:
+        app_main.config.auth_mode = "disabled"
         app_main.config.auth_token = ""
         app_main.config.auth_exempt_paths = ""
 
@@ -41,6 +46,7 @@ class MainSecurityTest(unittest.TestCase):
         self.assertEqual(response, {"ok": True})
 
     def test_auth_enabled_requires_bearer_token(self) -> None:
+        app_main.config.auth_mode = "legacy_token"
         app_main.config.auth_token = "secret-token"
         app_main.config.auth_exempt_paths = ""
 
@@ -57,6 +63,7 @@ class MainSecurityTest(unittest.TestCase):
         self.assertEqual(valid, {"ok": True})
 
     def test_auth_enabled_accepts_query_token_for_eventsource_and_file_links(self) -> None:
+        app_main.config.auth_mode = "legacy_token"
         app_main.config.auth_token = "secret-token"
         app_main.config.auth_exempt_paths = ""
 
@@ -67,6 +74,7 @@ class MainSecurityTest(unittest.TestCase):
         self.assertEqual(response, {"ok": True})
 
     def test_auth_exempt_paths_allow_public_healthcheck_when_configured(self) -> None:
+        app_main.config.auth_mode = "legacy_token"
         app_main.config.auth_token = "secret-token"
         app_main.config.auth_exempt_paths = "/health"
 

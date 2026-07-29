@@ -50,14 +50,23 @@ class ClassroomWorkflowRuntime:
     # Lessons
     # ------------------------------------------------------------------
 
-    def list_lessons(self) -> Dict[str, Any]:
-        return self.lesson_service.list_lessons()
+    def list_lessons(self, owner_user_id: str = "", include_all: bool = False) -> Dict[str, Any]:
+        return self.lesson_service.list_lessons(
+            owner_user_id=owner_user_id,
+            include_all=include_all,
+        )
 
     def get_lesson(self, lesson_id: str) -> Dict[str, Any]:
         return {"status": "success", **self.lesson_service.get_lesson(lesson_id).to_dict()}
 
-    def create_lesson(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return {"status": "success", **self.lesson_service.create_lesson(payload).to_dict()}
+    def create_lesson(self, payload: Dict[str, Any], owner_user_id: str = "") -> Dict[str, Any]:
+        return {
+            "status": "success",
+            **self.lesson_service.create_lesson(
+                payload,
+                owner_user_id=owner_user_id,
+            ).to_dict(),
+        }
 
     def update_lesson(self, lesson_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"status": "success", **self.lesson_service.update_lesson(lesson_id, payload).to_dict()}
@@ -83,7 +92,7 @@ class ClassroomWorkflowRuntime:
     def capture_lesson_scene(self, lesson_id: str, stage_id: str, snapshot: Dict[str, Any]) -> Dict[str, Any]:
         return self.lesson_service.capture_stage_scene(lesson_id, stage_id, snapshot)
 
-    def submit_lesson_import(self, project_id: str, text: str) -> Dict[str, Any]:
+    def submit_lesson_import(self, project_id: str, text: str, owner_user_id: str = "") -> Dict[str, Any]:
         job = self.store.create_job(
             project_id=project_id,
             job_type="lesson_import",
@@ -91,7 +100,11 @@ class ClassroomWorkflowRuntime:
             workflow_type="lesson_import",
             request={"text_length": len(text or "")},
         )
-        threading.Thread(target=self._run_lesson_import_job, args=(job.job_id, text), daemon=True).start()
+        threading.Thread(
+            target=self._run_lesson_import_job,
+            args=(job.job_id, text, owner_user_id),
+            daemon=True,
+        ).start()
         return {"status": "accepted", "job_id": job.job_id, "project_id": project_id}
 
     def submit_population_lesson_prep(self, project_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -109,11 +122,11 @@ class ClassroomWorkflowRuntime:
             accepted_stage_ids=accepted_stage_ids,
         )
 
-    def _run_lesson_import_job(self, job_id: str, text: str) -> None:
+    def _run_lesson_import_job(self, job_id: str, text: str, owner_user_id: str = "") -> None:
         try:
             self.store.set_job_status(job_id, "running")
             self.store.update_job_stage(job_id, "analysis", "running", "Parsing lesson text.")
-            result = self.lesson_service.import_from_text(text)
+            result = self.lesson_service.import_from_text(text, owner_user_id=owner_user_id)
             lesson = result["lesson"]
             parser_label = "minimax" if result.get("parser") == "minimax" else "rules"
             self.store.update_job_stage(job_id, "analysis", "success", f"Lesson parsed by {parser_label}.")

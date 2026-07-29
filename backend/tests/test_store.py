@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from backend.app.models import LayerRecord, ProjectRecord
+from backend.app.models import LayerRecord, LessonRecord, ProjectRecord
 from backend.app.store import RuntimeStore
 
 
@@ -130,3 +130,22 @@ class RuntimeStoreTest(unittest.TestCase):
 
             self.assertEqual(set(reloaded.projects), created_ids)
             self.assertEqual(marker.read_text(encoding="utf-8"), '{"archived": true}')
+
+    def test_assign_unowned_records_is_idempotent_and_preserves_builtins(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_file = Path(temp_dir) / "state.json"
+            store = RuntimeStore(state_file)
+            project = store.create_project(name="历史项目")
+            manual = LessonRecord.create(title="历史课时", source="manual")
+            builtin = LessonRecord.create(title="内置课时", source="builtin")
+            store.upsert_lesson(manual)
+            store.upsert_lesson(builtin)
+
+            first = store.assign_unowned_records("user_bootstrap")
+            second = store.assign_unowned_records("user_other")
+
+            self.assertEqual(first, {"projects": 1, "lessons": 1})
+            self.assertEqual(second, {"projects": 0, "lessons": 0})
+            self.assertEqual(store.get_project(project.project_id).owner_user_id, "user_bootstrap")
+            self.assertEqual(store.get_lesson(manual.lesson_id).owner_user_id, "user_bootstrap")
+            self.assertEqual(store.get_lesson(builtin.lesson_id).owner_user_id, "")

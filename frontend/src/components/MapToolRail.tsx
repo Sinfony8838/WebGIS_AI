@@ -20,8 +20,8 @@ type Props = {
   onZoomOut: () => void;
   onClear: () => void;
   onToggleGraticule: () => void;
-  /** Globe-only: reset the camera to the default Asia-centric view. */
-  onResetGlobeView?: () => void;
+  /** Reset the active 2D/3D view to the default Asia-centric scene. */
+  onResetView: () => void;
 };
 
 type ToolDescriptor = {
@@ -186,7 +186,7 @@ export function MapToolRail({
   onZoomOut,
   onClear,
   onToggleGraticule,
-  onResetGlobeView
+  onResetView
 }: Props) {
   const canClear = hasSearchArea || hasMeasurements || hasAnnotations || mode !== "browse";
   const isGlobe = viewMode === "globe";
@@ -249,20 +249,18 @@ export function MapToolRail({
           <span className="tool-rail-label">经纬网</span>
         </button>
 
-        {isGlobe && onResetGlobeView ? (
-          <button
-            type="button"
-            className="tool-rail-button"
-            aria-label="重置视角"
-            title="将相机重置回亚洲全景视角"
-            onClick={onResetGlobeView}
-          >
-            <span className="tool-rail-icon" aria-hidden="true">
-              <ResetViewIcon />
-            </span>
-            <span className="tool-rail-label">重置视角</span>
-          </button>
-        ) : null}
+        <button
+          type="button"
+          className="tool-rail-button"
+          aria-label="重置视角"
+          title="将当前视图重置回亚洲全景"
+          onClick={onResetView}
+        >
+          <span className="tool-rail-icon" aria-hidden="true">
+            <ResetViewIcon />
+          </span>
+          <span className="tool-rail-label">重置视角</span>
+        </button>
       </div>
 
       <div className="tool-rail-divider" aria-hidden="true" />

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { buildWorkflowStreamUrl, fetchWorkflow } from "../api";
+import { buildWorkflowStreamUrl, fetchCurrentUser, fetchWorkflow } from "../api";
 import type {
   WorkflowArtifactRecord,
   WorkflowError,
@@ -95,7 +95,7 @@ export function useWorkflowStream(workflowId: string): WorkflowStreamState {
       });
 
     const url = buildWorkflowStreamUrl(workflowId);
-    const source = new EventSource(url);
+    const source = new EventSource(url, { withCredentials: true });
     sourceRef.current = source;
 
     function handleEvent(eventType: WorkflowEventType, raw: MessageEvent<string>) {
@@ -130,6 +130,7 @@ export function useWorkflowStream(workflowId: string): WorkflowStreamState {
     source.onerror = () => {
       // Browser will retry automatically; we just note we lost connectivity.
       setState((prev) => ({ ...prev }));
+      void fetchCurrentUser().catch(() => undefined);
     };
 
     return () => {

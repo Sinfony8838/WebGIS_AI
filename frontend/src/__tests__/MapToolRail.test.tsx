@@ -19,7 +19,7 @@ function renderRail(viewMode: "plane" | "globe") {
       onZoomOut={vi.fn()}
       onClear={vi.fn()}
       onToggleGraticule={vi.fn()}
-      onResetGlobeView={vi.fn()}
+      onResetView={vi.fn()}
     />
   );
 }
@@ -36,7 +36,7 @@ describe("MapToolRail", () => {
     const labels = Array.from(group.querySelectorAll(".tool-rail-label")).map(
       (item) => item.textContent
     );
-    expect(labels).toEqual(["选择", "标注", "测距", "绘区", "画笔", "经纬网"]);
+    expect(labels).toEqual(["选择", "标注", "测距", "绘区", "画笔", "经纬网", "重置视角"]);
   });
 
   it("keeps unsupported drawing tools out of the globe rail", () => {

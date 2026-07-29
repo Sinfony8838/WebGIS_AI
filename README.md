@@ -261,9 +261,28 @@ GIS 工作流：
 
 - `WEBGIS_AI_RESOURCE_SEARCH_ENDPOINT`
 
+教师账号与安全：
+
+- `WEBGIS_AI_AUTH_MODE`：默认 `users`；兼容模式可设为 `legacy_token` 或 `disabled`
+- `WEBGIS_AI_AUTH_DB`：可选的独立鉴权 SQLite 路径，默认 `backend/data/auth/auth.db`
+- `WEBGIS_AI_BOOTSTRAP_KEY`：非本机首次初始化管理员时必须提供
+- `WEBGIS_AI_COOKIE_SECURE`：HTTPS 部署时设为 `true`
+- `WEBGIS_AI_SESSION_IDLE_MINUTES`：会话空闲有效期，默认 480 分钟
+- `WEBGIS_AI_SESSION_MAX_HOURS`：会话绝对有效期，默认 24 小时
+
+默认用户模式下，首次打开前端会进入管理员初始化页。系统不开放注册，之后仅管理员可以创建教师或其他管理员账号。项目、课时、课堂记录、工作流、产物和教师上传资料按教师隔离，管理员可查看全部。
+
 ## 关键接口
 
 - `GET /health`
+- `GET /auth/bootstrap-status`
+- `POST /auth/bootstrap`
+- `POST /auth/login`
+- `GET /auth/me`
+- `POST /auth/logout`
+- `POST /auth/change-password`
+- `GET /admin/users`
+- `GET /admin/audit-logs`
 - `GET /llm/status`
 - `GET /basemaps`
 - `GET /teaching-maps`

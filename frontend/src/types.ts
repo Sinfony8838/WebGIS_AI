@@ -1,3 +1,45 @@
+export type UserRole = "admin" | "teacher";
+export type UserStatus = "active" | "disabled";
+
+export type AuthUser = {
+  user_id: string;
+  username: string;
+  display_name: string;
+  email: string;
+  role: UserRole;
+  status: UserStatus;
+  must_change_password: boolean;
+  created_at: string;
+  updated_at: string;
+  last_login_at: string;
+  locked_until: string;
+  active_session_count?: number;
+};
+
+export type AuthSession = {
+  status: string;
+  user: AuthUser;
+  csrf_token: string;
+  expires_at?: string;
+};
+
+export type AuthBootstrapStatus = {
+  status: string;
+  auth_mode: "users" | "legacy_token" | "disabled";
+  required: boolean;
+};
+
+export type AuthAuditLog = {
+  audit_id: number;
+  actor_user_id: string;
+  action: string;
+  target_user_id: string;
+  outcome: string;
+  detail: string;
+  ip_address: string;
+  created_at: string;
+};
+
 export type BasemapLayerDescriptor = {
   layer_id: string;
   title: string;

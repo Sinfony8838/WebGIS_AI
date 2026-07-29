@@ -99,8 +99,23 @@ class AppConfig:
             "http://127.0.0.1:5173,http://localhost:5173",
         )
     )
+    auth_mode: str = field(
+        default_factory=lambda: os.getenv("WEBGIS_AI_AUTH_MODE", "users").strip().lower()
+    )
     auth_token: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_AUTH_TOKEN", ""))
     auth_exempt_paths: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_AUTH_EXEMPT_PATHS", ""))
+    auth_db: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_AUTH_DB", "").strip())
+    bootstrap_key: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_BOOTSTRAP_KEY", "").strip())
+    cookie_secure: bool = field(
+        default_factory=lambda: os.getenv("WEBGIS_AI_COOKIE_SECURE", "false").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+    session_idle_minutes: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_SESSION_IDLE_MINUTES", "480"))
+    )
+    session_max_hours: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_SESSION_MAX_HOURS", "24"))
+    )
     base_map_url: str = field(
         default_factory=lambda: os.getenv(
             "WEBGIS_AI_BASEMAP_URL",
@@ -205,10 +220,14 @@ class AppConfig:
         self.builtin_dir = self.app_dir / "data" / "builtin"
         self.knowledge_dir = self.builtin_dir / "knowledge"
         self.state_dir = self.data_dir / "state"
+        self.auth_dir = self.data_dir / "auth"
+        self.auth_db_path = Path(self.auth_db).expanduser() if self.auth_db else self.auth_dir / "auth.db"
         self.uploads_dir = self.data_dir / "uploads"
         self.outputs_dir = self.data_dir / "outputs"
         self.workflows_dir = self.data_dir / "workflows"
         self.state_file = self.state_dir / "runtime.json"
+        if self.auth_mode not in {"users", "legacy_token", "disabled"}:
+            self.auth_mode = "users"
         # If the user set QGIS_ROOT but not WEBGIS_AI_QGIS_PYTHON, auto-derive
         # the QGIS-bundled interpreter at <QGIS_ROOT>/bin/python.exe (OSGeo4W
         # layout used by every official Windows installer). The worker
@@ -221,6 +240,7 @@ class AppConfig:
     def ensure_dirs(self) -> None:
         for path in (
             self.state_dir,
+            self.auth_dir,
             self.uploads_dir,
             self.outputs_dir,
             self.uploads_dir / "kb_materials",
@@ -233,7 +253,11 @@ class AppConfig:
         return origins or ["http://127.0.0.1:5173", "http://localhost:5173"]
 
     def auth_enabled(self) -> bool:
-        return bool(self.auth_token.strip())
+        if self.auth_mode == "users":
+            return True
+        if self.auth_mode == "legacy_token":
+            return bool(self.auth_token.strip())
+        return False
 
     def auth_exempt_path_set(self) -> set[str]:
         return {item.strip() for item in self.auth_exempt_paths.split(",") if item.strip()}

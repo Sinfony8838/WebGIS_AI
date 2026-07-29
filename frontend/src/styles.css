@@ -4366,15 +4366,23 @@ button {
   }
 }
 
-@media (max-width: 1360px) {
+@media (max-width: 1500px) {
   :root {
     --left-panel-width: 320px;
     --header-height: 72px;
   }
 
   .app-header {
-    grid-template-columns: auto minmax(300px, 1fr) auto;
+    grid-template-columns: auto minmax(240px, 1fr) auto;
     gap: 10px;
+  }
+
+  .brand-platform-name {
+    display: none;
+  }
+
+  .app-header .toolbar-button {
+    padding-inline: 9px;
   }
 
   .header-actions {

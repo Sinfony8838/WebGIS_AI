@@ -370,8 +370,11 @@ class WebGISRuntime:
         self._require_project(project_id)
         return {"status": "success", "active": self.teaching_map_service.get_active_overlays(project_id)}
 
-    def kb_manifest(self) -> Dict[str, Any]:
-        return self.knowledge_base_service.get_manifest()
+    def kb_manifest(self, owner_user_id: str = "", include_all: bool = False) -> Dict[str, Any]:
+        return self.knowledge_base_service.get_manifest(
+            owner_user_id=owner_user_id,
+            include_all=include_all,
+        )
 
     def kb_search(
         self,
@@ -380,23 +383,61 @@ class WebGISRuntime:
         region: str = "",
         tag: str = "",
         limit: int = 20,
+        owner_user_id: str = "",
+        include_all: bool = False,
     ) -> Dict[str, Any]:
-        return self.knowledge_base_service.search(query=query, topic=topic, region=region, tag=tag, limit=limit)
+        return self.knowledge_base_service.search(
+            query=query,
+            topic=topic,
+            region=region,
+            tag=tag,
+            limit=limit,
+            owner_user_id=owner_user_id,
+            include_all=include_all,
+        )
 
-    def kb_topics(self) -> Dict[str, Any]:
-        return self.knowledge_base_service.topics()
+    def kb_topics(self, owner_user_id: str = "", include_all: bool = False) -> Dict[str, Any]:
+        return self.knowledge_base_service.topics(
+            owner_user_id=owner_user_id,
+            include_all=include_all,
+        )
 
-    def kb_upsert_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
-        normalized = self.knowledge_base_service.upsert_item(item)
+    def kb_upsert_item(
+        self,
+        item: Dict[str, Any],
+        owner_user_id: str = "",
+        include_all: bool = False,
+    ) -> Dict[str, Any]:
+        normalized = self.knowledge_base_service.upsert_item(
+            item,
+            owner_user_id=owner_user_id,
+            include_all=include_all,
+        )
         return {"status": "success", "item": normalized}
 
-    def kb_register_layer(self, project_id: str, layer_id: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def kb_register_layer(
+        self,
+        project_id: str,
+        layer_id: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        owner_user_id: str = "",
+        include_all: bool = False,
+    ) -> Dict[str, Any]:
         project = self._require_project(project_id)
         target_layer = next((layer for layer in project.layers if layer.layer_id == layer_id), None)
         if target_layer is None:
             raise KeyError(f"Unknown layer in project: {layer_id}")
-        item = self.knowledge_base_service.build_item_from_layer(project_id, target_layer, metadata or {})
-        normalized = self.knowledge_base_service.upsert_item(item)
+        item = self.knowledge_base_service.build_item_from_layer(
+            project_id,
+            target_layer,
+            metadata or {},
+            owner_user_id=owner_user_id,
+        )
+        normalized = self.knowledge_base_service.upsert_item(
+            item,
+            owner_user_id=owner_user_id,
+            include_all=include_all,
+        )
         self.store.add_recent_action(
             project_id,
             "知识库登记",
@@ -415,6 +456,8 @@ class WebGISRuntime:
         description: str = "",
         material_type: str = "",
         region_binding: Optional[Dict[str, Any]] = None,
+        owner_user_id: str = "",
+        include_all: bool = False,
     ) -> Dict[str, Any]:
         suffix = Path(filename or "").suffix.lower()
         if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".mp4", ".webm", ".mov", ".m4v", ".html", ".htm", ".pdf", ".doc", ".docx", ".ppt", ".pptx"}:
@@ -434,6 +477,8 @@ class WebGISRuntime:
                 "description": description,
                 "region_binding": region_binding or {},
             },
+            owner_user_id=owner_user_id,
+            include_all=include_all,
         )
         return {"status": "success", "material": material}
 
@@ -446,6 +491,8 @@ class WebGISRuntime:
         material_type: str = "link",
         thumbnail_url: str = "",
         region_binding: Optional[Dict[str, Any]] = None,
+        owner_user_id: str = "",
+        include_all: bool = False,
     ) -> Dict[str, Any]:
         if not str(url or "").strip().lower().startswith(("http://", "https://", "/files/")):
             raise ValueError("Material link must be an http(s) URL or a public /files URL")
@@ -460,11 +507,26 @@ class WebGISRuntime:
                 "description": description,
                 "region_binding": region_binding or {},
             },
+            owner_user_id=owner_user_id,
+            include_all=include_all,
         )
         return {"status": "success", "material": material}
 
-    def resource_search(self, query: str = "", scope: str = "all", limit: int = 12) -> Dict[str, Any]:
-        return self.resource_search_service.search(query=query, scope=scope, limit=limit)
+    def resource_search(
+        self,
+        query: str = "",
+        scope: str = "all",
+        limit: int = 12,
+        owner_user_id: str = "",
+        include_all: bool = False,
+    ) -> Dict[str, Any]:
+        return self.resource_search_service.search(
+            query=query,
+            scope=scope,
+            limit=limit,
+            owner_user_id=owner_user_id,
+            include_all=include_all,
+        )
 
     def list_population_source_versions(self, project_id: str = "") -> Dict[str, Any]:
         return self.population_source_registry_service.list_versions(project_id=project_id)
@@ -608,8 +670,18 @@ class WebGISRuntime:
         except urllib.error.URLError as exc:
             raise ConnectionError(f"Weather tile upstream is unavailable: {exc.reason}") from exc
 
-    def create_project(self, name: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        project = self.store.create_project(name=name, metadata=metadata, base_map=self.config.default_basemap())
+    def create_project(
+        self,
+        name: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        owner_user_id: str = "",
+    ) -> Dict[str, Any]:
+        project = self.store.create_project(
+            name=name,
+            owner_user_id=owner_user_id,
+            metadata=metadata,
+            base_map=self.config.default_basemap(),
+        )
         return {"status": "success", **project.to_dict()}
 
     @staticmethod
@@ -621,8 +693,10 @@ class WebGISRuntime:
             layer["data"] = {}
         return payload
 
-    def list_projects(self) -> Dict[str, Any]:
+    def list_projects(self, owner_user_id: str = "", include_all: bool = False) -> Dict[str, Any]:
         projects = sorted(self.store.projects.values(), key=lambda project: project.updated_at, reverse=True)
+        if owner_user_id and not include_all:
+            projects = [project for project in projects if project.owner_user_id == owner_user_id]
         return {
             "status": "success",
             "items": [self._project_payload(project) for project in projects],

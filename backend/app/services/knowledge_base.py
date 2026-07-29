@@ -106,6 +106,7 @@ def _normalize_material(value: Any) -> Dict[str, Any]:
         "region_binding": _normalize_region_binding(raw.get("region_binding")),
         "sort_order": int(raw.get("sort_order") or 0),
         "created_at": created_at,
+        "owner_user_id": _as_text(raw.get("owner_user_id")),
     }
 
 
@@ -164,12 +165,18 @@ class KnowledgeBaseService:
         self.geo_path = self.knowledge_dir / "geo_knowledge.json"
         self.manifest_path = self.knowledge_dir / "kb_manifest.json"
 
-    def get_manifest(self) -> Dict[str, Any]:
+    def get_manifest(self, owner_user_id: str = "", include_all: bool = False) -> Dict[str, Any]:
         manifest = self._load_manifest(create_if_missing=True)
+        items = [
+            item
+            for item in self._manifest_items()
+            if self._can_access_item(item, owner_user_id, include_all)
+        ]
         return {
             "status": "success",
             "path": str(self.manifest_path),
             **manifest,
+            "items": items,
         }
 
     def search(
@@ -179,6 +186,8 @@ class KnowledgeBaseService:
         region: str = "",
         tag: str = "",
         limit: int = 20,
+        owner_user_id: str = "",
+        include_all: bool = False,
     ) -> Dict[str, Any]:
         query_tokens = [token for token in _normalize_keywords(query) if token]
         topic_lower = _as_text(topic).lower()
@@ -187,6 +196,8 @@ class KnowledgeBaseService:
         rows = []
 
         for item in self._manifest_items():
+            if not self._can_access_item(item, owner_user_id, include_all):
+                continue
             item_topic = _as_text(item.get("topic")).lower()
             item_region = _as_text(item.get("region")).lower()
             keywords = _normalize_keywords(item.get("keywords"))
@@ -242,9 +253,11 @@ class KnowledgeBaseService:
             "items": paged,
         }
 
-    def topics(self) -> Dict[str, Any]:
+    def topics(self, owner_user_id: str = "", include_all: bool = False) -> Dict[str, Any]:
         groups: Dict[str, Dict[str, Any]] = {}
         for item in self._manifest_items():
+            if not self._can_access_item(item, owner_user_id, include_all):
+                continue
             topic = _as_text(item.get("topic")) or "uncategorized"
             status = _derive_status(item)
             group = groups.setdefault(
@@ -274,8 +287,15 @@ class KnowledgeBaseService:
             "items": sorted(groups.values(), key=lambda row: (row["topic"] != "population_census", row["topic"])),
         }
 
-    def upsert_item(self, raw_item: Dict[str, Any]) -> Dict[str, Any]:
+    def upsert_item(
+        self,
+        raw_item: Dict[str, Any],
+        *,
+        owner_user_id: str = "",
+        include_all: bool = False,
+    ) -> Dict[str, Any]:
         manifest = self._load_manifest(create_if_missing=True)
+        raw_item = {**raw_item, "owner_user_id": owner_user_id or raw_item.get("owner_user_id", "")}
         item = self._normalize_manifest_item(raw_item)
         if not item["title"]:
             raise ValueError("Knowledge item requires title")
@@ -284,6 +304,13 @@ class KnowledgeBaseService:
         replaced = False
         for index, row in enumerate(existing):
             if _as_text(_safe_dict(row).get("id")) == item["id"]:
+                current = self._normalize_manifest_item(_safe_dict(row))
+                if not self._can_access_item(current, owner_user_id, include_all):
+                    raise ValueError(f"Unknown knowledge item: {item['id']}")
+                if not current.get("owner_user_id") and owner_user_id:
+                    raise ValueError("Built-in knowledge items are read-only")
+                if current.get("owner_user_id") and not item.get("owner_user_id"):
+                    item["owner_user_id"] = current["owner_user_id"]
                 existing[index] = item
                 replaced = True
                 break
@@ -295,18 +322,31 @@ class KnowledgeBaseService:
         self._write_manifest(manifest)
         return item
 
-    def add_material_to_item(self, kb_item_id: str, raw_material: Dict[str, Any]) -> Dict[str, Any]:
+    def add_material_to_item(
+        self,
+        kb_item_id: str,
+        raw_material: Dict[str, Any],
+        *,
+        owner_user_id: str = "",
+        include_all: bool = False,
+    ) -> Dict[str, Any]:
         manifest = self._load_manifest(create_if_missing=True)
         target_id = _as_text(kb_item_id)
         if not target_id:
             raise ValueError("Knowledge material requires kb_item_id")
-        material = _normalize_material(raw_material)
+        material = _normalize_material(
+            {**raw_material, "owner_user_id": owner_user_id or raw_material.get("owner_user_id", "")}
+        )
         found = False
         items = _safe_list(manifest.get("items"))
         for index, row in enumerate(items):
             item = self._normalize_manifest_item(_safe_dict(row))
             if item["id"] != target_id:
                 continue
+            if not self._can_access_item(item, owner_user_id, include_all):
+                break
+            if not item.get("owner_user_id") and owner_user_id:
+                raise ValueError("Built-in knowledge items are read-only")
             existing = [entry for entry in item.get("materials", []) if entry.get("id") != material["id"]]
             item["materials"] = _normalize_materials([*existing, material])
             items[index] = item
@@ -324,6 +364,7 @@ class KnowledgeBaseService:
         project_id: str,
         layer: LayerRecord,
         overrides: Optional[Dict[str, Any]] = None,
+        owner_user_id: str = "",
     ) -> Dict[str, Any]:
         overrides = overrides or {}
         source_file = _as_text(layer.metadata.get("source_file"))
@@ -360,6 +401,7 @@ class KnowledgeBaseService:
                 }
             ],
             "materials": _safe_list(overrides.get("materials")),
+            "owner_user_id": owner_user_id,
         }
         return self._normalize_manifest_item(item)
 
@@ -367,6 +409,8 @@ class KnowledgeBaseService:
         geo_units = self._load_geo_units()
         manifest_units = []
         for item in self._manifest_items():
+            if item.get("owner_user_id"):
+                continue
             manifest_units.append(
                 {
                     "id": _as_text(item.get("id")),
@@ -451,7 +495,13 @@ class KnowledgeBaseService:
             "materials": _normalize_materials(item.get("materials")),
             "related_templates": _safe_list(item.get("related_templates")),
             "updated_at": _as_text(item.get("updated_at")) or _utc_now(),
+            "owner_user_id": _as_text(item.get("owner_user_id")),
         }
+
+    @staticmethod
+    def _can_access_item(item: Dict[str, Any], owner_user_id: str, include_all: bool) -> bool:
+        item_owner = _as_text(item.get("owner_user_id"))
+        return include_all or not item_owner or (bool(owner_user_id) and item_owner == owner_user_id)
 
     def _load_geo_units(self) -> List[Dict[str, Any]]:
         if not self.geo_path.exists():

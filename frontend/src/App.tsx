@@ -29,6 +29,7 @@ import {
   createProject,
   exportSnapshot,
   fetchDatasetCatalog,
+  fetchCurrentUser,
   fetchLessonResources,
   fetchHealth,
   fetchKbManifest,
@@ -73,6 +74,7 @@ import { ToastStack, type ToastItem } from "./components/ToastStack";
 import { UploadDialog } from "./components/UploadDialog";
 import { VisualMapPanel } from "./components/VisualMapPanel";
 import { WorkflowDock } from "./components/WorkflowDock";
+import { UserMenu } from "./components/UserMenu";
 import { PptViewer } from "./components/PptViewer";
 import { BrushOverlay, type BrushOverlayHandle, type BrushSettings } from "./components/BrushOverlay";
 import { BrushToolbar } from "./components/BrushToolbar";
@@ -90,6 +92,7 @@ import type {
   AssistantMode,
   AssistantTarget,
   ArtifactRecord,
+  AuthUser,
   ChatMessage,
   DatasetCatalogItem,
   DatasetStatsResponse,
@@ -118,17 +121,21 @@ import "./lesson-workflow.css";
 
 const PROJECT_ID_STORAGE_KEY = "webgis_ai_project_id";
 
-function readStoredProjectId(): string {
+function projectStorageKey(userId: string): string {
+  return `${PROJECT_ID_STORAGE_KEY}:${userId}`;
+}
+
+function readStoredProjectId(userId: string): string {
   try {
-    return window.localStorage.getItem(PROJECT_ID_STORAGE_KEY) || "";
+    return window.localStorage.getItem(projectStorageKey(userId)) || "";
   } catch {
     return "";
   }
 }
 
-function storeProjectId(projectId: string): void {
+function storeProjectId(userId: string, projectId: string): void {
   try {
-    window.localStorage.setItem(PROJECT_ID_STORAGE_KEY, projectId);
+    window.localStorage.setItem(projectStorageKey(userId), projectId);
   } catch {
     // localStorage 不可用时退化为每次新建项目
   }
@@ -381,7 +388,15 @@ function layerStyle(record: LayerRecord) {
   };
 }
 
-export default function App() {
+export default function App({
+  currentUser,
+  onLogout,
+  onUserChanged
+}: {
+  currentUser: AuthUser;
+  onLogout: () => void;
+  onUserChanged: (user: AuthUser) => void;
+}) {
   const mapElementRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<Map | null>(null);
     const basemapLayersRef = useRef<RenderableLayer[]>([]);
@@ -1044,7 +1059,9 @@ export default function App() {
 
   const subscribeToJob = useCallback(
     (jobId: string) => {
-      const source = new EventSource(`${getApiBase()}/jobs/${jobId}/stream`);
+      const source = new EventSource(`${getApiBase()}/jobs/${jobId}/stream`, {
+        withCredentials: true
+      });
       jobStreamsRef.current.add(source);
       activeJobStreamsRef.current += 1;
       setBusy(true);
@@ -1088,6 +1105,7 @@ export default function App() {
       source.addEventListener("error", () => {
         if (closeJobStream(source)) {
           pushToast("error", "任务流断开", "事件流提前关闭，请重试当前操作。");
+          void fetchCurrentUser().catch(() => undefined);
         }
       });
     },
@@ -2129,7 +2147,7 @@ export default function App() {
       setHealth(healthPayload);
       // 优先复用上次的课堂项目：每次刷新都新建项目会让后端状态文件无限膨胀
       //（历史上曾涨到 228MB，导致整个课堂演示卡顿）。
-      const storedProjectId = readStoredProjectId();
+      const storedProjectId = readStoredProjectId(currentUser.user_id);
       let active: (ProjectRecord & { status: string }) | null = null;
       if (storedProjectId) {
         try {
@@ -2147,7 +2165,7 @@ export default function App() {
       const restored = Boolean(active);
       if (!active) {
         active = await createProject();
-        storeProjectId(active.project_id);
+        storeProjectId(currentUser.user_id, active.project_id);
       }
       if (cancelled) {
         return;
@@ -2772,7 +2790,7 @@ export default function App() {
             </g>
           </svg>
           <div className="brand-title">
-            <strong>GeoBot 智能教学平台</strong>
+            <strong>GeoBot<span className="brand-platform-name"> 智能教学平台</span></strong>
             <span
               className={`connection-dot ${connectionReady ? "connected" : "disconnected"}`}
               aria-label={connectionReady ? "系统已连接" : "系统未连接"}
@@ -2920,6 +2938,11 @@ export default function App() {
               重试连接
             </button>
           ) : null}
+          <UserMenu
+            user={currentUser}
+            onLogout={onLogout}
+            onUserChanged={onUserChanged}
+          />
         </div>
       </header>
 
@@ -2976,7 +2999,13 @@ export default function App() {
             onChangeMode={setInteractionMode}
             onChangeViewMode={handleViewModeToggle}
             onToggleGraticule={() => setShowGraticule((value) => !value)}
-            onResetGlobeView={viewMode === "globe" ? () => globeRef.current?.resetView() : undefined}
+            onResetView={() => {
+              if (viewMode === "globe") {
+                globeRef.current?.resetView();
+              } else {
+                handleResetView();
+              }
+            }}
             onZoomIn={() => {
               if (viewMode === "globe") {
                 const cam = globeCamera;

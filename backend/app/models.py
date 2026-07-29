@@ -284,6 +284,7 @@ class JobRecord:
 class LessonRecord:
     lesson_id: str
     title: str
+    owner_user_id: str = ""
     subject: str = "鍦扮悊"
     grade: str = ""
     objectives: List[str] = field(default_factory=list)
@@ -297,6 +298,7 @@ class LessonRecord:
     def create(
         cls,
         title: str,
+        owner_user_id: str = "",
         subject: str = "鍦扮悊",
         grade: str = "",
         objectives: Optional[List[str]] = None,
@@ -308,6 +310,7 @@ class LessonRecord:
         return cls(
             lesson_id=lesson_id or f"lesson_{uuid4().hex}",
             title=title,
+            owner_user_id=owner_user_id,
             subject=subject,
             grade=grade,
             objectives=objectives or [],
@@ -489,6 +492,7 @@ class WorkflowRecord:
 class ProjectRecord:
     project_id: str
     name: str
+    owner_user_id: str = ""
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -511,12 +515,14 @@ class ProjectRecord:
     def create(
         cls,
         name: Optional[str] = None,
+        owner_user_id: str = "",
         metadata: Optional[Dict[str, Any]] = None,
         base_map: Optional[Dict[str, Any]] = None,
     ) -> "ProjectRecord":
         return cls(
             project_id=f"project_{uuid4().hex}",
             name=name or "WebGIS Classroom Project",
+            owner_user_id=owner_user_id,
             metadata=metadata or {},
             base_map=base_map or {},
         )

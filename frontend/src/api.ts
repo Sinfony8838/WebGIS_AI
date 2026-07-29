@@ -2,6 +2,10 @@ import type {
   AssistantMode,
   AssistantInputMode,
   AssistantTarget,
+  AuthAuditLog,
+  AuthBootstrapStatus,
+  AuthSession,
+  AuthUser,
   ArtifactRecord,
   BasemapCatalog,
   BasemapPreset,
@@ -53,24 +57,47 @@ import type {
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:18999";
+let csrfToken = "";
+let unauthorizedHandler: (() => void) | null = null;
+
+export function setCsrfToken(value: string): void {
+  csrfToken = value || "";
+}
+
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  unauthorizedHandler = handler;
+}
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = String(init?.method || "GET").toUpperCase();
+  const headers = new Headers(init?.headers);
+  if (!["GET", "HEAD", "OPTIONS"].includes(method) && csrfToken) {
+    headers.set("X-WebGIS-CSRF", csrfToken);
+  }
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}${path}`, init);
+    response = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers,
+      credentials: "include"
+    });
   } catch (err) {
     throw new Error(
       `无法连接到后端服务 (${API_BASE})，请确认服务已启动`
     );
   }
   if (!response.ok) {
+    if (response.status === 401) {
+      csrfToken = "";
+      unauthorizedHandler?.();
+    }
     let message = `请求失败 (${response.status})`;
     try {
       const body = await response.json();
       if (body && typeof body.detail === "string") {
         message = body.detail;
       } else if (body && typeof body.detail === "object") {
-        message = JSON.stringify(body.detail);
+        message = String(body.detail.message || body.detail.code || JSON.stringify(body.detail));
       }
     } catch {
       try {
@@ -81,6 +108,128 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(message);
   }
   return (await response.json()) as T;
+}
+
+export async function fetchBootstrapStatus(): Promise<AuthBootstrapStatus> {
+  return requestJson<AuthBootstrapStatus>("/auth/bootstrap-status");
+}
+
+export async function bootstrapAdmin(payload: {
+  username: string;
+  display_name: string;
+  password: string;
+  bootstrap_key?: string;
+}): Promise<AuthSession> {
+  const { bootstrap_key, ...body } = payload;
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (bootstrap_key) headers.set("X-WebGIS-Bootstrap-Key", bootstrap_key);
+  const session = await requestJson<AuthSession>("/auth/bootstrap", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body)
+  });
+  setCsrfToken(session.csrf_token);
+  return session;
+}
+
+export async function loginUser(username: string, password: string): Promise<AuthSession> {
+  const session = await requestJson<AuthSession>("/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password })
+  });
+  setCsrfToken(session.csrf_token);
+  return session;
+}
+
+export async function fetchCurrentUser(): Promise<AuthSession> {
+  const session = await requestJson<AuthSession>("/auth/me");
+  setCsrfToken(session.csrf_token);
+  return session;
+}
+
+export async function logoutUser(): Promise<void> {
+  await requestJson("/auth/logout", { method: "POST" });
+  setCsrfToken("");
+}
+
+export async function logoutAllSessions(): Promise<void> {
+  await requestJson("/auth/logout-all", { method: "POST" });
+  setCsrfToken("");
+}
+
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string
+): Promise<{ status: string; user: AuthUser }> {
+  return requestJson("/auth/change-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword
+    })
+  });
+}
+
+export async function fetchAdminUsers(filters: {
+  query?: string;
+  role?: string;
+  status?: string;
+} = {}): Promise<{ status: string; items: AuthUser[] }> {
+  const query = new URLSearchParams();
+  if (filters.query) query.set("query", filters.query);
+  if (filters.role) query.set("role", filters.role);
+  if (filters.status) query.set("status", filters.status);
+  const suffix = query.size ? `?${query.toString()}` : "";
+  return requestJson(`/admin/users${suffix}`);
+}
+
+export async function createAdminUser(payload: {
+  username: string;
+  display_name: string;
+  email?: string;
+  role: "admin" | "teacher";
+}): Promise<{ status: string; user: AuthUser; temporary_password: string }> {
+  return requestJson("/admin/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function updateAdminUser(
+  userId: string,
+  patch: Partial<Pick<AuthUser, "display_name" | "email" | "role" | "status">>
+): Promise<{ status: string; user: AuthUser }> {
+  return requestJson(`/admin/users/${encodeURIComponent(userId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch)
+  });
+}
+
+export async function resetAdminUserPassword(
+  userId: string
+): Promise<{ status: string; user: AuthUser; temporary_password: string }> {
+  return requestJson(`/admin/users/${encodeURIComponent(userId)}/reset-password`, {
+    method: "POST"
+  });
+}
+
+export async function revokeAdminUserSessions(
+  userId: string
+): Promise<{ status: string; revoked: number }> {
+  return requestJson(`/admin/users/${encodeURIComponent(userId)}/revoke-sessions`, {
+    method: "POST"
+  });
+}
+
+export async function fetchAuditLogs(limit = 100): Promise<{
+  status: string;
+  items: AuthAuditLog[];
+}> {
+  return requestJson(`/admin/audit-logs?limit=${encodeURIComponent(String(limit))}`);
 }
 
 export function getApiBase(): string {
