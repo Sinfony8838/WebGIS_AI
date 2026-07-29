@@ -206,7 +206,12 @@ export function MapToolRail({
 
       <div className="tool-rail-divider" aria-hidden="true" />
 
-      <div className="tool-rail-grid" role="group" aria-label="交互模式">
+      <div
+        className="tool-rail-grid"
+        role="group"
+        aria-label="交互模式"
+        data-layout="single-column"
+      >
         {visibleTools.map((tool) => {
           const active = mode === tool.mode;
           return (

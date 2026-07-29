@@ -2215,20 +2215,20 @@ button {
 
 .tool-rail-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
 }
 
 .tool-rail-button {
   position: relative;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
+  justify-content: flex-start;
+  gap: 9px;
   width: 100%;
-  min-height: 58px;
-  padding: 10px 6px 8px;
+  min-height: 44px;
+  padding: 8px 9px;
   border-radius: 12px;
   border: 1px solid rgba(132, 178, 220, 0.18);
   background: linear-gradient(180deg, rgba(40, 64, 96, 0.32), rgba(20, 38, 60, 0.2));
@@ -2280,14 +2280,15 @@ button {
   font-size: 12.5px;
   font-weight: 600;
   letter-spacing: 0.06em;
-  line-height: 1;
+  line-height: 1.2;
   color: currentColor;
+  text-align: left;
 }
 
 .tool-rail-shortcut {
-  position: absolute;
-  top: 5px;
-  right: 6px;
+  position: static;
+  margin-left: auto;
+  flex: 0 0 auto;
   min-width: 16px;
   height: 16px;
   padding: 0 4px;
@@ -4983,6 +4984,24 @@ button {
   border-radius: 6px;
   padding: 6px 8px;
   font: inherit;
+}
+
+.workflow-dock__select {
+  color-scheme: dark;
+}
+
+.workflow-dock__select option {
+  background-color: #172235;
+  color: #f8fafc;
+}
+
+.workflow-dock__select option:checked {
+  background-color: #315b7c;
+  color: #ffffff;
+}
+
+.workflow-dock__select option:disabled {
+  color: rgba(214, 230, 246, 0.46);
 }
 
 .workflow-dock__input {

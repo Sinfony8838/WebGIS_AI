@@ -418,6 +418,8 @@ export function WorkflowDock({
         <label className="workflow-dock__label">
           工作流模板
           <select
+            className="workflow-dock__select"
+            data-testid="workflow-template-select"
             value={templateId}
             onChange={(event) => {
               setTemplateId(event.target.value);
@@ -437,6 +439,8 @@ export function WorkflowDock({
         <label className="workflow-dock__label" data-testid="workflow-dock-dataset">
           数据集
           <select
+            className="workflow-dock__select"
+            data-testid="workflow-primary-dataset-select"
             value={primaryDataset}
             onChange={(event) => setPrimaryDataset(event.target.value)}
             disabled={submitting}
@@ -454,6 +458,8 @@ export function WorkflowDock({
           <label className="workflow-dock__label" data-testid="workflow-dock-dataset-secondary">
             {secondaryConfig.label}
             <select
+              className="workflow-dock__select"
+              data-testid="workflow-secondary-dataset-select"
               value={secondaryDataset}
               onChange={(event) => setSecondaryDataset(event.target.value)}
               disabled={submitting}
