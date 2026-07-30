@@ -59,6 +59,7 @@ import {
 } from "./api";
 import { AnnotationDialog } from "./components/AnnotationDialog";
 import { BasemapMenu } from "./components/BasemapMenu";
+import { BrandLogo } from "./components/BrandLogo";
 import { CopilotWidget } from "./components/CopilotWidget";
 import { DatabaseViewer } from "./components/DatabaseViewer";
 import { type KnowledgeQuery } from "./components/KnowledgePanel";
@@ -2761,34 +2762,7 @@ export default function App({
 
       <header className="app-header glass-panel">
         <div className="brand-block">
-          <svg className="brand-logo" viewBox="0 0 36 36" width="36" height="36" fill="none" aria-hidden="true">
-            <defs>
-              <linearGradient id="brand-globe-grad" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stopColor="#69d2ff" />
-                <stop offset="100%" stopColor="#5b7cff" />
-              </linearGradient>
-              <linearGradient id="brand-ring-grad" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stopColor="#69d2ff" stopOpacity="0.9" />
-                <stop offset="100%" stopColor="#5b7cff" stopOpacity="0.9" />
-              </linearGradient>
-            </defs>
-            {/* Globe body */}
-            <circle cx="18" cy="18" r="14" stroke="url(#brand-globe-grad)" strokeWidth="2.2" fill="none" />
-            {/* Equator */}
-            <ellipse cx="18" cy="18" rx="14" ry="4.2" stroke="url(#brand-globe-grad)" strokeWidth="1.4" fill="none" opacity="0.6" />
-            {/* Meridian */}
-            <ellipse cx="18" cy="18" rx="5.5" ry="14" stroke="url(#brand-globe-grad)" strokeWidth="1.4" fill="none" opacity="0.5" />
-            {/* Tropic lines */}
-            <ellipse cx="18" cy="11.5" rx="11" ry="2.8" stroke="url(#brand-globe-grad)" strokeWidth="1" fill="none" opacity="0.35" />
-            <ellipse cx="18" cy="24.5" rx="11" ry="2.8" stroke="url(#brand-globe-grad)" strokeWidth="1" fill="none" opacity="0.35" />
-            {/* Orbital ring */}
-            <ellipse cx="18" cy="18" rx="16.5" ry="6" stroke="url(#brand-ring-grad)" strokeWidth="1.6" fill="none" transform="rotate(-25 18 18)" opacity="0.8" />
-            {/* Pin marker */}
-            <g transform="translate(25.5 7.5)">
-              <path d="M0 0 C0 -3.5 2.5 -6 2.5 -6 C2.5 -6 5 -3.5 5 0 C5 2.8 2.5 4.5 2.5 4.5 C2.5 4.5 0 2.8 0 0Z" fill="url(#brand-globe-grad)" />
-              <circle cx="2.5" cy="0" r="1.2" fill="#06182c" />
-            </g>
-          </svg>
+          <BrandLogo className="brand-logo" />
           <div className="brand-title">
             <strong>GeoBot<span className="brand-platform-name"> 智能教学平台</span></strong>
             <span

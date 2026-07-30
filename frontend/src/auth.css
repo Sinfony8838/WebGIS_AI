@@ -59,7 +59,7 @@
 .auth-card footer { margin-top: 16px; color: #7f9db9; font-size: 12px; text-align: center; }
 .auth-card-compact { width: min(410px, calc(100vw - 40px)); }
 .auth-brand { display: flex; align-items: center; gap: 10px; color: #a8e8ff; font-weight: 800; letter-spacing: .08em; }
-.auth-brand-globe { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid #61cdf8; border-radius: 50%; font-size: 24px; }
+.auth-brand-logo { width: 44px; height: 44px; box-shadow: 0 5px 18px rgba(62, 180, 218, .24); }
 .auth-eyebrow { margin: 15px 0 0; color: #5fd4ff; font-size: 12px; font-weight: 800; letter-spacing: .18em; text-transform: uppercase; }
 .auth-subtitle { margin: 0 0 24px; color: #a8bed1; line-height: 1.65; }
 .auth-field { display: grid; gap: 7px; margin: 12px 0; color: #cce2f3; font-size: 13px; font-weight: 700; }

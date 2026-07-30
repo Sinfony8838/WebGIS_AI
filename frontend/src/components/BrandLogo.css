@@ -1,0 +1,7 @@
+.geobot-brand-logo {
+  display: block;
+  object-fit: cover;
+  border-radius: 50%;
+  background: #fff;
+  user-select: none;
+}

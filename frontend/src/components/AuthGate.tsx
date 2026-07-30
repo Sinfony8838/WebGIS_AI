@@ -10,6 +10,7 @@ import {
 } from "../api";
 import type { AuthUser } from "../types";
 import "../auth.css";
+import { BrandLogo } from "./BrandLogo";
 
 type AuthGateProps = {
   children: (user: AuthUser, signOut: () => void, updateUser: (user: AuthUser) => void) => React.ReactNode;
@@ -150,7 +151,7 @@ function LoginCard({
       <div className="auth-population-points" aria-hidden="true" />
       <main className="auth-card" aria-labelledby="auth-title">
         <div className="auth-brand" aria-hidden="true">
-          <span className="auth-brand-globe">◎</span>
+          <BrandLogo className="auth-brand-logo" />
           <span>GeoBot</span>
         </div>
         <p className="auth-eyebrow">人口地理智能教学平台</p>
