@@ -17,9 +17,8 @@ import type { AuthUser } from "../types";
 
 const admin: AuthUser = {
   user_id: "user_admin",
-  username: "admin.geo",
-  display_name: "系统管理员",
-  email: "",
+  email: "admin@school.edu.cn",
+  nickname: "系统管理员",
   role: "admin",
   status: "active",
   must_change_password: false,

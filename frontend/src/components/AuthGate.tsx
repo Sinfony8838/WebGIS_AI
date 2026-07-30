@@ -104,12 +104,12 @@ export function AuthGate({ children }: AuthGateProps) {
           const session =
             view === "bootstrap"
               ? await bootstrapAdmin({
-                  username: payload.username,
-                  display_name: payload.displayName,
+                  email: payload.email,
+                  nickname: payload.nickname,
                   password: payload.password,
                   bootstrap_key: payload.bootstrapKey
                 })
-              : await loginUser(payload.username, payload.password);
+              : await loginUser(payload.email, payload.password);
           setUser(session.user);
           setView(session.user.must_change_password ? "change-password" : "login");
         } catch (reason) {
@@ -121,8 +121,8 @@ export function AuthGate({ children }: AuthGateProps) {
 }
 
 type LoginPayload = {
-  username: string;
-  displayName: string;
+  email: string;
+  nickname: string;
   password: string;
   bootstrapKey: string;
 };
@@ -136,8 +136,8 @@ function LoginCard({
   error: string;
   onSubmit: (payload: LoginPayload) => Promise<void>;
 }) {
-  const [username, setUsername] = useState("");
-  const [displayName, setDisplayName] = useState("");
+  const [email, setEmail] = useState("");
+  const [nickname, setNickname] = useState("");
   const [password, setPassword] = useState("");
   const [bootstrapKey, setBootstrapKey] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -158,33 +158,35 @@ function LoginCard({
         <p className="auth-subtitle">
           {bootstrap
             ? "首次启动仅需初始化一个管理员账号，之后由管理员为教师开户。"
-            : "使用学校分配的教师或管理员账号进入备课、授课与复盘工作台。"}
+            : "使用学校分配的教师或管理员邮箱进入备课、授课与复盘工作台。"}
         </p>
         <form
           onSubmit={(event) => {
             event.preventDefault();
             setPending(true);
-            void onSubmit({ username, displayName, password, bootstrapKey }).finally(() => setPending(false));
+            void onSubmit({ email, nickname, password, bootstrapKey }).finally(() => setPending(false));
           }}
         >
           <label className="auth-field">
-            <span>用户名</span>
+            <span>邮箱</span>
             <input
               autoFocus
+              type="email"
               autoComplete="username"
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              placeholder="例如：geo.teacher"
+              inputMode="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="例如：teacher@school.edu.cn"
               required
             />
           </label>
           {bootstrap ? (
             <label className="auth-field">
-              <span>姓名</span>
+              <span>昵称</span>
               <input
-                autoComplete="name"
-                value={displayName}
-                onChange={(event) => setDisplayName(event.target.value)}
+                autoComplete="nickname"
+                value={nickname}
+                onChange={(event) => setNickname(event.target.value)}
                 placeholder="用于课堂工作台显示"
                 required
               />
@@ -212,7 +214,7 @@ function LoginCard({
                 onChange={(event) => setPassword(event.target.value)}
                 onKeyUp={(event) => setCapsLock(event.getModifierState("CapsLock"))}
                 onKeyDown={(event) => setCapsLock(event.getModifierState("CapsLock"))}
-                minLength={bootstrap ? 12 : undefined}
+                minLength={bootstrap ? 8 : undefined}
                 required
               />
               <button type="button" onClick={() => setShowPassword((value) => !value)}>
@@ -221,7 +223,7 @@ function LoginCard({
             </span>
           </label>
           {capsLock ? <p className="auth-hint">Caps Lock 已开启</p> : null}
-          {bootstrap ? <p className="auth-hint">至少 12 位，并包含三类字符。</p> : null}
+          {bootstrap ? <p className="auth-hint">至少 8 位，并包含字母、数字、特殊符号中的至少两种。</p> : null}
           {error ? <p className="auth-error" role="alert">{error}</p> : null}
           <button className="auth-primary" type="submit" disabled={pending}>
             {pending ? "请稍候…" : bootstrap ? "创建并进入系统" : "登录"}
@@ -284,7 +286,7 @@ export function PasswordChangeCard({
             autoComplete="new-password"
             value={newPassword}
             onChange={(event) => setNewPassword(event.target.value)}
-            minLength={12}
+            minLength={8}
             required
           />
         </label>
@@ -295,10 +297,11 @@ export function PasswordChangeCard({
             autoComplete="new-password"
             value={confirmPassword}
             onChange={(event) => setConfirmPassword(event.target.value)}
-            minLength={12}
+            minLength={8}
             required
           />
         </label>
+        <p className="auth-hint">至少 8 位，并包含字母、数字、特殊符号中的至少两种。</p>
         {localError || error ? <p className="auth-error" role="alert">{localError || error}</p> : null}
         <div className="auth-actions">
           {!forced ? <button type="button" onClick={onCancel}>取消</button> : null}

@@ -72,9 +72,8 @@ def _client_ip(request: Request) -> str:
 def _local_user() -> Dict[str, Any]:
     return {
         "user_id": "local_admin",
-        "username": "local",
-        "display_name": "本机管理员",
-        "email": "",
+        "email": "local@localhost.invalid",
+        "nickname": "本机管理员",
         "role": "admin",
         "status": "active",
         "must_change_password": False,
@@ -307,13 +306,13 @@ class CreateProjectRequest(BaseModel):
 
 
 class AuthBootstrapRequest(BaseModel):
-    username: str
-    display_name: str = ""
+    email: str
+    nickname: str = ""
     password: str
 
 
 class AuthLoginRequest(BaseModel):
-    username: str
+    email: str
     password: str
 
 
@@ -323,14 +322,13 @@ class PasswordChangeRequest(BaseModel):
 
 
 class AdminUserCreateRequest(BaseModel):
-    username: str
-    display_name: str = ""
-    email: str = ""
+    email: str
+    nickname: str = ""
     role: str = "teacher"
 
 
 class AdminUserPatchRequest(BaseModel):
-    display_name: Optional[str] = None
+    nickname: Optional[str] = None
     email: Optional[str] = None
     role: Optional[str] = None
     status: Optional[str] = None
@@ -558,8 +556,8 @@ def auth_bootstrap(request: Request, payload: AuthBootstrapRequest) -> Response:
         )
     try:
         result = auth_service.bootstrap(
-            payload.username,
-            payload.display_name,
+            payload.email,
+            payload.nickname,
             payload.password,
             ip_address=client_ip,
             user_agent=request.headers.get("User-Agent", ""),
@@ -597,7 +595,7 @@ def auth_login(request: Request, payload: AuthLoginRequest) -> Response:
         )
     try:
         result = auth_service.login(
-            payload.username,
+            payload.email,
             payload.password,
             ip_address=_client_ip(request),
             user_agent=request.headers.get("User-Agent", ""),
@@ -710,9 +708,8 @@ def admin_create_user(request: Request, payload: AdminUserCreateRequest) -> Dict
     try:
         result = auth_service.create_user(
             actor_user_id=str(context.user["user_id"]),
-            username=payload.username,
-            display_name=payload.display_name,
             email=payload.email,
+            nickname=payload.nickname,
             role=payload.role,
             ip_address=_client_ip(request),
         )

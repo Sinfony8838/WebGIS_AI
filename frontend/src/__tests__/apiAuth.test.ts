@@ -37,7 +37,7 @@ describe("api url helpers", () => {
     );
     setCsrfToken("csrf-only-in-memory");
 
-    await updateAdminUser("user_1", { display_name: "王老师" });
+    await updateAdminUser("user_1", { nickname: "王老师" });
 
     const [, init] = fetchMock.mock.calls[0];
     expect(init?.credentials).toBe("include");
@@ -54,7 +54,7 @@ describe("api url helpers", () => {
       })
     );
 
-    await expect(updateAdminUser("user_1", { display_name: "王老师" })).rejects.toThrow("登录已失效");
+    await expect(updateAdminUser("user_1", { nickname: "王老师" })).rejects.toThrow("登录已失效");
     expect(unauthorized).toHaveBeenCalledTimes(1);
   });
 });

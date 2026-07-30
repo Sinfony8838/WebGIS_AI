@@ -3,9 +3,8 @@ export type UserStatus = "active" | "disabled";
 
 export type AuthUser = {
   user_id: string;
-  username: string;
-  display_name: string;
   email: string;
+  nickname: string;
   role: UserRole;
   status: UserStatus;
   must_change_password: boolean;

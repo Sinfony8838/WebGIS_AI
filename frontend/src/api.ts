@@ -115,8 +115,8 @@ export async function fetchBootstrapStatus(): Promise<AuthBootstrapStatus> {
 }
 
 export async function bootstrapAdmin(payload: {
-  username: string;
-  display_name: string;
+  email: string;
+  nickname: string;
   password: string;
   bootstrap_key?: string;
 }): Promise<AuthSession> {
@@ -132,11 +132,11 @@ export async function bootstrapAdmin(payload: {
   return session;
 }
 
-export async function loginUser(username: string, password: string): Promise<AuthSession> {
+export async function loginUser(email: string, password: string): Promise<AuthSession> {
   const session = await requestJson<AuthSession>("/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password })
+    body: JSON.stringify({ email, password })
   });
   setCsrfToken(session.csrf_token);
   return session;
@@ -186,9 +186,8 @@ export async function fetchAdminUsers(filters: {
 }
 
 export async function createAdminUser(payload: {
-  username: string;
-  display_name: string;
-  email?: string;
+  email: string;
+  nickname: string;
   role: "admin" | "teacher";
 }): Promise<{ status: string; user: AuthUser; temporary_password: string }> {
   return requestJson("/admin/users", {
@@ -200,7 +199,7 @@ export async function createAdminUser(payload: {
 
 export async function updateAdminUser(
   userId: string,
-  patch: Partial<Pick<AuthUser, "display_name" | "email" | "role" | "status">>
+  patch: Partial<Pick<AuthUser, "nickname" | "email" | "role" | "status">>
 ): Promise<{ status: string; user: AuthUser }> {
   return requestJson(`/admin/users/${encodeURIComponent(userId)}`, {
     method: "PATCH",

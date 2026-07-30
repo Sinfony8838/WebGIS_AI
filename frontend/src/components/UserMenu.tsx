@@ -37,9 +37,9 @@ export function UserMenu({
           aria-expanded={open}
           onClick={() => setOpen((value) => !value)}
         >
-          <span className="user-avatar">{(user.display_name || user.username).slice(0, 1)}</span>
+          <span className="user-avatar">{(user.nickname || user.email).slice(0, 1)}</span>
           <span className="user-menu-label">
-            <strong>{user.display_name || user.username}</strong>
+            <strong>{user.nickname || user.email}</strong>
             <small>{user.role === "admin" ? "管理员" : "教师"}</small>
           </span>
           <span aria-hidden="true">⌄</span>
@@ -47,9 +47,8 @@ export function UserMenu({
         {open ? (
           <div className="user-menu-popover" role="menu">
             <div className="user-menu-profile">
-              <strong>{user.display_name || user.username}</strong>
-              <span>@{user.username}</span>
-              {user.email ? <span>{user.email}</span> : null}
+              <strong>{user.nickname || user.email}</strong>
+              <span>{user.email}</span>
             </div>
             {user.role === "admin" ? (
               <button type="button" role="menuitem" onClick={() => { setOpen(false); setAdminOpen(true); }}>

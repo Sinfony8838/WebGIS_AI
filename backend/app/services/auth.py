@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
 import secrets
 import sqlite3
 import string
@@ -18,7 +17,6 @@ from argon2.exceptions import InvalidHashError, VerifyMismatchError
 from argon2.low_level import Type
 
 
-USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._-]{2,31}$")
 ALLOWED_ROLES = {"admin", "teacher"}
 ALLOWED_STATUSES = {"active", "disabled"}
 
@@ -172,15 +170,15 @@ class AuthService:
 
     def bootstrap(
         self,
-        username: str,
-        display_name: str,
+        email: str,
+        nickname: str,
         password: str,
         *,
         ip_address: str = "",
         user_agent: str = "",
     ) -> Dict[str, Any]:
-        normalized = self._validate_username(username)
-        self._validate_password(password, normalized)
+        normalized_email = self._validate_email(email)
+        self._validate_password(password)
         now = iso(utc_now())
         user_id = f"user_{uuid4().hex}"
         with self._lock, self._connect() as connection:
@@ -193,12 +191,13 @@ class AuthService:
                 INSERT INTO users (
                     user_id, username, display_name, email, role, status,
                     password_hash, must_change_password, created_at, updated_at
-                ) VALUES (?, ?, ?, '', 'admin', 'active', ?, 0, ?, ?)
+                ) VALUES (?, ?, ?, ?, 'admin', 'active', ?, 0, ?, ?)
                 """,
                 (
                     user_id,
-                    normalized,
-                    self._clean_display_name(display_name, normalized),
+                    normalized_email,
+                    self._clean_nickname(nickname, normalized_email),
+                    normalized_email,
                     self._password_hasher.hash(password),
                     now,
                     now,
@@ -227,13 +226,13 @@ class AuthService:
 
     def login(
         self,
-        username: str,
+        email: str,
         password: str,
         *,
         ip_address: str = "",
         user_agent: str = "",
     ) -> Dict[str, Any]:
-        normalized = str(username or "").strip().lower()
+        normalized = str(email or "").strip().lower()
         now_dt = utc_now()
         with self._lock, self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -285,7 +284,7 @@ class AuthService:
                 connection.commit()
                 raise AuthError(
                     "INVALID_CREDENTIALS",
-                    "用户名或密码错误。",
+                    "邮箱或密码错误。",
                     401,
                 )
 
@@ -301,7 +300,7 @@ class AuthService:
                 connection.commit()
                 raise AuthError(
                     "INVALID_CREDENTIALS",
-                    "用户名或密码错误。",
+                    "邮箱或密码错误。",
                     401,
                 )
 
@@ -475,7 +474,7 @@ class AuthService:
                     "当前密码不正确。",
                     400,
                 )
-            self._validate_password(new_password, str(user["username"]))
+            self._validate_password(new_password)
             now = iso(utc_now())
             connection.execute(
                 """
@@ -507,9 +506,9 @@ class AuthService:
         sql = "SELECT * FROM users WHERE 1 = 1"
         params: List[Any] = []
         if query.strip():
-            sql += " AND (username LIKE ? OR display_name LIKE ? OR email LIKE ?)"
+            sql += " AND (display_name LIKE ? OR email LIKE ?)"
             needle = f"%{query.strip()}%"
-            params.extend([needle, needle, needle])
+            params.extend([needle, needle])
         if role in ALLOWED_ROLES:
             sql += " AND role = ?"
             params.append(role)
@@ -537,13 +536,12 @@ class AuthService:
         self,
         *,
         actor_user_id: str,
-        username: str,
-        display_name: str,
-        email: str = "",
+        email: str,
+        nickname: str,
         role: str = "teacher",
         ip_address: str = "",
     ) -> Dict[str, Any]:
-        normalized = self._validate_username(username)
+        normalized_email = self._validate_email(email)
         self._validate_role(role)
         temporary_password = self._generate_temporary_password()
         now = iso(utc_now())
@@ -559,9 +557,9 @@ class AuthService:
                     """,
                     (
                         user_id,
-                        normalized,
-                        self._clean_display_name(display_name, normalized),
-                        self._clean_email(email),
+                        normalized_email,
+                        self._clean_nickname(nickname, normalized_email),
+                        normalized_email,
                         role,
                         self._password_hasher.hash(temporary_password),
                         now,
@@ -579,7 +577,7 @@ class AuthService:
                 )
                 user = self._public_user(self._get_user_row(connection, user_id))
         except sqlite3.IntegrityError as exc:
-            raise AuthError("USERNAME_EXISTS", "该用户名已存在。", 409) from exc
+            raise AuthError("EMAIL_EXISTS", "该邮箱已存在。", 409) from exc
         return {"user": user, "temporary_password": temporary_password}
 
     def update_user(
@@ -590,57 +588,64 @@ class AuthService:
         actor_user_id: str,
         ip_address: str = "",
     ) -> Dict[str, Any]:
-        allowed = {"display_name", "email", "role", "status"}
+        allowed = {"nickname", "email", "role", "status"}
         unknown = set(patch) - allowed
         if unknown:
             raise AuthError("INVALID_USER_PATCH", "包含不支持的用户字段。", 400)
-        with self._lock, self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            current = self._get_user_row(connection, user_id)
-            next_role = str(patch.get("role", current["role"]))
-            next_status = str(patch.get("status", current["status"]))
-            self._validate_role(next_role)
-            self._validate_status(next_status)
-            if (
-                str(current["role"]) == "admin"
-                and str(current["status"]) == "active"
-                and (next_role != "admin" or next_status != "active")
-                and self._active_admin_count(connection) <= 1
-            ):
-                raise AuthError(
-                    "LAST_ADMIN_REQUIRED",
-                    "系统必须至少保留一个有效管理员。",
-                    409,
+        try:
+            with self._lock, self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                current = self._get_user_row(connection, user_id)
+                next_role = str(patch.get("role", current["role"]))
+                next_status = str(patch.get("status", current["status"]))
+                self._validate_role(next_role)
+                self._validate_status(next_status)
+                if (
+                    str(current["role"]) == "admin"
+                    and str(current["status"]) == "active"
+                    and (next_role != "admin" or next_status != "active")
+                    and self._active_admin_count(connection) <= 1
+                ):
+                    raise AuthError(
+                        "LAST_ADMIN_REQUIRED",
+                        "系统必须至少保留一个有效管理员。",
+                        409,
+                    )
+                nickname = self._clean_nickname(
+                    str(patch.get("nickname", current["display_name"])),
+                    str(current["email"]),
                 )
-            display_name = self._clean_display_name(
-                str(patch.get("display_name", current["display_name"])),
-                str(current["username"]),
-            )
-            email = self._clean_email(str(patch.get("email", current["email"])))
-            now = iso(utc_now())
-            connection.execute(
-                """
-                UPDATE users
-                SET display_name = ?, email = ?, role = ?, status = ?, updated_at = ?
-                WHERE user_id = ?
-                """,
-                (display_name, email, next_role, next_status, now, user_id),
-            )
-            if next_status != "active" or next_role != str(current["role"]):
+                email = self._validate_email(str(patch.get("email", current["email"])))
+                now = iso(utc_now())
                 connection.execute(
-                    "UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at = ''",
-                    (now, user_id),
+                    """
+                    UPDATE users
+                    SET username = ?, display_name = ?, email = ?, role = ?, status = ?, updated_at = ?
+                    WHERE user_id = ?
+                    """,
+                    (email, nickname, email, next_role, next_status, now, user_id),
                 )
-            self._audit(
-                connection,
-                actor_user_id,
-                "update_user",
-                user_id,
-                "success",
-                detail=f"role={next_role};status={next_status}",
-                ip_address=ip_address,
-            )
-            return self._public_user(self._get_user_row(connection, user_id))
+                if (
+                    next_status != "active"
+                    or next_role != str(current["role"])
+                    or email != str(current["email"])
+                ):
+                    connection.execute(
+                        "UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at = ''",
+                        (now, user_id),
+                    )
+                self._audit(
+                    connection,
+                    actor_user_id,
+                    "update_user",
+                    user_id,
+                    "success",
+                    detail=f"role={next_role};status={next_status}",
+                    ip_address=ip_address,
+                )
+                return self._public_user(self._get_user_row(connection, user_id))
+        except sqlite3.IntegrityError as exc:
+            raise AuthError("EMAIL_EXISTS", "该邮箱已存在。", 409) from exc
 
     def reset_password(
         self,
@@ -778,9 +783,8 @@ class AuthService:
     def _public_user(row: sqlite3.Row) -> Dict[str, Any]:
         return {
             "user_id": str(row["user_id"]),
-            "username": str(row["username"]),
-            "display_name": str(row["display_name"]),
-            "email": str(row["email"] or ""),
+            "email": str(row["username"]),
+            "nickname": str(row["display_name"]),
             "role": str(row["role"]),
             "status": str(row["status"]),
             "must_change_password": bool(row["must_change_password"]),
@@ -837,27 +841,25 @@ class AuthService:
         )
 
     @staticmethod
-    def _validate_username(username: str) -> str:
-        normalized = str(username or "").strip().lower()
-        if not USERNAME_RE.fullmatch(normalized):
-            raise AuthError(
-                "INVALID_USERNAME",
-                "用户名须以字母开头，长度为 3–32 位，可包含字母、数字、点、下划线或短横线。",
-                400,
-            )
-        return normalized
-
-    @staticmethod
-    def _clean_display_name(display_name: str, fallback: str) -> str:
-        value = str(display_name or "").strip() or fallback
+    def _clean_nickname(nickname: str, fallback: str) -> str:
+        value = str(nickname or "").strip() or fallback.split("@", 1)[0]
         if len(value) > 80:
-            raise AuthError("INVALID_DISPLAY_NAME", "姓名不能超过 80 个字符。", 400)
+            raise AuthError("INVALID_NICKNAME", "昵称不能超过 80 个字符。", 400)
         return value
 
     @staticmethod
-    def _clean_email(email: str) -> str:
+    def _validate_email(email: str) -> str:
         value = str(email or "").strip().lower()
-        if value and ("@" not in value or len(value) > 254):
+        local, separator, domain = value.rpartition("@")
+        if (
+            not separator
+            or not local
+            or "." not in domain
+            or domain.startswith(".")
+            or domain.endswith(".")
+            or any(ch.isspace() for ch in value)
+            or len(value) > 254
+        ):
             raise AuthError("INVALID_EMAIL", "邮箱格式不正确。", 400)
         return value
 
@@ -872,26 +874,25 @@ class AuthService:
             raise AuthError("INVALID_STATUS", "用户状态不正确。", 400)
 
     @staticmethod
-    def _validate_password(password: str, username: str) -> None:
+    def _validate_password(password: str) -> None:
         value = str(password or "")
-        if len(value) < 12 or len(value) > 128:
+        if len(value) < 8 or len(value) > 128:
             raise AuthError(
                 "WEAK_PASSWORD",
-                "密码长度须为 12–128 位。",
+                "密码长度须为 8–128 位。",
                 400,
             )
         categories = sum(
             (
-                any(ch.islower() for ch in value),
-                any(ch.isupper() for ch in value),
+                any(ch.isalpha() for ch in value),
                 any(ch.isdigit() for ch in value),
-                any(not ch.isalnum() for ch in value),
+                any(not ch.isalnum() and not ch.isspace() for ch in value),
             )
         )
-        if categories < 3 or (username and username.lower() in value.lower()):
+        if categories < 2:
             raise AuthError(
                 "WEAK_PASSWORD",
-                "密码须包含至少三类字符，且不能包含用户名。",
+                "密码须包含字母、数字、特殊符号中的至少两种。",
                 400,
             )
 

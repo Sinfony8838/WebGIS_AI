@@ -84,7 +84,7 @@ export function UserManagementPanel({ currentUser, onClose }: {
         {tab === "users" ? (
           <>
             <div className="admin-toolbar">
-              <input aria-label="搜索用户" placeholder="搜索用户名、姓名或邮箱" value={query} onChange={(e) => setQuery(e.target.value)} />
+              <input aria-label="搜索用户" placeholder="搜索邮箱或昵称" value={query} onChange={(e) => setQuery(e.target.value)} />
               <select aria-label="筛选角色" value={role} onChange={(e) => setRole(e.target.value)}>
                 <option value="">全部角色</option>
                 <option value="teacher">教师</option>
@@ -103,10 +103,10 @@ export function UserManagementPanel({ currentUser, onClose }: {
                 <tbody>
                   {users.map((item) => (
                     <tr key={item.user_id}>
-                      <td><strong>{item.display_name || item.username}</strong><span>@{item.username}{item.email ? ` · ${item.email}` : ""}</span></td>
+                      <td><strong>{item.nickname || item.email}</strong><span>{item.email}</span></td>
                       <td>
                         <select
-                          aria-label={`修改 ${item.username} 角色`}
+                          aria-label={`修改 ${item.email} 角色`}
                           value={item.role}
                           onChange={(e) => void run(() => updateAdminUser(item.user_id, { role: e.target.value as UserRole }))}
                         >
@@ -189,17 +189,17 @@ export function UserManagementPanel({ currentUser, onClose }: {
 function EditUserForm({ user, onCancel, onSave }: {
   user: AuthUser;
   onCancel: () => void;
-  onSave: (patch: Pick<AuthUser, "display_name" | "email">) => Promise<void>;
+  onSave: (patch: Pick<AuthUser, "nickname" | "email">) => Promise<void>;
 }) {
-  const [displayName, setDisplayName] = useState(user.display_name);
+  const [nickname, setNickname] = useState(user.nickname);
   const [email, setEmail] = useState(user.email);
   return (
     <div className="admin-subdialog">
-      <form onSubmit={(event) => { event.preventDefault(); void onSave({ display_name: displayName, email }); }}>
+      <form onSubmit={(event) => { event.preventDefault(); void onSave({ nickname, email }); }}>
         <h3>编辑账号资料</h3>
-        <p className="auth-hint">@{user.username}</p>
-        <label className="auth-field"><span>姓名</span><input value={displayName} onChange={(e) => setDisplayName(e.target.value)} required /></label>
-        <label className="auth-field"><span>邮箱（可选）</span><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></label>
+        <p className="auth-hint">{user.email}</p>
+        <label className="auth-field"><span>昵称</span><input value={nickname} onChange={(e) => setNickname(e.target.value)} required /></label>
+        <label className="auth-field"><span>邮箱</span><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
         <div className="auth-actions"><button type="button" onClick={onCancel}>取消</button><button className="auth-primary" type="submit">保存资料</button></div>
       </form>
     </div>
@@ -208,19 +208,17 @@ function EditUserForm({ user, onCancel, onSave }: {
 
 function CreateUserForm({ onCancel, onCreate }: {
   onCancel: () => void;
-  onCreate: (payload: { username: string; display_name: string; email: string; role: UserRole }) => Promise<void>;
+  onCreate: (payload: { email: string; nickname: string; role: UserRole }) => Promise<void>;
 }) {
-  const [username, setUsername] = useState("");
-  const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
+  const [nickname, setNickname] = useState("");
   const [role, setRole] = useState<UserRole>("teacher");
   return (
     <div className="admin-subdialog">
-      <form onSubmit={(event) => { event.preventDefault(); void onCreate({ username, display_name: displayName, email, role }); }}>
+      <form onSubmit={(event) => { event.preventDefault(); void onCreate({ email, nickname, role }); }}>
         <h3>创建教师或管理员</h3>
-        <label className="auth-field"><span>用户名</span><input value={username} onChange={(e) => setUsername(e.target.value)} required /></label>
-        <label className="auth-field"><span>姓名</span><input value={displayName} onChange={(e) => setDisplayName(e.target.value)} required /></label>
-        <label className="auth-field"><span>邮箱（可选）</span><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></label>
+        <label className="auth-field"><span>邮箱</span><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
+        <label className="auth-field"><span>昵称</span><input value={nickname} onChange={(e) => setNickname(e.target.value)} required /></label>
         <label className="auth-field"><span>角色</span><select value={role} onChange={(e) => setRole(e.target.value as UserRole)}><option value="teacher">教师</option><option value="admin">管理员</option></select></label>
         <div className="auth-actions"><button type="button" onClick={onCancel}>取消</button><button className="auth-primary" type="submit">创建账号</button></div>
       </form>

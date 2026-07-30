@@ -37,8 +37,8 @@ class AuthApiTest(unittest.TestCase):
         response = self.client.post(
             "/auth/bootstrap",
             json={
-                "username": "admin.geo",
-                "display_name": "系统管理员",
+                "email": "admin@school.edu.cn",
+                "nickname": "系统管理员",
                 "password": "Strong-Admin-2026!",
             },
         )
@@ -80,8 +80,8 @@ class AuthApiTest(unittest.TestCase):
         created = self.client.post(
             "/admin/users",
             json={
-                "username": "teacher.one",
-                "display_name": "教师一",
+                "email": "teacher.one@school.edu.cn",
+                "nickname": "教师一",
                 "role": "teacher",
             },
             headers={"X-WebGIS-CSRF": csrf},
@@ -93,7 +93,7 @@ class AuthApiTest(unittest.TestCase):
             login = teacher_client.post(
                 "/auth/login",
                 json={
-                    "username": "teacher.one",
+                    "email": "teacher.one@school.edu.cn",
                     "password": created.json()["temporary_password"],
                 },
             )
@@ -121,6 +121,14 @@ class AuthApiTest(unittest.TestCase):
             self.assertEqual(own.status_code, 200, own.text)
         finally:
             teacher_client.close()
+
+    def test_public_account_contract_uses_email_and_nickname(self) -> None:
+        admin, _csrf = self.bootstrap_admin()
+
+        self.assertEqual(admin["email"], "admin@school.edu.cn")
+        self.assertEqual(admin["nickname"], "系统管理员")
+        self.assertNotIn("username", admin)
+        self.assertNotIn("display_name", admin)
 
     def test_kb_upload_uses_the_authenticated_owner(self) -> None:
         admin, csrf = self.bootstrap_admin()

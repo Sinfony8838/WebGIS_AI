@@ -18,9 +18,8 @@ import type { AuthUser } from "../types";
 
 const admin: AuthUser = {
   user_id: "user_admin",
-  username: "admin.geo",
-  display_name: "系统管理员",
-  email: "",
+  email: "admin@school.edu.cn",
+  nickname: "系统管理员",
   role: "admin",
   status: "active",
   must_change_password: false,
@@ -51,18 +50,22 @@ describe("AuthGate", () => {
 
     render(
       <AuthGate>
-        {(user) => <div>课堂应用：{user.display_name}</div>}
+        {(user) => <div>课堂应用：{user.nickname}</div>}
       </AuthGate>
     );
 
     expect(await screen.findByRole("heading", { name: "创建系统管理员" })).toBeInTheDocument();
     expect(screen.queryByText(/课堂应用/)).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("用户名"), { target: { value: "admin.geo" } });
-    fireEvent.change(screen.getByLabelText("姓名"), { target: { value: "系统管理员" } });
+    fireEvent.change(screen.getByLabelText("邮箱"), { target: { value: "admin@school.edu.cn" } });
+    fireEvent.change(screen.getByLabelText("昵称"), { target: { value: "系统管理员" } });
     fireEvent.change(screen.getByLabelText("密码"), { target: { value: "Strong-Admin-2026!" } });
     fireEvent.click(screen.getByRole("button", { name: "创建并进入系统" }));
 
     expect(await screen.findByText("课堂应用：系统管理员")).toBeInTheDocument();
+    expect(apiMocks.bootstrapAdmin).toHaveBeenCalledWith(expect.objectContaining({
+      email: "admin@school.edu.cn",
+      nickname: "系统管理员"
+    }));
   });
 
   it("falls back to the login page when no valid cookie session exists", async () => {
@@ -98,9 +101,10 @@ describe("AuthGate", () => {
 
     render(<AuthGate>{() => <div>课堂应用</div>}</AuthGate>);
     await screen.findByRole("heading", { name: "教师工作台登录" });
-    fireEvent.change(screen.getByLabelText("用户名"), { target: { value: "admin.geo" } });
+    fireEvent.change(screen.getByLabelText("邮箱"), { target: { value: "admin@school.edu.cn" } });
     fireEvent.change(screen.getByLabelText("密码"), { target: { value: "Temporary-2026!" } });
     fireEvent.click(screen.getByRole("button", { name: "登录" }));
+    expect(apiMocks.loginUser).toHaveBeenCalledWith("admin@school.edu.cn", "Temporary-2026!");
 
     expect(await screen.findByRole("heading", { name: "请先修改临时密码" })).toBeInTheDocument();
     expect(screen.queryByText("课堂应用")).not.toBeInTheDocument();
