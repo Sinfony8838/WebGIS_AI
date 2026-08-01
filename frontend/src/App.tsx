@@ -2912,11 +2912,6 @@ export default function App({
               重试连接
             </button>
           ) : null}
-          <UserMenu
-            user={currentUser}
-            onLogout={onLogout}
-            onUserChanged={onUserChanged}
-          />
         </div>
       </header>
 
@@ -3051,6 +3046,18 @@ export default function App({
 
         </aside>
         </main>
+
+        <aside
+          className="account-dock"
+          data-testid="account-dock"
+          aria-label="当前登录账号"
+        >
+          <UserMenu
+            user={currentUser}
+            onLogout={onLogout}
+            onUserChanged={onUserChanged}
+          />
+        </aside>
 
       {interactionMode === "brush" ? (
         <BrushToolbar

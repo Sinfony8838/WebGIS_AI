@@ -129,6 +129,65 @@
 .user-menu-popover button { width: 100%; border: 0; border-radius: 8px; padding: 9px 10px; color: #dcefff; background: transparent; text-align: left; }
 .user-menu-popover button:hover, .user-menu-popover button:focus-visible { background: rgba(80, 171, 225, .14); }
 
+/* ── Bottom-left account dock ───────────────────────────────────────────
+   The login account entry moved out of .header-actions to a persistent
+   corner card. position:fixed (rather than the absolute suggested against
+   .screen-shell) keeps it pinned to the viewport on mobile, where
+   .screen-shell becomes height:auto and the page scrolls — an absolute
+   card would scroll out of view. No ancestor applies transform/filter, so
+   fixed resolves against the viewport as intended. */
+.account-dock {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 60;
+  max-width: min(240px, calc(100vw - 32px));
+  pointer-events: auto;
+}
+.account-dock .user-menu { width: 100%; }
+.account-dock .user-menu-trigger {
+  max-width: 100%;
+  padding: 6px 12px 6px 7px;
+  border-color: rgba(123, 211, 255, .42);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(122, 222, 255, .14), transparent 60%),
+    linear-gradient(160deg, rgba(16, 42, 68, .92), rgba(8, 25, 45, .86));
+  box-shadow: 0 14px 38px rgba(0, 8, 22, .5), inset 0 1px 0 rgba(255, 255, 255, .08);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+.account-dock .user-menu-trigger:hover {
+  border-color: rgba(123, 211, 255, .62);
+  box-shadow: 0 16px 44px rgba(0, 8, 22, .58), 0 0 14px rgba(88, 199, 255, .22), inset 0 1px 0 rgba(255, 255, 255, .1);
+}
+.account-dock .user-menu-label strong { max-width: 150px; }
+/* Popover opens up-and-right from the bottom-left card so it never spills
+   past the bottom or left edge of the viewport. */
+.account-dock .user-menu-popover {
+  top: auto;
+  right: auto;
+  bottom: calc(100% + 8px);
+  left: 0;
+  transform-origin: left bottom;
+}
+
+/* On mobile the .bottom-stack classroom bar spans the full width at the
+   very bottom, so the dock lifts just above it. */
+@media (max-width: 960px) {
+  .account-dock {
+    left: 8px;
+    bottom: 80px;
+  }
+}
+/* Keep avatar + nickname on the dock even though the header menu label is
+   hidden at this width; drop the role line to save space. */
+@media (max-width: 760px) {
+  .account-dock .user-menu-label { display: grid; }
+  .account-dock .user-menu-label small { display: none; }
+  .account-dock .user-menu-label strong { max-width: 110px; }
+}
+
 .admin-panel { position: relative; display: flex; flex-direction: column; width: min(1050px, calc(100vw - 44px)); max-height: calc(100vh - 44px); overflow: hidden; border: 1px solid rgba(110, 190, 239, .34); border-radius: 24px; color: #edf8ff; background: #091c30; box-shadow: 0 28px 90px rgba(0, 0, 0, .6); }
 .admin-panel > header { display: flex; justify-content: space-between; align-items: center; padding: 22px 24px 14px; }
 .admin-panel h2 { margin: 5px 0 0; }
