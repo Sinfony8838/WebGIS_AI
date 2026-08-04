@@ -1916,12 +1916,17 @@ class WebGISRuntime:
                 raise ValueError("launch_question requires an active class session")
             question_id = str(params.get("question_id") or "").strip()
             # Deliberately no teaching_context.stage_id fallback: the class may
-            # advance between planning and confirmation, and an empty stage_id
+            # advance between planning and execution, and an empty stage_id
             # makes the classroom service attribute the question to the CURRENT
             # stage at execution time.
             stage_id = str(params.get("stage_id") or "")
             if question_id:
-                result = self.classroom.launch_session_question(session_id, stage_id=stage_id, question_id=question_id)
+                result = self.classroom.launch_session_question(
+                    session_id,
+                    stage_id=stage_id,
+                    question_id=question_id,
+                    delivery="teacher_oral",
+                )
             else:
                 raw_options = params.get("options")
                 if isinstance(raw_options, str):
@@ -1945,11 +1950,16 @@ class WebGISRuntime:
                     "options": options,
                     "answer_index": answer_index,
                 }
-                result = self.classroom.launch_session_question(session_id, stage_id=stage_id, adhoc=adhoc)
-            active = result.get("active_question") or {}
-            summary = f"已向学生端发布提问：{active.get('text', '')}"
-            self.store.add_recent_action(project_id, "发布提问", summary, status="success")
-            return {"assistant_message": summary, "active_question": active, "artifacts": []}
+                result = self.classroom.launch_session_question(
+                    session_id,
+                    stage_id=stage_id,
+                    adhoc=adhoc,
+                    delivery="teacher_oral",
+                )
+            presented = result.get("presented_question") or {}
+            summary = f"已在教师工作台呈现口头提问：{presented.get('text', '')}"
+            self.store.add_recent_action(project_id, "呈现口头提问", summary, status="success")
+            return {"assistant_message": summary, "presented_question": presented, "artifacts": []}
         raise ValueError(f"Unsupported assistant tool: {tool_name}")
 
     def _register_artifacts(self, project_id: str, job_id: str, artifacts: List[Dict[str, Any]]) -> Dict[str, Any]:

@@ -26,7 +26,7 @@ ASSISTANT_TOOL_SCHEMA = [
     {"name": "toggle_teaching_map", "description": "叠加或隐藏教学地图（课本插图）。", "parameters": {"map_id": "string", "visible": "boolean?"}},
     {"name": "open_material", "description": "打开课堂素材或外部教学资料。", "parameters": {"material_id": "string?", "material": "object?"}},
     {"name": "record_observation", "description": "记录课堂学情观察到正在进行的班课（verdict 取值 correct/partial/misconception），供课后报告统计。仅在进行中的班课可用。", "parameters": {"verdict": "string", "tag": "string?", "note": "string?", "question_id": "string?"}},
-    {"name": "launch_question", "description": "向学生端发布课堂提问（question_id 指教案题目，或用 text/options 现场出题）。高风险操作，需教师确认后才会发送。仅在进行中的班课可用。", "parameters": {"question_id": "string?", "text": "string?", "options": "string[]?", "answer_index": "number?"}},
+    {"name": "launch_question", "description": "在教师课堂工作台呈现一道口头提问并记录为课堂证据（question_id 指教案题目，或用 text/options 现场出题）。不向学生端发送。仅在进行中的班课可用。", "parameters": {"question_id": "string?", "text": "string?", "options": "string[]?", "answer_index": "number?"}},
 ]
 
 

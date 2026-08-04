@@ -624,7 +624,12 @@ export function populationLessonPrepResult(job: JobRecord): PopulationLessonPrep
 
 export async function launchSessionQuestion(
   sessionId: string,
-  payload: { question_id?: string; stage_id?: string; adhoc?: Record<string, unknown> }
+  payload: {
+    question_id?: string;
+    stage_id?: string;
+    adhoc?: Record<string, unknown>;
+    delivery?: "student" | "teacher_oral";
+  }
 ): Promise<{ status: string; active_question: Record<string, unknown> }> {
   return requestJson<{ status: string; active_question: Record<string, unknown> }>(
     `/class-sessions/${encodeURIComponent(sessionId)}/questions/launch`,

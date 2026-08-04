@@ -138,8 +138,8 @@ export function ReportPanel({ projectId, onClose }: Props) {
               <span>课堂时长(分)</span>
             </div>
             <div className="report-stat">
-              <strong>{statistics.participant_count}</strong>
-              <span>扫码作答人数</span>
+              <strong>{statistics.response_data_collected ? statistics.participant_count : "未采集"}</strong>
+              <span>学生端作答</span>
             </div>
             <div className="report-stat">
               <strong>{statistics.questions.length}</strong>
@@ -178,14 +178,17 @@ export function ReportPanel({ projectId, onClose }: Props) {
             {!statistics.stages.length ? <p className="lesson-empty">本次会话未记录环节切换。</p> : null}
           </div>
 
-          <h3>提问与作答</h3>
+          <h3>教师提问与课堂证据</h3>
           {statistics.questions.map((question, index) => (
             <div key={question.question_id} className="report-question">
               <p className="report-question-text">
-                Q{index + 1}. {question.text}（{question.response_count} 人作答
-                {question.correct_rate !== null ? ` · 正确率 ${(question.correct_rate * 100).toFixed(0)}%` : ""}）
+                Q{index + 1}. {question.text}（
+                {question.collection_mode === "teacher_observation"
+                  ? "教师口头呈现 · 表现见教师观察"
+                  : `${question.response_count} 人作答${question.correct_rate !== null ? ` · 正确率 ${(question.correct_rate * 100).toFixed(0)}%` : ""}`}
+                ）
               </p>
-              {question.options.map((option, optionIndex) => {
+              {question.collection_mode !== "teacher_observation" ? question.options.map((option, optionIndex) => {
                 const count = question.option_counts[optionIndex] || 0;
                 const total = Math.max(question.response_count, 1);
                 return (
@@ -200,7 +203,11 @@ export function ReportPanel({ projectId, onClose }: Props) {
                     <span className="tally-count">{count}</span>
                   </div>
                 );
-              })}
+              }) : question.options.length ? (
+                <p className="report-question-options">
+                  备选项：{question.options.map((option, optionIndex) => `${String.fromCharCode(65 + optionIndex)}. ${option}`).join("；")}
+                </p>
+              ) : null}
               {question.sample_texts.length ? (
                 <div className="report-sample-texts">
                   {question.sample_texts.map((text, textIndex) => (
@@ -210,7 +217,7 @@ export function ReportPanel({ projectId, onClose }: Props) {
               ) : null}
             </div>
           ))}
-          {!statistics.questions.length ? <p className="lesson-empty">本节课未通过系统发起提问。</p> : null}
+          {!statistics.questions.length ? <p className="lesson-empty">本节课未记录教师提问。</p> : null}
 
           <h3>教师课堂观察</h3>
           <div className="report-observations">

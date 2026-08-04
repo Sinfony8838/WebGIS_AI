@@ -325,11 +325,13 @@ class TeachingContextIntegrationTest(unittest.TestCase):
             },
             {"teaching_context": self.teaching_context(session_id=session_id, phase="in_class")},
         )
-        active = result["active_question"]
-        self.assertEqual(active["options"], ["北京", "上海"])
-        self.assertEqual(active["answer_index"], 1)
-        self.assertEqual(active["type"], "choice")
-        self.assertEqual(store.get_class_session(session_id).active_question.get("text"), "谁更挤？")
+        presented = result["presented_question"]
+        self.assertEqual(presented["options"], ["北京", "上海"])
+        self.assertEqual(presented["answer_index"], 1)
+        self.assertEqual(presented["type"], "choice")
+        record = store.get_class_session(session_id)
+        self.assertEqual(record.active_question, {})
+        self.assertEqual(record.events[-1]["type"], "teacher_question_presented")
 
     def test_v1_tool_mode_refuses_classroom_tools(self) -> None:
         runtime, store, project_id = self.build_runtime()
@@ -357,16 +359,16 @@ class TeachingContextIntegrationTest(unittest.TestCase):
         self.assertNotIn("question_launched", [event["type"] for event in record.events])
 
     # ------------------------------------------------------------------
-    # P1-4: launch_question high-risk confirmation flow
+    # Teacher-only launch_question flow
     # ------------------------------------------------------------------
 
-    def test_launch_question_full_confirmation_flow(self) -> None:
+    def test_launch_question_presents_teacher_oral_question_without_confirmation(self) -> None:
         runtime, store, project_id = self.build_runtime()
         session_id = self.start_session(runtime, project_id)
         runtime.classroom.enter_session_stage(session_id, "s3")
 
         plan = {
-            "assistant_message": "准备向学生端发布提问。",
+            "assistant_message": "准备呈现教师口头提问。",
             "planner": "test_stub",
             "target": "webgis",
             "actions": [
@@ -383,101 +385,27 @@ class TeachingContextIntegrationTest(unittest.TestCase):
         with mock.patch.object(runtime.session_engine.tool_planner, "plan", return_value=plan):
             response = runtime.submit_assistant_message(
                 project_id,
-                "把这道题发给学生",
+                "把这道题呈现在教师工作台",
                 assistant_mode="teaching",
                 teaching_context=self.teaching_context(session_id=session_id, stage_id="s3", phase="in_class"),
             )
             job = self.wait_for_job(runtime, response["job_id"])
 
         result = job["result"]
-        self.assertTrue(result["requires_confirmation"])
-        confirmation_id = result["confirmation_id"]
-        self.assertTrue(confirmation_id)
-        confirmation = store.get_confirmation(confirmation_id)
-        self.assertIn("发布提问", confirmation.title)
-        self.assertIn("胡焕庸线东南侧", confirmation.reason)
-
-        self.assertEqual(store.get_class_session(session_id).active_question, {})
-
-        # The class moves on before the teacher approves: the question must be
-        # attributed to the CURRENT stage, not the plan-time one.
-        runtime.classroom.enter_session_stage(session_id, "s4")
-
-        confirm_response = runtime.confirm_assistant_action(confirmation_id, decision="approve")
-        confirm_job = self.wait_for_job(runtime, confirm_response["job_id"])
-        self.assertEqual(confirm_job["status"], "completed")
-        executed = confirm_job["result"]["actions_executed"]
+        self.assertFalse(result["requires_confirmation"])
+        self.assertFalse(result.get("confirmation_id"))
+        executed = result["actions_executed"]
         self.assertEqual(len(executed), 1)
-        self.assertIn("已向学生端发布提问", executed[0]["result"]["assistant_message"])
+        self.assertIn("已在教师工作台呈现口头提问", executed[0]["result"]["assistant_message"])
 
         record = store.get_class_session(session_id)
-        self.assertEqual(record.active_question.get("text"), "为什么人口大城几乎都在胡焕庸线东南侧？")
-        self.assertEqual(record.active_question.get("stage_id"), "s4")
+        self.assertEqual(record.active_question, {})
+        presented = [event for event in record.events if event["type"] == "teacher_question_presented"]
+        self.assertEqual(presented[-1]["payload"]["text"], "为什么人口大城几乎都在胡焕庸线东南侧？")
+        self.assertEqual(presented[-1]["stage_id"], "s3")
         event_types = [event["type"] for event in record.events]
-        self.assertIn("question_launched", event_types)
-        # Exactly one exchange for the whole ask→confirm round trip (the
-        # pending-confirmation reply must not double-count).
+        self.assertNotIn("question_launched", event_types)
         self.assertEqual(event_types.count("assistant_exchange"), 1)
-
-    def test_confirmation_invalidated_when_session_ended_before_approval(self) -> None:
-        runtime, store, project_id = self.build_runtime()
-        session_id = self.start_session(runtime, project_id)
-
-        plan = {
-            "assistant_message": "准备向学生端发布提问。",
-            "planner": "test_stub",
-            "target": "webgis",
-            "actions": [{"tool_name": "launch_question", "tool_params": {"text": "下课前最后一题"}}],
-        }
-        with mock.patch.object(runtime.session_engine.tool_planner, "plan", return_value=plan):
-            response = runtime.submit_assistant_message(
-                project_id,
-                "发布最后一题",
-                assistant_mode="teaching",
-                teaching_context=self.teaching_context(session_id=session_id, phase="in_class"),
-            )
-            job = self.wait_for_job(runtime, response["job_id"])
-        confirmation_id = job["result"]["confirmation_id"]
-        self.assertTrue(confirmation_id)
-
-        runtime.classroom.end_class_session(session_id)
-
-        confirm_response = runtime.confirm_assistant_action(confirmation_id, decision="approve")
-        confirm_job = self.wait_for_job(runtime, confirm_response["job_id"])
-        self.assertEqual(confirm_job["status"], "failed")
-        self.assertIn("已结束", confirm_job.get("error") or "")
-        confirmation = store.get_confirmation(confirmation_id)
-        self.assertEqual(confirmation.status, "invalidated")
-        record = store.get_class_session(session_id)
-        self.assertNotIn("question_launched", [event["type"] for event in record.events])
-        self.assertEqual(record.active_question, {})
-
-    def test_launch_question_rejection_keeps_students_untouched(self) -> None:
-        runtime, store, project_id = self.build_runtime()
-        session_id = self.start_session(runtime, project_id)
-
-        plan = {
-            "assistant_message": "准备向学生端发布提问。",
-            "planner": "test_stub",
-            "target": "webgis",
-            "actions": [{"tool_name": "launch_question", "tool_params": {"text": "临时提问"}}],
-        }
-        with mock.patch.object(runtime.session_engine.tool_planner, "plan", return_value=plan):
-            response = runtime.submit_assistant_message(
-                project_id,
-                "发布一道临时提问",
-                assistant_mode="teaching",
-                teaching_context=self.teaching_context(session_id=session_id, phase="in_class"),
-            )
-            job = self.wait_for_job(runtime, response["job_id"])
-
-        confirmation_id = job["result"]["confirmation_id"]
-        reject_response = runtime.confirm_assistant_action(confirmation_id, decision="reject")
-        reject_job = self.wait_for_job(runtime, reject_response["job_id"])
-        self.assertEqual(reject_job["status"], "completed")
-        record = store.get_class_session(session_id)
-        self.assertEqual(record.active_question, {})
-        self.assertNotIn("question_launched", [event["type"] for event in record.events])
 
 
 if __name__ == "__main__":

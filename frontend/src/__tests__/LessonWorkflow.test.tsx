@@ -275,10 +275,16 @@ describe("ClassRunPanel", () => {
     expect(props.onEnterStage).toHaveBeenCalledWith("s2");
   });
 
-  it("launches choice questions as quiz", () => {
+  it("presents choice questions orally without exposing the answer until the teacher reveals it", () => {
     const props = renderPanel();
-    fireEvent.click(screen.getByTestId("launch-s1q1"));
+    fireEvent.click(screen.getByTestId("oral-toggle-s1q1"));
     expect(props.onLaunchQuestion).toHaveBeenCalledWith("s1q1", "s1");
+    const oralCard = screen.getByTestId("oral-prompt-s1q1");
+    expect(oralCard.textContent).toContain("A");
+    expect(oralCard.textContent).toContain("B");
+    expect(oralCard.textContent).not.toContain("参考答案");
+    fireEvent.click(screen.getByTestId("oral-reveal-s1q1"));
+    expect(screen.getByTestId("oral-answer-s1q1").textContent).toContain("B. 东南密西北疏");
   });
 
   it("records quick observation and misconception tag", () => {
@@ -323,6 +329,8 @@ describe("ClassRunPanel", () => {
     const card = screen.getByTestId("oral-prompt-s2q1");
     expect(card.textContent).toContain("朗读提问卡");
     expect(card.textContent).toContain("为什么要看人口密度？");
+    expect(card.textContent).not.toContain("面积不同不可直接比较");
+    fireEvent.click(screen.getByTestId("oral-reveal-s2q1"));
     expect(card.textContent).toContain("面积不同不可直接比较");
     expect(card.textContent).toContain("请用密度概念解释东西部人口疏密差异。");
     // 朗读提问卡预置学情速记到 s2q1
@@ -331,6 +339,56 @@ describe("ClassRunPanel", () => {
     // 再次点击收起卡片
     fireEvent.click(toggle);
     expect(screen.queryByTestId("oral-prompt-s2q1")).toBeNull();
+  });
+
+  it("renders the generated teacher guidance card", () => {
+    const lesson = makeLesson();
+    lesson.stages[0].teacher_guidance = {
+      observation_prompt: "先找图例、年份和空间差异。",
+      evidence_points: ["人口密度图", "胡焕庸线"],
+      oral_question: "中国人口分布均匀吗？",
+      expected_response: "东南稠密、西北稀疏",
+      misconception_cue: "不要只说不均匀",
+      closing: "用区域—证据—解释收束。",
+      fallback: "三维异常时使用二维图。"
+    };
+    renderPanel({ lesson });
+    const guidance = screen.getByTestId("stage-teacher-guidance");
+    expect(guidance.textContent).toContain("先找图例、年份和空间差异");
+    expect(guidance.textContent).toContain("人口密度图");
+    expect(guidance.textContent).toContain("三维异常时使用二维图");
+  });
+
+  it("focuses one evidence layer at a time from the stage guide", () => {
+    const lesson = makeLesson();
+    lesson.stages[0].scene.catalog_layers = ["china_climate_types", "china_terrain_steps", "china_major_rivers"];
+    const onFocusEvidenceLayer = vi.fn();
+    renderPanel({
+      lesson,
+      visibleCatalogLayerIds: ["china_climate_types"],
+      onFocusEvidenceLayer
+    });
+
+    const steps = screen.getByTestId("evidence-layer-steps");
+    expect(within(steps).getByText("① 气候").className).toContain("active");
+    fireEvent.click(within(steps).getByTestId("evidence-layer-china_terrain_steps"));
+    expect(onFocusEvidenceLayer).toHaveBeenCalledWith("china_terrain_steps", [
+      "china_climate_types",
+      "china_terrain_steps",
+      "china_major_rivers"
+    ]);
+  });
+
+  it("offers a one-click handoff from a 3D introduction to 2D map reading", () => {
+    const lesson = makeLesson();
+    lesson.stages[0].scene.globe = { enabled: true, themes: ["density_fill", "hu_line"] };
+    const onRequestPlaneView = vi.fn();
+    renderPanel({ lesson, onRequestPlaneView });
+
+    const handoff = screen.getByTestId("stage-view-handoff");
+    expect(handoff.textContent).toContain("3D 用于宏观导入");
+    fireEvent.click(within(handoff).getByText("切回二维判读"));
+    expect(onRequestPlaneView).toHaveBeenCalledOnce();
   });
 
   it("collapses to a slim tab and expands back", () => {

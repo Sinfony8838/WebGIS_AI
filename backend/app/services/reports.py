@@ -49,6 +49,7 @@ class ReportService:
         questions = self._question_stats(events, session, question_lookup)
         observations = self._observation_stats(events)
         participants = self._participants(session)
+        response_data_collected = any(bool(items) for items in session.responses.values())
         snapshots = [
             {"timestamp": event.get("timestamp", ""), **(event.get("payload") or {})}
             for event in events
@@ -75,6 +76,7 @@ class ReportService:
             "duration_minutes": duration_minutes,
             "participant_count": len(participants),
             "participants": sorted(participants),
+            "response_data_collected": response_data_collected,
             "stages": stages,
             "questions": questions,
             "observations": observations,
@@ -124,12 +126,19 @@ class ReportService:
     ) -> List[Dict[str, Any]]:
         launched: Dict[str, Dict[str, Any]] = {}
         for event in events:
-            if event.get("type") != "question_launched":
+            event_type = str(event.get("type") or "")
+            if event_type not in {"question_launched", "teacher_question_presented"}:
                 continue
             payload = event.get("payload") or {}
             question_id = str(payload.get("question_id") or "")
             if question_id:
-                launched[question_id] = {**payload, "stage_id": event.get("stage_id", "")}
+                launched[question_id] = {
+                    **payload,
+                    "stage_id": event.get("stage_id", ""),
+                    "collection_mode": "teacher_observation"
+                    if event_type == "teacher_question_presented"
+                    else "student_response",
+                }
 
         results: List[Dict[str, Any]] = []
         for question_id, info in launched.items():
@@ -155,6 +164,7 @@ class ReportService:
                     "stage_id": info.get("stage_id", ""),
                     "text": info.get("text") or defined.get("text", ""),
                     "type": info.get("type") or defined.get("type", "open"),
+                    "collection_mode": info.get("collection_mode", "student_response"),
                     "options": options,
                     "answer_index": answer_index if isinstance(answer_index, int) else None,
                     "response_count": total,
@@ -228,6 +238,7 @@ class ReportService:
                 "lesson_title",
                 "duration_minutes",
                 "participant_count",
+                "response_data_collected",
                 "stages",
                 "questions",
                 "observations",
@@ -236,10 +247,11 @@ class ReportService:
             )
         }
         system = (
-            "你是一名地理教研员，请基于课堂数据 JSON 写一份课后学情诊断。"
+            "你是一名地理教研员，请基于课堂数据 JSON 写一份课后教学证据复盘。"
             "输出 Markdown（不要代码块包裹），分三个小节：\n"
             "### 学情诊断\n### 共性误区分析\n### 下节课教学建议\n"
-            "要求：紧扣数据说话（引用正确率、误区标签、环节用时等具体数字），"
+            "要求：紧扣真实数据说话。只有 response_data_collected=true 时才能引用作答人数和正确率；"
+            "否则必须明确写“学生端数据未采集”，只引用教师观察、误区标签、环节用时、截图和课堂事件，"
             "语言面向授课教师本人，每节 2-4 句，总长不超过 350 字，不要空话套话。"
         )
         return self.minimax_client.chat_completion(
@@ -254,7 +266,7 @@ class ReportService:
         lines: List[str] = ["### 学情诊断"]
         questions = statistics.get("questions") or []
         rated = [item for item in questions if item.get("correct_rate") is not None]
-        if rated:
+        if rated and statistics.get("response_data_collected"):
             average = sum(item["correct_rate"] for item in rated) / len(rated)
             lines.append(
                 f"本节课发起 {len(questions)} 次提问，选择题平均正确率 {average:.0%}，"
@@ -264,7 +276,7 @@ class ReportService:
             if weakest["correct_rate"] < 0.6:
                 lines.append(f"「{weakest['text']}」正确率仅 {weakest['correct_rate']:.0%}，需要针对性巩固。")
         else:
-            lines.append("本节课以开放式问答和教师观察为主，未产生选择题正确率数据。")
+            lines.append("本节课未采集学生端作答数据，诊断仅依据教师观察、环节用时和课堂证据事件。")
 
         observations = statistics.get("observations") or {}
         verdicts = observations.get("verdict_counts") or {}
@@ -306,7 +318,7 @@ class ReportService:
             "",
             f"- 上课时间：{statistics.get('started_at', '')} ~ {statistics.get('ended_at', '') or '进行中'}",
             f"- 实际时长：{statistics.get('duration_minutes', '—')} 分钟",
-            f"- 扫码参与人数：{statistics.get('participant_count', 0)}",
+            f"- 学生端作答数据：{'已采集' if statistics.get('response_data_collected') else '未采集'}",
             f"- 课堂事件：{statistics.get('event_count', 0)} 条"
             f"（截图 {statistics.get('snapshot_count', 0)} 张，助教问答 {statistics.get('assistant_exchange_count', 0)} 次）",
             "",
@@ -323,20 +335,25 @@ class ReportService:
         if not statistics.get("stages"):
             lines.append("| （本次会话未记录环节切换） | — | — |")
 
-        lines.extend(["", "## 课堂提问与作答", ""])
+        lines.extend(["", "## 教师提问与课堂证据", ""])
         questions = statistics.get("questions") or []
         if not questions:
-            lines.append("本节课未通过系统发起提问。")
+            lines.append("本节课未记录教师提问。")
         for index, question in enumerate(questions, start=1):
-            lines.append(f"**Q{index}. {question.get('text', '')}**（{question.get('response_count', 0)} 人作答）")
+            teacher_oral = question.get("collection_mode") == "teacher_observation"
+            collection_label = "教师口头呈现，表现由教师观察记录" if teacher_oral else f"{question.get('response_count', 0)} 人作答"
+            lines.append(f"**Q{index}. {question.get('text', '')}**（{collection_label}）")
             options = question.get("options") or []
             counts = question.get("option_counts") or []
             total = max(question.get("response_count", 0), 1)
-            for option_index, option in enumerate(options):
-                count = counts[option_index] if option_index < len(counts) else 0
-                marker = " ✅" if question.get("answer_index") == option_index else ""
-                lines.append(f"- {chr(65 + option_index)}. {option}：{count} 人（{count / total:.0%}）{marker}")
-            if question.get("correct_rate") is not None:
+            if not teacher_oral:
+                for option_index, option in enumerate(options):
+                    count = counts[option_index] if option_index < len(counts) else 0
+                    marker = " ✅" if question.get("answer_index") == option_index else ""
+                    lines.append(f"- {chr(65 + option_index)}. {option}：{count} 人（{count / total:.0%}）{marker}")
+            elif options:
+                lines.append("- 备选项：" + "；".join(f"{chr(65 + option_index)}. {option}" for option_index, option in enumerate(options)))
+            if question.get("correct_rate") is not None and not teacher_oral:
                 lines.append(f"- 正确率：**{question['correct_rate']:.0%}**")
             for text in question.get("sample_texts") or []:
                 lines.append(f"- 「{text}」")

@@ -57,6 +57,7 @@ TOOL_ACTION_HINTS = (
     "发布",
     "发给",
     "发起",
+    "呈现",
     "推送",
     "记一下",
     "apply",
@@ -1213,7 +1214,7 @@ class ToolExecutor:
             "open_material": {"target": "webgis", "category": "material", "risk_level": "low", "reversible": True, "requires_confirmation": False},
             "run_visual_query": {"target": "webgis", "category": "analysis", "risk_level": "medium", "reversible": True, "requires_confirmation": False},
             "record_observation": {"target": "webgis", "category": "classroom", "risk_level": "medium", "reversible": False, "requires_confirmation": False, "validator": self._require_active_session},
-            "launch_question": {"target": "webgis", "category": "classroom", "risk_level": "high", "reversible": False, "requires_confirmation": True, "validator": self._require_active_session},
+            "launch_question": {"target": "webgis", "category": "classroom", "risk_level": "medium", "reversible": False, "requires_confirmation": False, "validator": self._require_active_session},
         }
         return registry
 
@@ -1456,16 +1457,6 @@ class AssistantSessionEngine:
             stage_callback("confirmation", "running", "Waiting for user confirmation", "")
             confirm_title = "High-risk GIS action"
             confirm_reason = "One or more planned actions are high risk and require confirmation."
-            launch_action = next((item for item in actions if str(item.get("tool_name") or "") == "launch_question"), None)
-            if launch_action is not None:
-                launch_params = launch_action.get("tool_params") or {}
-                question_text = str(launch_params.get("text") or launch_params.get("question_id") or "").strip()
-                confirm_title = "向学生端发布提问"
-                confirm_reason = (
-                    f"即将向学生端发布提问：{question_text}。发送后全班学生立即可见，请确认。"
-                    if question_text
-                    else "即将向学生端发布提问，发送后全班学生立即可见，请确认。"
-                )
             confirmation = self.store.create_confirmation(
                 project.project_id,
                 conversation.conversation_id,

@@ -60,6 +60,10 @@ type Props = {
   onApplyGlobeScene?: (globe: LessonGlobeScene) => void;
   /** 捕获当前课堂场景时同时读取 3D 模式、主题和相机。 */
   getGlobeSceneSnapshot?: () => LessonGlobeScene;
+  /** 课中按教学顺序聚焦一张证据图层，避免多图层同时堆叠。 */
+  onFocusEvidenceLayer?: (datasetId: string, stageDatasetIds: string[]) => void;
+  /** 三维宏观导入结束后，教师一键回到二维规范专题图判读。 */
+  onRequestPlaneView?: () => void;
 };
 
 function currentLayerSnapshot(
@@ -130,7 +134,9 @@ export function LessonWorkflowShell({
   onTeachingContextChange,
   onAssistantPrompt,
   onApplyGlobeScene,
-  getGlobeSceneSnapshot
+  getGlobeSceneSnapshot,
+  onFocusEvidenceLayer,
+  onRequestPlaneView
 }: Props) {
   const [lessonMode, setLessonMode] = useState<LessonMode>("off");
   const [lessons, setLessons] = useState<LessonRecord[]>([]);
@@ -419,8 +425,11 @@ export function LessonWorkflowShell({
     async (questionId: string, stageId: string) => {
       if (!activeSession) return;
       await runWithBusy(async () => {
-        await launchSessionQuestion(activeSession.session_id, { question_id: questionId, stage_id: stageId });
-        setQuizVisible(true);
+        await launchSessionQuestion(activeSession.session_id, {
+          question_id: questionId,
+          stage_id: stageId,
+          delivery: "teacher_oral"
+        });
       });
     },
     [activeSession, runWithBusy]
@@ -432,9 +441,9 @@ export function LessonWorkflowShell({
       await runWithBusy(async () => {
         await launchSessionQuestion(activeSession.session_id, {
           stage_id: activeSession.current_stage_id,
-          adhoc: { text, options }
+          adhoc: { text, options },
+          delivery: "teacher_oral"
         });
-        setQuizVisible(true);
       });
     },
     [activeSession, runWithBusy]
@@ -485,6 +494,11 @@ export function LessonWorkflowShell({
           onObservation={recordObservation}
           onSnapshot={() => void onRefresh()}
           onEndSession={() => void endSession()}
+          visibleCatalogLayerIds={(layerState?.items || [])
+            .filter((layer) => layer.visible && layer.source === "one_map_catalog")
+            .map((layer) => String(layer.metadata?.catalog_id || layer.layer_id.replace(/^one_map_/, "")))}
+          onFocusEvidenceLayer={onFocusEvidenceLayer}
+          onRequestPlaneView={onRequestPlaneView}
           onAssistantPrompt={onAssistantPrompt}
         />
       ) : null}

@@ -217,6 +217,7 @@ class ClassroomWorkflowRuntime:
         stage_id: str = "",
         question_id: str = "",
         adhoc: Optional[Dict[str, Any]] = None,
+        delivery: str = "student",
     ) -> Dict[str, Any]:
         session = self._require_session(session_id)
         if session.status != "running":
@@ -248,7 +249,31 @@ class ClassroomWorkflowRuntime:
         else:
             raise ValueError("Question launch requires question_id or adhoc text")
 
-        active = {**question, "stage_id": stage_id or session.current_stage_id, "launched_at": self._utc_now()}
+        delivery_mode = str(delivery or "student").strip().lower()
+        if delivery_mode not in {"student", "teacher_oral"}:
+            raise ValueError(f"Unsupported question delivery: {delivery_mode}")
+
+        active = {
+            **question,
+            "stage_id": stage_id or session.current_stage_id,
+            "launched_at": self._utc_now(),
+            "delivery": delivery_mode,
+        }
+        if delivery_mode == "teacher_oral":
+            event = self.store.append_session_event(
+                session_id,
+                "teacher_question_presented",
+                stage_id=str(active.get("stage_id") or ""),
+                payload={
+                    "question_id": active["question_id"],
+                    "text": active["text"],
+                    "type": active["type"],
+                    "options": active["options"],
+                    "delivery": "teacher_oral",
+                },
+            )
+            return {"status": "success", "active_question": {}, "presented_question": active, "event": event}
+
         with self.store.batch():
             self.store.set_active_question(session_id, active)
             self.store.append_session_event(

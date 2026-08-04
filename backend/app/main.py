@@ -489,6 +489,7 @@ class QuestionLaunchRequest(BaseModel):
     stage_id: str = ""
     question_id: str = ""
     adhoc: Dict[str, Any] = Field(default_factory=dict)
+    delivery: str = "student"
 
 
 class ObservationRequest(BaseModel):
@@ -1564,6 +1565,7 @@ def launch_session_question(session_id: str, payload: QuestionLaunchRequest, req
             stage_id=payload.stage_id,
             question_id=payload.question_id,
             adhoc=payload.adhoc,
+            delivery=payload.delivery,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

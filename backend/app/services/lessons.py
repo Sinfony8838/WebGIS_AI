@@ -37,6 +37,7 @@ LESSON_IMPORT_SCHEMA_HINT = {
                 "templates": ["population_distribution"],
                 "layer_visibility": {"builtin_population_regions": True},
                 "catalog_layers": ["china_climate_types"],
+                "catalog_layer_focus": "china_climate_types",
                 "view": {"center": [104.0, 35.0], "zoom": 4},
                 "annotations": [{"text": "string", "position": [104.0, 35.0]}],
                 "visual_query": None,
@@ -66,6 +67,7 @@ def default_scene() -> Dict[str, Any]:
         "templates": [],
         "layer_visibility": {},
         "catalog_layers": [],
+        "catalog_layer_focus": "",
         "view": {},
         "annotations": [],
         "visual_query": None,
@@ -286,6 +288,9 @@ class LessonService:
                 applied["visualization"] = self._apply_visual_query(project_id, visual_query)
 
             catalog_ids = [str(item) for item in (scene.get("catalog_layers") or [])]
+            catalog_layer_focus = str(scene.get("catalog_layer_focus") or "")
+            if catalog_layer_focus not in catalog_ids:
+                catalog_layer_focus = ""
             if catalog_ids and self.catalog_layer_loader is not None:
                 project = self.store.get_project(project_id)
                 existing_catalog = {
@@ -309,10 +314,15 @@ class LessonService:
                     continue
                 self.store.patch_layer(project_id, str(layer_id), {"visible": bool(visible)})
             # Declared catalog layers are shown on top of whatever the reset left.
+            # A lesson may preload several evidence layers but focus only one to
+            # keep the initial classroom map legible.
             for layer in project.layers:
                 catalog_id = str((layer.metadata or {}).get("catalog_id") or "")
-                if catalog_id and catalog_id in catalog_id_set and not layer.visible:
-                    self.store.patch_layer(project_id, layer.layer_id, {"visible": True})
+                if not catalog_id or catalog_id not in catalog_id_set:
+                    continue
+                should_show = catalog_id == catalog_layer_focus if catalog_layer_focus else True
+                if layer.visible != should_show:
+                    self.store.patch_layer(project_id, layer.layer_id, {"visible": should_show})
 
             self._write_stage_annotations(project_id, scene.get("annotations") or [])
 
@@ -337,6 +347,7 @@ class LessonService:
             "applied_templates": applied["templates"],
             "visualization": applied["visualization"],
             "catalog_layers": catalog_ids,
+            "catalog_layer_focus": catalog_layer_focus,
             "view": project.view,
             "base_map": project.base_map,
             "globe": normalize_scene_globe(scene.get("globe")),
@@ -592,6 +603,8 @@ class LessonService:
             scene = {**default_scene(), **(raw.get("scene") or {})}
             raw_catalog = scene.get("catalog_layers")
             scene["catalog_layers"] = [str(item) for item in raw_catalog] if isinstance(raw_catalog, list) else []
+            raw_catalog_focus = str(scene.get("catalog_layer_focus") or "")
+            scene["catalog_layer_focus"] = raw_catalog_focus if raw_catalog_focus in scene["catalog_layers"] else ""
             scene["globe"] = normalize_scene_globe(scene.get("globe"))
             questions = []
             for q_index, question in enumerate(raw.get("questions") or [], start=1):

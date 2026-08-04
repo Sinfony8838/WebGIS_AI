@@ -1427,6 +1427,39 @@ export default function App({
     [layerState?.items, project, pushToast, refreshProjectState]
   );
 
+  const handleFocusLessonEvidenceLayer = useCallback(
+    async (datasetId: string, stageDatasetIds: string[]) => {
+      if (!project) {
+        return;
+      }
+      const stageSet = new Set(stageDatasetIds);
+      const existingLayers = (layerState?.items || []).filter((item) => {
+        const catalogId = String(item.metadata?.catalog_id || item.layer_id.replace(/^one_map_/, ""));
+        return item.source === "one_map_catalog" && stageSet.has(catalogId);
+      });
+      const targetExists = existingLayers.some((item) =>
+        String(item.metadata?.catalog_id || item.layer_id.replace(/^one_map_/, "")) === datasetId
+      );
+      try {
+        await Promise.all(
+          existingLayers.map((item) => {
+            const catalogId = String(item.metadata?.catalog_id || item.layer_id.replace(/^one_map_/, ""));
+            return patchLayer(project.project_id, item.layer_id, { visible: catalogId === datasetId });
+          })
+        );
+        if (!targetExists) {
+          await addCatalogDatasetLayer(project.project_id, datasetId);
+        }
+        setViewMode("plane");
+        await refreshProjectState(project.project_id);
+        pushToast("success", "证据图层已聚焦", "已隐藏同环节其他专题图层，便于课堂逐图判读。");
+      } catch (error) {
+        pushToast("error", "证据图层切换失败", error instanceof Error ? error.message : "请求失败");
+      }
+    },
+    [layerState?.items, project, pushToast, refreshProjectState]
+  );
+
   const handleDatabaseOpenKnowledgeItem = useCallback((item: KnowledgeBaseItem) => {
     setKbEditingItem(item);
     setDrawerOpen(true);
@@ -3121,6 +3154,10 @@ export default function App({
           onAssistantPrompt={(prompt) => assistantDispatchRef.current(prompt)}
           onApplyGlobeScene={handleApplyLessonGlobeScene}
           getGlobeSceneSnapshot={getLessonGlobeSceneSnapshot}
+          onFocusEvidenceLayer={(datasetId, stageDatasetIds) => {
+            void handleFocusLessonEvidenceLayer(datasetId, stageDatasetIds);
+          }}
+          onRequestPlaneView={() => handleViewModeToggle("plane")}
           statusBar={
             <MapStatusBar
               mode={viewMode}

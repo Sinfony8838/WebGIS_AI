@@ -233,6 +233,36 @@ class LessonServiceTest(unittest.TestCase):
         self.assertTrue(catalog_layers)
         self.assertTrue(catalog_layers[0].visible)
 
+    def test_stage_scene_preloads_catalog_layers_but_shows_only_declared_focus(self) -> None:
+        runtime, store, project_id = self.build_runtime()
+        lesson = runtime.classroom.lesson_service.create_lesson(
+            {
+                "title": "catalog evidence focus test",
+                "stages": [
+                    {
+                        "stage_id": "s1",
+                        "title": "focus climate",
+                        "scene": {
+                            "catalog_layers": ["china_climate_types", "china_terrain_steps"],
+                            "catalog_layer_focus": "china_climate_types",
+                        },
+                    }
+                ],
+            }
+        )
+
+        result = runtime.classroom.apply_lesson_scene(project_id, lesson.lesson_id, "s1")
+
+        self.assertEqual(result["catalog_layer_focus"], "china_climate_types")
+        project = store.get_project(project_id)
+        visibility = {
+            str((layer.metadata or {}).get("catalog_id") or ""): layer.visible
+            for layer in project.layers
+            if str((layer.metadata or {}).get("catalog_id") or "")
+            in {"china_climate_types", "china_terrain_steps"}
+        }
+        self.assertEqual(visibility, {"china_climate_types": True, "china_terrain_steps": False})
+
     def test_stage_switch_hides_undeclared_catalog_layers(self) -> None:
         runtime, store, project_id = self.build_runtime()
         lesson = runtime.classroom.lesson_service.create_lesson(

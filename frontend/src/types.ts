@@ -642,6 +642,7 @@ export type LessonScene = {
   templates: string[];
   layer_visibility: Record<string, boolean>;
   catalog_layers?: string[];
+  catalog_layer_focus?: string;
   view: { center?: [number, number]; zoom?: number; extent?: [number, number, number, number] };
   annotations: Array<{ text: string; position: [number, number] }>;
   visual_query: Record<string, unknown> | null;
@@ -822,6 +823,7 @@ export type ReportQuestionStat = {
   stage_id: string;
   text: string;
   type: string;
+  collection_mode?: "student_response" | "teacher_observation" | string;
   options: string[];
   answer_index: number | null;
   response_count: number;
@@ -840,6 +842,7 @@ export type SessionReportStatistics = {
   duration_minutes: number | null;
   participant_count: number;
   participants: string[];
+  response_data_collected?: boolean;
   stages: ReportStageStat[];
   questions: ReportQuestionStat[];
   observations: {

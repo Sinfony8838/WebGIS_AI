@@ -16,6 +16,9 @@ type Props = {
   onObservation: (verdict: ObservationVerdict, tag: string, note: string, questionId: string) => void;
   onSnapshot: () => void;
   onEndSession: () => void;
+  visibleCatalogLayerIds?: string[];
+  onFocusEvidenceLayer?: (datasetId: string, stageDatasetIds: string[]) => void;
+  onRequestPlaneView?: () => void;
   /** 把备课时预设的追问一键派发给教学智能体（不传则退化为纯展示）。 */
   onAssistantPrompt?: (prompt: string) => void;
 };
@@ -27,10 +30,16 @@ function formatElapsed(seconds: number): string {
 }
 
 const OPTION_LABELS = ["A", "B", "C", "D", "E", "F", "G", "H"];
+const EVIDENCE_LAYER_LABELS: Record<string, string> = {
+  china_climate_types: "① 气候",
+  china_terrain_steps: "② 地形",
+  china_major_rivers: "③ 河流",
+  china_vegetation_zones: "④ 植被验证",
+  china_province_gdp_per_capita: "⑤ 经济"
+};
 
 export function ClassRunPanel({
   lesson,
-  session,
   currentStageId,
   stageEnteredAt,
   busy,
@@ -43,6 +52,9 @@ export function ClassRunPanel({
   onObservation,
   onSnapshot,
   onEndSession,
+  visibleCatalogLayerIds = [],
+  onFocusEvidenceLayer,
+  onRequestPlaneView,
   onAssistantPrompt
 }: Props) {
   const [nowTick, setNowTick] = useState(Date.now());
@@ -53,6 +65,7 @@ export function ClassRunPanel({
   const [savedFlash, setSavedFlash] = useState(false);
   const [expandedQuestionId, setExpandedQuestionId] = useState("");
   const [oralQuestionId, setOralQuestionId] = useState("");
+  const [revealedOralQuestionId, setRevealedOralQuestionId] = useState("");
   const [scriptOpen, setScriptOpen] = useState(false);
   const [adhocText, setAdhocText] = useState("");
   const [adhocOptions, setAdhocOptions] = useState("");
@@ -66,6 +79,7 @@ export function ClassRunPanel({
   useEffect(() => {
     setExpandedQuestionId("");
     setOralQuestionId("");
+    setRevealedOralQuestionId("");
     setScriptOpen(true);
     resetRecord();
   }, [currentStageId]);
@@ -126,12 +140,21 @@ export function ClassRunPanel({
   function toggleOral(questionId: string) {
     if (oralQuestionId === questionId) {
       setOralQuestionId("");
+      setRevealedOralQuestionId("");
       setRecordQuestionId("");
       return;
     }
     // 展开朗读提问卡，同时为学情速记预置该题，便于记录学生表现。
     setOralQuestionId(questionId);
+    setRevealedOralQuestionId("");
     setRecordQuestionId(questionId);
+  }
+
+  function presentQuestion(question: LessonQuestion) {
+    if (oralQuestionId !== question.question_id) {
+      onLaunchQuestion(question.question_id, currentStage?.stage_id || "");
+    }
+    toggleOral(question.question_id);
   }
 
   function launchAdhoc() {
@@ -178,7 +201,7 @@ export function ClassRunPanel({
               {currentStage ? ` / ${currentStage.minutes}:00` : ""}
             </span>
             <span className="class-session-label">
-              课堂码 {session.join_code}
+              教师端课堂记录 · 仅采集教师观察
               {savedFlash ? <em className="record-saved"> ✓ 已记录</em> : null}
             </span>
           </div>
@@ -247,6 +270,71 @@ export function ClassRunPanel({
           </div>
         ) : null}
 
+        {currentStage?.teacher_guidance ? (
+          <div className="class-stage-guidance" data-testid="stage-teacher-guidance">
+            <div className="class-stage-guidance-head">
+              <span className="question-detail-label">教师环节卡</span>
+              <strong>{currentStage.teacher_guidance.observation_prompt || "先观察地图，再用证据回答。"}</strong>
+            </div>
+            {currentStage.teacher_guidance.evidence_points?.length ? (
+              <div className="class-stage-evidence-points">
+                {currentStage.teacher_guidance.evidence_points.map((point) => (
+                  <span key={point}>{point}</span>
+                ))}
+              </div>
+            ) : null}
+            <dl className="class-stage-guidance-grid">
+              {currentStage.teacher_guidance.oral_question ? (
+                <><dt>口头问题</dt><dd>{currentStage.teacher_guidance.oral_question}</dd></>
+              ) : null}
+              {currentStage.teacher_guidance.expected_response ? (
+                <><dt>预期回答</dt><dd>{currentStage.teacher_guidance.expected_response}</dd></>
+              ) : null}
+              {currentStage.teacher_guidance.misconception_cue ? (
+                <><dt>误区提醒</dt><dd>{currentStage.teacher_guidance.misconception_cue}</dd></>
+              ) : null}
+              {currentStage.teacher_guidance.closing ? (
+                <><dt>教师收束</dt><dd>{currentStage.teacher_guidance.closing}</dd></>
+              ) : null}
+              {currentStage.teacher_guidance.fallback ? (
+                <><dt>备用方案</dt><dd>{currentStage.teacher_guidance.fallback}</dd></>
+              ) : null}
+            </dl>
+          </div>
+        ) : null}
+
+        {currentStage?.scene.globe?.enabled && onRequestPlaneView ? (
+          <div className="class-stage-view-handoff" data-testid="stage-view-handoff">
+            <span>3D 用于宏观导入；开始读图和答题时回到二维规范专题图。</span>
+            <button type="button" className="toolbar-button compact" onClick={onRequestPlaneView}>
+              切回二维判读
+            </button>
+          </div>
+        ) : null}
+
+        {currentStage?.scene.catalog_layers && currentStage.scene.catalog_layers.length > 1 && onFocusEvidenceLayer ? (
+          <div className="class-evidence-layer-steps" data-testid="evidence-layer-steps">
+            <div className="class-evidence-layer-heading">
+              <span className="question-detail-label">证据图层步骤</span>
+              <small>逐张聚焦，避免图层堆叠</small>
+            </div>
+            <div className="class-evidence-layer-buttons">
+              {currentStage.scene.catalog_layers.map((datasetId) => (
+                <button
+                  key={datasetId}
+                  type="button"
+                  className={`evidence-layer-step ${visibleCatalogLayerIds.includes(datasetId) ? "active" : ""}`}
+                  disabled={busy}
+                  onClick={() => onFocusEvidenceLayer(datasetId, currentStage.scene.catalog_layers || [])}
+                  data-testid={`evidence-layer-${datasetId}`}
+                >
+                  {EVIDENCE_LAYER_LABELS[datasetId] || datasetId}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
         {currentStage?.assistant_prompts.length && onAssistantPrompt ? (
           <div className="class-panel-assistant-prompts" data-testid="stage-assistant-prompts">
             <span className="question-detail-label">AI 追问</span>
@@ -281,7 +369,7 @@ export function ClassRunPanel({
                     data-testid={`question-toggle-${question.question_id}`}
                   >
                     <span className={`question-type-badge ${question.type}`}>
-                      {question.type === "choice" ? "投票" : "问答"}
+                      {question.type === "choice" ? "选择" : "问答"}
                     </span>
                     <span className="class-question-text">{question.text}</span>
                   </button>
@@ -300,7 +388,32 @@ export function ClassRunPanel({
                         </button>
                       </div>
                       <p className="class-oral-prompt-text">{question.text}</p>
-                      {question.expected_points.length ? (
+                      {question.options.length ? (
+                        <ol className="class-oral-options">
+                          {question.options.map((option, index) => (
+                            <li key={index}>
+                              <span>{OPTION_LABELS[index] || index + 1}</span>
+                              {option}
+                            </li>
+                          ))}
+                        </ol>
+                      ) : null}
+                      {revealedOralQuestionId !== question.question_id ? (
+                        <button
+                          type="button"
+                          className="toolbar-button compact class-reveal-answer"
+                          onClick={() => setRevealedOralQuestionId(question.question_id)}
+                          data-testid={`oral-reveal-${question.question_id}`}
+                        >
+                          显示答案与教师收束
+                        </button>
+                      ) : null}
+                      {revealedOralQuestionId === question.question_id && question.options.length && question.answer_index !== null ? (
+                        <p className="class-oral-answer" data-testid={`oral-answer-${question.question_id}`}>
+                          参考答案：{OPTION_LABELS[question.answer_index] || question.answer_index + 1}. {question.options[question.answer_index]}
+                        </p>
+                      ) : null}
+                      {revealedOralQuestionId === question.question_id && question.expected_points.length ? (
                         <div className="question-points">
                           <span className="question-detail-label">答案要点</span>
                           {question.expected_points.map((point) => (
@@ -308,13 +421,34 @@ export function ClassRunPanel({
                           ))}
                         </div>
                       ) : null}
-                      {question.misconceptions.length ? (
+                      {revealedOralQuestionId === question.question_id && question.argument_chain?.length ? (
+                        <div className="question-argument-chain">
+                          <span className="question-detail-label">标准论证链</span>
+                          <ol>
+                            {question.argument_chain.map((step) => <li key={step}>{step}</li>)}
+                          </ol>
+                        </div>
+                      ) : null}
+                      {revealedOralQuestionId === question.question_id && question.evidence_refs?.length ? (
+                        <div className="question-evidence-refs">
+                          <span className="question-detail-label">证据来源</span>
+                          {question.evidence_refs.map((evidence) => (
+                            <span key={evidence.source_id} className="evidence-chip">
+                              {evidence.title || evidence.source_id}{evidence.source_year ? ` · ${evidence.source_year}` : ""}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                      {revealedOralQuestionId === question.question_id && question.misconceptions.length ? (
                         <div className="question-misconceptions">
                           <span className="question-detail-label">易错提醒</span>
                           {question.misconceptions.map((item) => (
                             <span key={item.tag} className="tag-chip">{item.tag}</span>
                           ))}
                         </div>
+                      ) : null}
+                      {revealedOralQuestionId === question.question_id && question.remediation_task ? (
+                        <p className="question-remediation"><strong>课后补救：</strong>{question.remediation_task}</p>
                       ) : null}
                       {currentStage?.assistant_prompts.length ? (
                         <div className="class-oral-prompt-leads">
@@ -387,27 +521,16 @@ export function ClassRunPanel({
                   ) : null}
 
                   <div className="class-question-actions">
-                    {question.type === "choice" ? (
-                      <button
-                        type="button"
-                        className="toolbar-button compact primary"
-                        disabled={busy || quizActive}
-                        onClick={() => onLaunchQuestion(question.question_id, currentStage.stage_id)}
-                        data-testid={`launch-${question.question_id}`}
-                      >
-                        发起投票
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className={`toolbar-button compact primary ${oralQuestionId === question.question_id ? "active" : ""}`}
-                        onClick={() => toggleOral(question.question_id)}
-                        data-testid={`oral-toggle-${question.question_id}`}
-                        title="展开朗读提问卡：教师朗读问题并按要点引导，学情速记自动就绪"
-                      >
-                        {oralQuestionId === question.question_id ? "结束朗读" : "口头提问"}
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      className={`toolbar-button compact primary ${oralQuestionId === question.question_id ? "active" : ""}`}
+                      disabled={busy}
+                      onClick={() => presentQuestion(question)}
+                      data-testid={`oral-toggle-${question.question_id}`}
+                      title="教师口头呈现问题；答案与论证链默认隐藏，学情速记自动就绪"
+                    >
+                      {oralQuestionId === question.question_id ? "结束提问" : "口头提问"}
+                    </button>
                   </div>
                 </article>
               );
@@ -416,7 +539,7 @@ export function ClassRunPanel({
         ) : null}
 
         <div className="class-panel-adhoc" data-testid="adhoc-question">
-          <span className="question-detail-label">临时提问</span>
+          <span className="question-detail-label">临时口头提问</span>
           <input
             value={adhocText}
             placeholder="输入课堂即兴问题…"
@@ -440,7 +563,7 @@ export function ClassRunPanel({
               onClick={launchAdhoc}
               data-testid="launch-adhoc"
             >
-              发起
+              记录提问
             </button>
           </div>
         </div>
