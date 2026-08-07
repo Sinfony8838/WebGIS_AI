@@ -31,6 +31,8 @@ type Props = {
   busy: boolean;
   /** Current lesson-workflow phase; drives the header chip and chip ordering. */
   teachingPhase?: "course_prep" | "in_class" | "post_class" | "";
+  /** Increment to bring the GeoBot panel forward for a classroom AI activity. */
+  openSignal?: number;
 };
 
 // One-tap teaching capabilities. Each chip sends a templated prompt that the
@@ -117,7 +119,7 @@ function pickThinkingLabel(stages: Array<[string, { status: string; summary?: st
 
 function roleLabel(role: string): string {
   if (role === "assistant") {
-    return "助教";
+    return "GeoBot AI";
   }
   if (role === "user") {
     return "教师";
@@ -125,12 +127,12 @@ function roleLabel(role: string): string {
   return "系统";
 }
 
-// The backend appends a deterministic "教学处理：" text block to teaching
+// The backend appends a deterministic "回答总结：" text block to teaching
 // answers for voice/history/tests. When the structured teaching_contract is
 // rendered as visual blocks, strip that trailing text block so the contract
 // is not shown twice (once as blocks, once as plain text).
 function splitScaffoldBody(text: string): string {
-  const marker = "教学处理：";
+  const marker = "回答总结：";
   const idx = text.indexOf(marker);
   if (idx === -1) {
     return text;
@@ -362,7 +364,8 @@ export function CopilotWidget({
   onVoiceSubmit,
   onVoiceNotice,
   busy,
-  teachingPhase = ""
+  teachingPhase = "",
+  openSignal = 0
 }: Props) {
   const speechSupported = useMemo(() => Boolean(getSpeechRecognitionConstructor()), []);
   const phaseMeta = teachingPhase ? PHASE_META[teachingPhase] || null : null;
@@ -408,6 +411,12 @@ export function CopilotWidget({
     | null
   >(null);
   const lastSeenMessages = useRef(chatLog.length);
+
+  useEffect(() => {
+    if (openSignal > 0) {
+      setMinimized(false);
+    }
+  }, [openSignal]);
 
   const jobStages = useMemo(() => (currentJob ? Object.entries(currentJob.stages) : []), [currentJob]);
   const isListening = voiceStatus === "listening";
@@ -769,7 +778,7 @@ export function CopilotWidget({
               welcomeToken={welcomeToken}
             />
           </span>
-          <span className="copilot-orb-label">助教</span>
+          <span className="copilot-orb-label">GeoBot AI</span>
           {unreadCount ? <span className="copilot-unread">{unreadCount}</span> : null}
         </button>
       </div>
@@ -794,7 +803,7 @@ export function CopilotWidget({
             />
           </div>
           <div className="copilot-title-copy">
-            <h2>专业教学智能体</h2>
+            <h2>GeoBot 专业教学智能体</h2>
             <div className="copilot-header-meta">
               <span className={`status-pill ${busy ? "busy" : "ready"}`}>{busy ? "执行中" : "在线"}</span>
               {phaseMeta ? (
@@ -884,24 +893,16 @@ export function CopilotWidget({
                     <>
                       {body ? <p>{body}</p> : null}
                       <div className="copilot-teaching-blocks" data-testid="copilot-teaching-blocks">
-                        <div className="copilot-teaching-block evidence">
-                          <span className="copilot-teaching-label">证据或观察点</span>
-                          <p>{contract.evidence}</p>
-                        </div>
-                        <div className="copilot-teaching-block question">
-                          <span className="copilot-teaching-label">给学生的问题</span>
-                          <p>{contract.question}</p>
+                        <div className="copilot-teaching-block summary">
+                          <span className="copilot-teaching-label">回答总结</span>
+                          <p>{contract.summary}</p>
                           <button
                             type="button"
                             className="copilot-teaching-copy"
-                            onClick={() => copyToClipboard(contract.question)}
+                            onClick={() => copyToClipboard(contract.summary)}
                           >
-                            复制问题
+                            复制总结
                           </button>
-                        </div>
-                        <div className="copilot-teaching-block closing">
-                          <span className="copilot-teaching-label">教师收束语或下一步</span>
-                          <p>{contract.closing}</p>
                         </div>
                       </div>
                     </>

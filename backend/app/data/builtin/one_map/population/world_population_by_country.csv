@@ -139,7 +139,7 @@ name,name_en,region_code,population,area,density,source_year,source_name
 澳大利亚,Australia,AUS,25364307,7702079.91,3.29,2019,Natural Earth 110m Admin 0 countries
 斯里兰卡,Sri Lanka,LKA,21803000,65635.8,332.18,2019,Natural Earth 110m Admin 0 countries
 中华人民共和国,People's Republic of China,CHN,1397715000,9407764.39,148.57,2019,Natural Earth 110m Admin 0 countries
-中华民国,Taiwan,TWN,23568378,34448.74,684.16,2020,Natural Earth 110m Admin 0 countries
+中国台湾省,"Taiwan, China",TWN,23568378,34448.74,684.16,2020,Natural Earth 110m Admin 0 countries
 意大利,Italy,ITA,60297396,314588.89,191.67,2019,Natural Earth 110m Admin 0 countries
 丹麦,Denmark,DNK,5818553,42589.19,136.62,2019,Natural Earth 110m Admin 0 countries
 英国,United Kingdom,GBR,66834405,248869.51,268.55,2019,Natural Earth 110m Admin 0 countries

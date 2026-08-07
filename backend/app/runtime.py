@@ -216,10 +216,15 @@ def _classify_colors(features: List[Dict[str, Any]], field: str) -> None:
     for feature in features:
         props = feature.setdefault("properties", {})
         value = _as_number(props.get(field))
+        if value is None:
+            props["__fillColor"] = "#94a3b8"
+            props["__fillOpacity"] = 0.28
+            props["__strokeColor"] = "#334155"
+            props["__strokeWidth"] = 0.8
+            continue
         index = 0
-        if value is not None:
-            while index < len(breaks) - 1 and value > breaks[index]:
-                index += 1
+        while index < len(breaks) - 1 and value > breaks[index]:
+            index += 1
         props["__fillColor"] = colors[index]
         props["__fillOpacity"] = 0.42
         props["__strokeColor"] = "#334155"

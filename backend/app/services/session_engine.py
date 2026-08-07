@@ -116,29 +116,30 @@ def _utc_timestamp(minutes_from_now: int = 0) -> str:
 
 
 def _teaching_scaffold_parts(knowledge: Dict[str, Any], map_context: Dict[str, Any]) -> Dict[str, str]:
-    """Deterministic three-part teaching contract (structured).
+    """Return one concise, student-facing summary for a teaching answer.
 
-    Returns 证据或观察点 / 给学生的问题 / 教师收束语或下一步 as separate strings
-    so the frontend can render them as distinct visual blocks. Guarantees the
-    structure even when the LLM is unavailable, and states missing evidence
-    explicitly instead of fabricating layer or student claims.
+    Raw viewport metadata and teacher-only scaffolding are deliberately kept
+    out of the projected classroom response.
     """
     knowledge = knowledge or {}
-    grounding = str(knowledge.get("map_grounding") or "").strip()
-    has_evidence = grounding.startswith("基于当前地图")
-    evidence_line = grounding if has_evidence else "本回答缺少当前地图或素材证据，仅为一般性讲解。"
-    teaching_points = [str(item).strip() for item in list(knowledge.get("teaching_points") or []) if str(item).strip()]
-    question_line = (
-        teaching_points[0]
-        if teaching_points
-        else "请学生观察图中高值区与低值区的分布，并说明可能的影响因素。"
-    )
-    closing_line = "收束到区域认知方法：位置-格局-成因；下一步可切换图层或结合读图讲解继续验证。"
-    return {
-        "evidence": evidence_line,
-        "question": question_line,
-        "closing": closing_line,
-    }
+    direct_answer = str(knowledge.get("direct_answer") or "").strip()
+    explicit_summary = ""
+    if "回答总结：" in direct_answer:
+        explicit_summary = direct_answer.rsplit("回答总结：", 1)[-1].strip().splitlines()[0].strip()
+    candidates = [
+        explicit_summary,
+        direct_answer,
+        *[str(item).strip() for item in list(knowledge.get("teaching_points") or []) if str(item).strip()],
+    ]
+    summary = next((item for item in candidates if item), "本次回答需要结合本节人口地理主题作进一步概括。")
+    summary = " ".join(summary.split())
+    for marker in ("。", "！", "？", ";", "；"):
+        if marker in summary:
+            summary = summary.split(marker, 1)[0].strip() + ("。" if marker in {"。", ";", "；"} else marker)
+            break
+    if len(summary) > 90:
+        summary = summary[:88].rstrip("，、；;：:") + "。"
+    return {"summary": summary}
 
 
 def _format_scaffold_text(parts: Optional[Dict[str, str]]) -> str:
@@ -149,12 +150,7 @@ def _format_scaffold_text(parts: Optional[Dict[str, str]]) -> str:
     ``teaching_contract`` field instead of parsing this text.
     """
     parts = parts or {}
-    return (
-        "教学处理：\n"
-        f"- 证据或观察点：{parts.get('evidence', '')}\n"
-        f"- 给学生的问题：{parts.get('question', '')}\n"
-        f"- 教师收束语或下一步：{parts.get('closing', '')}"
-    )
+    return f"回答总结：{parts.get('summary', '')}"
 
 
 def _teaching_scaffold(knowledge: Dict[str, Any], map_context: Dict[str, Any]) -> str:
@@ -478,6 +474,7 @@ class KnowledgeEngine:
     ) -> Dict[str, Any]:
         map_context = map_context or {}
         answer_type = self._classify(question)
+        brainstorm_request = question.lstrip().startswith("GeoBot 头脑风暴：")
         if answer_type in {"assistant_identity", "assistant_model", "assistant_capability"}:
             return self._meta_answer(answer_type)
 
@@ -569,6 +566,11 @@ class KnowledgeEngine:
             mechanism_explanation = self._mechanism_text(question, entry, answer_type)
             teaching_points = list(entry.get("teaching_points", [])) if entry else self._default_teaching_points(answer_type)
             confidence = 0.92 if entry else (0.45 if answer_type == "timely_fact" else 0.68)
+            if brainstorm_request:
+                direct_answer = "头脑风暴生成失败：当前 AI 服务不可用，请稍后重试。"
+                mechanism_explanation = ""
+                teaching_points = []
+                confidence = 0.0
 
         map_grounding = self._map_grounding(map_context, answer_type)
         return {
@@ -580,7 +582,10 @@ class KnowledgeEngine:
             "confidence": confidence,
             "answer_type": answer_type,
             "retrieval_trace": retrieval_trace,
-            "presentation": self._presentation_policy(answer_type),
+            "presentation": {
+                **self._presentation_policy(answer_type),
+                **({"show_map_grounding": False, "show_teaching_points": False} if teaching_task else {}),
+            },
             "llm_used": llm_used,
         }
 
@@ -634,14 +639,12 @@ class KnowledgeEngine:
             "- 语言简洁专业，适合课堂直接朗读\n"
             "- 用中文回答\n"
         )
+        brainstorm_request = question.lstrip().startswith("GeoBot 头脑风暴：")
         if teaching_task:
             system_prompt += (
-                "\n你正在“专业教学智能体”模式下支持地理课堂。除上述结构外，“课堂要点”必须依次覆盖：\n"
-                "- 证据或观察点：只能引用参考上下文里真实存在的图层、选区、素材或视觉读图结果\n"
-                "- 给学生的问题：1-2 个可以在课堂上直接提问的问题\n"
-                "- 教师收束语或下一步\n"
-                "如果参考上下文里没有地图或素材证据，必须明确说明“本回答缺少当前地图或素材证据”，"
-                "不得编造图层名称、数据或学生表现。\n"
+                "\n你正在“专业教学智能体”模式下支持地理课堂。请把核心答案讲清楚，最后增加“回答总结：”，"
+                "用一句话概括刚才的回答。不要输出证据或观察点、给学生的问题、教师收束语或下一步，"
+                "不要复述地图中心坐标、缩放级别、可见范围等系统元数据，也不得编造图层数据或学生表现。\n"
             )
             if teaching_task == "teaching_question":
                 system_prompt += "本次请求侧重课堂提问设计：问题要由浅入深，先观察描述，再比较分析，最后解释迁移，并给出常见误区。\n"
@@ -651,12 +654,19 @@ class KnowledgeEngine:
                     "没有真实课堂记录时不得编造学生表现或掌握程度。\n"
                 )
 
+        if brainstorm_request:
+            system_prompt += (
+                "\n本次是课堂头脑风暴活动。忽略上面的常规三部分格式，只输出以下三部分："
+                "“头脑风暴问题：”“回答：”“回答总结：”。问题必须体现区域差异、条件变化、尺度转换或"
+                "反直觉比较中的至少一种；回答总结必须是一句话。不得输出教师提示、系统图层名或视口元数据。\n"
+            )
+
         teaching_context = map_context.get("teaching_context") if isinstance(map_context.get("teaching_context"), dict) else {}
         phase = str((teaching_context or {}).get("phase") or "")
         if phase == "in_class":
             system_prompt += (
-                "\n当前正在课堂授课：全文控制在 150 字以内，第一句必须是教师可以直接口播的结论，"
-                "课堂要点最多保留 1 个给学生的问题，不要展开背景综述。\n"
+                "\n当前正在课堂授课：全文控制在 180 字以内，直接回答探究问题，不要展开背景综述；"
+                "结尾用一句“回答总结”帮助学生概括。\n"
             )
         elif phase == "course_prep":
             system_prompt += (
@@ -984,13 +994,6 @@ class KnowledgeEngine:
             material_titles = [title for title in material_titles if title]
             if material_titles:
                 parts.append(f"已绑定教学资料：{', '.join(material_titles)}")
-        center = map_context.get("center")
-        zoom = map_context.get("zoom")
-        if center or zoom is not None:
-            parts.append(f"视图中心 {center or '未知'}，缩放级别 {zoom if zoom is not None else '未知'}")
-        extent = map_context.get("extent")
-        if extent:
-            parts.append(f"可见范围 {extent}")
         return "；".join(parts)
 
     def _map_reading_direct_answer(self, question: str, map_context: Dict[str, Any]) -> str:
@@ -1029,7 +1032,7 @@ class KnowledgeEngine:
         else:
             answer += "\n\n本次请求没有携带可见图层、选区或截图信息，因此只能给出通用读图框架；若要识别图面颜色、图例数值或具体地貌边界，请使用“读图讲解”截图识别。"
         if map_context.get("vision_reason"):
-            answer += "\n\n当前截图视觉读图尚未启用，以上是基于视图范围、缩放级别和图层状态的辅助判读；启用读图模型后可进一步识别颜色分层、图例数值和地形纹理。"
+            answer += "\n\n当前截图视觉读图尚未启用，以上依据已选择区域和教学资料作辅助判读；启用读图模型后可进一步识别颜色分层、图例数值和地形纹理。"
         return answer
 
     def _mechanism_text(self, question: str, entry: Optional[Dict[str, Any]], answer_type: str) -> str:

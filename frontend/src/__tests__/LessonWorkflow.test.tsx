@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ClassRunPanel } from "../components/ClassRunPanel";
 import { LessonPanel } from "../components/LessonPanel";
 import { QuizOverlay } from "../components/QuizOverlay";
@@ -75,7 +75,13 @@ function makeLesson(): LessonRecord {
             misconceptions: [{ tag: "只见城市不见格局", description: "" }]
           }
         ],
-        assistant_prompts: []
+        assistant_prompts: [],
+        brainstorm: {
+          title: "随机地区的人口格局猜想",
+          prompt: "比较该地区与全国人口格局。",
+          regions: ["黑河", "腾冲", "台湾省"],
+          button_label: "转动地区并生成探究"
+        }
       },
       {
         stage_id: "s2",
@@ -101,7 +107,13 @@ function makeLesson(): LessonRecord {
             misconceptions: [{ tag: "混淆数量与密度", description: "" }]
           }
         ],
-        assistant_prompts: ["请用密度概念解释东西部人口疏密差异。"]
+        assistant_prompts: ["请用密度概念解释东西部人口疏密差异。"],
+        brainstorm: {
+          title: "总量与密度的反直觉比较",
+          prompt: "判断更应关注人口总量还是人口密度。",
+          regions: ["北京市", "西藏自治区"],
+          button_label: "抽取省区并生成比较"
+        }
       }
     ]
   };
@@ -126,7 +138,11 @@ function makeSession(): ClassSessionRecord {
 
 afterEach(() => {
   cleanup();
+  if (vi.isMockFunction(Math.random)) {
+    vi.mocked(Math.random).mockRestore();
+  }
   vi.clearAllMocks();
+  vi.useRealTimers();
 });
 
 describe("LessonPanel", () => {
@@ -275,7 +291,7 @@ describe("ClassRunPanel", () => {
     expect(props.onEnterStage).toHaveBeenCalledWith("s2");
   });
 
-  it("presents choice questions orally without exposing the answer until the teacher reveals it", () => {
+  it("presents choice questions orally without exposing teacher answers", () => {
     const props = renderPanel();
     fireEvent.click(screen.getByTestId("oral-toggle-s1q1"));
     expect(props.onLaunchQuestion).toHaveBeenCalledWith("s1q1", "s1");
@@ -283,8 +299,8 @@ describe("ClassRunPanel", () => {
     expect(oralCard.textContent).toContain("A");
     expect(oralCard.textContent).toContain("B");
     expect(oralCard.textContent).not.toContain("参考答案");
-    fireEvent.click(screen.getByTestId("oral-reveal-s1q1"));
-    expect(screen.getByTestId("oral-answer-s1q1").textContent).toContain("B. 东南密西北疏");
+    expect(screen.queryByTestId("oral-reveal-s1q1")).toBeNull();
+    expect(screen.queryByTestId("oral-answer-s1q1")).toBeNull();
   });
 
   it("records quick observation and misconception tag", () => {
@@ -295,18 +311,20 @@ describe("ClassRunPanel", () => {
     fireEvent.click(screen.getByText("误区"));
     const picker = screen.getByTestId("misconception-picker");
     expect(picker).toBeTruthy();
-    fireEvent.click(within(picker).getByText("只见城市不见格局"));
+    fireEvent.change(within(picker).getByPlaceholderText("教师现场输入误区标签"), {
+      target: { value: "只见城市不见格局" }
+    });
     fireEvent.click(screen.getByText("记录误区"));
     expect(props.onObservation).toHaveBeenCalledWith("misconception", "只见城市不见格局", "", "");
   });
 
-  it("expands question detail with options, expected points and misconception shortcuts", () => {
-    const props = renderPanel();
+  it("expands only student-visible options without answers or teacher hints", () => {
+    renderPanel();
     fireEvent.click(screen.getByTestId("question-toggle-s1q1"));
     expect(screen.getByText(/东南密西北疏/)).toBeTruthy();
     const card = screen.getByTestId("question-toggle-s1q1").closest(".class-question-card") as HTMLElement;
-    fireEvent.click(within(card).getByText("只见城市不见格局"));
-    expect(props.onObservation).toHaveBeenCalledWith("misconception", "只见城市不见格局", "", "s1q1");
+    expect(card.textContent).not.toContain("✓ 正确");
+    expect(card.textContent).not.toContain("只见城市不见格局");
   });
 
   it("launches ad-hoc questions with optional options", () => {
@@ -330,9 +348,7 @@ describe("ClassRunPanel", () => {
     expect(card.textContent).toContain("朗读提问卡");
     expect(card.textContent).toContain("为什么要看人口密度？");
     expect(card.textContent).not.toContain("面积不同不可直接比较");
-    fireEvent.click(screen.getByTestId("oral-reveal-s2q1"));
-    expect(card.textContent).toContain("面积不同不可直接比较");
-    expect(card.textContent).toContain("请用密度概念解释东西部人口疏密差异。");
+    expect(screen.queryByText("显示答案与教师收束")).toBeNull();
     // 朗读提问卡预置学情速记到 s2q1
     fireEvent.click(screen.getByText("答对"));
     expect(props.onObservation).toHaveBeenCalledWith("correct", "", "", "s2q1");
@@ -341,7 +357,7 @@ describe("ClassRunPanel", () => {
     expect(screen.queryByTestId("oral-prompt-s2q1")).toBeNull();
   });
 
-  it("renders the generated teacher guidance card", () => {
+  it("keeps teacher guidance out of the projected classroom panel", () => {
     const lesson = makeLesson();
     lesson.stages[0].teacher_guidance = {
       observation_prompt: "先找图例、年份和空间差异。",
@@ -353,10 +369,24 @@ describe("ClassRunPanel", () => {
       fallback: "三维异常时使用二维图。"
     };
     renderPanel({ lesson });
-    const guidance = screen.getByTestId("stage-teacher-guidance");
-    expect(guidance.textContent).toContain("先找图例、年份和空间差异");
-    expect(guidance.textContent).toContain("人口密度图");
-    expect(guidance.textContent).toContain("三维异常时使用二维图");
+    expect(screen.queryByTestId("stage-teacher-guidance")).toBeNull();
+    expect(screen.queryByText("先找图例、年份和空间差异。")).toBeNull();
+  });
+
+  it("opens student-facing textbook knowledge in a movable enlarged overlay", () => {
+    renderPanel();
+    expect(screen.queryByText("先看地图")).toBeNull();
+    fireEvent.click(within(screen.getByTestId("basic-knowledge-launcher")).getByText("放大展示"));
+    const overlay = screen.getByTestId("basic-knowledge-overlay");
+    expect(overlay.textContent).toContain("基础知识讲解");
+    expect(overlay.textContent).toContain("先看地图");
+    const header = overlay.querySelector(".basic-knowledge-overlay-header") as HTMLElement;
+    fireEvent.pointerDown(header, { pointerId: 1, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(header, { pointerId: 1, clientX: 180, clientY: 150 });
+    fireEvent.pointerUp(header, { pointerId: 1, clientX: 180, clientY: 150 });
+    expect(overlay.getAttribute("style")).toContain("left:");
+    fireEvent.click(screen.getByLabelText("关闭基础知识讲解"));
+    expect(screen.queryByTestId("basic-knowledge-overlay")).toBeNull();
   });
 
   it("focuses one evidence layer at a time from the stage guide", () => {
@@ -398,28 +428,26 @@ describe("ClassRunPanel", () => {
     expect(props.onToggleCollapsed).toHaveBeenCalled();
   });
 
-  it("renders stage-level AI follow-up chips and dispatches the prompt to the agent", () => {
+  it("runs a GeoBot brainstorm without exposing the internal prompt", () => {
+    vi.useFakeTimers();
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
     const onAssistantPrompt = vi.fn();
     renderPanel({ currentStageId: "s2", onAssistantPrompt });
-    const chips = screen.getByTestId("stage-assistant-prompts");
-    fireEvent.click(within(chips).getByTestId("stage-assistant-prompt-0"));
-    expect(onAssistantPrompt).toHaveBeenCalledWith("请用密度概念解释东西部人口疏密差异。");
+    const card = screen.getByTestId("stage-brainstorm");
+    expect(card.textContent).toContain("GeoBot AI");
+    expect(card.textContent).not.toContain("判断更应关注人口总量还是人口密度");
+    fireEvent.click(screen.getByTestId("run-brainstorm"));
+    act(() => vi.advanceTimersByTime(1100));
+    expect(onAssistantPrompt).toHaveBeenCalledOnce();
+    expect(onAssistantPrompt.mock.calls[0][0]).toContain("随机抽中的地区是：北京市");
+    expect(onAssistantPrompt.mock.calls[0][0]).toContain("只输出“头脑风暴问题”“回答”“回答总结”");
+    expect(onAssistantPrompt.mock.calls[0][1]).toBe("GeoBot 头脑风暴 · 北京市");
+    randomSpy.mockRestore();
   });
 
-  it("hides the AI follow-up section without prompts or without a dispatcher", () => {
+  it("hides the brainstorm activity when no dispatcher is available", () => {
     renderPanel({ currentStageId: "s2" });
-    expect(screen.queryByTestId("stage-assistant-prompts")).toBeNull();
-    cleanup();
-    renderPanel({ currentStageId: "s1", onAssistantPrompt: vi.fn() });
-    expect(screen.queryByTestId("stage-assistant-prompts")).toBeNull();
-  });
-
-  it("dispatches oral-card assistant prompts to the agent", () => {
-    const onAssistantPrompt = vi.fn();
-    renderPanel({ currentStageId: "s2", onAssistantPrompt });
-    fireEvent.click(screen.getByTestId("oral-toggle-s2q1"));
-    fireEvent.click(screen.getByTestId("oral-assistant-prompt-0"));
-    expect(onAssistantPrompt).toHaveBeenCalledWith("请用密度概念解释东西部人口疏密差异。");
+    expect(screen.queryByTestId("stage-brainstorm")).toBeNull();
   });
 });
 

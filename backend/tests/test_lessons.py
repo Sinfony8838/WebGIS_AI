@@ -41,6 +41,24 @@ class LessonServiceTest(unittest.TestCase):
         listing = runtime.classroom.list_lessons()
         self.assertTrue(any(item["lesson_id"] == BUILTIN_LESSON_ID for item in listing["items"]))
 
+        for stage in lesson.stages:
+            self.assertTrue(stage["script"], stage["stage_id"])
+            self.assertTrue(stage["brainstorm"], stage["stage_id"])
+            self.assertEqual(len(stage["brainstorm"]["regions"]), 5, stage["stage_id"])
+            self.assertTrue(stage["brainstorm"]["prompt"], stage["stage_id"])
+
+    def test_legacy_lesson_without_brainstorm_remains_readable(self) -> None:
+        runtime, _store, _project_id = self.build_runtime()
+
+        created = runtime.classroom.create_lesson(
+            {
+                "title": "旧课时",
+                "stages": [{"stage_id": "s1", "title": "旧环节", "scene": {}, "script": ["旧知识"]}],
+            }
+        )
+
+        self.assertEqual(created["stages"][0]["brainstorm"], {})
+
     def test_apply_stage_scene_sets_layers_view_and_basemap(self) -> None:
         runtime, store, project_id = self.build_runtime()
 

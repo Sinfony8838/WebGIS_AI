@@ -56,6 +56,12 @@ LESSON_IMPORT_SCHEMA_HINT = {
                 }
             ],
             "assistant_prompts": ["string"],
+            "brainstorm": {
+                "title": "string",
+                "prompt": "string",
+                "regions": ["string"],
+                "button_label": "string",
+            },
         }
     ],
 }
@@ -142,6 +148,21 @@ def normalize_teacher_guidance(raw: Any) -> Dict[str, Any]:
     if isinstance(points, list):
         result["evidence_points"] = [str(item) for item in points if str(item)]
     return result
+
+
+def normalize_brainstorm(raw: Any) -> Dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    prompt = str(raw.get("prompt") or "").strip()
+    regions = [str(item).strip() for item in raw.get("regions") or [] if str(item).strip()]
+    if not prompt or not regions:
+        return {}
+    return {
+        "title": str(raw.get("title") or "GeoBot 头脑风暴").strip(),
+        "prompt": prompt,
+        "regions": regions,
+        "button_label": str(raw.get("button_label") or "转动并生成探究").strip(),
+    }
 
 
 class LessonService:
@@ -647,6 +668,7 @@ class LessonService:
                     "script": [str(item) for item in raw.get("script") or []],
                     "questions": questions,
                     "assistant_prompts": [str(item) for item in raw.get("assistant_prompts") or []],
+                    "brainstorm": normalize_brainstorm(raw.get("brainstorm")),
                     "evidence_refs": normalize_evidence_refs(raw.get("evidence_refs")),
                     "teacher_guidance": normalize_teacher_guidance(raw.get("teacher_guidance")),
                 }

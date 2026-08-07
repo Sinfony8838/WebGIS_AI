@@ -107,36 +107,28 @@ describe("CopilotWidget", () => {
     expect(screen.getByLabelText("展开智能助教")).toBeInTheDocument();
   });
 
-  it("renders the structured teaching contract as three visual blocks", () => {
+  it("renders only the student-facing answer summary contract", () => {
     renderWidget({
       chatLog: [
         {
           role: "assistant",
-          text: "东部人口密集与自然条件、经济机会相关。\n\n教学处理：\n- 证据或观察点：基于当前地图：可见图层包括 人口密度。\n- 给学生的问题：观察高值区与低值区的分布。\n- 教师收束语或下一步：收束到区域认知方法。",
+          text: "东部人口密集与自然条件、经济机会相关。\n\n回答总结：东部人口集聚是自然基础与经济机会共同作用的结果。",
           timestamp: "1",
           teaching_contract: {
-            evidence: "基于当前地图：可见图层包括 人口密度。",
-            question: "观察高值区与低值区的分布。",
-            closing: "收束到区域认知方法：位置-格局-成因。"
+            summary: "东部人口集聚是自然基础与经济机会共同作用的结果。"
           }
         }
       ]
     });
 
-    // The three contract parts render as labeled blocks.
-    expect(screen.getByText("证据或观察点")).toBeInTheDocument();
-    expect(screen.getByText("给学生的问题")).toBeInTheDocument();
-    expect(screen.getByText("教师收束语或下一步")).toBeInTheDocument();
-    // Structured values are rendered.
-    expect(screen.getByText("观察高值区与低值区的分布。")).toBeInTheDocument();
-    expect(screen.getByText("收束到区域认知方法：位置-格局-成因。")).toBeInTheDocument();
-    // The legacy "教学处理：" text block is stripped (not duplicated) when the
-    // structured contract is rendered.
-    expect(screen.queryByText(/教学处理/)).toBeNull();
+    expect(screen.getByText("回答总结")).toBeInTheDocument();
+    expect(screen.getByText("东部人口集聚是自然基础与经济机会共同作用的结果。")).toBeInTheDocument();
+    expect(screen.queryByText("证据或观察点")).toBeNull();
+    expect(screen.queryByText("给学生的问题")).toBeNull();
+    expect(screen.queryByText("教师收束语或下一步")).toBeNull();
     // The answer body before the scaffold is still shown.
     expect(screen.getByText(/东部人口密集与自然条件/)).toBeInTheDocument();
-    // The copy-question button is present.
-    expect(screen.getByRole("button", { name: "复制问题" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "复制总结" })).toBeInTheDocument();
   });
 
   it("fires onQuickPrompt with the map-reading prompt when the 读图 chip is clicked", () => {
@@ -380,7 +372,7 @@ describe("CopilotWidget", () => {
   it("renders the teaching agent without a mode switch or coding copy", () => {
     renderWidget();
 
-    expect(screen.getByText("专业教学智能体")).toBeInTheDocument();
+    expect(screen.getByText(/专业教学智能体/)).toBeInTheDocument();
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
     expect(screen.queryByText("知识助手")).not.toBeInTheDocument();
     expect(screen.queryByText("Agent 助手")).not.toBeInTheDocument();

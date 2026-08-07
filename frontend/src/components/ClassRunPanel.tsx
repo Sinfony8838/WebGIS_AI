@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
+import { createPortal } from "react-dom";
 import type { ClassSessionRecord, LessonQuestion, LessonRecord, LessonStage, ObservationVerdict } from "../types";
 
 type Props = {
@@ -19,8 +21,8 @@ type Props = {
   visibleCatalogLayerIds?: string[];
   onFocusEvidenceLayer?: (datasetId: string, stageDatasetIds: string[]) => void;
   onRequestPlaneView?: () => void;
-  /** 把备课时预设的追问一键派发给教学智能体（不传则退化为纯展示）。 */
-  onAssistantPrompt?: (prompt: string) => void;
+  /** 以隐藏的内部提示驱动 GeoBot，课堂对话只显示简短的头脑风暴标题。 */
+  onAssistantPrompt?: (prompt: string, displayMessage?: string) => void;
 };
 
 function formatElapsed(seconds: number): string {
@@ -37,6 +39,118 @@ const EVIDENCE_LAYER_LABELS: Record<string, string> = {
   china_vegetation_zones: "④ 植被验证",
   china_province_gdp_per_capita: "⑤ 经济"
 };
+
+type KnowledgePosition = { x: number; y: number };
+
+function defaultKnowledgePosition(): KnowledgePosition {
+  if (typeof window === "undefined") {
+    return { x: 28, y: 92 };
+  }
+  return { x: Math.max(20, Math.min(72, window.innerWidth * 0.035)), y: Math.max(72, window.innerHeight * 0.1) };
+}
+
+function BasicKnowledgeOverlay({
+  title,
+  points,
+  position,
+  onPositionChange,
+  onClose
+}: {
+  title: string;
+  points: string[];
+  position: KnowledgePosition;
+  onPositionChange: (next: KnowledgePosition) => void;
+  onClose: () => void;
+}) {
+  const overlayRef = useRef<HTMLElement | null>(null);
+  const dragRef = useRef<{ pointerId: number; startX: number; startY: number; origin: KnowledgePosition } | null>(null);
+
+  function clampPosition(next: KnowledgePosition): KnowledgePosition {
+    const rect = overlayRef.current?.getBoundingClientRect();
+    const width = rect?.width || Math.min(880, Math.max(420, window.innerWidth * 0.56));
+    const height = rect?.height || Math.min(680, window.innerHeight * 0.7);
+    return {
+      x: Math.max(12, Math.min(Math.max(12, window.innerWidth - width - 12), next.x)),
+      y: Math.max(12, Math.min(Math.max(12, window.innerHeight - height - 12), next.y))
+    };
+  }
+
+  useEffect(() => {
+    const keepInViewport = () => {
+      const clamped = clampPosition(position);
+      if (clamped.x !== position.x || clamped.y !== position.y) {
+        onPositionChange(clamped);
+      }
+    };
+    keepInViewport();
+    window.addEventListener("resize", keepInViewport);
+    return () => window.removeEventListener("resize", keepInViewport);
+  }, [position.x, position.y]);
+
+  function startDrag(event: ReactPointerEvent<HTMLElement>) {
+    const clientX = Number.isFinite(event.clientX) ? event.clientX : 0;
+    const clientY = Number.isFinite(event.clientY) ? event.clientY : 0;
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: clientX,
+      startY: clientY,
+      origin: position
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
+  function moveDrag(event: ReactPointerEvent<HTMLElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    const clientX = Number.isFinite(event.clientX) ? event.clientX : drag.startX;
+    const clientY = Number.isFinite(event.clientY) ? event.clientY : drag.startY;
+    onPositionChange(clampPosition({
+      x: drag.origin.x + clientX - drag.startX,
+      y: drag.origin.y + clientY - drag.startY
+    }));
+  }
+
+  function endDrag(event: ReactPointerEvent<HTMLElement>) {
+    if (dragRef.current?.pointerId === event.pointerId) {
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+      dragRef.current = null;
+    }
+  }
+
+  return createPortal(
+    <section
+      ref={overlayRef}
+      className="basic-knowledge-overlay glass-panel"
+      style={{ left: position.x, top: position.y }}
+      role="dialog"
+      aria-label={`${title}基础知识讲解`}
+      data-testid="basic-knowledge-overlay"
+    >
+      <header
+        className="basic-knowledge-overlay-header"
+        onPointerDown={startDrag}
+        onPointerMove={moveDrag}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+      >
+        <div>
+          <span>基础知识讲解</span>
+          <strong>{title}</strong>
+        </div>
+        <span className="basic-knowledge-drag-hint">拖动调整位置</span>
+        <button type="button" className="mini-control" onPointerDown={(event) => event.stopPropagation()} onClick={onClose} aria-label="关闭基础知识讲解">
+          ×
+        </button>
+      </header>
+      <ol className="basic-knowledge-points">
+        {points.map((point, index) => <li key={`${index}_${point}`}>{point}</li>)}
+      </ol>
+    </section>,
+    document.body
+  );
+}
 
 export function ClassRunPanel({
   lesson,
@@ -65,8 +179,11 @@ export function ClassRunPanel({
   const [savedFlash, setSavedFlash] = useState(false);
   const [expandedQuestionId, setExpandedQuestionId] = useState("");
   const [oralQuestionId, setOralQuestionId] = useState("");
-  const [revealedOralQuestionId, setRevealedOralQuestionId] = useState("");
-  const [scriptOpen, setScriptOpen] = useState(false);
+  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
+  const [knowledgePosition, setKnowledgePosition] = useState<KnowledgePosition>(defaultKnowledgePosition);
+  const [brainstormRegion, setBrainstormRegion] = useState("");
+  const [brainstormSpinning, setBrainstormSpinning] = useState(false);
+  const brainstormTimerRef = useRef<number | null>(null);
   const [adhocText, setAdhocText] = useState("");
   const [adhocOptions, setAdhocOptions] = useState("");
 
@@ -77,10 +194,24 @@ export function ClassRunPanel({
 
   // 切换环节后回到默认展示状态
   useEffect(() => {
+    return () => {
+      if (brainstormTimerRef.current !== null) {
+        window.clearInterval(brainstormTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     setExpandedQuestionId("");
     setOralQuestionId("");
-    setRevealedOralQuestionId("");
-    setScriptOpen(true);
+    setKnowledgeOpen(false);
+    setKnowledgePosition(defaultKnowledgePosition());
+    setBrainstormRegion("");
+    setBrainstormSpinning(false);
+    if (brainstormTimerRef.current !== null) {
+      window.clearInterval(brainstormTimerRef.current);
+      brainstormTimerRef.current = null;
+    }
     resetRecord();
   }, [currentStageId]);
 
@@ -94,14 +225,6 @@ export function ClassRunPanel({
   const plannedSeconds = (currentStage?.minutes || 0) * 60;
   const overtime = plannedSeconds > 0 && elapsedSeconds > plannedSeconds;
   const stageProgress = plannedSeconds > 0 ? Math.min(1, elapsedSeconds / plannedSeconds) : 0;
-
-  const misconceptionTags = useMemo(() => {
-    const tags = new Set<string>();
-    currentStage?.questions.forEach((question) =>
-      question.misconceptions.forEach((item) => item.tag && tags.add(item.tag))
-    );
-    return Array.from(tags);
-  }, [currentStage]);
 
   function submitObservation(verdict: ObservationVerdict) {
     if (verdict !== "misconception") {
@@ -120,11 +243,6 @@ export function ClassRunPanel({
     flashSaved();
   }
 
-  function recordQuestionMisconception(question: LessonQuestion, tag: string) {
-    onObservation("misconception", tag, "", question.question_id);
-    flashSaved();
-  }
-
   function resetRecord() {
     setRecordVerdict(null);
     setRecordTag("");
@@ -140,14 +258,50 @@ export function ClassRunPanel({
   function toggleOral(questionId: string) {
     if (oralQuestionId === questionId) {
       setOralQuestionId("");
-      setRevealedOralQuestionId("");
       setRecordQuestionId("");
       return;
     }
     // 展开朗读提问卡，同时为学情速记预置该题，便于记录学生表现。
     setOralQuestionId(questionId);
-    setRevealedOralQuestionId("");
     setRecordQuestionId(questionId);
+  }
+
+  function runBrainstorm() {
+    const brainstorm = currentStage?.brainstorm;
+    if (!brainstorm || !onAssistantPrompt || brainstormSpinning || busy) {
+      return;
+    }
+    setBrainstormSpinning(true);
+    let tick = 0;
+    brainstormTimerRef.current = window.setInterval(() => {
+      const preview = brainstorm.regions[tick % brainstorm.regions.length];
+      setBrainstormRegion(preview);
+      tick += 1;
+      if (tick < 15) {
+        return;
+      }
+      if (brainstormTimerRef.current !== null) {
+        window.clearInterval(brainstormTimerRef.current);
+        brainstormTimerRef.current = null;
+      }
+      const selected = brainstorm.regions[Math.floor(Math.random() * brainstorm.regions.length)] || preview;
+      setBrainstormRegion(selected);
+      setBrainstormSpinning(false);
+      const prompt = [
+        `GeoBot 头脑风暴：围绕“${currentStage.title}”开展随机地区探究。`,
+        `随机抽中的地区是：${selected}。`,
+        `本环节可用地图资料：${[
+          ...(currentStage.scene.templates || []),
+          ...(currentStage.scene.catalog_layers || [])
+        ].join("、") || "当前人口专题地图"}。`,
+        brainstorm.prompt,
+        "请提出一个教师难以提前穷举、但可以用高中地理知识回答的探究问题，并直接作答。",
+        "问题必须体现区域差异、条件变化、尺度转换或反直觉比较中的至少一种；资料不足时明确说明限制，不得编造数据。",
+        "只输出“头脑风暴问题”“回答”“回答总结”三部分；回答总结必须是一句话。",
+        "不要输出地图中心坐标、缩放级别、可见范围、证据或观察点、给学生的问题、教师收束语。"
+      ].join("\n");
+      onAssistantPrompt(prompt, `GeoBot 头脑风暴 · ${selected}`);
+    }, 70);
   }
 
   function presentQuestion(question: LessonQuestion) {
@@ -256,50 +410,15 @@ export function ClassRunPanel({
 
       <div className="class-panel-current">
         {currentStage?.script.length ? (
-          <div className="class-panel-script">
-            <button type="button" className="class-panel-section-toggle" onClick={() => setScriptOpen((value) => !value)}>
-              讲稿提示 {scriptOpen ? "▾" : "▸"}
-            </button>
-            {scriptOpen ? (
-              <ul>
-                {currentStage.script.map((line, index) => (
-                  <li key={index}>{line}</li>
-                ))}
-              </ul>
-            ) : null}
-          </div>
-        ) : null}
-
-        {currentStage?.teacher_guidance ? (
-          <div className="class-stage-guidance" data-testid="stage-teacher-guidance">
-            <div className="class-stage-guidance-head">
-              <span className="question-detail-label">教师环节卡</span>
-              <strong>{currentStage.teacher_guidance.observation_prompt || "先观察地图，再用证据回答。"}</strong>
+          <div className="basic-knowledge-launcher" data-testid="basic-knowledge-launcher">
+            <div>
+              <span className="question-detail-label">基础知识讲解</span>
+              <strong>课本知识 × 当前真实地图</strong>
+              <small>点击后放大投屏，可拖动且不会锁住地图。</small>
             </div>
-            {currentStage.teacher_guidance.evidence_points?.length ? (
-              <div className="class-stage-evidence-points">
-                {currentStage.teacher_guidance.evidence_points.map((point) => (
-                  <span key={point}>{point}</span>
-                ))}
-              </div>
-            ) : null}
-            <dl className="class-stage-guidance-grid">
-              {currentStage.teacher_guidance.oral_question ? (
-                <><dt>口头问题</dt><dd>{currentStage.teacher_guidance.oral_question}</dd></>
-              ) : null}
-              {currentStage.teacher_guidance.expected_response ? (
-                <><dt>预期回答</dt><dd>{currentStage.teacher_guidance.expected_response}</dd></>
-              ) : null}
-              {currentStage.teacher_guidance.misconception_cue ? (
-                <><dt>误区提醒</dt><dd>{currentStage.teacher_guidance.misconception_cue}</dd></>
-              ) : null}
-              {currentStage.teacher_guidance.closing ? (
-                <><dt>教师收束</dt><dd>{currentStage.teacher_guidance.closing}</dd></>
-              ) : null}
-              {currentStage.teacher_guidance.fallback ? (
-                <><dt>备用方案</dt><dd>{currentStage.teacher_guidance.fallback}</dd></>
-              ) : null}
-            </dl>
+            <button type="button" className="toolbar-button compact primary" onClick={() => setKnowledgeOpen(true)}>
+              放大展示
+            </button>
           </div>
         ) : null}
 
@@ -329,27 +448,6 @@ export function ClassRunPanel({
                   data-testid={`evidence-layer-${datasetId}`}
                 >
                   {EVIDENCE_LAYER_LABELS[datasetId] || datasetId}
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        {currentStage?.assistant_prompts.length && onAssistantPrompt ? (
-          <div className="class-panel-assistant-prompts" data-testid="stage-assistant-prompts">
-            <span className="question-detail-label">AI 追问</span>
-            <div className="assistant-prompt-chips">
-              {currentStage.assistant_prompts.map((prompt, index) => (
-                <button
-                  key={index}
-                  type="button"
-                  className="assistant-prompt-chip"
-                  disabled={busy}
-                  onClick={() => onAssistantPrompt(prompt)}
-                  data-testid={`stage-assistant-prompt-${index}`}
-                  title={prompt}
-                >
-                  ✦ {prompt}
                 </button>
               ))}
             </div>
@@ -398,82 +496,6 @@ export function ClassRunPanel({
                           ))}
                         </ol>
                       ) : null}
-                      {revealedOralQuestionId !== question.question_id ? (
-                        <button
-                          type="button"
-                          className="toolbar-button compact class-reveal-answer"
-                          onClick={() => setRevealedOralQuestionId(question.question_id)}
-                          data-testid={`oral-reveal-${question.question_id}`}
-                        >
-                          显示答案与教师收束
-                        </button>
-                      ) : null}
-                      {revealedOralQuestionId === question.question_id && question.options.length && question.answer_index !== null ? (
-                        <p className="class-oral-answer" data-testid={`oral-answer-${question.question_id}`}>
-                          参考答案：{OPTION_LABELS[question.answer_index] || question.answer_index + 1}. {question.options[question.answer_index]}
-                        </p>
-                      ) : null}
-                      {revealedOralQuestionId === question.question_id && question.expected_points.length ? (
-                        <div className="question-points">
-                          <span className="question-detail-label">答案要点</span>
-                          {question.expected_points.map((point) => (
-                            <span key={point} className="point-chip">{point}</span>
-                          ))}
-                        </div>
-                      ) : null}
-                      {revealedOralQuestionId === question.question_id && question.argument_chain?.length ? (
-                        <div className="question-argument-chain">
-                          <span className="question-detail-label">标准论证链</span>
-                          <ol>
-                            {question.argument_chain.map((step) => <li key={step}>{step}</li>)}
-                          </ol>
-                        </div>
-                      ) : null}
-                      {revealedOralQuestionId === question.question_id && question.evidence_refs?.length ? (
-                        <div className="question-evidence-refs">
-                          <span className="question-detail-label">证据来源</span>
-                          {question.evidence_refs.map((evidence) => (
-                            <span key={evidence.source_id} className="evidence-chip">
-                              {evidence.title || evidence.source_id}{evidence.source_year ? ` · ${evidence.source_year}` : ""}
-                            </span>
-                          ))}
-                        </div>
-                      ) : null}
-                      {revealedOralQuestionId === question.question_id && question.misconceptions.length ? (
-                        <div className="question-misconceptions">
-                          <span className="question-detail-label">易错提醒</span>
-                          {question.misconceptions.map((item) => (
-                            <span key={item.tag} className="tag-chip">{item.tag}</span>
-                          ))}
-                        </div>
-                      ) : null}
-                      {revealedOralQuestionId === question.question_id && question.remediation_task ? (
-                        <p className="question-remediation"><strong>课后补救：</strong>{question.remediation_task}</p>
-                      ) : null}
-                      {currentStage?.assistant_prompts.length ? (
-                        <div className="class-oral-prompt-leads">
-                          {currentStage.assistant_prompts.map((prompt, index) =>
-                            onAssistantPrompt ? (
-                              <button
-                                key={index}
-                                type="button"
-                                className="class-oral-prompt-lead-button"
-                                disabled={busy}
-                                onClick={() => onAssistantPrompt(prompt)}
-                                data-testid={`oral-assistant-prompt-${index}`}
-                                title="一键把这条追问交给教学智能体展开"
-                              >
-                                <span className="assistant-prompt-icon">✦</span>
-                                {prompt}
-                              </button>
-                            ) : (
-                              <p key={index} className="class-oral-prompt-lead">
-                                {prompt}
-                              </p>
-                            )
-                          )}
-                        </div>
-                      ) : null}
                       <p className="class-oral-prompt-note">学情速记已就绪，下方可记录学生表现。</p>
                     </div>
                   ) : null}
@@ -483,39 +505,12 @@ export function ClassRunPanel({
                       {question.options.length ? (
                         <ul className="question-options">
                           {question.options.map((option, index) => (
-                            <li key={index} className={question.answer_index === index ? "answer" : ""}>
+                            <li key={index}>
                               <span className="option-label">{OPTION_LABELS[index] || index + 1}</span>
                               <span>{option}</span>
-                              {question.answer_index === index ? <em>✓ 正确</em> : null}
                             </li>
                           ))}
                         </ul>
-                      ) : null}
-                      {question.expected_points.length ? (
-                        <div className="question-points">
-                          <span className="question-detail-label">要点</span>
-                          {question.expected_points.map((point) => (
-                            <span key={point} className="point-chip">
-                              {point}
-                            </span>
-                          ))}
-                        </div>
-                      ) : null}
-                      {question.misconceptions.length ? (
-                        <div className="question-misconceptions">
-                          <span className="question-detail-label">易错</span>
-                          {question.misconceptions.map((item) => (
-                            <button
-                              key={item.tag}
-                              type="button"
-                              className="tag-chip"
-                              title={`${item.description || item.tag}（点击记一次误区）`}
-                              onClick={() => recordQuestionMisconception(question, item.tag)}
-                            >
-                              {item.tag}
-                            </button>
-                          ))}
-                        </div>
                       ) : null}
                     </div>
                   ) : null}
@@ -567,6 +562,31 @@ export function ClassRunPanel({
             </button>
           </div>
         </div>
+
+        {currentStage?.brainstorm && onAssistantPrompt ? (
+          <div className="class-brainstorm-card" data-testid="stage-brainstorm">
+            <div className="class-brainstorm-identity">
+              <span className="class-brainstorm-mark" aria-hidden="true">✦</span>
+              <div>
+                <span>GeoBot AI</span>
+                <strong>{currentStage.brainstorm.title || "头脑风暴"}</strong>
+              </div>
+            </div>
+            <p>随机抽取一个地区，把本节知识迁移到教师难以逐一预设的真实区域情境。</p>
+            <div className={`brainstorm-region-wheel ${brainstormSpinning ? "spinning" : ""}`} aria-live="polite">
+              <span>{brainstormRegion || "等待抽取地区"}</span>
+            </div>
+            <button
+              type="button"
+              className="toolbar-button compact primary class-brainstorm-run"
+              disabled={busy || brainstormSpinning}
+              onClick={runBrainstorm}
+              data-testid="run-brainstorm"
+            >
+              {brainstormSpinning ? "GeoBot 正在转动…" : currentStage.brainstorm.button_label || "转动并生成探究"}
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <footer className="class-panel-footer">
@@ -590,19 +610,9 @@ export function ClassRunPanel({
         {recordVerdict === "misconception" ? (
           <div className="misconception-picker" data-testid="misconception-picker">
             <div className="misconception-tags">
-              {misconceptionTags.map((tag) => (
-                <button
-                  key={tag}
-                  type="button"
-                  className={`tag-chip ${recordTag === tag ? "active" : ""}`}
-                  onClick={() => setRecordTag(tag)}
-                >
-                  {tag}
-                </button>
-              ))}
               <input
                 value={recordTag}
-                placeholder="自定义误区标签"
+                placeholder="教师现场输入误区标签"
                 onChange={(event) => setRecordTag(event.target.value)}
               />
             </div>
@@ -631,6 +641,15 @@ export function ClassRunPanel({
           </button>
         </div>
       </footer>
+      {knowledgeOpen && currentStage?.script.length ? (
+        <BasicKnowledgeOverlay
+          title={currentStage.title}
+          points={currentStage.script}
+          position={knowledgePosition}
+          onPositionChange={setKnowledgePosition}
+          onClose={() => setKnowledgeOpen(false)}
+        />
+      ) : null}
     </section>
   );
 }

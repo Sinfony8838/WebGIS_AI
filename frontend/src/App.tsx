@@ -360,6 +360,19 @@ function layerStyle(record: LayerRecord) {
     const radius = Number(record.style.radius || feature.get("__radius") || 7);
     const labelField = String(record.style.labelField || "name");
     const labelValue = String(feature.get(labelField) || feature.get("name") || "");
+    const catalogId = String(record.metadata?.catalog_id || "");
+    const coverage = String(record.metadata?.coverage || "").toLowerCase();
+    const templateId = String(record.metadata?.template_id || "");
+    const provinceLevelLayer = (
+      coverage.includes("china province-level") ||
+      [
+        "china_provinces",
+        "china_province_population_density",
+        "china_aging_rate_province",
+        "china_province_gdp_per_capita"
+      ].includes(catalogId) ||
+      ["population_distribution", "population_density", "hu_line_comparison"].includes(templateId)
+    );
 
     return new Style({
       fill: geometryType.includes("Polygon") ? new Fill({ color: withOpacity(fillColor, fillOpacity) }) : undefined,
@@ -375,7 +388,7 @@ function layerStyle(record: LayerRecord) {
             stroke: new Stroke({ color: strokeColor, width: 1.2 })
           })
         : undefined,
-      text: labelValue
+      text: labelValue && !provinceLevelLayer
         ? new Text({
             text: labelValue,
             font: "600 11px 'Microsoft YaHei UI', 'Segoe UI', sans-serif",
@@ -417,12 +430,17 @@ export default function App({
   const interactionModeRef = useRef<InteractionMode>("browse");
   const lastAppliedViewRef = useRef("");
   const lastPoiSignatureRef = useRef("");
-  const assistantDispatchRef = useRef<(message: string, overrides?: Partial<MapContext>) => void>(() => undefined);
+  const assistantDispatchRef = useRef<(
+    message: string,
+    overrides?: Partial<MapContext>,
+    displayMessage?: string
+  ) => void>(() => undefined);
   // 课堂工作流（课前/课中/课后）当前所处的 lesson/session/stage/phase，随每次
   // 助教请求发给后端，让智能体知道自己正在服务哪节课的哪个环节。
   const teachingContextRef = useRef<TeachingContext | null>(null);
   // 同步一份 phase 到 state：助教面板头部的阶段徽标与能力芯片排序需要触发渲染。
   const [teachingPhase, setTeachingPhase] = useState<TeachingContext["phase"]>("");
+  const [copilotOpenSignal, setCopilotOpenSignal] = useState(0);
   const activeJobStreamsRef = useRef(0);
   const jobStreamsRef = useRef<Set<EventSource>>(new Set());
 
@@ -818,7 +836,9 @@ export default function App({
       const firstFeature = features[0];
       highlightSourceRef.current?.clear();
       if (firstFeature) {
-        highlightSourceRef.current?.addFeature(firstFeature.clone());
+        const highlighted = firstFeature.clone();
+        highlighted.set("__selectedLabel", regionLabel(firstFeature.getProperties()), true);
+        highlightSourceRef.current?.addFeature(highlighted);
       }
       map.getView().fit(extent, { duration: 620, padding: [90, 360, 90, 360], maxZoom: 8 });
       const properties = { ...firstFeature.getProperties() } as Record<string, unknown>;
@@ -1127,12 +1147,13 @@ export default function App({
       overrides?: Partial<MapContext>,
       target: AssistantTarget = "webgis",
       inputMode: AssistantInputMode = "text",
-      screenSnapshot?: ScreenSnapshot
+      screenSnapshot?: ScreenSnapshot,
+      displayMessage?: string
     ) => {
       if (!project) {
         return;
       }
-      appendChat("user", message);
+      appendChat("user", displayMessage || message);
       let effectiveSnapshot = screenSnapshot;
       if (!effectiveSnapshot && mapRef.current && shouldAttachMapSnapshot(message)) {
         const size = mapRef.current.getSize() || [0, 0];
@@ -1161,8 +1182,9 @@ export default function App({
     [appendChat, buildMapContext, chatLog, conversationId, health?.ui.assistant_v2_enabled, project, subscribeToJob]
   );
 
-  assistantDispatchRef.current = (message, overrides) => {
-    void submitAssistantText(message, overrides);
+  assistantDispatchRef.current = (message, overrides, displayMessage) => {
+    setCopilotOpenSignal((value) => value + 1);
+    void submitAssistantText(message, overrides, "webgis", "text", undefined, displayMessage);
   };
 
   const handleTemplateRun = useCallback(
@@ -1905,6 +1927,7 @@ export default function App({
       zIndex: 170,
       style: (feature) => {
         const geometryType = feature.getGeometry()?.getType() || "";
+        const selectedLabel = String(feature.get("__selectedLabel") || feature.get("name") || "");
         return new Style({
           fill: geometryType.includes("Polygon") ? new Fill({ color: "rgba(56, 189, 248, 0.2)" }) : undefined,
           stroke: new Stroke({ color: "#67e8f9", width: 3.2 }),
@@ -1913,6 +1936,17 @@ export default function App({
                 radius: 10,
                 fill: new Fill({ color: "rgba(56, 189, 248, 0.45)" }),
                 stroke: new Stroke({ color: "#ecfeff", width: 2.2 })
+              })
+            : undefined,
+          text: selectedLabel
+            ? new Text({
+                text: selectedLabel,
+                font: "700 15px 'Microsoft YaHei UI', 'Segoe UI', sans-serif",
+                fill: new Fill({ color: "#ffffff" }),
+                backgroundFill: new Fill({ color: "rgba(7, 28, 48, 0.88)" }),
+                backgroundStroke: new Stroke({ color: "rgba(103, 232, 249, 0.72)", width: 1.2 }),
+                padding: [5, 8, 5, 8],
+                overflow: true
               })
             : undefined
         });
@@ -2120,6 +2154,7 @@ export default function App({
           const highlighted = feature.clone ? feature.clone() : undefined;
           if (highlighted?.setGeometry) {
             highlighted.setGeometry(cloned);
+            highlighted.set("__selectedLabel", regionLabel(properties), true);
             highlightSource.addFeature(highlighted);
           }
           const extent = cloned.getExtent();
@@ -3138,6 +3173,7 @@ export default function App({
           }}
           busy={busy}
           teachingPhase={teachingPhase}
+          openSignal={copilotOpenSignal}
         />
       ) : null}
 
@@ -3151,7 +3187,7 @@ export default function App({
             teachingContextRef.current = ctx;
             setTeachingPhase(ctx?.phase || "");
           }}
-          onAssistantPrompt={(prompt) => assistantDispatchRef.current(prompt)}
+          onAssistantPrompt={(prompt, displayMessage) => assistantDispatchRef.current(prompt, undefined, displayMessage)}
           onApplyGlobeScene={handleApplyLessonGlobeScene}
           getGlobeSceneSnapshot={getLessonGlobeSceneSnapshot}
           onFocusEvidenceLayer={(datasetId, stageDatasetIds) => {

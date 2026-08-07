@@ -789,6 +789,102 @@
   padding-left: 8px;
 }
 
+.basic-knowledge-launcher {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(88, 199, 255, 0.3);
+  border-radius: 11px;
+  background: linear-gradient(145deg, rgba(27, 93, 130, 0.2), rgba(11, 32, 53, 0.36));
+}
+
+.basic-knowledge-launcher > div {
+  display: grid;
+  gap: 2px;
+}
+
+.basic-knowledge-launcher strong {
+  color: #e8f7ff;
+  font-size: 12px;
+}
+
+.basic-knowledge-launcher small {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.basic-knowledge-overlay {
+  position: fixed;
+  z-index: 720;
+  width: 56vw;
+  min-width: 680px;
+  max-width: 880px;
+  max-height: min(70vh, 680px);
+  overflow: hidden;
+  border: 1px solid rgba(111, 214, 255, 0.62);
+  border-radius: 18px;
+  background: rgba(9, 29, 49, 0.93);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48), 0 0 38px rgba(52, 185, 235, 0.14);
+  backdrop-filter: blur(16px);
+}
+
+.basic-knowledge-overlay-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(111, 214, 255, 0.2);
+  background: rgba(18, 72, 103, 0.34);
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+
+.basic-knowledge-overlay-header > div {
+  display: grid;
+  gap: 2px;
+}
+
+.basic-knowledge-overlay-header span:first-child {
+  color: #70d6ff;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.basic-knowledge-overlay-header strong {
+  color: #f4fbff;
+  font-size: clamp(18px, 1.7vw, 25px);
+}
+
+.basic-knowledge-drag-hint {
+  color: #91aabd !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0 !important;
+}
+
+.basic-knowledge-points {
+  display: grid;
+  gap: 16px;
+  max-height: calc(min(70vh, 680px) - 74px);
+  margin: 0;
+  padding: 24px 30px 28px 58px;
+  overflow: auto;
+  color: #f5f9fc;
+  font-size: clamp(19px, 1.65vw, 27px);
+  font-weight: 600;
+  line-height: 1.65;
+}
+
+.basic-knowledge-points li::marker {
+  color: #63d1ff;
+  font-weight: 800;
+}
+
 .class-stage-guidance {
   display: flex;
   flex-direction: column;
@@ -916,6 +1012,123 @@
 .evidence-layer-step:disabled {
   cursor: wait;
   opacity: 0.55;
+}
+
+.class-brainstorm-card {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid rgba(151, 126, 255, 0.38);
+  border-radius: 13px;
+  background: radial-gradient(circle at 92% 0%, rgba(133, 104, 255, 0.2), transparent 44%), rgba(22, 22, 55, 0.46);
+}
+
+.class-brainstorm-identity {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.class-brainstorm-mark {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(151, 126, 255, 0.65);
+  border-radius: 50%;
+  background: rgba(115, 88, 230, 0.26);
+  color: #dacfff;
+  font-size: 18px;
+  box-shadow: 0 0 18px rgba(133, 104, 255, 0.25);
+}
+
+.class-brainstorm-identity > div {
+  display: grid;
+  gap: 1px;
+}
+
+.class-brainstorm-identity span {
+  color: #ac9cff;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.class-brainstorm-identity strong {
+  color: #f0ecff;
+  font-size: 13px;
+}
+
+.class-brainstorm-card > p {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.brainstorm-region-wheel {
+  position: relative;
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid rgba(151, 126, 255, 0.36);
+  border-radius: 10px;
+  background: linear-gradient(90deg, rgba(48, 35, 92, 0.5), rgba(88, 61, 145, 0.62), rgba(48, 35, 92, 0.5));
+  color: #f6f2ff;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.brainstorm-region-wheel::before,
+.brainstorm-region-wheel::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 34px;
+  content: "";
+  pointer-events: none;
+}
+
+.brainstorm-region-wheel::before {
+  left: 0;
+  background: linear-gradient(90deg, rgba(11, 19, 41, 0.9), transparent);
+}
+
+.brainstorm-region-wheel::after {
+  right: 0;
+  background: linear-gradient(-90deg, rgba(11, 19, 41, 0.9), transparent);
+}
+
+.brainstorm-region-wheel.spinning span {
+  animation: brainstorm-wheel-pulse 0.14s ease-in-out infinite alternate;
+}
+
+@keyframes brainstorm-wheel-pulse {
+  from { transform: translateY(-3px); opacity: 0.68; }
+  to { transform: translateY(3px); opacity: 1; }
+}
+
+.class-brainstorm-run {
+  justify-self: stretch;
+}
+
+@media (max-width: 760px) {
+  .basic-knowledge-overlay {
+    width: calc(100vw - 24px);
+    min-width: 0;
+  }
+
+  .basic-knowledge-drag-hint {
+    display: none;
+  }
+
+  .basic-knowledge-points {
+    padding: 20px 22px 24px 46px;
+    font-size: 19px;
+  }
 }
 
 .class-panel-questions {
@@ -1212,7 +1425,7 @@
   color: #f0bb78;
 }
 
-/* 环节级“AI 追问”入口：备课预设的 assistant_prompts 一键派发 */
+/* 兼容旧课时中备课预设的 assistant_prompts；人口示范课改用环节末头脑风暴。 */
 .class-panel-assistant-prompts {
   display: flex;
   flex-direction: column;

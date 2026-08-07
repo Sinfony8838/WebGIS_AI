@@ -318,9 +318,7 @@ export type KnowledgeAnswer = {
 };
 
 export type TeachingContract = {
-  evidence: string;
-  question: string;
-  closing: string;
+  summary: string;
 };
 
 export type AssistantMode = "teaching" | "knowledge" | "tool";
@@ -624,6 +622,13 @@ export type LessonTeacherGuidance = {
   fallback?: string;
 };
 
+export type LessonBrainstorm = {
+  title: string;
+  prompt: string;
+  regions: string[];
+  button_label: string;
+};
+
 export type LessonQuestion = {
   question_id: string;
   type: "choice" | "open";
@@ -657,6 +662,7 @@ export type LessonStage = {
   script: string[];
   questions: LessonQuestion[];
   assistant_prompts: string[];
+  brainstorm?: LessonBrainstorm;
   evidence_refs?: LessonEvidenceRef[];
   teacher_guidance?: LessonTeacherGuidance;
 };

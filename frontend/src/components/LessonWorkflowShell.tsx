@@ -55,7 +55,7 @@ type Props = {
   /** 课堂工作流状态（lesson/session/stage/phase）变化时上报给 App，随助教请求发往后端。 */
   onTeachingContextChange?: (ctx: TeachingContext | null) => void;
   /** 课中一键把预设追问派发给教学智能体。 */
-  onAssistantPrompt?: (prompt: string) => void;
+  onAssistantPrompt?: (prompt: string, displayMessage?: string) => void;
   /** 应用课时场景返回的 3D 意图；空对象表示离开课时固定场景并恢复进入前状态。 */
   onApplyGlobeScene?: (globe: LessonGlobeScene) => void;
   /** 捕获当前课堂场景时同时读取 3D 模式、主题和相机。 */

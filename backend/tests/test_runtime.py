@@ -196,6 +196,35 @@ class WebGISRuntimeTest(unittest.TestCase):
         )
         self.assertEqual(taiwan["properties"]["population"], 23561236)
 
+    def test_missing_taiwan_metrics_use_neutral_no_data_style(self) -> None:
+        runtime, _store, project_id = self.build_runtime()
+
+        for dataset_id, field in (
+            ("china_aging_rate_province", "aging_rate"),
+            ("china_province_gdp_per_capita", "gdp_per_capita_2020"),
+        ):
+            layer = runtime.add_catalog_dataset_layer(project_id, dataset_id)["layer"]
+            taiwan = next(
+                feature
+                for feature in layer["data"]["features"]
+                if feature.get("properties", {}).get("name") == "台湾省"
+            )
+            self.assertIsNone(taiwan["properties"][field])
+            self.assertEqual(taiwan["properties"]["__fillColor"], "#94a3b8")
+            self.assertEqual(taiwan["properties"].get("data_status"), "同口径数据暂缺")
+
+    def test_world_population_labels_taiwan_as_china_province(self) -> None:
+        runtime, _store, project_id = self.build_runtime()
+
+        layer = runtime.add_catalog_dataset_layer(project_id, "world_population_by_country")["layer"]
+        taiwan = next(
+            feature
+            for feature in layer["data"]["features"]
+            if feature.get("properties", {}).get("region_code") == "TWN"
+        )
+        self.assertEqual(taiwan["properties"]["name"], "中国台湾省")
+        self.assertEqual(taiwan["properties"]["name_en"], "Taiwan, China")
+
     def test_add_catalog_dataset_layer_materializes_joined_csv_layer(self) -> None:
         runtime, store, project_id = self.build_runtime()
 
