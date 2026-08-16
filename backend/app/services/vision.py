@@ -122,7 +122,12 @@ class MapVisionService:
             }
 
         prompt = self._build_image_prompt(question, supplemental_context)
-        return self._understand_via_mcp(path, prompt, allow_structured_fallback=False)
+        return self._understand_via_mcp(
+            path,
+            prompt,
+            allow_structured_fallback=False,
+            include_coordinates=self._asks_for_coordinates(question),
+        )
 
     # ------------------------------------------------------------------
     # Provider backends
@@ -133,6 +138,7 @@ class MapVisionService:
         snapshot_path: Path,
         prompt: str,
         allow_structured_fallback: bool = True,
+        include_coordinates: bool = False,
     ) -> Dict[str, Any]:
         try:
             result = self.mcp_client.understand_image(prompt=prompt, image_url=str(snapshot_path))
@@ -150,7 +156,10 @@ class MapVisionService:
             "used_vision": True,
             "snapshot_path": str(snapshot_path),
             "provider": "minimax_mcp",
-            "summary": self._sanitize_vision_summary(str(result.get("text") or "")),
+            "summary": self._sanitize_vision_summary(
+                str(result.get("text") or ""),
+                include_coordinates=include_coordinates,
+            ),
             "raw": result.get("raw", {}),
         }
 
@@ -164,7 +173,7 @@ class MapVisionService:
         return f"未配置受支持的视觉读图后端（vision_provider={provider}），已回退到结构化地图上下文读图。"
 
     @staticmethod
-    def _sanitize_vision_summary(text: str) -> str:
+    def _sanitize_vision_summary(text: str, include_coordinates: bool = False) -> str:
         """Keep useful visual evidence and discard transport/OCR noise.
 
         Some Windows releases of the upstream MCP package corrupt OCR-only
@@ -190,7 +199,20 @@ class MapVisionService:
                     skip_coordinate_section = False
                 else:
                     continue
-            if any(token in lowered for token in ("zoom level", "viewport coordinate", "latitude lines", "longitude lines")):
+            coordinate_line = any(
+                token in lowered
+                for token in (
+                    "zoom level",
+                    "viewport coordinate",
+                    "latitude lines",
+                    "longitude lines",
+                    "degrees north",
+                    "degrees south",
+                    "degrees east",
+                    "degrees west",
+                )
+            ) or bool(re.search(r"\b\d{1,3}(?:\.\d+)?\s*°\s*[NSEW]\b", line, re.IGNORECASE))
+            if not include_coordinates and coordinate_line:
                 continue
             if line.count("�") >= 2:
                 continue
@@ -213,11 +235,15 @@ class MapVisionService:
             ]
         )
 
-    def _build_image_prompt(self, question: str, supplemental_context: str = "") -> str:
-        asks_for_coordinates = any(
+    @staticmethod
+    def _asks_for_coordinates(question: str) -> bool:
+        return any(
             token in question.lower()
-            for token in ("经纬度", "坐标", "经线", "纬线", "比例尺", "尺度", "coordinate", "latitude", "longitude")
+            for token in ("经纬度", "经度", "纬度", "坐标", "经线", "纬线", "比例尺", "尺度", "coordinate", "latitude", "longitude")
         )
+
+    def _build_image_prompt(self, question: str, supplemental_context: str = "") -> str:
+        asks_for_coordinates = self._asks_for_coordinates(question)
         parts = [
             "Analyze this real image for a geography teacher. Inspect the image before answering.",
             "Return the visual analysis in clear English only; the application will produce the final Simplified Chinese response.",
@@ -230,6 +256,15 @@ class MapVisionService:
             ),
             f"User's original question: {question.strip() or 'Identify and analyze the geographic information in this image.'}",
         ]
+        if "人口" in question:
+            parts.extend(
+                [
+                    "This is a population-geography task. First identify whether the mapped variable is population total, population density, migration flow, or another indicator; never substitute one for another.",
+                    "Read the map title, printed data year, legend unit, and every visible class boundary exactly. Treat a printed year as the data time point and never describe it as current data unless the image explicitly says so.",
+                    "Do not derive population counts, percentages, rankings, or present-day claims from colors. Do not merge legend classes or change inequality signs and numeric ranges.",
+                    "Answer only the spatial pattern the user asked about. Do not add causes, extra regions, or unlabelled places unless the question explicitly asks for inference.",
+                ]
+            )
         if supplemental_context.strip():
             parts.append(f"Optional context for explanation only, never a substitute for image evidence: {supplemental_context.strip()}")
         return "\n".join(parts)

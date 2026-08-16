@@ -83,6 +83,62 @@ class VisualQueryServiceTest(unittest.TestCase):
         self.assertEqual(result["layer"]["kind"], "vector")
         self.assertEqual(result["layer"]["source"], "generated")
 
+    def test_population_result_keeps_2020_resident_population_scope(self) -> None:
+        service = self.build_service()
+        result = service.run(
+            "project-test",
+            {
+                "dataset": "prefecture_population",
+                "year": 2020,
+                "metric": "population",
+                "operation": "top",
+                "limit": 20,
+            },
+        )
+
+        self.assertIn("2020", result["title"])
+        self.assertIn("常住人口", result["title"])
+        self.assertIn("2020", result["summary"])
+        self.assertNotIn("当前", result["summary"])
+        self.assertNotIn("最新", result["summary"])
+        self.assertEqual(result["layer"]["metadata"]["year"], 2020)
+
+    def test_population_layer_contains_real_non_empty_geometry(self) -> None:
+        service = self.build_service()
+        result = service.run(
+            "project-test",
+            {
+                "dataset": "prefecture_population",
+                "year": 2020,
+                "metric": "population",
+                "operation": "top",
+                "limit": 20,
+            },
+        )
+
+        features = result["layer"]["data"]["features"]
+        self.assertTrue(all(feature["geometry"]["coordinates"] for feature in features))
+        extent = result["view"]["extent"]
+        self.assertGreaterEqual(extent[0], 70)
+        self.assertLessEqual(extent[2], 140)
+        self.assertGreaterEqual(extent[1], 15)
+        self.assertLessEqual(extent[3], 55)
+
+    def test_unavailable_population_year_is_rejected_instead_of_relabeling_2020(self) -> None:
+        service = self.build_service()
+
+        with self.assertRaisesRegex(VisualQueryError, "2024"):
+            service.run(
+                "project-test",
+                {
+                    "dataset": "prefecture_population",
+                    "year": 2024,
+                    "metric": "population",
+                    "operation": "top",
+                    "limit": 20,
+                },
+            )
+
     def test_unsupported_dataset_raises(self) -> None:
         service = self.build_service()
         with self.assertRaises(VisualQueryError):

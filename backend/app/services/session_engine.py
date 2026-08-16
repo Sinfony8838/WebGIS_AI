@@ -107,6 +107,21 @@ WEB_RETRIEVAL_HINTS = (
     "verify",
     "source",
 )
+IMAGE_WEB_RETRIEVAL_HINTS = (
+    "联网",
+    "在线搜索",
+    "联网核实",
+    "核实最新",
+    "查证最新",
+    "查询最新",
+    "查找最新",
+    "结合最新",
+    "补充最新",
+    "最新资料",
+    "今年数据",
+    "search online",
+    "verify latest",
+)
 IMAGE_FOLLOW_UP_HINTS = ("这张图", "这幅图", "刚才的图", "刚才的图片", "上一张图", "图里", "图中")
 MATCH_STOP_WORDS = {
     "什么",
@@ -506,10 +521,14 @@ class KnowledgeEngine:
         teaching_context = map_context.get("teaching_context") if isinstance(map_context.get("teaching_context"), dict) else {}
         teaching_phase = str((teaching_context or {}).get("phase") or "")
         web_context = ""
+        web_evidence_available = False
         # In-class requests skip online retrieval entirely: latency beats
         # coverage while the teacher is standing in front of the class.
         should_search_web = retrieval_mode in {"web", "local_web"}
-        explicit_web = _contains_any(question, WEB_RETRIEVAL_HINTS)
+        explicit_web = _contains_any(
+            question,
+            IMAGE_WEB_RETRIEVAL_HINTS if map_context.get("image_attachment") else WEB_RETRIEVAL_HINTS,
+        )
         if self.resource_search is not None and should_search_web and (teaching_phase != "in_class" or explicit_web):
             try:
                 web_results = self.resource_search.search(query=question, scope="web", limit=5)
@@ -519,7 +538,19 @@ class KnowledgeEngine:
                         title = str(item.get("title") or "").strip()
                         url = str(item.get("url") or "").strip()
                         summary = str(item.get("summary") or "").strip()
+                        evidence_verified = bool(item.get("evidence_verified", bool(summary)))
+                        if not evidence_verified:
+                            retrieval_trace.append(
+                                {
+                                    "source": "web_suggestion",
+                                    "title": title,
+                                    "url": url,
+                                    "status": "suggestion_only",
+                                }
+                            )
+                            continue
                         if title and url:
+                            web_evidence_available = True
                             citations.append({"title": title, "url": url})
                             retrieval_trace.append({
                                 "source": "web_search",
@@ -533,22 +564,50 @@ class KnowledgeEngine:
             except Exception:
                 retrieval_trace.append({"source": "web_search", "status": "error"})
 
+        web_verification_failed = should_search_web and not web_evidence_available
+        if web_verification_failed:
+            retrieval_trace.append({"source": "web_verification", "status": "unavailable"})
+
         # --- Phase 3: LLM-powered answer (primary path) ---
         llm_used = False
-        if self.minimax_client is not None and self.config.minimax_enabled():
+        population_guardrail_answer = self._population_guardrail_answer(question)
+        verification_guardrail_answer = (
+            self._unverified_timely_answer(question, entry) if web_verification_failed and not population_guardrail_answer else ""
+        )
+        deterministic_answer = population_guardrail_answer or verification_guardrail_answer
+        if deterministic_answer:
+            direct_answer = deterministic_answer
+            mechanism_explanation = ""
+            teaching_points = []
+            confidence = 0.96 if population_guardrail_answer else 0.45
+            retrieval_trace.append(
+                {
+                    "source": "population_concept_guardrail" if population_guardrail_answer else "timely_verification_guardrail",
+                    "status": "success",
+                }
+            )
+        elif self.minimax_client is not None and self.config.minimax_enabled():
             try:
-                llm_answer = self._llm_answer(question, entry, answer_type, map_context, web_context, teaching_task=teaching_task)
+                llm_answer = self._llm_answer(
+                    question,
+                    entry,
+                    answer_type,
+                    map_context,
+                    web_context,
+                    teaching_task=teaching_task,
+                    web_verification_failed=web_verification_failed,
+                )
                 llm_used = True
                 retrieval_trace.append({"source": "llm_generation", "status": "success"})
                 direct_answer = llm_answer["direct_answer"]
                 mechanism_explanation = llm_answer.get("mechanism_explanation", "")
                 teaching_points = llm_answer.get("teaching_points", [])
-                confidence = 0.88 if entry else 0.78
+                confidence = 0.45 if web_verification_failed else (0.88 if entry else 0.78)
             except Exception as exc:
                 retrieval_trace.append({"source": "llm_generation", "status": "error", "detail": str(exc)})
                 llm_used = False
 
-        if not llm_used:
+        if not llm_used and not deterministic_answer:
             # Fallback to deterministic, classroom-safe templates.
             direct_answer = (
                 entry.get("canonical_answer")
@@ -580,6 +639,7 @@ class KnowledgeEngine:
             "presentation": self._presentation_policy(answer_type),
             "llm_used": llm_used,
             "retrieval_mode": retrieval_mode,
+            "web_verified": web_evidence_available,
         }
 
     # ------------------------------------------------------------------
@@ -602,6 +662,90 @@ class KnowledgeEngine:
             cleaned = _re.sub(r"```\s*$", "", cleaned).strip()
         return cleaned
 
+    @staticmethod
+    def _sanitize_image_answer_coordinates(text: str, question: str) -> str:
+        """Remove unsolicited coordinate details from an image answer.
+
+        Vision summaries can contain graticule-derived latitude bands even
+        when the user asked only about a spatial pattern. The prompt remains
+        the primary control, while this small output guard prevents those
+        internal reading aids from leaking into the final conversation.
+        """
+        if _contains_any(
+            question,
+            ("经纬度", "经度", "纬度", "坐标", "经线", "纬线", "比例尺", "尺度", "coordinate", "latitude", "longitude"),
+        ):
+            return text
+        coordinate_pattern = re.compile(
+            r"(?:\b\d{1,3}(?:\.\d+)?\s*°\s*[NSEW]\b|北纬|南纬|东经|西经|纬度|经度)",
+            re.IGNORECASE,
+        )
+        kept: List[str] = []
+        for line in text.splitlines():
+            if not coordinate_pattern.search(line):
+                kept.append(line)
+                continue
+            fragments = re.split(r"(?<=[。！？；])", line)
+            kept.extend(fragment for fragment in fragments if fragment.strip() and not coordinate_pattern.search(fragment))
+        return "\n".join(kept).strip()
+
+    @staticmethod
+    def _population_legend_values(vision_summary: str) -> List[str]:
+        """Extract only explicitly printed population-legend values/classes."""
+        values: List[str] = []
+        in_legend = False
+        for raw_line in vision_summary.splitlines():
+            line = raw_line.strip()
+            lowered = line.lower()
+            if "legend" in lowered and not in_legend:
+                in_legend = True
+                continue
+            if not in_legend:
+                continue
+            if line.startswith("#") or (
+                line.startswith("**")
+                and not re.match(r"^\*\*\s*[<>≤≥]?\s*\d", line)
+                and "legend" not in lowered
+            ):
+                break
+            match = re.match(
+                r"^\s*-\s*(?:\*\*)?([<>≤≥]?\s*\d+(?:\.\d+)?(?:\s*[–—~-]\s*\d+(?:\.\d+)?)?\+?)",
+                line,
+            )
+            if match is None:
+                match = re.search(
+                    r":\s*(?:\*\*)?([<>≤≥]?\s*\d+(?:\.\d+)?(?:\s*[–—~-]\s*\d+(?:\.\d+)?)?\+?)",
+                    line,
+                )
+            if match:
+                value = re.sub(r"\s+", "", match.group(1)).replace("~", "–").replace("—", "–")
+                if value not in values:
+                    values.append(value)
+        if values and all(re.fullmatch(r"\d+(?:\.\d+)?", value) for value in values):
+            values.sort(key=float)
+        return values
+
+    @classmethod
+    def _ensure_population_legend_statement(cls, text: str, question: str, vision_summary: str) -> str:
+        if "人口" not in question or "图例" not in question:
+            return text
+        summary_lower = vision_summary.lower()
+        if "人口密度" not in vision_summary and "population density" not in summary_lower:
+            return text
+        values = cls._population_legend_values(vision_summary)
+        if len(values) < 2:
+            return text
+
+        kept: List[str] = []
+        for line in text.splitlines():
+            fragments = re.split(r"(?<=[。！？；])", line)
+            kept.extend(fragment for fragment in fragments if fragment.strip() and "图例" not in fragment)
+        unit = "人/km²" if any(token in vision_summary for token in ("人/km²", "persons/km²", "persons per square kilometer")) else ""
+        suffix = f"（{unit}）" if unit else ""
+        legend = f"图例标注了{'、'.join(values)}{suffix}，颜色由浅到深表示人口密度升高。"
+        body = "\n".join(kept).strip()
+        return f"{body}\n\n{legend}" if body else legend
+
     def _llm_answer(
         self,
         question: str,
@@ -610,6 +754,7 @@ class KnowledgeEngine:
         map_context: Dict[str, Any],
         web_context: str = "",
         teaching_task: str = "",
+        web_verification_failed: bool = False,
     ) -> Dict[str, Any]:
         """Call MiniMax LLM to generate a geography knowledge answer.
 
@@ -622,9 +767,22 @@ class KnowledgeEngine:
             "回答应像真实交流：通常使用连贯短段落，只有比较、步骤或用户明确要求清单时才使用小标题或列表。\n"
             "不要套用固定的“证据点、原理分析、课堂要点、教师收束语”模板，不要输出 JSON、代码块、<think> 或 XML 标签。\n"
             "不要暴露检索轨迹、视觉摘要等内部字段，也不要主动报告经纬度、缩放等级或可见范围。\n"
+            "不要用“知识库认为”“系统提示”“内部资料显示”等措辞描述回答来源。\n"
             "涉及图片时，把画面中可直接观察到的内容与地理推断区分开；文字、图例或边界看不清时自然说明不确定，不得编造。\n"
             "如果参考资料不足，直接说明限制并给出仍然可靠的判断，不要用生硬的系统提示口吻。\n"
         )
+        if "人口" in question:
+            system_prompt += (
+                "人口地理回答必须严格区分人口总量、人口密度、迁入、迁出、净迁移和自然增长，不能互相替代。"
+                "比较两个地区时先核对比较方向，结论必须与同一回答中的数字和表格一致。"
+                "参考上下文没有给出对应年份和数值时，优先做可靠的定性比较，不自行编造人口、比例、排名或面积数据。\n"
+            )
+        if web_verification_failed:
+            system_prompt += (
+                "问题包含时效或核验意图，但本次没有取得包含具体事实的在线检索结果。"
+                "你可以回答本地知识中的稳定定义，但必须明确说明最新或当前部分尚未核实；"
+                "不得给出现时人口数、比例、排名，也不得把机构主页链接当成已经核验的证据。\n"
+            )
         vision_summary = str(map_context.get("vision_summary") or "").strip()
         if vision_summary:
             system_prompt = (
@@ -638,6 +796,17 @@ class KnowledgeEngine:
                 "并明确说名称无法从图中确认。不要添加视觉摘要以外的成因、数量、历史或区域背景。\n"
                 "先回答核心问题，再用自然短段落补充必要的不确定性；不要输出固定教学模板、JSON、代码块或内部字段。\n"
             )
+            system_prompt += (
+                "默认写成两到四个简短自然段；除非用户明确要求清单或逐项对照，不要使用 Markdown 标题。\n"
+                "图例数值必须逐项保持视觉读图结果中的原始区间、单位和不等号；不能合并等级，也不能把一个等级的颜色或范围移给另一个等级。\n"
+            )
+            if "人口" in question:
+                system_prompt += (
+                    "这是人口专题图片转述：全文通常不超过 260 个汉字，只回答用户询问的变量、时间和空间差异，不要枚举无关城市或区域。\n"
+                    "如果视觉结果只说图例印有若干刻度值，就按刻度值表述，不得擅自改写成闭区间或大于等于关系；只有视觉结果明确给出区间时才可逐字使用该区间。\n"
+                    "用户没有询问原因或影响因素时，不得补充气候、地形、水源、农业、工业化、城市化等成因。\n"
+                    "不要使用“像素”“内部读图结果”等机器处理词。线状标志只能按图中可见作用描述；除非图例明确说明，不得称为行政边界、法定边界或绝对分界线。\n"
+                )
             if not _contains_any(question, ("经纬度", "坐标", "经线", "纬线", "比例尺", "尺度")):
                 system_prompt += "用户没有询问坐标或尺度，答案中不要出现经纬度、坐标或经纬网数值。\n"
         if teaching_task:
@@ -657,10 +826,20 @@ class KnowledgeEngine:
                 "课堂要点最多保留 1 个给学生的问题，不要展开背景综述。\n"
             )
         elif phase == "course_prep":
-            system_prompt += (
-                "\n当前处于课前备课：可以输出较长的结构化内容（问题阶梯、地图证据路线、预演话术），"
-                "设计的问题要附预期答案要点和常见误区。\n"
+            asks_for_lesson_design = teaching_task == "teaching_question" or _contains_any(
+                question,
+                ("教学设计", "教案", "备课", "课堂活动", "问题链", "怎么教", "如何讲", "教学步骤"),
             )
+            if asks_for_lesson_design:
+                system_prompt += (
+                    "\n当前处于课前备课，用户明确需要教学设计：可以组织问题阶梯、地图证据路线和预演话术，"
+                    "设计的问题要附预期答案要点和常见误区。\n"
+                )
+            else:
+                system_prompt += (
+                    "\n当前虽处于课前备课，但这是普通知识问答：保持 2 至 4 个自然短段落，通常不超过 350 字，"
+                    "不要自动扩展成完整教案、历史综述或多级标题。\n"
+                )
         elif phase == "post_class":
             system_prompt += (
                 "\n当前处于课后复盘：必须优先引用参考上下文中“课堂真实记录”里的具体数字；"
@@ -701,6 +880,9 @@ class KnowledgeEngine:
         # --- Post-process: strip think tags, code fences, JSON wrappers ---
         cleaned = self._strip_think_tags(raw)
         cleaned = self._strip_code_fences(cleaned)
+        if vision_summary:
+            cleaned = self._sanitize_image_answer_coordinates(cleaned, question)
+            cleaned = self._ensure_population_legend_statement(cleaned, question, vision_summary)
 
         # If the model still returned JSON despite the prompt, extract text from it
         if cleaned.startswith("{"):
@@ -926,6 +1108,101 @@ class KnowledgeEngine:
             "当前" in lowered_question and _contains_any(lowered_question, ("地图", "视图", "画面", "图层", "区域", "选区"))
         )
 
+    @staticmethod
+    def _population_guardrail_answer(question: str) -> str:
+        """Return concise, deterministic answers for common population misconceptions.
+
+        These concepts are frequently misanswered by swapping absolute and
+        relative indicators or by treating a one-way flow as net migration.
+        Keeping the core distinction deterministic prevents a fluent model
+        response from contradicting its own numbers or the map legend.
+        """
+        text = question or ""
+        if "人口密度" in text and _contains_any(text, ("人口总量", "总人口", "人口数量", "总量")):
+            answer = (
+                "人口总量回答一个地区“有多少人”，人口密度回答“单位面积上有多少人”，"
+                "计算上是人口总量除以土地面积。两者不能互相替代：总量大不一定密度高，密度高也不必然意味着总量更大。"
+            )
+            if "上海" in text and "西藏" in text:
+                answer += (
+                    "以上海和西藏为例，上海的人口总量和人口密度都高于西藏，所以这组地区不能用来证明“密度高但总量小”；"
+                    "它更适合说明土地面积差异会显著改变密度。若要做数量比较，还必须使用同一年、同一人口口径和同一级行政单元的数据。"
+                )
+            return answer
+
+        if "自然增长率" in text and _contains_any(text, ("下降", "降低", "放缓")) and _contains_any(
+            text, ("人口总量", "总人口", "人口增加", "继续增加")
+        ):
+            return (
+                "自然增长率下降只表示人口自然增长的速度放慢，不等于增长率已经为零或转为负值。"
+                "只要自然增长率仍为正，出生人数仍多于死亡人数，人口总量就可能继续增加；同样的增长率作用在不同人口基数上，带来的增量也不同。"
+                "判断一个地区的总人口变化时，还要把净迁移与自然增长合并考虑，不能只看增长率是升还是降。"
+            )
+
+        if "自然增长" in text and "负" in text and _contains_any(text, ("人口", "总量", "减少", "下降")):
+            return (
+                "自然增长为负只说明死亡人数多于出生人数，并不能单独决定人口总量一定减少。"
+                "一个地区的人口变化由自然增长和净迁移共同决定：如果净迁入大于自然减少，总量仍可增加；"
+                "如果净迁入不足以抵消自然减少，总量才会下降。比较时还要统一统计时期和常住人口等人口口径。"
+            )
+
+        if "净迁入" in text and _contains_any(text, ("常住人口", "人口总量", "总人口")) and _contains_any(
+            text, ("下降", "减少", "仍可能", "为什么")
+        ):
+            return (
+                "净迁入为正只说明迁入人数多于迁出人数，不代表人口总量必然增加。"
+                "常住人口变化可以概括为“自然增长加净迁移”：当自然减少的规模大于净迁入时，最终总量仍会下降；"
+                "反过来，净迁入足以抵消自然减少时，总量才会增加。判断时必须使用同一时期、同一人口口径的数据。"
+            )
+
+        if "常住人口" in text and "户籍人口" in text and _contains_any(text, ("比较", "混用", "口径", "规模")):
+            return (
+                "常住人口和户籍人口不能直接混用比较。常住人口反映实际在当地居住的人口，户籍人口按户籍登记地统计，"
+                "同一个人可能计入一个地区的户籍人口、同时计入另一个地区的常住人口。"
+                "比较城市人口规模时，应统一年份、行政范围和人口口径，并在图题、表头或注释中明确写出“常住人口”或“户籍人口”。"
+            )
+
+        if _contains_any(text.lower(), ("top", "排名", "排行")) and "人口" in text and _contains_any(
+            text, ("年份", "行政范围", "统计口径", "可比")
+        ):
+            return (
+                "人口排名要先统一比较对象，再进行排序。所有城市应使用同一统计年份、同一人口口径和同一行政范围，"
+                "例如不能把一个城市的全域常住人口与另一个城市的市辖区户籍人口放在同一榜单。"
+                "结果中应同时标明数据年份、统计单位、人口口径、行政层级和来源；缺少任一项时，排名只能视为不可直接比较的参考。"
+            )
+
+        if "迁移" in text and "流线" in text and _contains_any(text, ("净迁入", "净迁移", "净流入", "净迁出")):
+            return (
+                "流线越粗代表什么，必须先看图例；只有图例明确规定线宽表示迁移人数时，粗线才能说明该条起讫路径的迁移规模更大。"
+                "它仍不等于一个地区的全部迁入量。净迁入要用所有迁入量减去所有迁出量，"
+                "因此只看到单向流线或几条示意流线，不能判断净迁入；还需要完整的双向流量、统计时期和人口口径。"
+            )
+
+        if _contains_any(text, ("七普", "2020年", "2020 年")) and _contains_any(
+            text, ("当前数据", "历史数据", "现在", "最新", "时效", "实时")
+        ):
+            return (
+                "课堂上应把它明确称为“2020年第七次全国人口普查数据”，用来说明2020年的空间格局，而不要简称为“当前人口数据”。"
+                "讲解时可以先用七普数据比较区域分布，再单独提醒学生：格局判断有明确的数据时点，后续人口变化需要另找更新的官方统计。"
+                "课件、图例和口播都应同时标注年份、常住人口或户籍人口口径、统计单位和来源；没有完成最新核验时，不补写现时人口数。"
+            )
+
+        return ""
+
+    @staticmethod
+    def _unverified_timely_answer(question: str, entry: Optional[Dict[str, Any]]) -> str:
+        stable_answer = str((entry or {}).get("canonical_answer") or "").strip()
+        if stable_answer:
+            return (
+                f"{stable_answer}"
+                "不过，你问到的“今天、最新或当前”部分需要用带明确统计日期和口径的在线资料核验。"
+                "本次没有取得包含具体事实的有效在线结果，因此不能据此断言现状仍然相同，也不提供未经核实的现时比例、排名或人口数。"
+            )
+        return (
+            "这个问题需要最新或当前资料，但本次没有取得包含具体事实、统计日期和口径的有效在线结果。"
+            "因此我暂时不能给出当前数值或肯定结论；机构主页只能作为继续查找的入口，不能当作已经完成核验。"
+        )
+
     def _match_entry(self, question: str) -> Optional[Dict[str, Any]]:
         lowered = (question or "").lower()
         lowered = (
@@ -968,11 +1245,14 @@ class KnowledgeEngine:
         teaching_context = map_context.get("teaching_context") if isinstance(map_context.get("teaching_context"), dict) else {}
         if str((teaching_context or {}).get("phase") or "") == "in_class" and not _contains_any(question, WEB_RETRIEVAL_HINTS):
             wants_web = False
-        if map_context.get("image_attachment") and not (
-            _contains_any(question, LOCAL_RETRIEVAL_HINTS) or _contains_any(question, WEB_RETRIEVAL_HINTS)
-        ):
-            wants_local = False
-            wants_web = False
+        if map_context.get("image_attachment"):
+            # An image question is grounded in the image by default. Merely
+            # mentioning words such as "current data" or "source" (including
+            # in a negation) must not silently turn visual reading into a web
+            # lookup. Only an explicit request to combine or verify newer
+            # material enables online retrieval.
+            wants_local = _contains_any(question, LOCAL_RETRIEVAL_HINTS)
+            wants_web = _contains_any(question, IMAGE_WEB_RETRIEVAL_HINTS)
         if wants_local and wants_web:
             return "local_web"
         if wants_local:

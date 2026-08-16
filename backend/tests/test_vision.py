@@ -127,6 +127,38 @@ class MapVisionServiceTest(unittest.TestCase):
         self.assertNotIn("zoom=", prompt)
         self.assertNotIn("center=", prompt)
 
+    def test_population_image_prompt_preserves_indicator_year_and_legend(self) -> None:
+        config = self.build_config()
+        config.vision_enabled = True
+        config.vision_provider = "minimax_mcp"
+        config.minimax_token_plan_key = "token-plan-key"
+        fake_client = FakeMcpClient()
+        service = MapVisionService(config, mcp_client=fake_client)
+        image_path = config.uploads_dir / "population.png"
+        image_path.write_bytes(b"image")
+
+        service.understand_image(str(image_path), "请根据图例分析人口密度分布，并说明数据年份。")
+
+        prompt = fake_client.calls[0]["prompt"]
+        self.assertIn("population total, population density, migration flow", prompt)
+        self.assertIn("printed data year", prompt)
+        self.assertIn("never describe it as current data", prompt)
+        self.assertIn("Do not merge legend classes", prompt)
+
+    def test_coordinate_lines_are_removed_unless_question_requests_them(self) -> None:
+        text = (
+            "- Southern Finland is more densely populated.\n"
+            "- The main belt lies between 60°N and 64°N.\n"
+            "- Helsinki is labelled on the southern coast."
+        )
+
+        ordinary = MapVisionService._sanitize_vision_summary(text)
+        coordinate_request = MapVisionService._sanitize_vision_summary(text, include_coordinates=True)
+
+        self.assertIn("Southern Finland", ordinary)
+        self.assertNotIn("60°N", ordinary)
+        self.assertIn("60°N", coordinate_request)
+
     def test_vision_summary_removes_corrupted_ocr_and_coordinate_noise(self) -> None:
         summary = MapVisionService._sanitize_vision_summary(
             "# Visual Analysis\n"
