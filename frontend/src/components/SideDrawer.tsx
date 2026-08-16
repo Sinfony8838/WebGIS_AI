@@ -1,8 +1,9 @@
 import { useMemo } from "react";
-import type { DatasetStatsResponse, LayerRecord, LayersResponse, PoiSearchItem, ResourceSearchResult } from "../types";
+import type { ArtifactRecord, DatasetStatsResponse, ImageAttachment, LayerRecord, LayersResponse, PoiSearchItem, ResourceSearchResult } from "../types";
+import { buildPublicFileUrl } from "../api";
 import { LiveResourceSearchPanel } from "./LiveResourceSearchPanel";
 
-export type DrawerTab = "resource-search" | "layers" | "search" | "stats";
+export type DrawerTab = "resource-search" | "images" | "layers" | "search" | "stats";
 
 type Props = {
   open: boolean;
@@ -15,6 +16,7 @@ type Props = {
   resourceScope: "all" | "kb" | "web";
   resourceLoading: boolean;
   resourceResults: ResourceSearchResult[];
+  outputs?: ArtifactRecord[];
   onToggleOpen: () => void;
   onChangeTab: (tab: DrawerTab) => void;
   onToggleLayer: (layerId: string, visible: boolean) => void;
@@ -24,12 +26,15 @@ type Props = {
   onResourceScopeChange: (value: "all" | "kb" | "web") => void;
   onOpenResourceResult: (item: ResourceSearchResult) => void;
   onImportResourceResult: (item: ResourceSearchResult) => void;
+  onAttachImage?: (image: ImageAttachment) => void;
+  onUploadImage?: (file: File) => void;
   /** 打开课堂工作流（课中面板；无进行中课堂时打开课前备课面板）。 */
   onOpenLessonWorkflow: () => void;
 };
 
 const TABS: Array<{ key: DrawerTab; label: string }> = [
   { key: "resource-search", label: "资料搜索" },
+  { key: "images", label: "图片库" },
   { key: "layers", label: "图层" },
   { key: "search", label: "检索" },
   { key: "stats", label: "区域统计" }
@@ -90,6 +95,7 @@ export function SideDrawer({
   resourceScope,
   resourceLoading,
   resourceResults,
+  outputs = [],
   onToggleOpen,
   onChangeTab,
   onToggleLayer,
@@ -99,14 +105,21 @@ export function SideDrawer({
   onResourceScopeChange,
   onOpenResourceResult,
   onImportResourceResult,
+  onAttachImage = () => undefined,
+  onUploadImage = () => undefined,
   onOpenLessonWorkflow
 }: Props) {
   const visibleLayers = useMemo(() => (layerState?.items || []).filter((item) => item.visible), [layerState?.items]);
   const hiddenLayers = useMemo(() => (layerState?.items || []).filter((item) => !item.visible), [layerState?.items]);
   const totalLayers = visibleLayers.length + hiddenLayers.length;
+  const imageItems = useMemo(
+    () => outputs.filter((item) => item.artifact_type === "map_snapshot" || item.artifact_type === "uploaded_image"),
+    [outputs]
+  );
 
   const tabCount: Record<DrawerTab, number> = {
     "resource-search": resourceResults.length,
+    images: imageItems.length,
     layers: totalLayers,
     search: searchResults.length,
     stats: oneMapStats?.layers.length || 0
@@ -165,6 +178,66 @@ export function SideDrawer({
                 onOpenResult={onOpenResourceResult}
                 onImportResult={onImportResourceResult}
               />
+            </section>
+          ) : null}
+
+          {activeTab === "images" ? (
+            <section className="drawer-section image-library" data-testid="drawer-images">
+              <div className="drawer-section-header">
+                <span>项目图片</span>
+                <label className="image-library-upload">
+                  上传图片
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) {
+                        onUploadImage(file);
+                      }
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                </label>
+              </div>
+              {imageItems.length ? (
+                <div className="image-library-grid">
+                  {imageItems.map((artifact) => {
+                    const publicUrl = buildPublicFileUrl(String(artifact.metadata?.public_url || ""));
+                    const attachment: ImageAttachment = {
+                      artifact_id: artifact.artifact_id,
+                      title: artifact.title,
+                      public_url: publicUrl,
+                      mime_type: String(artifact.metadata?.mime_type || "image/png")
+                    };
+                    return (
+                      <article
+                        key={artifact.artifact_id}
+                        className="image-library-card"
+                        draggable
+                        onDragStart={(event) => {
+                          event.dataTransfer.effectAllowed = "copy";
+                          event.dataTransfer.setData("application/x-webgis-image", JSON.stringify(attachment));
+                        }}
+                      >
+                        <img src={publicUrl} alt={artifact.title} draggable={false} />
+                        <div>
+                          <strong>{artifact.title}</strong>
+                          <small>
+                            {artifact.artifact_type === "map_snapshot" ? "地图截图" : "本地上传"}
+                            {artifact.created_at ? ` · ${new Date(artifact.created_at).toLocaleString("zh-CN")}` : ""}
+                          </small>
+                        </div>
+                        <button type="button" onClick={() => onAttachImage(attachment)}>
+                          加入助教
+                        </button>
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="drawer-empty-state">还没有图片，可先截图或上传一张地理图片。</div>
+              )}
             </section>
           ) : null}
 

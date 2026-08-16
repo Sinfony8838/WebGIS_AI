@@ -9,6 +9,7 @@ import {
   searchKb,
   sendAssistantMessage,
   summarizeCatalogLayers,
+  uploadImageLibraryAsset,
   upsertKbItem
 } from "../api";
 
@@ -171,6 +172,47 @@ describe("api.sendAssistantMessage", () => {
     const [, init] = fetchMock.mock.calls[0];
     expect(String(init?.body)).toContain('"screen_snapshot"');
     expect(String(init?.body)).toContain('"width":1920');
+  });
+
+  it("sends only an artifact id for an assistant image attachment", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ job_id: "job_image_1" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+
+    await sendAssistantMessage(
+      "project_1",
+      "这条河流有什么特征？",
+      { center: [104, 35], zoom: 4, extent: [78, 18, 132, 50], visible_layers: [], recent_actions: [] },
+      "webgis",
+      "text",
+      { imageAttachments: [{ artifact_id: "artifact_1" }] }
+    );
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = String(init?.body);
+    expect(body).toContain('"image_attachments":[{"artifact_id":"artifact_1"}]');
+    expect(body).not.toContain("base64");
+  });
+
+  it("uploads an image to the project image library", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ artifact: { artifact_id: "artifact_1" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+    const file = new File(["png"], "map.png", { type: "image/png" });
+    await uploadImageLibraryAsset("project_1", file, "地图");
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/image-library/upload");
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBeInstanceOf(FormData);
+    expect((init?.body as FormData).get("project_id")).toBe("project_1");
+    expect((init?.body as FormData).get("file")).toBe(file);
   });
 
   it("posts assistant confirmation ids and decisions", async () => {

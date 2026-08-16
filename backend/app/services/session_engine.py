@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -82,6 +83,49 @@ EXPLANATION_HINTS = ("解释", "讲解", "分析", "为什么", "说明", "读�
 CURRENT_MAP_HINTS = ("当前视图", "当前地图", "当前画面", "当前图层", "当前区域", "当前选区", "图中", "图上", "视图", "画面")
 MAP_READING_HINTS = ("读图", "判读", "图上", "图中", "视图", "地图", "图例", "等高线", "地貌", "地形", "地势", "空间格局", "分布特征")
 TIME_SENSITIVE_HINTS = ("最新", "目前", "今天", "近年", "recent", "latest", "today")
+LOCAL_RETRIEVAL_HINTS = (
+    "知识库",
+    "教材",
+    "课程资料",
+    "课堂资料",
+    "项目资料",
+    "本地资料",
+    "课本",
+)
+WEB_RETRIEVAL_HINTS = (
+    "最新",
+    "今年",
+    "当前数据",
+    "实时",
+    "核实",
+    "查证",
+    "来源",
+    "在线搜索",
+    "联网",
+    "recent",
+    "latest",
+    "verify",
+    "source",
+)
+IMAGE_FOLLOW_UP_HINTS = ("这张图", "这幅图", "刚才的图", "刚才的图片", "上一张图", "图里", "图中")
+MATCH_STOP_WORDS = {
+    "什么",
+    "怎么",
+    "为什么",
+    "当前",
+    "这个",
+    "那个",
+    "请问",
+    "分析",
+    "解释",
+    "说明",
+    "地图",
+    "图片",
+    "the",
+    "what",
+    "why",
+    "how",
+}
 
 TEACHING_TASKS = ("teaching_explain", "teaching_question", "teaching_action", "teaching_reflect")
 TEACHING_QUESTION_HINTS = ("追问", "提问", "设计问题", "出几道题", "几个问题", "还有什么问题", "进一步问", "follow-up")
@@ -113,52 +157,6 @@ def _parse_timestamp(value: str) -> Optional[datetime]:
 def _utc_timestamp(minutes_from_now: int = 0) -> str:
     return (datetime.now(timezone.utc) + timedelta(minutes=minutes_from_now)).isoformat()
 
-
-def _teaching_scaffold_parts(knowledge: Dict[str, Any], map_context: Dict[str, Any]) -> Dict[str, str]:
-    """Deterministic three-part teaching contract (structured).
-
-    Returns 证据或观察点 / 给学生的问题 / 教师收束语或下一步 as separate strings
-    so the frontend can render them as distinct visual blocks. Guarantees the
-    structure even when the LLM is unavailable, and states missing evidence
-    explicitly instead of fabricating layer or student claims.
-    """
-    knowledge = knowledge or {}
-    grounding = str(knowledge.get("map_grounding") or "").strip()
-    has_evidence = grounding.startswith("基于当前地图")
-    evidence_line = grounding if has_evidence else "本回答缺少当前地图或素材证据，仅为一般性讲解。"
-    teaching_points = [str(item).strip() for item in list(knowledge.get("teaching_points") or []) if str(item).strip()]
-    question_line = (
-        teaching_points[0]
-        if teaching_points
-        else "请学生观察图中高值区与低值区的分布，并说明可能的影响因素。"
-    )
-    closing_line = "收束到区域认知方法：位置-格局-成因；下一步可切换图层或结合读图讲解继续验证。"
-    return {
-        "evidence": evidence_line,
-        "question": question_line,
-        "closing": closing_line,
-    }
-
-
-def _format_scaffold_text(parts: Optional[Dict[str, str]]) -> str:
-    """Render the structured teaching contract as the legacy text block.
-
-    Kept for ``assistant_message`` (consumed by voice/history/tests) so the
-    textual contract stays byte-identical; the frontend renders the structured
-    ``teaching_contract`` field instead of parsing this text.
-    """
-    parts = parts or {}
-    return (
-        "教学处理：\n"
-        f"- 证据或观察点：{parts.get('evidence', '')}\n"
-        f"- 给学生的问题：{parts.get('question', '')}\n"
-        f"- 教师收束语或下一步：{parts.get('closing', '')}"
-    )
-
-
-def _teaching_scaffold(knowledge: Dict[str, Any], map_context: Dict[str, Any]) -> str:
-    """Backward-compatible text scaffold; see ``_teaching_scaffold_parts``."""
-    return _format_scaffold_text(_teaching_scaffold_parts(knowledge, map_context))
 
 META_ANSWER_TYPES = {"assistant_identity", "assistant_model", "assistant_capability"}
 
@@ -476,7 +474,7 @@ class KnowledgeEngine:
         teaching_task: str = "",
     ) -> Dict[str, Any]:
         map_context = map_context or {}
-        answer_type = self._classify(question)
+        answer_type = "map_reading" if map_context.get("image_attachment") else self._classify(question)
         if answer_type in {"assistant_identity", "assistant_model", "assistant_capability"}:
             return self._meta_answer(answer_type)
 
@@ -485,7 +483,9 @@ class KnowledgeEngine:
         # in a generic canned KB item. Skipping loose KB matches here prevents
         # unrelated teaching points from leaking into image interpretation.
         references_current_map = self._references_current_map((question or "").lower())
-        entry = None if answer_type == "map_reading" and references_current_map else self._match_entry(question)
+        matched_entry = None if answer_type == "map_reading" and references_current_map else self._match_entry(question)
+        retrieval_mode = self._retrieval_mode(question, answer_type, matched_entry, map_context)
+        entry = matched_entry if retrieval_mode in {"local", "local_web"} else None
         citations = list(entry.get("citations", [])) if entry else []
         retrieval_trace: List[Dict[str, Any]] = []
         if map_context.get("vision_summary"):
@@ -508,7 +508,9 @@ class KnowledgeEngine:
         web_context = ""
         # In-class requests skip online retrieval entirely: latency beats
         # coverage while the teacher is standing in front of the class.
-        if self.resource_search is not None and answer_type != "map_reading" and teaching_phase != "in_class":
+        should_search_web = retrieval_mode in {"web", "local_web"}
+        explicit_web = _contains_any(question, WEB_RETRIEVAL_HINTS)
+        if self.resource_search is not None and should_search_web and (teaching_phase != "in_class" or explicit_web):
             try:
                 web_results = self.resource_search.search(query=question, scope="web", limit=5)
                 web_items = web_results.get("items", [])
@@ -530,10 +532,6 @@ class KnowledgeEngine:
                             web_context += f"- {title}: {summary}\n"
             except Exception:
                 retrieval_trace.append({"source": "web_search", "status": "error"})
-
-        if not citations:
-            citations = self._default_citations(answer_type)
-            retrieval_trace.extend(self._score_sources(citations, source_type="authority_fallback", timely=answer_type == "timely_fact"))
 
         # --- Phase 3: LLM-powered answer (primary path) ---
         llm_used = False
@@ -562,8 +560,8 @@ class KnowledgeEngine:
                 direct_answer = self._map_reading_direct_answer(question, map_context)
             elif answer_type == "timely_fact":
                 direct_answer = (
-                    "这个问题具有时效性。系统应先核对权威实时来源，再给出最终结论。"
-                    "下面列出优先参考的权威来源。"
+                    "这个问题具有时效性，但当前没有取得可核验的在线资料，"
+                    "因此我不能把未经核实的数据当作当前结论。你可以明确要求联网核实后再问。"
                 )
             mechanism_explanation = self._mechanism_text(question, entry, answer_type)
             teaching_points = list(entry.get("teaching_points", [])) if entry else self._default_teaching_points(answer_type)
@@ -581,6 +579,7 @@ class KnowledgeEngine:
             "retrieval_trace": retrieval_trace,
             "presentation": self._presentation_policy(answer_type),
             "llm_used": llm_used,
+            "retrieval_mode": retrieval_mode,
         }
 
     # ------------------------------------------------------------------
@@ -614,39 +613,39 @@ class KnowledgeEngine:
     ) -> Dict[str, Any]:
         """Call MiniMax LLM to generate a geography knowledge answer.
 
-        The prompt asks for *plain readable Chinese text* — NOT JSON — so that
-        the response can be displayed directly to the teacher in the classroom
-        copilot panel.  We post-process the text to extract an optional
-        "原理分析" section and "课堂要点" bullet list.
+        The prompt asks for one natural Chinese answer. Structured teaching
+        output is used only when the user explicitly asks for questions,
+        lesson design, or a reflection checklist.
         """
         system_prompt = (
-            "你是一位专业的高中地理教师助手，具有丰富的地理学科知识。\n"
-            "老师会向你提问地理相关问题，请用准确、权威、适合课堂讲解的方式直接回答。\n\n"
-            "格式要求（非常重要）：\n"
-            "- 直接用自然语言回答，不要输出 JSON、代码块或任何标记语言\n"
-            "- 不要输出 <think> 或任何 XML 标签\n"
-            "- 如果问题包含“当前视图、当前地图、当前画面、读图、判读”等表达，必须结合参考上下文中的地图状态作读图回答，不要把它当作时效性事实问题\n"
-            "- 回答分为三部分，用空行分隔：\n"
-            "  第一部分：直接回答问题（1-3 段）\n"
-            "  第二部分：以\"原理分析：\"开头，解释核心地理机制（1-2 段）\n"
-            "  第三部分：以\"课堂要点：\"开头，列出 2-4 个要点，每个要点以\"- \"开头换行书写\n"
-            "- 语言简洁专业，适合课堂直接朗读\n"
-            "- 用中文回答\n"
+            "你是一位专业、自然、耐心的地理教学助手。默认使用简体中文，先直接回答用户真正关心的问题。\n"
+            "回答应像真实交流：通常使用连贯短段落，只有比较、步骤或用户明确要求清单时才使用小标题或列表。\n"
+            "不要套用固定的“证据点、原理分析、课堂要点、教师收束语”模板，不要输出 JSON、代码块、<think> 或 XML 标签。\n"
+            "不要暴露检索轨迹、视觉摘要等内部字段，也不要主动报告经纬度、缩放等级或可见范围。\n"
+            "涉及图片时，把画面中可直接观察到的内容与地理推断区分开；文字、图例或边界看不清时自然说明不确定，不得编造。\n"
+            "如果参考资料不足，直接说明限制并给出仍然可靠的判断，不要用生硬的系统提示口吻。\n"
         )
-        if teaching_task:
-            system_prompt += (
-                "\n你正在“专业教学智能体”模式下支持地理课堂。除上述结构外，“课堂要点”必须依次覆盖：\n"
-                "- 证据或观察点：只能引用参考上下文里真实存在的图层、选区、素材或视觉读图结果\n"
-                "- 给学生的问题：1-2 个可以在课堂上直接提问的问题\n"
-                "- 教师收束语或下一步\n"
-                "如果参考上下文里没有地图或素材证据，必须明确说明“本回答缺少当前地图或素材证据”，"
-                "不得编造图层名称、数据或学生表现。\n"
+        vision_summary = str(map_context.get("vision_summary") or "").strip()
+        if vision_summary:
+            system_prompt = (
+                "你是一个受约束的地理图片信息转述编辑器。默认使用自然、简洁的简体中文回答。\n"
+                "视觉读图结果是唯一事实来源，用户问题只决定从中挑选哪些内容，不授权你调用常识、记忆或外部知识补充答案。\n"
+                "只可忠实翻译、压缩和重组视觉读图结果已经明确陈述的内容。任何地名、水域名、山名、行政区名、"
+                "数值、方向和边界性质，必须在视觉读图结果中明确出现才能写入答案。\n"
+                "视觉读图结果中已有中文专名时必须逐字复制，禁止改写或重新音译；只有外文名时宁可保留外文。"
+                "数值、单位和大于小于等比较关系也必须保持原意，不得自行扩大或缩小范围。\n"
+                "严禁使用“很可能是”“应该是”后接视觉读图结果中没有的专名；无法确认名称时，只描述图中可见的形态和位置关系，"
+                "并明确说名称无法从图中确认。不要添加视觉摘要以外的成因、数量、历史或区域背景。\n"
+                "先回答核心问题，再用自然短段落补充必要的不确定性；不要输出固定教学模板、JSON、代码块或内部字段。\n"
             )
+            if not _contains_any(question, ("经纬度", "坐标", "经线", "纬线", "比例尺", "尺度")):
+                system_prompt += "用户没有询问坐标或尺度，答案中不要出现经纬度、坐标或经纬网数值。\n"
+        if teaching_task:
             if teaching_task == "teaching_question":
-                system_prompt += "本次请求侧重课堂提问设计：问题要由浅入深，先观察描述，再比较分析，最后解释迁移，并给出常见误区。\n"
+                system_prompt += "\n用户明确需要课堂提问设计，可以用简短列表呈现由观察到解释的递进问题，并提示常见误区。\n"
             elif teaching_task == "teaching_reflect":
                 system_prompt += (
-                    "本次请求侧重课后复盘：以课堂小结口吻输出已讲要点、易错提醒和下一步建议；"
+                    "\n用户明确需要课后复盘，可以自然地概括已讲内容、易错提醒和下一步建议；"
                     "没有真实课堂记录时不得编造学生表现或掌握程度。\n"
                 )
 
@@ -677,11 +676,10 @@ class KnowledgeEngine:
                 context_parts.append(f"知识库要点：{'；'.join(kb_points)}")
         if web_context:
             context_parts.append(f"在线参考资料：\n{web_context}")
-        vision_summary = str(map_context.get("vision_summary") or "").strip()
         if vision_summary:
-            context_parts.append(f"视觉读图结果：{vision_summary}")
+            context_parts.append(f"视觉读图结果（图片事实仅限以下内容）：{vision_summary}")
 
-        map_summary = self._map_context_brief(map_context)
+        map_summary = "" if vision_summary else self._map_context_brief(map_context)
         if map_summary:
             context_parts.append(f"当前地图状态：{map_summary}")
 
@@ -698,7 +696,7 @@ class KnowledgeEngine:
             {"role": "user", "content": user_content},
         ]
 
-        raw = self.minimax_client.chat_completion(messages, temperature=0.3)
+        raw = self.minimax_client.chat_completion(messages, temperature=0.0 if vision_summary else 0.3)
 
         # --- Post-process: strip think tags, code fences, JSON wrappers ---
         cleaned = self._strip_think_tags(raw)
@@ -716,8 +714,11 @@ class KnowledgeEngine:
             except json.JSONDecodeError:
                 pass
 
-        # --- Split plain-text answer into structured parts ---
-        return self._parse_plain_answer(cleaned)
+        return {
+            "direct_answer": cleaned,
+            "mechanism_explanation": "",
+            "teaching_points": [],
+        }
 
     @staticmethod
     def _parse_plain_answer(text: str) -> Dict[str, Any]:
@@ -858,7 +859,7 @@ class KnowledgeEngine:
             }
         return {
             "show_mechanism": True,
-            "show_map_grounding": True,
+            "show_map_grounding": answer_type == "map_reading",
             "show_teaching_points": True,
             "teaching_points_title": "课堂要点",
         }
@@ -927,24 +928,58 @@ class KnowledgeEngine:
 
     def _match_entry(self, question: str) -> Optional[Dict[str, Any]]:
         lowered = (question or "").lower()
+        lowered = (
+            lowered.replace("hu huanyong line", "胡焕庸线")
+            .replace("hu huanyong", "胡焕庸")
+            .replace("heihe-tengchong line", "胡焕庸线")
+            .replace("heihe-tengchong", "胡焕庸")
+        )
         for item in self.knowledge_units:
-            haystack = " ".join([item.get("title", ""), *item.get("tags", [])]).lower()
-            if any(tag.lower() in lowered for tag in item.get("tags", [])) or item.get("title", "").lower() in lowered:
+            title = str(item.get("title") or "").strip().lower()
+            tags = [str(tag or "").strip().lower() for tag in item.get("tags", [])]
+            meaningful_tags = [tag for tag in tags if len(tag) >= 2 and tag not in MATCH_STOP_WORDS]
+            if (len(title) >= 2 and title in lowered) or any(tag in lowered for tag in meaningful_tags):
                 return item
-            if haystack and any(token in haystack for token in lowered.split()):
+            query_tokens = {
+                token
+                for token in re.findall(r"[a-z0-9_-]{3,}|[\u4e00-\u9fff]{2,}", lowered)
+                if token not in MATCH_STOP_WORDS
+            }
+            haystack_tokens = {
+                token
+                for token in re.findall(r"[a-z0-9_-]{3,}|[\u4e00-\u9fff]{2,}", " ".join([title, *meaningful_tags]))
+                if token not in MATCH_STOP_WORDS
+            }
+            if query_tokens and len(query_tokens & haystack_tokens) >= 2:
                 return item
         return None
 
-    def _default_citations(self, answer_type: str) -> List[Dict[str, str]]:
-        if answer_type == "timely_fact":
-            return [
-                {"title": "World Bank Data", "url": "https://data.worldbank.org/"},
-                {"title": "UN Data", "url": "https://data.un.org/"},
-            ]
-        return [
-            {"title": "USGS", "url": "https://www.usgs.gov/"},
-            {"title": "NOAA", "url": "https://www.noaa.gov/"},
-        ]
+    def _retrieval_mode(
+        self,
+        question: str,
+        answer_type: str,
+        entry: Optional[Dict[str, Any]],
+        map_context: Dict[str, Any],
+    ) -> str:
+        if answer_type in META_ANSWER_TYPES:
+            return "none"
+        wants_local = _contains_any(question, LOCAL_RETRIEVAL_HINTS) or entry is not None
+        wants_web = answer_type == "timely_fact" or _contains_any(question, WEB_RETRIEVAL_HINTS)
+        teaching_context = map_context.get("teaching_context") if isinstance(map_context.get("teaching_context"), dict) else {}
+        if str((teaching_context or {}).get("phase") or "") == "in_class" and not _contains_any(question, WEB_RETRIEVAL_HINTS):
+            wants_web = False
+        if map_context.get("image_attachment") and not (
+            _contains_any(question, LOCAL_RETRIEVAL_HINTS) or _contains_any(question, WEB_RETRIEVAL_HINTS)
+        ):
+            wants_local = False
+            wants_web = False
+        if wants_local and wants_web:
+            return "local_web"
+        if wants_local:
+            return "local"
+        if wants_web:
+            return "web"
+        return "none"
 
     def _visible_layer_names(self, map_context: Dict[str, Any], limit: int = 6) -> List[str]:
         names: List[str] = []
@@ -970,9 +1005,9 @@ class KnowledgeEngine:
             parts.append(f"已选要素：{selected_feature[:160]}")
         vision_summary = str(map_context.get("vision_summary") or "").strip()
         if vision_summary:
-            parts.append("已完成页面截图视觉读图")
+            parts.append("已结合图片内容")
         elif map_context.get("vision_reason"):
-            parts.append("截图视觉读图未启用，已使用结构化地图上下文")
+            parts.append("图片识别当前不可用")
         active_materials = map_context.get("active_lesson_materials") or []
         if active_materials:
             material_titles = [
@@ -983,13 +1018,6 @@ class KnowledgeEngine:
             material_titles = [title for title in material_titles if title]
             if material_titles:
                 parts.append(f"已绑定教学资料：{', '.join(material_titles)}")
-        center = map_context.get("center")
-        zoom = map_context.get("zoom")
-        if center or zoom is not None:
-            parts.append(f"视图中心 {center or '未知'}，缩放级别 {zoom if zoom is not None else '未知'}")
-        extent = map_context.get("extent")
-        if extent:
-            parts.append(f"可见范围 {extent}")
         return "；".join(parts)
 
     def _map_reading_direct_answer(self, question: str, map_context: Dict[str, Any]) -> str:
@@ -1028,7 +1056,7 @@ class KnowledgeEngine:
         else:
             answer += "\n\n本次请求没有携带可见图层、选区或截图信息，因此只能给出通用读图框架；若要识别图面颜色、图例数值或具体地貌边界，请使用“读图讲解”截图识别。"
         if map_context.get("vision_reason"):
-            answer += "\n\n当前截图视觉读图尚未启用，以上是基于视图范围、缩放级别和图层状态的辅助判读；启用读图模型后可进一步识别颜色分层、图例数值和地形纹理。"
+            answer += "\n\n当前没有取得可用的图片识别结果，因此不能把图层状态当成画面内容继续推断。"
         return answer
 
     def _mechanism_text(self, question: str, entry: Optional[Dict[str, Any]], answer_type: str) -> str:
@@ -1062,6 +1090,10 @@ class KnowledgeEngine:
         ]
 
     def _map_grounding(self, map_context: Dict[str, Any], answer_type: str = "") -> str:
+        if map_context.get("image_attachment") or map_context.get("vision_summary"):
+            # The natural-language answer already explains the attached image.
+            # Do not append an internal-looking "based on current map" footer.
+            return ""
         map_brief = self._map_context_brief(map_context)
         if map_brief:
             return f"基于当前地图：{map_brief}。"
@@ -1342,12 +1374,38 @@ class AssistantSessionEngine:
             history=history,
             map_context=map_context,
         )
-        self.memory.append(conversation.conversation_id, "user", message, normalized_mode, metadata={"job_id": job_id})
+        attachments = list(map_context.get("image_attachments") or [])
+        image_attachment = attachments[0] if attachments and isinstance(attachments[0], dict) else None
+        if image_attachment is None and _contains_any(message, IMAGE_FOLLOW_UP_HINTS):
+            remembered = conversation.pinned_state.get("last_image_attachment")
+            if isinstance(remembered, dict) and remembered.get("path"):
+                image_attachment = dict(remembered)
+        if image_attachment is not None:
+            map_context = {**map_context, "image_attachment": image_attachment}
+        self.memory.append(
+            conversation.conversation_id,
+            "user",
+            message,
+            normalized_mode,
+            metadata={
+                "job_id": job_id,
+                "image_attachment": {
+                    "artifact_id": image_attachment.get("artifact_id", ""),
+                    "title": image_attachment.get("title", ""),
+                    "public_url": image_attachment.get("public_url", ""),
+                }
+                if image_attachment
+                else {},
+            },
+        )
 
         stage_callback("routing", "running", "Routing request", "")
         context = self.memory.build_context(conversation)
         route = self.router.route(normalized_mode, message, context["raw_messages"], map_context, {"project_id": project.project_id})
         intent = route["intent"]
+        if image_attachment is not None:
+            intent = "knowledge" if normalized_mode == "knowledge" else "teaching_explain"
+            route = {**route, "intent": intent, "reason": "image attachment requires visual understanding"}
         stage_callback("routing", "success", f"Intent: {intent}", route["reason"])
 
         if intent == "knowledge" or (intent in TEACHING_TASKS and intent != "teaching_action"):
@@ -1557,9 +1615,6 @@ class AssistantSessionEngine:
                 knowledge = self.knowledge.answer(message, map_context=map_context, teaching_task="teaching_action")
                 citations = knowledge["citations"]
                 grounding_text = self.knowledge.render_public_answer(knowledge, include_teaching_points=True)
-                scaffold_parts = _teaching_scaffold_parts(knowledge, map_context)
-                teaching_contract = scaffold_parts
-                grounding_text = "\n\n".join(part for part in [grounding_text, _format_scaffold_text(scaffold_parts)] if part).strip()
             else:
                 knowledge = self.knowledge.answer(message, map_context=map_context)
                 citations = knowledge["citations"]
@@ -1692,9 +1747,6 @@ class AssistantSessionEngine:
                 knowledge = self.knowledge.answer(confirmed_message, map_context=map_context, teaching_task="teaching_action")
                 citations = list(knowledge.get("citations") or [])
                 grounding_text = self.knowledge.render_public_answer(knowledge, include_teaching_points=True)
-                scaffold_parts = _teaching_scaffold_parts(knowledge, map_context)
-                teaching_contract = scaffold_parts
-                grounding_text = "\n\n".join(part for part in [grounding_text, _format_scaffold_text(scaffold_parts)] if part).strip()
             else:
                 knowledge = self.knowledge.answer(confirmed_message, map_context=map_context)
                 citations = list(knowledge.get("citations") or [])
@@ -1808,6 +1860,52 @@ class AssistantSessionEngine:
             "permission_context": permission_context.to_dict(),
         }
 
+    def _enrich_image_attachment_with_vision(
+        self,
+        message: str,
+        map_context: Dict[str, Any],
+        stage_callback: Callable[[str, str, str, str], None],
+    ) -> Dict[str, Any]:
+        attachment = map_context.get("image_attachment")
+        if not isinstance(attachment, dict) or not attachment.get("path"):
+            return map_context
+        if self.vision_service is None:
+            return {**map_context, "vision_reason": "图片识别服务暂时不可用，请稍后重试。"}
+
+        stage_callback("grounding", "running", "正在识别图片内容", "")
+        try:
+            result = self.vision_service.understand_image(
+                image_path=str(attachment.get("path") or ""),
+                question=message,
+            )
+        except Exception as exc:  # pragma: no cover - defensive runtime branch
+            result = {"used_vision": False, "reason": f"图片识别失败：{exc}"}
+
+        enriched = {**map_context, "vision_result": result}
+        if result.get("used_vision") and str(result.get("summary") or "").strip():
+            summary = str(result.get("summary") or "").strip()
+            stage_callback("grounding", "success", "图片识别完成", summary[:180])
+            enriched.update(
+                {
+                    "vision_used": True,
+                    "vision_summary": summary,
+                    "vision_provider": result.get("provider", ""),
+                    "vision_snapshot_path": result.get("snapshot_path", ""),
+                }
+            )
+            return enriched
+
+        reason = str(result.get("reason") or "图片识别服务没有返回可用结果，请稍后重试。")
+        stage_callback("grounding", "success", "图片识别暂不可用", reason)
+        enriched.update(
+            {
+                "vision_used": False,
+                "vision_reason": reason,
+                "vision_snapshot_path": result.get("snapshot_path", ""),
+            }
+        )
+        return enriched
+
     def _enrich_map_reading_with_vision(
         self,
         project: ProjectRecord,
@@ -1833,8 +1931,8 @@ class AssistantSessionEngine:
                 screen_snapshot=screen_snapshot,
             )
         except Exception as exc:  # pragma: no cover - defensive runtime branch
-            reason = f"地图视觉读图调用异常，已回退到结构化地图上下文：{exc}"
-            stage_callback("grounding", "success", "截图读图回退", reason)
+            reason = f"地图图片识别服务暂时不可用：{exc}"
+            stage_callback("grounding", "success", "截图识别暂不可用", reason)
             return {**map_context, "vision_reason": reason}
 
         enriched = {**map_context, "vision_result": vision_result}
@@ -1851,8 +1949,8 @@ class AssistantSessionEngine:
             )
             return enriched
 
-        reason = str(vision_result.get("reason") or "地图视觉读图未返回可用结果，已回退到结构化地图上下文。")
-        stage_callback("grounding", "success", "截图读图回退", reason)
+        reason = str(vision_result.get("reason") or "地图图片识别服务暂时不可用，请稍后重试。")
+        stage_callback("grounding", "success", "截图识别暂不可用", reason)
         enriched.update(
             {
                 "vision_used": False,
@@ -1944,13 +2042,36 @@ class AssistantSessionEngine:
         stage_callback: Callable[[str, str, str, str], None],
         teaching_task: str = "",
     ) -> Dict[str, Any]:
-        map_context = self._enrich_map_reading_with_vision(project, message, map_context, stage_callback)
+        map_context = self._enrich_image_attachment_with_vision(message, map_context, stage_callback)
+        if not map_context.get("image_attachment"):
+            map_context = self._enrich_map_reading_with_vision(project, message, map_context, stage_callback)
         map_context = self._inject_session_digest(map_context, teaching_task)
         llm_available = self.knowledge.minimax_client is not None and self.config.minimax_enabled()
-        stage_label = "AI 通用知识 + 在线检索" if llm_available else "本地知识库检索"
+        if (map_context.get("image_attachment") or map_context.get("screen_snapshot")) and not map_context.get("vision_summary"):
+            reason = str(map_context.get("vision_reason") or "图片识别服务暂时不可用，请稍后重试。")
+            knowledge = {
+                "direct_answer": reason,
+                "mechanism_explanation": "",
+                "map_grounding": "",
+                "teaching_points": [],
+                "citations": [],
+                "confidence": 0.0,
+                "answer_type": "map_reading",
+                "retrieval_trace": [{"source": "map_vision", "status": "error", "reason": reason}],
+                "presentation": {"show_mechanism": False, "show_map_grounding": False, "show_teaching_points": False},
+                "llm_used": False,
+                "retrieval_mode": "none",
+            }
+        else:
+            knowledge = self.knowledge.answer(message, map_context=map_context, teaching_task=teaching_task)
+        retrieval_mode = str(knowledge.get("retrieval_mode") or "none")
+        stage_label = {
+            "local": "正在查找项目知识库",
+            "web": "正在核对在线资料",
+            "local_web": "正在结合知识库与在线资料",
+        }.get(retrieval_mode, "正在组织回答")
         stage_callback("retrieval", "running", stage_label, "")
-        knowledge = self.knowledge.answer(message, map_context=map_context, teaching_task=teaching_task)
-        if teaching_task:
+        if teaching_task in {"teaching_question", "teaching_reflect"}:
             knowledge["presentation"] = {
                 **dict(knowledge.get("presentation") or {}),
                 "teaching_points_title": "课堂教学要点",
@@ -1959,14 +2080,11 @@ class AssistantSessionEngine:
         source_label = "AI 回答" if llm_used else "本地知识库"
         stage_callback("retrieval", "success", f"{source_label} · {knowledge['answer_type']}", "")
         stage_callback("grounding", "running", "Composing grounded answer", "")
-        assistant_message = self.knowledge.render_public_answer(knowledge, include_teaching_points=True)
+        assistant_message = self.knowledge.render_public_answer(
+            knowledge,
+            include_teaching_points=teaching_task in {"teaching_question", "teaching_reflect"},
+        )
         teaching_contract: Optional[Dict[str, str]] = None
-        if teaching_task:
-            scaffold_parts = _teaching_scaffold_parts(knowledge, map_context)
-            teaching_contract = scaffold_parts
-            assistant_message = "\n\n".join(
-                part for part in [assistant_message, _format_scaffold_text(scaffold_parts)] if part
-            ).strip()
         stage_callback("grounding", "success", "Knowledge answer completed", "")
         result_intent = teaching_task or "knowledge"
         self.memory.append(
@@ -1980,7 +2098,14 @@ class AssistantSessionEngine:
             conversation,
             {"last_intent": result_intent},
             map_context,
-            pinned_state_updates={"last_answer_type": knowledge["answer_type"]},
+            pinned_state_updates={
+                "last_answer_type": knowledge["answer_type"],
+                **(
+                    {"last_image_attachment": dict(map_context.get("image_attachment") or {})}
+                    if map_context.get("image_attachment")
+                    else {}
+                ),
+            },
         )
         planner_label = "knowledge_llm" if llm_used else "knowledge_engine"
         return {

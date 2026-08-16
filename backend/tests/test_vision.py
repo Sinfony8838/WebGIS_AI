@@ -65,7 +65,7 @@ class MapVisionServiceTest(unittest.TestCase):
         self.assertIn("东南多", result["summary"])
         self.assertTrue(Path(result["snapshot_path"]).exists())
         self.assertEqual(len(fake_client.calls), 1)
-        self.assertIn("直接读取", fake_client.calls[0]["prompt"])
+        self.assertIn("Read this classroom geography map", fake_client.calls[0]["prompt"])
 
     def test_understand_map_falls_back_when_not_configured(self) -> None:
         config = self.build_config()
@@ -107,6 +107,41 @@ class MapVisionServiceTest(unittest.TestCase):
         self.assertIn("已回退", result["reason"])
         # Snapshot still saved so the operator can inspect what was sent.
         self.assertTrue(Path(result["snapshot_path"]).exists())
+
+    def test_understand_image_uses_user_question_without_map_coordinates(self) -> None:
+        config = self.build_config()
+        config.vision_enabled = True
+        config.vision_provider = "minimax_mcp"
+        config.minimax_token_plan_key = "token-plan-key"
+        fake_client = FakeMcpClient()
+        service = MapVisionService(config, mcp_client=fake_client)
+        image_path = config.uploads_dir / "terrain.png"
+        image_path.write_bytes(b"image")
+
+        result = service.understand_image(str(image_path), "这张图是什么地貌？")
+
+        self.assertTrue(result["used_vision"])
+        self.assertEqual(len(fake_client.calls), 1)
+        prompt = fake_client.calls[0]["prompt"]
+        self.assertIn("这张图是什么地貌", prompt)
+        self.assertNotIn("zoom=", prompt)
+        self.assertNotIn("center=", prompt)
+
+    def test_vision_summary_removes_corrupted_ocr_and_coordinate_noise(self) -> None:
+        summary = MapVisionService._sanitize_vision_summary(
+            "# Visual Analysis\n"
+            "- Elevation is highest in the northwest.\n"
+            "- Source label: ����ͼ��\n"
+            "## Map Coordinates (graticule)\n"
+            "- Latitude lines: 60��, 64��\n"
+            "## Spatial Relationships\n"
+            "- Coastal areas are low-lying."
+        )
+
+        self.assertIn("highest in the northwest", summary)
+        self.assertIn("Coastal areas are low-lying", summary)
+        self.assertNotIn("����", summary)
+        self.assertNotIn("Latitude", summary)
 
 
 class RuntimeVisionIntegrationTest(unittest.TestCase):

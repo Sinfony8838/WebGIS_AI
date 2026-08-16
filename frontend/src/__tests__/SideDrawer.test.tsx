@@ -113,12 +113,58 @@ describe("SideDrawer", () => {
     const scoped = within(tablist as HTMLElement);
 
     expect(scoped.getByRole("tab", { name: /资料搜索/ })).toBeInTheDocument();
+    expect(scoped.getByRole("tab", { name: /图片库/ })).toBeInTheDocument();
     expect(scoped.getByRole("tab", { name: /图层/ })).toBeInTheDocument();
     expect(scoped.getByRole("tab", { name: /检索/ })).toBeInTheDocument();
     expect(scoped.getByRole("tab", { name: /区域统计/ })).toBeInTheDocument();
     expect(scoped.queryByRole("tab", { name: /^资料$/ })).toBeNull();
     expect(scoped.queryByRole("tab", { name: /产物/ })).toBeNull();
     expect(scoped.queryByText("当前状态")).toBeNull();
+  });
+
+  it("shows only project images and supports button and upload attachment paths", () => {
+    const onAttachImage = vi.fn();
+    const onUploadImage = vi.fn();
+    render(
+      <SideDrawer
+        {...baseProps}
+        activeTab="images"
+        outputs={[
+          {
+            artifact_id: "snapshot_1",
+            project_id: "project_1",
+            job_id: "job_1",
+            artifact_type: "map_snapshot",
+            title: "长江流域截图",
+            path: "outputs/map.png",
+            metadata: { public_url: "/files/map.png", mime_type: "image/png" },
+            created_at: "2026-08-11T09:00:00+08:00"
+          },
+          {
+            artifact_id: "report_1",
+            project_id: "project_1",
+            job_id: "job_2",
+            artifact_type: "report",
+            title: "不应展示的报告",
+            path: "outputs/report.md",
+            metadata: {},
+            created_at: "2026-08-11T09:00:00+08:00"
+          }
+        ]}
+        onAttachImage={onAttachImage}
+        onUploadImage={onUploadImage}
+      />
+    );
+
+    expect(screen.getByText("长江流域截图")).toBeInTheDocument();
+    expect(screen.queryByText("不应展示的报告")).toBeNull();
+    fireEvent.click(screen.getByText("加入助教"));
+    expect(onAttachImage).toHaveBeenCalledWith(expect.objectContaining({ artifact_id: "snapshot_1" }));
+
+    const file = new File(["image"], "terrain.jpg", { type: "image/jpeg" });
+    const input = document.querySelector(".image-library-upload input") as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [file] } });
+    expect(onUploadImage).toHaveBeenCalledWith(file);
   });
 
   it("renders one-map area statistics", () => {

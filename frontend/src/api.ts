@@ -12,6 +12,7 @@ import type {
   DatasetCatalogResponse,
   DatasetStatsResponse,
   HealthResponse,
+  ImageAttachment,
   JobRecord,
   KnowledgeBaseItem,
   KnowledgeLayerRegisterResponse,
@@ -233,6 +234,7 @@ export async function sendAssistantMessage(
     history?: ChatMessage[];
     screenSnapshot?: ScreenSnapshot;
     teachingContext?: TeachingContext;
+    imageAttachments?: Array<Pick<ImageAttachment, "artifact_id">>;
   }
 ): Promise<{ job_id: string; conversation_id?: string; assistant_mode?: AssistantMode }> {
   return requestJson<{ job_id: string; conversation_id?: string; assistant_mode?: AssistantMode }>("/assistant/messages", {
@@ -248,8 +250,26 @@ export async function sendAssistantMessage(
       target,
       input_mode: inputMode,
       screen_snapshot: options?.screenSnapshot || {},
-      teaching_context: options?.teachingContext || mapContext.teaching_context || {}
+      teaching_context: options?.teachingContext || mapContext.teaching_context || {},
+      image_attachments: options?.imageAttachments || []
     })
+  });
+}
+
+export async function uploadImageLibraryAsset(
+  projectId: string,
+  file: File,
+  title = ""
+): Promise<{ job_id: string; artifact: ArtifactRecord }> {
+  const formData = new FormData();
+  formData.set("project_id", projectId);
+  formData.set("file", file);
+  if (title.trim()) {
+    formData.set("title", title.trim());
+  }
+  return requestJson<{ job_id: string; artifact: ArtifactRecord }>("/image-library/upload", {
+    method: "POST",
+    body: formData
   });
 }
 

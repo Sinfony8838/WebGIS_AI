@@ -107,7 +107,7 @@ describe("CopilotWidget", () => {
     expect(screen.getByLabelText("展开智能助教")).toBeInTheDocument();
   });
 
-  it("renders the structured teaching contract as three visual blocks", () => {
+  it("renders assistant replies naturally without rebuilding legacy teaching cards", () => {
     renderWidget({
       chatLog: [
         {
@@ -123,31 +123,62 @@ describe("CopilotWidget", () => {
       ]
     });
 
-    // The three contract parts render as labeled blocks.
-    expect(screen.getByText("证据或观察点")).toBeInTheDocument();
-    expect(screen.getByText("给学生的问题")).toBeInTheDocument();
-    expect(screen.getByText("教师收束语或下一步")).toBeInTheDocument();
-    // Structured values are rendered.
-    expect(screen.getByText("观察高值区与低值区的分布。")).toBeInTheDocument();
-    expect(screen.getByText("收束到区域认知方法：位置-格局-成因。")).toBeInTheDocument();
-    // The legacy "教学处理：" text block is stripped (not duplicated) when the
-    // structured contract is rendered.
-    expect(screen.queryByText(/教学处理/)).toBeNull();
-    // The answer body before the scaffold is still shown.
+    expect(screen.queryByText("证据或观察点")).toBeNull();
+    expect(screen.queryByText("给学生的问题")).toBeNull();
+    expect(screen.queryByRole("button", { name: "复制问题" })).toBeNull();
     expect(screen.getByText(/东部人口密集与自然条件/)).toBeInTheDocument();
-    // The copy-question button is present.
-    expect(screen.getByRole("button", { name: "复制问题" })).toBeInTheDocument();
   });
 
-  it("fires onQuickPrompt with the map-reading prompt when the 读图 chip is clicked", () => {
-    const { onQuickPrompt } = renderWidget();
+  it("fills the composer instead of auto-sending when the 读图 chip is clicked", () => {
+    const { onInputChange, onQuickPrompt } = renderWidget();
 
     expect(screen.getByTestId("copilot-capability-chips")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("copilot-chip-read-map"));
 
-    expect(onQuickPrompt).toHaveBeenCalledTimes(1);
-    const prompt = onQuickPrompt.mock.calls[0][0] as string;
-    expect(prompt).toContain("读图讲解");
+    expect(onQuickPrompt).not.toHaveBeenCalled();
+    expect(onInputChange).toHaveBeenCalledTimes(1);
+    expect(String(onInputChange.mock.calls[0][0])).toContain("附加的图片");
+  });
+
+  it("previews, removes, uploads, and sends an image without text", () => {
+    const onRemoveImage = vi.fn();
+    const onUploadImage = vi.fn();
+    const { onSubmit } = renderWidget({
+      inputValue: "",
+      pendingImage: {
+        artifact_id: "artifact_1",
+        title: "河流地貌",
+        public_url: "http://localhost/image.png",
+        mime_type: "image/png"
+      },
+      onRemoveImage,
+      onUploadImage
+    });
+
+    expect(screen.getByTestId("copilot-image-preview")).toHaveTextContent("河流地貌");
+    fireEvent.submit(screen.getByTestId("copilot-input").closest("form")!);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByLabelText("移除待发送图片"));
+    expect(onRemoveImage).toHaveBeenCalledTimes(1);
+
+    const file = new File(["image"], "map.webp", { type: "image/webp" });
+    const input = document.querySelector(".copilot-image-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [file] } });
+    expect(onUploadImage).toHaveBeenCalledWith(file);
+  });
+
+  it("accepts an image dragged from the project library", () => {
+    const onAttachImage = vi.fn();
+    renderWidget({ onAttachImage });
+    const form = screen.getByTestId("copilot-input").closest("form")!;
+    const attachment = { artifact_id: "artifact_2", title: "气候图", public_url: "/files/climate.png" };
+    fireEvent.drop(form, {
+      dataTransfer: {
+        files: [],
+        getData: (type: string) => type === "application/x-webgis-image" ? JSON.stringify(attachment) : ""
+      }
+    });
+    expect(onAttachImage).toHaveBeenCalledWith(attachment);
   });
 
   it("shows the teaching phase chip when a workflow phase is active", () => {

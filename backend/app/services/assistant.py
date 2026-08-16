@@ -480,7 +480,7 @@ class AssistantService:
         return f"当前视域的近似尺度为：东西约 {approximate_width_km:.0f} 千米，南北约 {approximate_height_km:.0f} 千米。"
 
     def build_export_hint(self) -> str:
-        return "当前任务包含导出意图。请点击顶部“导出截图”，系统会把当前课堂画面保存为本地成果。"
+        return "当前任务包含截图意图。请点击顶部“截图”并框选地图区域，保存后可在项目图片库中查看或加入智能助教。"
 
     def build_poi_hint(self, keyword: str, count: int) -> str:
         if count <= 0:

@@ -74,6 +74,7 @@ class AssistantMessageRequest(BaseModel):
     input_mode: str = "text"
     screen_snapshot: Dict[str, Any] = Field(default_factory=dict)
     teaching_context: Dict[str, Any] = Field(default_factory=dict)
+    image_attachments: list[Dict[str, Any]] = Field(default_factory=list)
 
 
 class AssistantConfirmRequest(BaseModel):
@@ -454,9 +455,32 @@ def submit_assistant_message(request: AssistantMessageRequest) -> Dict[str, Any]
             request.input_mode,
             request.screen_snapshot,
             request.teaching_context,
+            request.image_attachments,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/image-library/upload")
+async def upload_image_library_asset(
+    project_id: str = Form(...),
+    file: UploadFile = File(...),
+    title: str = Form(""),
+) -> Dict[str, Any]:
+    try:
+        raw = await file.read()
+        return runtime.upload_image_asset(
+            project_id=project_id,
+            filename=file.filename or "uploaded_image",
+            raw_bytes=raw,
+            title=title,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/assistant/confirm")

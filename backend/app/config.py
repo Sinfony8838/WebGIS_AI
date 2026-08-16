@@ -168,6 +168,12 @@ class AppConfig:
     vision_provider: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_VISION_PROVIDER", "").strip().lower())
     vision_model: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_VISION_MODEL", "").strip())
     minimax_token_plan_key: str = field(default_factory=lambda: _resolve_env_value(MINIMAX_TOKEN_PLAN_KEY_ENV_KEYS, "", "unset")[0])
+    minimax_mcp_command: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_MINIMAX_MCP_COMMAND", "uvx"))
+    minimax_mcp_package: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_MINIMAX_MCP_PACKAGE", "minimax-coding-plan-mcp"))
+    minimax_mcp_compat_package: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_MINIMAX_MCP_COMPAT_PACKAGE", "mcp>=1.2,<2"))
+    minimax_api_host: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_MINIMAX_API_HOST", "https://api.minimaxi.com"))
+    minimax_mcp_base_path: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_MINIMAX_MCP_BASE_PATH", ""))
+    minimax_mcp_resource_mode: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_MINIMAX_MCP_RESOURCE_MODE", "local"))
     vision_enabled: bool = field(
         default_factory=lambda: os.getenv("WEBGIS_AI_VISION_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
     )
@@ -196,6 +202,10 @@ class AppConfig:
         self.llm_provider = normalized_provider
         self.minimax_base_url = (self.minimax_base_url or DEFAULT_MINIMAX_BASE_URL).strip() or DEFAULT_MINIMAX_BASE_URL
         self.minimax_model = (self.minimax_model or DEFAULT_MINIMAX_MODEL).strip() or DEFAULT_MINIMAX_MODEL
+        self.minimax_mcp_command = (self.minimax_mcp_command or "uvx").strip() or "uvx"
+        self.minimax_mcp_package = (self.minimax_mcp_package or "minimax-coding-plan-mcp").strip() or "minimax-coding-plan-mcp"
+        self.minimax_mcp_compat_package = self.minimax_mcp_compat_package.strip()
+        self.minimax_api_host = (self.minimax_api_host or "https://api.minimaxi.com").strip().rstrip("/")
         # 视觉读图唯一后端：MiniMax Token Plan MCP。
         if not self.vision_provider or self.vision_provider == "mimo":
             self.vision_provider = "minimax_mcp"

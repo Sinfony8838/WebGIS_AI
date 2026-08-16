@@ -39,6 +39,35 @@ TRANSPARENT_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR42mP8z8BQDwAFgwJ/lU9nWQAAAABJRU5ErkJggg=="
 )
 
+MAX_IMAGE_LIBRARY_BYTES = 20 * 1024 * 1024
+SUPPORTED_IMAGE_MIME_BY_SUFFIX = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+}
+
+
+def _detect_image_mime(raw_bytes: bytes) -> str:
+    if raw_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if raw_bytes.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if raw_bytes.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(raw_bytes) >= 12 and raw_bytes[:4] == b"RIFF" and raw_bytes[8:12] == b"WEBP":
+        return "image/webp"
+    return ""
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
 
 def _safe_id(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_-]+", "_", str(value or "").strip())
@@ -732,12 +761,21 @@ class WebGISRuntime:
         input_mode: str = "text",
         screen_snapshot: Optional[Dict[str, Any]] = None,
         teaching_context: Optional[Dict[str, Any]] = None,
+        image_attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         # Heavy GIS work moved to /workflow/*; assistant actions are WebGIS-only.
         normalized_target = "webgis"
         normalized_input_mode = input_mode if input_mode in {"text", "voice"} else "text"
         normalized_mode = assistant_mode if assistant_mode in {"teaching", "knowledge", "tool"} else "teaching"
-        use_v2 = self.config.assistant_v2_enabled or normalized_mode == "teaching" or assistant_mode == "knowledge" or bool(conversation_id) or bool(history)
+        resolved_attachments = self.resolve_image_attachments(project_id, image_attachments or [])
+        use_v2 = (
+            self.config.assistant_v2_enabled
+            or normalized_mode == "teaching"
+            or assistant_mode == "knowledge"
+            or bool(conversation_id)
+            or bool(history)
+            or bool(resolved_attachments)
+        )
         job = self.store.create_job(
             project_id=project_id,
             job_type="assistant",
@@ -753,6 +791,7 @@ class WebGISRuntime:
                 "input_mode": normalized_input_mode,
                 "screen_snapshot": screen_snapshot or {},
                 "teaching_context": teaching_context or {},
+                "image_attachments": image_attachments or [],
             },
             stages=build_assistant_v2_stages() if use_v2 else build_workflow_stages(),
         )
@@ -771,6 +810,7 @@ class WebGISRuntime:
                     normalized_input_mode,
                     screen_snapshot or {},
                     teaching_context or {},
+                    resolved_attachments,
                 ),
                 daemon=True,
             ).start()
@@ -818,6 +858,114 @@ class WebGISRuntime:
         messages = [item.to_dict() for item in self.store.list_conversation_messages(conversation_id)]
         return {"status": "success", **conversation.to_dict(), "messages": messages}
 
+    def upload_image_asset(
+        self,
+        project_id: str,
+        filename: str,
+        raw_bytes: bytes,
+        title: str = "",
+    ) -> Dict[str, Any]:
+        self._require_project(project_id)
+        if not raw_bytes:
+            raise ValueError("图片文件为空。")
+        if len(raw_bytes) > MAX_IMAGE_LIBRARY_BYTES:
+            raise ValueError("图片不能超过 20MB。")
+        detected_mime = _detect_image_mime(raw_bytes)
+        if not detected_mime:
+            raise ValueError("仅支持 JPEG、PNG、WebP 或 GIF 图片。")
+
+        original_suffix = Path(filename or "").suffix.lower()
+        expected_mime = SUPPORTED_IMAGE_MIME_BY_SUFFIX.get(original_suffix)
+        if expected_mime and expected_mime != detected_mime:
+            raise ValueError("图片扩展名与实际文件格式不一致。")
+        suffix = original_suffix if expected_mime else next(
+            key for key, value in SUPPORTED_IMAGE_MIME_BY_SUFFIX.items() if value == detected_mime
+        )
+        safe_stem = _safe_id(Path(filename or "uploaded_image").stem)[:80]
+        output_dir = self.config.project_upload_dir(project_id) / "image_library"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = self.config.unique_path(output_dir, f"{safe_stem}{suffix}")
+
+        job = self.store.create_job(
+            project_id=project_id,
+            job_type="image_upload",
+            title=title.strip() or Path(filename or "图片").stem or "图片",
+            workflow_type="image_library_upload",
+            request={"filename": filename, "size": len(raw_bytes)},
+        )
+        try:
+            self.store.set_job_status(job.job_id, "running")
+            self.store.update_job_stage(job.job_id, "artifacts", "running", "正在保存图片。")
+            output_path.write_bytes(raw_bytes)
+            public_url = self.config.public_url_for_path(output_path)
+            artifact = self.store.register_artifact(
+                project_id=project_id,
+                job_id=job.job_id,
+                artifact_type="uploaded_image",
+                title=title.strip() or Path(filename or "图片").stem or "图片",
+                path=str(output_path),
+                metadata={
+                    "public_url": public_url,
+                    "mime_type": detected_mime,
+                    "source": "upload",
+                    "original_filename": filename,
+                    "size": len(raw_bytes),
+                },
+            )
+            self.store.update_job_stage(job.job_id, "artifacts", "success", "图片已保存到图片库。")
+            self.store.set_job_status(
+                job.job_id,
+                "completed",
+                result={"status": "success", "artifact": artifact.to_dict()},
+            )
+            return {"status": "success", "job_id": job.job_id, "artifact": artifact.to_dict()}
+        except Exception as exc:
+            self._fail_job(job.job_id, "image_library_upload", str(exc))
+            raise
+
+    def resolve_image_attachments(
+        self,
+        project_id: str,
+        attachments: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        if len(attachments) > 1:
+            raise ValueError("每条消息暂时只能附加一张图片。")
+        resolved: List[Dict[str, Any]] = []
+        for item in attachments:
+            artifact_id = str(item.get("artifact_id") or "").strip()
+            if not artifact_id:
+                raise ValueError("图片附件缺少 artifact_id。")
+            artifact = self.store.get_artifact(artifact_id)
+            if artifact is None:
+                raise KeyError(f"Unknown artifact: {artifact_id}")
+            if artifact.project_id != project_id:
+                raise ValueError("不能使用其他项目的图片。")
+            if artifact.artifact_type not in {"map_snapshot", "uploaded_image"}:
+                raise ValueError("该产物不是可识别的图片。")
+            path = Path(artifact.path).resolve()
+            allowed_roots = (self.config.uploads_dir.resolve(), self.config.outputs_dir.resolve())
+            if not any(_is_relative_to(path, root) for root in allowed_roots):
+                raise ValueError("图片路径不在允许的项目目录中。")
+            if not path.is_file() or path.suffix.lower() not in SUPPORTED_IMAGE_MIME_BY_SUFFIX:
+                raise ValueError("图片文件不存在或格式不受支持。")
+            detected_mime = _detect_image_mime(path.read_bytes()[:32])
+            expected_mime = SUPPORTED_IMAGE_MIME_BY_SUFFIX[path.suffix.lower()]
+            if not detected_mime or detected_mime != expected_mime:
+                raise ValueError("图片文件内容与格式不一致。")
+            resolved.append(
+                {
+                    "artifact_id": artifact.artifact_id,
+                    "title": artifact.title,
+                    "path": str(path),
+                    "public_url": str(artifact.metadata.get("public_url") or self.config.public_url_for_path(path)),
+                    "mime_type": str(
+                        artifact.metadata.get("mime_type")
+                        or SUPPORTED_IMAGE_MIME_BY_SUFFIX.get(path.suffix.lower(), "")
+                    ),
+                }
+            )
+        return resolved
+
     def export_snapshot(
         self,
         project_id: str,
@@ -841,6 +989,10 @@ class WebGISRuntime:
             if ";base64" not in prefix:
                 raise ValueError("Snapshot export requires a base64 data URL")
             raw = base64.b64decode(encoded.encode("utf-8"))
+            if len(raw) > MAX_IMAGE_LIBRARY_BYTES:
+                raise ValueError("截图不能超过 20MB。")
+            if _detect_image_mime(raw) != "image/png" or not prefix.lower().startswith("data:image/png"):
+                raise ValueError("截图必须是有效的 PNG 图片。")
             output_path = self.config.project_output_dir(project_id) / f"snapshot_{job.job_id}.png"
             output_path.write_bytes(raw)
             artifact = self.store.register_artifact(
@@ -849,7 +1001,13 @@ class WebGISRuntime:
                 artifact_type="map_snapshot",
                 title=title or "课堂导图",
                 path=str(output_path),
-                metadata={"public_url": self.config.public_url_for_path(output_path), "note": note},
+                metadata={
+                    "public_url": self.config.public_url_for_path(output_path),
+                    "note": note,
+                    "mime_type": "image/png",
+                    "source": "screenshot",
+                    "size": len(raw),
+                },
             )
             self.store.add_recent_action(project_id, "导出课堂截图", title or "课堂导图", status="success")
             self.store.update_job_stage(job.job_id, "artifacts", "success", "课堂截图已保存。")
@@ -883,7 +1041,7 @@ class WebGISRuntime:
         return {"status": "success", **artifact.to_dict()}
 
     def list_outputs(self, project_id: Optional[str] = None) -> Dict[str, Any]:
-        teacher_facing = {"map_snapshot", "annotation_export", "dataset_import", "assistant_note", "query_summary"}
+        teacher_facing = {"map_snapshot", "uploaded_image", "annotation_export", "dataset_import", "assistant_note", "query_summary"}
         items = [item for item in self.store.list_outputs(project_id=project_id) if item.get("artifact_type") in teacher_facing]
         return {"status": "success", "items": items}
 
@@ -1396,6 +1554,7 @@ class WebGISRuntime:
         input_mode: str = "text",
         screen_snapshot: Optional[Dict[str, Any]] = None,
         teaching_context: Optional[Dict[str, Any]] = None,
+        image_attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         try:
             project = self._require_project(project_id)
@@ -1403,6 +1562,8 @@ class WebGISRuntime:
                 map_context = {**map_context, "screen_snapshot": screen_snapshot}
             if teaching_context:
                 map_context = {**map_context, "teaching_context": teaching_context}
+            if image_attachments:
+                map_context = {**map_context, "image_attachments": image_attachments}
             self.store.set_job_status(job_id, "running")
             self.store.append_job_step(job_id, "route", "assistant session engine started", "running")
 

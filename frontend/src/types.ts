@@ -247,6 +247,14 @@ export type ChatMessage = {
   intent?: string | null;
   /** Tools the agent executed for this reply - drives the collapsible tool-use trace. */
   actions_executed?: ExecutedAction[] | null;
+  image_attachment?: ImageAttachment | null;
+};
+
+export type ImageAttachment = {
+  artifact_id: string;
+  title: string;
+  public_url: string;
+  mime_type?: string;
 };
 
 export type CitationRecord = {
