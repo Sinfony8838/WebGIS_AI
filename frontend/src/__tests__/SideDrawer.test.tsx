@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { SideDrawer } from "../components/SideDrawer";
 
 const baseProps = {
@@ -203,6 +203,34 @@ describe("SideDrawer", () => {
       model: "image-01",
       aspectRatio: "4:3"
     });
+  });
+
+  it("prevents duplicate paid generation submissions while a request is pending", async () => {
+    let resolveGeneration: (() => void) | undefined;
+    const onGenerateImage = vi.fn(
+      () => new Promise<void>((resolve) => {
+        resolveGeneration = resolve;
+      })
+    );
+    const { container } = render(
+      <SideDrawer
+        {...baseProps}
+        activeTab="images"
+        imageGenerationConfigured
+        onGenerateImage={onGenerateImage}
+      />
+    );
+    const view = within(container);
+    const prompt = view.getByLabelText("MiniMax AI 生成");
+    const form = container.querySelector(".image-generation-form") as HTMLFormElement;
+    fireEvent.change(prompt, { target: { value: "季风环流教学示意图" } });
+
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+
+    expect(onGenerateImage).toHaveBeenCalledTimes(1);
+    resolveGeneration?.();
+    await waitFor(() => expect(prompt).toHaveValue(""));
   });
 
   it("renders one-map area statistics", () => {

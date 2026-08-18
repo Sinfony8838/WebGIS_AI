@@ -241,8 +241,9 @@ class AssistantService:
         target_layer = None if is_material_video_request else self._resolve_target_layer(message, project)
         active_layer = next((layer for layer in project.layers if layer.layer_id == project.active_layer_id), None)
         search_result = self._resolve_search_result(message, project)
+        visual_query_action = self._resolve_visual_query_action(message, lowered)
 
-        image_generation_action = self._resolve_image_generation_action(message, lowered)
+        image_generation_action = None if visual_query_action else self._resolve_image_generation_action(message, lowered)
         if image_generation_action:
             return {
                 "assistant_message": "我可以按这段描述生成一张 AI 教学示意图。生成会消耗 MiniMax API 余额，需要你确认后执行。",
@@ -300,7 +301,6 @@ class AssistantService:
             actions.append(poi_action)
             narrative_parts.append("我会在当前课堂范围内执行 POI 检索。")
 
-        visual_query_action = self._resolve_visual_query_action(message, lowered)
         if visual_query_action:
             actions.append(visual_query_action["action"])
             narrative_parts.append(visual_query_action["narrative"])
@@ -359,6 +359,8 @@ class AssistantService:
         action_hints = ("生成", "画一张", "画一个", "绘制", "创作", "制作一张", "做一张")
         image_hints = ("图", "图片", "插画", "示意图", "海报")
         if not any(hint in lowered for hint in action_hints) or not any(hint in lowered for hint in image_hints):
+            return None
+        if "图层" in lowered:
             return None
         if any(hint in lowered for hint in ("识别", "分析这张", "读这张", "看看这张")):
             return None

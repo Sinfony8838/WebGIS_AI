@@ -3,13 +3,14 @@ from __future__ import annotations
 import base64
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from backend.app.config import AppConfig
 from backend.app.runtime import TRANSPARENT_PNG, WebGISRuntime
-from backend.app.services.minimax_image_client import MiniMaxImageClient
+from backend.app.services.minimax_image_client import MiniMaxImageClient, MiniMaxImageError
 from backend.app.store import RuntimeStore
 
 
@@ -78,6 +79,19 @@ class MiniMaxImageClientTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "比例"):
             client.generate("地貌图", aspect_ratio="5:4")
 
+    def test_client_normalizes_malformed_upstream_status_to_safe_error(self) -> None:
+        client = MiniMaxImageClient(AppConfig(minimax_api_key="key"))
+        response = _Response(
+            {
+                "data": {"image_base64": [base64.b64encode(TRANSPARENT_PNG).decode("ascii")]},
+                "base_resp": {"status_code": "not-a-number", "status_msg": "unexpected status"},
+            }
+        )
+
+        with patch("urllib.request.urlopen", return_value=response):
+            with self.assertRaisesRegex(MiniMaxImageError, "状态"):
+                client.generate("水循环示意图")
+
 
 class ImageGenerationRuntimeTest(unittest.TestCase):
     def build_runtime(self) -> tuple[WebGISRuntime, str]:
@@ -90,10 +104,19 @@ class ImageGenerationRuntimeTest(unittest.TestCase):
         config.uploads_dir = config.data_dir / "uploads"
         config.outputs_dir = config.data_dir / "outputs"
         config.state_file = config.state_dir / "runtime.json"
+        config.assistant_v2_enabled = True
         config.ensure_dirs()
         runtime = WebGISRuntime(config=config, store=RuntimeStore(config.state_file))
         project_id = runtime.create_project()["project_id"]
         return runtime, project_id
+
+    def wait_for_job(self, runtime: WebGISRuntime, job_id: str) -> dict:
+        for _ in range(200):
+            job = runtime.get_job(job_id)
+            if job["status"] in {"completed", "failed"}:
+                return job
+            time.sleep(0.02)
+        self.fail("assistant job did not finish")
 
     def test_generated_image_is_persisted_and_can_be_attached(self) -> None:
         runtime, project_id = self.build_runtime()
@@ -128,6 +151,24 @@ class ImageGenerationRuntimeTest(unittest.TestCase):
             runtime.generate_image_asset(project_id, "地形剖面图")
         self.assertFalse(any(item["artifact_type"] == "generated_image" for item in runtime.list_outputs(project_id)["items"]))
 
+    def test_artifact_registration_failure_removes_written_image(self) -> None:
+        runtime, project_id = self.build_runtime()
+        runtime.image_generation_service.generate = lambda *args, **kwargs: {
+            "raw_bytes": TRANSPARENT_PNG,
+            "mime_type": "image/png",
+            "suffix": ".png",
+            "model": "image-01",
+            "aspect_ratio": "16:9",
+            "request_id": "request_1",
+        }
+        output_dir = runtime.config.project_output_dir(project_id) / "generated_images"
+
+        with patch.object(runtime.store, "register_artifact", side_effect=RuntimeError("state write failed")):
+            with self.assertRaisesRegex(RuntimeError, "state write failed"):
+                runtime.generate_image_asset(project_id, "地形剖面示意图")
+
+        self.assertFalse(output_dir.exists() and any(output_dir.iterdir()))
+
     def test_assistant_generation_intent_requires_confirmation(self) -> None:
         runtime, project_id = self.build_runtime()
         project = runtime.store.get_project(project_id)
@@ -157,6 +198,54 @@ class ImageGenerationRuntimeTest(unittest.TestCase):
         plan = runtime.assistant_service.plan_actions("请分析这张地形图", project)
 
         self.assertFalse(any(action["tool_name"] == "generate_image" for action in plan["actions"]))
+
+    def test_gis_layer_generation_does_not_trigger_paid_image(self) -> None:
+        runtime, project_id = self.build_runtime()
+        project = runtime.store.get_project(project_id)
+        self.assertIsNotNone(project)
+
+        plan = runtime.assistant_service.plan_actions("生成2020年地级市人口Top20图层", project)
+
+        self.assertFalse(any(action["tool_name"] == "generate_image" for action in plan["actions"]))
+        self.assertTrue(any(action["tool_name"] == "run_visual_query" for action in plan["actions"]))
+
+    def test_rejected_generation_can_be_requested_again_and_then_approved(self) -> None:
+        runtime, project_id = self.build_runtime()
+        runtime.image_generation_service.generate = lambda *args, **kwargs: {
+            "raw_bytes": TRANSPARENT_PNG,
+            "mime_type": "image/png",
+            "suffix": ".png",
+            "model": "image-01",
+            "aspect_ratio": "16:9",
+            "request_id": "request_1",
+        }
+
+        first = runtime.submit_assistant_message(
+            project_id,
+            "生成一张水循环教学示意图",
+            assistant_mode="teaching",
+        )
+        first_job = self.wait_for_job(runtime, first["job_id"])
+        self.assertTrue(first_job["result"]["requires_confirmation"])
+        conversation_id = first_job["result"]["conversation_id"]
+        reject = runtime.confirm_assistant_action(first_job["result"]["confirmation_id"], decision="reject")
+        reject_job = self.wait_for_job(runtime, reject["job_id"])
+        self.assertEqual(reject_job["result"]["confirmation_status"], "rejected")
+
+        second = runtime.submit_assistant_message(
+            project_id,
+            "生成一张水循环教学示意图",
+            assistant_mode="teaching",
+            conversation_id=conversation_id,
+        )
+        second_job = self.wait_for_job(runtime, second["job_id"])
+        self.assertTrue(second_job["result"]["requires_confirmation"])
+        approve = runtime.confirm_assistant_action(second_job["result"]["confirmation_id"], decision="approve")
+        approve_job = self.wait_for_job(runtime, approve["job_id"])
+
+        self.assertEqual(approve_job["status"], "completed")
+        generated = [item for item in runtime.list_outputs(project_id)["items"] if item["artifact_type"] == "generated_image"]
+        self.assertEqual(len(generated), 1)
 
 
 if __name__ == "__main__":

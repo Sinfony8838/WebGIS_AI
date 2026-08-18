@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import type { ArtifactRecord, DatasetStatsResponse, ImageAttachment, LayerRecord, LayersResponse, PoiSearchItem, ResourceSearchResult } from "../types";
 import { buildPublicFileUrl } from "../api";
 import { LiveResourceSearchPanel } from "./LiveResourceSearchPanel";
@@ -121,6 +121,9 @@ export function SideDrawer({
   const [generationPrompt, setGenerationPrompt] = useState("");
   const [generationModel, setGenerationModel] = useState(imageGenerationModel || "image-01");
   const [generationRatio, setGenerationRatio] = useState("16:9");
+  const [generationSubmitting, setGenerationSubmitting] = useState(false);
+  const generationSubmittingRef = useRef(false);
+  const generationBusy = imageGenerationLoading || generationSubmitting;
   const visibleLayers = useMemo(() => (layerState?.items || []).filter((item) => item.visible), [layerState?.items]);
   const hiddenLayers = useMemo(() => (layerState?.items || []).filter((item) => !item.visible), [layerState?.items]);
   const totalLayers = visibleLayers.length + hiddenLayers.length;
@@ -217,10 +220,24 @@ export function SideDrawer({
                 onSubmit={(event) => {
                   event.preventDefault();
                   const prompt = generationPrompt.trim();
-                  if (!prompt || imageGenerationLoading || !imageGenerationConfigured) return;
-                  void Promise.resolve(onGenerateImage({ prompt, model: generationModel, aspectRatio: generationRatio }))
+                  if (!prompt || generationSubmittingRef.current || imageGenerationLoading || !imageGenerationConfigured) return;
+                  generationSubmittingRef.current = true;
+                  setGenerationSubmitting(true);
+                  let submission: Promise<void> | void;
+                  try {
+                    submission = onGenerateImage({ prompt, model: generationModel, aspectRatio: generationRatio });
+                  } catch {
+                    generationSubmittingRef.current = false;
+                    setGenerationSubmitting(false);
+                    return;
+                  }
+                  void Promise.resolve(submission)
                     .then(() => setGenerationPrompt(""))
-                    .catch(() => undefined);
+                    .catch(() => undefined)
+                    .finally(() => {
+                      generationSubmittingRef.current = false;
+                      setGenerationSubmitting(false);
+                    });
                 }}
               >
                 <label htmlFor={generationPromptId}>MiniMax AI 生成</label>
@@ -258,8 +275,8 @@ export function SideDrawer({
                         <option key={ratio} value={ratio}>{ratio}</option>
                       ))}
                   </select>
-                  <button type="submit" disabled={!generationPrompt.trim() || imageGenerationLoading || !imageGenerationConfigured}>
-                    {imageGenerationLoading ? "生成中…" : "生成并保存"}
+                  <button type="submit" disabled={!generationPrompt.trim() || generationBusy || !imageGenerationConfigured}>
+                    {generationBusy ? "生成中…" : "生成并保存"}
                   </button>
                 </div>
                 <small>

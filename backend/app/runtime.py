@@ -949,6 +949,8 @@ class WebGISRuntime:
                 "prompt_optimizer": bool(prompt_optimizer),
             },
         )
+        output_path: Optional[Path] = None
+        artifact_registered = False
         try:
             self.store.set_job_status(job.job_id, "running")
             self.store.update_job_stage(job.job_id, "artifacts", "running", "正在调用 MiniMax 生成图片。")
@@ -985,6 +987,7 @@ class WebGISRuntime:
                     "aigc_watermark": True,
                 },
             )
+            artifact_registered = True
             self.store.add_recent_action(project_id, "AI生成图片", artifact.title, status="success")
             self.store.update_job_stage(job.job_id, "artifacts", "success", "图片已保存到项目图片库。")
             self.store.set_job_status(
@@ -994,6 +997,11 @@ class WebGISRuntime:
             )
             return {"status": "success", "job_id": job.job_id, "artifact": artifact.to_dict()}
         except Exception as exc:
+            if output_path is not None and not artifact_registered and output_path.exists():
+                try:
+                    output_path.unlink()
+                except OSError:
+                    pass
             self._fail_job(job.job_id, "image_generation", str(exc))
             raise
 

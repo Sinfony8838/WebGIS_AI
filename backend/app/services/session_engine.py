@@ -198,8 +198,10 @@ class ToolPermissionContext:
         )
 
     def decision_for(self, risk_level: str, tool_name: str = "") -> str:
-        if tool_name and tool_name in self.rejected_tools:
-            return "deny"
+        # A rejected confirmation applies only to its frozen plan. Keep
+        # rejected_tools as audit history, but allow a later explicit request
+        # to create a fresh confirmation instead of permanently banning the
+        # tool for the conversation.
         if risk_level in self.deny_rules:
             return "deny"
         if risk_level in self.ask_rules:

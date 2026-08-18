@@ -88,7 +88,11 @@ class MiniMaxImageClient:
             raise MiniMaxImageError("MiniMax 图片服务返回了无法解析的响应。") from exc
 
         base_resp = parsed.get("base_resp") if isinstance(parsed, dict) else None
-        if isinstance(base_resp, dict) and int(base_resp.get("status_code") or 0) != 0:
+        try:
+            upstream_status = int(base_resp.get("status_code") or 0) if isinstance(base_resp, dict) else 0
+        except (TypeError, ValueError) as exc:
+            raise MiniMaxImageError("MiniMax 图片服务返回了无效的状态码。") from exc
+        if isinstance(base_resp, dict) and upstream_status != 0:
             message = str(base_resp.get("status_msg") or "请求未成功")
             raise MiniMaxImageError(f"MiniMax 图片生成失败：{message}")
 
