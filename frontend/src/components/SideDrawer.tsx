@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useId, useMemo, useState } from "react";
 import type { ArtifactRecord, DatasetStatsResponse, ImageAttachment, LayerRecord, LayersResponse, PoiSearchItem, ResourceSearchResult } from "../types";
 import { buildPublicFileUrl } from "../api";
 import { LiveResourceSearchPanel } from "./LiveResourceSearchPanel";
@@ -28,6 +28,10 @@ type Props = {
   onImportResourceResult: (item: ResourceSearchResult) => void;
   onAttachImage?: (image: ImageAttachment) => void;
   onUploadImage?: (file: File) => void;
+  onGenerateImage?: (request: { prompt: string; model: string; aspectRatio: string }) => Promise<void> | void;
+  imageGenerationLoading?: boolean;
+  imageGenerationConfigured?: boolean;
+  imageGenerationModel?: string;
   /** 打开课堂工作流（课中面板；无进行中课堂时打开课前备课面板）。 */
   onOpenLessonWorkflow: () => void;
 };
@@ -107,13 +111,21 @@ export function SideDrawer({
   onImportResourceResult,
   onAttachImage = () => undefined,
   onUploadImage = () => undefined,
+  onGenerateImage = () => undefined,
+  imageGenerationLoading = false,
+  imageGenerationConfigured = false,
+  imageGenerationModel = "image-01",
   onOpenLessonWorkflow
 }: Props) {
+  const generationPromptId = useId();
+  const [generationPrompt, setGenerationPrompt] = useState("");
+  const [generationModel, setGenerationModel] = useState(imageGenerationModel || "image-01");
+  const [generationRatio, setGenerationRatio] = useState("16:9");
   const visibleLayers = useMemo(() => (layerState?.items || []).filter((item) => item.visible), [layerState?.items]);
   const hiddenLayers = useMemo(() => (layerState?.items || []).filter((item) => !item.visible), [layerState?.items]);
   const totalLayers = visibleLayers.length + hiddenLayers.length;
   const imageItems = useMemo(
-    () => outputs.filter((item) => item.artifact_type === "map_snapshot" || item.artifact_type === "uploaded_image"),
+    () => outputs.filter((item) => ["map_snapshot", "uploaded_image", "generated_image"].includes(item.artifact_type)),
     [outputs]
   );
 
@@ -200,6 +212,62 @@ export function SideDrawer({
                   />
                 </label>
               </div>
+              <form
+                className="image-generation-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const prompt = generationPrompt.trim();
+                  if (!prompt || imageGenerationLoading || !imageGenerationConfigured) return;
+                  void Promise.resolve(onGenerateImage({ prompt, model: generationModel, aspectRatio: generationRatio }))
+                    .then(() => setGenerationPrompt(""))
+                    .catch(() => undefined);
+                }}
+              >
+                <label htmlFor={generationPromptId}>MiniMax AI 生成</label>
+                <textarea
+                  id={generationPromptId}
+                  value={generationPrompt}
+                  maxLength={1500}
+                  rows={3}
+                  placeholder="例如：高中地理水循环过程示意图，蓝绿色教学插画，结构清晰"
+                  onChange={(event) => setGenerationPrompt(event.target.value)}
+                />
+                <div>
+                  <select
+                    aria-label="图片模型"
+                    value={generationModel}
+                    onChange={(event) => {
+                      const nextModel = event.target.value;
+                      setGenerationModel(nextModel);
+                      if (nextModel === "image-01-live" && generationRatio === "21:9") {
+                        setGenerationRatio("16:9");
+                      }
+                    }}
+                  >
+                    <option value="image-01">image-01</option>
+                    <option value="image-01-live">image-01-live</option>
+                  </select>
+                  <select
+                    aria-label="图片比例"
+                    value={generationRatio}
+                    onChange={(event) => setGenerationRatio(event.target.value)}
+                  >
+                    {["16:9", "4:3", "1:1", "3:2", "2:3", "3:4", "9:16", "21:9"]
+                      .filter((ratio) => generationModel === "image-01" || ratio !== "21:9")
+                      .map((ratio) => (
+                        <option key={ratio} value={ratio}>{ratio}</option>
+                      ))}
+                  </select>
+                  <button type="submit" disabled={!generationPrompt.trim() || imageGenerationLoading || !imageGenerationConfigured}>
+                    {imageGenerationLoading ? "生成中…" : "生成并保存"}
+                  </button>
+                </div>
+                <small>
+                  {imageGenerationConfigured
+                    ? "生成结果会标记为 AI 生成示意图，并保存到当前项目图片库。"
+                    : "图片生成尚未配置，请先配置普通余额 MiniMax API Key。"}
+                </small>
+              </form>
               {imageItems.length ? (
                 <div className="image-library-grid">
                   {imageItems.map((artifact) => {
@@ -224,7 +292,11 @@ export function SideDrawer({
                         <div>
                           <strong>{artifact.title}</strong>
                           <small>
-                            {artifact.artifact_type === "map_snapshot" ? "地图截图" : "本地上传"}
+                            {artifact.artifact_type === "map_snapshot"
+                              ? "地图截图"
+                              : artifact.artifact_type === "generated_image"
+                                ? "AI生成示意图"
+                                : "本地上传"}
                             {artifact.created_at ? ` · ${new Date(artifact.created_at).toLocaleString("zh-CN")}` : ""}
                           </small>
                         </div>

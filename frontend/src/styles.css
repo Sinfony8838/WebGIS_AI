@@ -3797,6 +3797,66 @@ button {
   display: none;
 }
 
+.image-generation-form {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid rgba(140, 222, 255, 0.22);
+  border-radius: 12px;
+  background: rgba(7, 18, 32, 0.42);
+}
+
+.image-generation-form > label {
+  color: #d8f1ff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.image-generation-form textarea,
+.image-generation-form select {
+  border: 1px solid rgba(140, 222, 255, 0.25);
+  border-radius: 8px;
+  color: #e6f6ff;
+  background: rgba(3, 14, 26, 0.72);
+}
+
+.image-generation-form textarea {
+  min-height: 70px;
+  padding: 8px;
+  resize: vertical;
+}
+
+.image-generation-form > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 78px minmax(92px, auto);
+  gap: 6px;
+}
+
+.image-generation-form select,
+.image-generation-form button {
+  min-height: 32px;
+  padding: 0 8px;
+}
+
+.image-generation-form button {
+  border: 1px solid rgba(140, 222, 255, 0.38);
+  border-radius: 8px;
+  color: #e6f6ff;
+  background: rgba(61, 142, 194, 0.24);
+}
+
+.image-generation-form button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.image-generation-form > small {
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 .image-library-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

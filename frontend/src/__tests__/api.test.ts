@@ -5,6 +5,7 @@ import {
   fetchDatasetCatalog,
   fetchKbManifest,
   fetchKbTopics,
+  generateImageLibraryAsset,
   registerKbLayer,
   searchKb,
   sendAssistantMessage,
@@ -213,6 +214,31 @@ describe("api.sendAssistantMessage", () => {
     expect(init?.body).toBeInstanceOf(FormData);
     expect((init?.body as FormData).get("project_id")).toBe("project_1");
     expect((init?.body as FormData).get("file")).toBe(file);
+  });
+
+  it("requests MiniMax image generation with project-scoped options", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ artifact: { artifact_id: "generated_1" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+
+    await generateImageLibraryAsset("project_1", "水循环示意图", {
+      model: "image-01",
+      aspectRatio: "4:3"
+    });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/image-generation");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      project_id: "project_1",
+      prompt: "水循环示意图",
+      model: "image-01",
+      aspect_ratio: "4:3",
+      prompt_optimizer: true
+    });
   });
 
   it("posts assistant confirmation ids and decisions", async () => {

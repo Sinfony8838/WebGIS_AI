@@ -523,6 +523,18 @@ export type HealthResponse = {
     configured?: boolean;
     provider: string;
     token_plan_key_source?: string;
+    api_key_source?: string;
+    billing?: string;
+  };
+  image_generation?: {
+    enabled: boolean;
+    configured?: boolean;
+    provider: string;
+    model: string;
+    base_url?: string;
+    api_key_source?: string;
+    billing?: string;
+    error?: string;
   };
   gis_workflow?: {
     enabled: boolean;

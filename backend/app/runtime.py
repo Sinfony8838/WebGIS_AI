@@ -22,6 +22,7 @@ from .services.knowledge import KnowledgeService
 from .services.knowledge_base import KnowledgeBaseService
 from .services.llm_planner import LLMPlanner
 from .services.minimax_client import MiniMaxClient
+from .services.minimax_image_client import MiniMaxImageClient
 from .services.one_map_catalog import OneMapCatalogService
 from .services.timeline_service import TimelineService
 from .services.poi import PoiService
@@ -304,6 +305,7 @@ class WebGISRuntime:
         self.poi_service = PoiService(self.config, self.store)
         self.vision_service = MapVisionService(self.config)
         self.minimax_client = MiniMaxClient(self.config)
+        self.image_generation_service = MiniMaxImageClient(self.config)
         self.teaching_map_service = TeachingMapService(self.config, self.store)
         self.assistant_service.teaching_map_service = self.teaching_map_service
         self.assistant_service.minimax_client = self.minimax_client
@@ -367,6 +369,7 @@ class WebGISRuntime:
             },
             "llm": self.minimax_client.status(),
             "vision": self.vision_service.status(),
+            "image_generation": self.image_generation_service.status(),
             "gis_workflow": {
                 "enabled": True,
                 "engine": "pyqgis_worker",
@@ -923,6 +926,77 @@ class WebGISRuntime:
             self._fail_job(job.job_id, "image_library_upload", str(exc))
             raise
 
+    def generate_image_asset(
+        self,
+        project_id: str,
+        prompt: str,
+        title: str = "",
+        model: str = "",
+        aspect_ratio: str = "16:9",
+        prompt_optimizer: bool = True,
+    ) -> Dict[str, Any]:
+        self._require_project(project_id)
+        normalized_prompt = str(prompt or "").strip()
+        job = self.store.create_job(
+            project_id=project_id,
+            job_type="image_generation",
+            title=title.strip() or "AI生成示意图",
+            workflow_type="image_generation",
+            request={
+                "prompt": normalized_prompt,
+                "model": model or self.config.minimax_image_model,
+                "aspect_ratio": aspect_ratio,
+                "prompt_optimizer": bool(prompt_optimizer),
+            },
+        )
+        try:
+            self.store.set_job_status(job.job_id, "running")
+            self.store.update_job_stage(job.job_id, "artifacts", "running", "正在调用 MiniMax 生成图片。")
+            generated = self.image_generation_service.generate(
+                normalized_prompt,
+                model=model,
+                aspect_ratio=aspect_ratio,
+                prompt_optimizer=prompt_optimizer,
+            )
+            raw_bytes = generated["raw_bytes"]
+            if not raw_bytes or len(raw_bytes) > MAX_IMAGE_LIBRARY_BYTES:
+                raise ValueError("生成图片为空或超过 20MB，未保存到项目图片库。")
+
+            output_dir = self.config.project_output_dir(project_id) / "generated_images"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = output_dir / f"ai_image_{job.job_id}{generated['suffix']}"
+            output_path.write_bytes(raw_bytes)
+            artifact = self.store.register_artifact(
+                project_id=project_id,
+                job_id=job.job_id,
+                artifact_type="generated_image",
+                title=title.strip() or "AI生成示意图",
+                path=str(output_path),
+                metadata={
+                    "public_url": self.config.public_url_for_path(output_path),
+                    "mime_type": generated["mime_type"],
+                    "source": "minimax_image_generation",
+                    "size": len(raw_bytes),
+                    "prompt": normalized_prompt,
+                    "model": generated["model"],
+                    "aspect_ratio": generated["aspect_ratio"],
+                    "request_id": generated["request_id"],
+                    "ai_generated": True,
+                    "aigc_watermark": True,
+                },
+            )
+            self.store.add_recent_action(project_id, "AI生成图片", artifact.title, status="success")
+            self.store.update_job_stage(job.job_id, "artifacts", "success", "图片已保存到项目图片库。")
+            self.store.set_job_status(
+                job.job_id,
+                "completed",
+                result={"status": "success", "artifact": artifact.to_dict()},
+            )
+            return {"status": "success", "job_id": job.job_id, "artifact": artifact.to_dict()}
+        except Exception as exc:
+            self._fail_job(job.job_id, "image_generation", str(exc))
+            raise
+
     def resolve_image_attachments(
         self,
         project_id: str,
@@ -940,7 +1014,7 @@ class WebGISRuntime:
                 raise KeyError(f"Unknown artifact: {artifact_id}")
             if artifact.project_id != project_id:
                 raise ValueError("不能使用其他项目的图片。")
-            if artifact.artifact_type not in {"map_snapshot", "uploaded_image"}:
+            if artifact.artifact_type not in {"map_snapshot", "uploaded_image", "generated_image"}:
                 raise ValueError("该产物不是可识别的图片。")
             path = Path(artifact.path).resolve()
             allowed_roots = (self.config.uploads_dir.resolve(), self.config.outputs_dir.resolve())
@@ -1041,7 +1115,7 @@ class WebGISRuntime:
         return {"status": "success", **artifact.to_dict()}
 
     def list_outputs(self, project_id: Optional[str] = None) -> Dict[str, Any]:
-        teacher_facing = {"map_snapshot", "uploaded_image", "annotation_export", "dataset_import", "assistant_note", "query_summary"}
+        teacher_facing = {"map_snapshot", "uploaded_image", "generated_image", "annotation_export", "dataset_import", "assistant_note", "query_summary"}
         items = [item for item in self.store.list_outputs(project_id=project_id) if item.get("artifact_type") in teacher_facing]
         return {"status": "success", "items": items}
 
@@ -1655,10 +1729,14 @@ class WebGISRuntime:
             messages = [plan.get("assistant_message", "").strip()]
             for action in plan.get("actions", []):
                 self.store.append_job_step(job_id, action["tool_name"], json.dumps(action["tool_params"], ensure_ascii=False), "info")
-                if action["tool_name"] in {"launch_question", "record_observation"}:
+                if action["tool_name"] in {"launch_question", "record_observation", "generate_image"}:
                     # The legacy path has no risk assessment or confirmation
                     # gate, so classroom tools are teaching-mode only.
-                    refusal = "课堂工具（发布提问/记录学情）只在专业教学智能体模式下可用，且发布提问需要教师确认。"
+                    refusal = (
+                        "图片生成会消耗 MiniMax API 余额，请在图片库中使用“MiniMax AI 生成”并明确点击生成。"
+                        if action["tool_name"] == "generate_image"
+                        else "课堂工具（发布提问/记录学情）只在专业教学智能体模式下可用，且发布提问需要教师确认。"
+                    )
                     executed_actions.append({"action": action, "result": {"assistant_message": refusal, "artifacts": []}})
                     messages.append(refusal)
                     continue
@@ -1920,6 +1998,21 @@ class WebGISRuntime:
             return {
                 "assistant_message": f"已打开课堂资料“{title}”。",
                 "ui_actions": [{"type": "open_material", "title": title, "materials": [material]}],
+                "artifacts": [],
+            }
+        if tool_name == "generate_image":
+            generated = self.generate_image_asset(
+                project_id=project_id,
+                prompt=str(params.get("prompt") or ""),
+                title=str(params.get("title") or ""),
+                model=str(params.get("model") or ""),
+                aspect_ratio=str(params.get("aspect_ratio") or "16:9"),
+                prompt_optimizer=bool(params.get("prompt_optimizer", True)),
+            )
+            artifact = generated["artifact"]
+            return {
+                "assistant_message": "图片已生成并保存到项目图片库，已标记为 AI 生成示意图。你可以把它加入助教继续提问。",
+                "generated_artifact": artifact,
                 "artifacts": [],
             }
         if tool_name == "record_observation":

@@ -16,6 +16,8 @@ LLM_PROVIDER_ENV_KEYS = ("WEBGIS_AI_LLM_PROVIDER", "LLM_PROVIDER", "MINIMAX_PROV
 MINIMAX_API_KEY_ENV_KEYS = ("WEBGIS_AI_MINIMAX_API_KEY", "MINIMAX_API_KEY")
 MINIMAX_BASE_URL_ENV_KEYS = ("WEBGIS_AI_MINIMAX_BASE_URL", "MINIMAX_BASE_URL")
 MINIMAX_MODEL_ENV_KEYS = ("WEBGIS_AI_MINIMAX_MODEL", "MINIMAX_MODEL")
+MINIMAX_IMAGE_BASE_URL_ENV_KEYS = ("WEBGIS_AI_MINIMAX_IMAGE_BASE_URL", "MINIMAX_IMAGE_BASE_URL")
+MINIMAX_IMAGE_MODEL_ENV_KEYS = ("WEBGIS_AI_MINIMAX_IMAGE_MODEL", "MINIMAX_IMAGE_MODEL")
 MINIMAX_TOKEN_PLAN_KEY_ENV_KEYS = (
     "WEBGIS_AI_MINIMAX_TOKEN_PLAN_KEY",
     "MINIMAX_TOKEN_PLAN_KEY",
@@ -34,6 +36,8 @@ MINIMAX_TOKEN_PLAN_KEY_ENV_KEYS = (
 DEFAULT_LLM_PROVIDER = "minimax"
 DEFAULT_MINIMAX_BASE_URL = "https://api.minimaxi.com/anthropic"
 DEFAULT_MINIMAX_MODEL = "MiniMax-M2.7-highspeed"
+DEFAULT_MINIMAX_IMAGE_BASE_URL = "https://api.minimaxi.com"
+DEFAULT_MINIMAX_IMAGE_MODEL = "image-01"
 
 ALLOWED_LLM_PROVIDERS = ("minimax",)
 LEGACY_WEATHER_BASEMAP_ID = "weather_live"
@@ -151,6 +155,20 @@ class AppConfig:
         default_factory=lambda: _resolve_env_value(MINIMAX_BASE_URL_ENV_KEYS, DEFAULT_MINIMAX_BASE_URL, "default")[0]
     )
     minimax_model: str = field(default_factory=lambda: _resolve_env_value(MINIMAX_MODEL_ENV_KEYS, DEFAULT_MINIMAX_MODEL, "default")[0])
+    minimax_image_base_url: str = field(
+        default_factory=lambda: _resolve_env_value(
+            MINIMAX_IMAGE_BASE_URL_ENV_KEYS,
+            DEFAULT_MINIMAX_IMAGE_BASE_URL,
+            "default",
+        )[0]
+    )
+    minimax_image_model: str = field(
+        default_factory=lambda: _resolve_env_value(
+            MINIMAX_IMAGE_MODEL_ENV_KEYS,
+            DEFAULT_MINIMAX_IMAGE_MODEL,
+            "default",
+        )[0]
+    )
     qgis_root: str = field(default_factory=lambda: os.getenv("QGIS_ROOT", os.getenv("WEBGIS_AI_QGIS_ROOT", "")))
     qgis_prefix_subpath: str = field(
         default_factory=lambda: os.getenv("WEBGIS_AI_QGIS_PREFIX_SUBPATH", "apps/qgis-ltr")
@@ -185,6 +203,8 @@ class AppConfig:
     minimax_api_key_source: str = field(init=False, default="unset")
     minimax_base_url_source: str = field(init=False, default="default")
     minimax_model_source: str = field(init=False, default="default")
+    minimax_image_base_url_source: str = field(init=False, default="default")
+    minimax_image_model_source: str = field(init=False, default="default")
     minimax_token_plan_key_source: str = field(init=False, default="unset")
 
     def __post_init__(self) -> None:
@@ -192,6 +212,16 @@ class AppConfig:
         _, self.minimax_api_key_source = _resolve_env_value(MINIMAX_API_KEY_ENV_KEYS, "", "unset")
         _, self.minimax_base_url_source = _resolve_env_value(MINIMAX_BASE_URL_ENV_KEYS, DEFAULT_MINIMAX_BASE_URL, "default")
         _, self.minimax_model_source = _resolve_env_value(MINIMAX_MODEL_ENV_KEYS, DEFAULT_MINIMAX_MODEL, "default")
+        _, self.minimax_image_base_url_source = _resolve_env_value(
+            MINIMAX_IMAGE_BASE_URL_ENV_KEYS,
+            DEFAULT_MINIMAX_IMAGE_BASE_URL,
+            "default",
+        )
+        _, self.minimax_image_model_source = _resolve_env_value(
+            MINIMAX_IMAGE_MODEL_ENV_KEYS,
+            DEFAULT_MINIMAX_IMAGE_MODEL,
+            "default",
+        )
         _, self.minimax_token_plan_key_source = _resolve_env_value(MINIMAX_TOKEN_PLAN_KEY_ENV_KEYS, "", "unset")
         # v1.3：MiMo 已彻底移除，MiniMax 是唯一 provider。历史环境变量里残留的
         # "mimo" 等取值会被强制归一到 minimax，避免旧配置让系统失联。
@@ -202,11 +232,20 @@ class AppConfig:
         self.llm_provider = normalized_provider
         self.minimax_base_url = (self.minimax_base_url or DEFAULT_MINIMAX_BASE_URL).strip() or DEFAULT_MINIMAX_BASE_URL
         self.minimax_model = (self.minimax_model or DEFAULT_MINIMAX_MODEL).strip() or DEFAULT_MINIMAX_MODEL
+        self.minimax_image_base_url = (
+            (self.minimax_image_base_url or DEFAULT_MINIMAX_IMAGE_BASE_URL).strip().rstrip("/")
+            or DEFAULT_MINIMAX_IMAGE_BASE_URL
+        )
+        self.minimax_image_model = (
+            (self.minimax_image_model or DEFAULT_MINIMAX_IMAGE_MODEL).strip()
+            or DEFAULT_MINIMAX_IMAGE_MODEL
+        )
         self.minimax_mcp_command = (self.minimax_mcp_command or "uvx").strip() or "uvx"
         self.minimax_mcp_package = (self.minimax_mcp_package or "minimax-coding-plan-mcp").strip() or "minimax-coding-plan-mcp"
         self.minimax_mcp_compat_package = self.minimax_mcp_compat_package.strip()
         self.minimax_api_host = (self.minimax_api_host or "https://api.minimaxi.com").strip().rstrip("/")
-        # 视觉读图唯一后端：MiniMax Token Plan MCP。
+        # 视觉读图通过 MiniMax MCP 的 understand_image 工具完成。普通余额
+        # API Key 可按量计费；Token Plan 专用变量仅作为兼容入口保留。
         if not self.vision_provider or self.vision_provider == "mimo":
             self.vision_provider = "minimax_mcp"
         self.backend_dir = self.root_dir / "backend"
@@ -564,11 +603,33 @@ class AppConfig:
             status["error"] = error
         return status
 
+    def image_generation_enabled(self) -> bool:
+        """Image generation uses the regular pay-as-you-go MiniMax API key."""
+        return bool(self.minimax_api_key.strip())
+
+    def image_generation_status(self) -> Dict[str, Any]:
+        configured = self.image_generation_enabled()
+        status: Dict[str, Any] = {
+            "enabled": configured,
+            "configured": configured,
+            "provider": "minimax",
+            "model": self.minimax_image_model,
+            "base_url": self.minimax_image_base_url,
+            "api_key_source": self.minimax_api_key_source if configured else "unset",
+            "model_source": self.minimax_image_model_source,
+            "base_url_source": self.minimax_image_base_url_source,
+            "billing": "pay_as_you_go_api",
+        }
+        if not configured:
+            status["error"] = "未检测到 MiniMax API Key，请设置 WEBGIS_AI_MINIMAX_API_KEY 并重启后端。"
+        return status
+
     def vision_status(self) -> Dict[str, Any]:
         """Surface whether the current vision_provider is fully configured.
 
-        v1.3 的唯一视觉后端是 ``minimax_mcp``（MiniMax Token Plan MCP），
-        需要 ``WEBGIS_AI_MINIMAX_TOKEN_PLAN_KEY``（默认复用 MiniMax API Key）。
+        The MiniMax MCP visual tool accepts the regular API key for
+        pay-as-you-go billing. The historical Token Plan variable remains a
+        compatibility override.
         """
         provider = self.vision_provider
         if provider == "minimax_mcp":
@@ -578,6 +639,12 @@ class AppConfig:
                 "configured": configured,
                 "provider": provider,
                 "token_plan_key_source": self.minimax_token_plan_key_source if self.minimax_token_plan_key.strip() else "unset",
+                "api_key_source": self.minimax_token_plan_key_source if self.minimax_token_plan_key.strip() else "unset",
+                "billing": (
+                    "pay_as_you_go_api"
+                    if self.minimax_token_plan_key_source in MINIMAX_API_KEY_ENV_KEYS
+                    else "token_plan_or_custom"
+                ),
             }
         return {
             "enabled": self.vision_enabled,

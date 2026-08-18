@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from .config import AppConfig
 from .runtime import WebGISRuntime
+from .services.minimax_image_client import MiniMaxImageError
 from .services.student_page import render_student_page
 from .services.ppt_renderer import PptRenderError, render_pptx_to_images
 
@@ -115,6 +116,15 @@ class ExportSnapshotRequest(BaseModel):
     title: str = "课堂导图"
     image_data_url: str
     note: str = ""
+
+
+class ImageGenerationRequest(BaseModel):
+    project_id: str
+    prompt: str
+    title: str = ""
+    model: str = ""
+    aspect_ratio: str = "16:9"
+    prompt_optimizer: bool = True
 
 
 class KnowledgeItemRequest(BaseModel):
@@ -481,6 +491,25 @@ async def upload_image_library_asset(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/image-generation")
+def generate_image(request: ImageGenerationRequest) -> Dict[str, Any]:
+    try:
+        return runtime.generate_image_asset(
+            project_id=request.project_id,
+            prompt=request.prompt,
+            title=request.title,
+            model=request.model,
+            aspect_ratio=request.aspect_ratio,
+            prompt_optimizer=request.prompt_optimizer,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except MiniMaxImageError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.post("/assistant/confirm")

@@ -273,6 +273,25 @@ export async function uploadImageLibraryAsset(
   });
 }
 
+export async function generateImageLibraryAsset(
+  projectId: string,
+  prompt: string,
+  options?: { title?: string; model?: string; aspectRatio?: string; promptOptimizer?: boolean }
+): Promise<{ job_id: string; artifact: ArtifactRecord }> {
+  return requestJson<{ job_id: string; artifact: ArtifactRecord }>("/image-generation", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project_id: projectId,
+      prompt,
+      title: options?.title || "",
+      model: options?.model || "",
+      aspect_ratio: options?.aspectRatio || "16:9",
+      prompt_optimizer: options?.promptOptimizer ?? true
+    })
+  });
+}
+
 export async function confirmAssistantAction(
   confirmationId: string,
   decision: "approve" | "reject" = "approve"

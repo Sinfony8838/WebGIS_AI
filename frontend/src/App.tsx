@@ -37,6 +37,7 @@ import {
   fetchLayers,
   fetchOutputs,
   fetchProject,
+  generateImageLibraryAsset,
   getApiBase,
   patchLayer,
   registerKbLayer,
@@ -459,6 +460,7 @@ export default function App() {
   const [conversationId, setConversationId] = useState("");
   const [assistantInput, setAssistantInput] = useState("");
   const [pendingImage, setPendingImage] = useState<ImageAttachment | null>(null);
+  const [imageGenerationLoading, setImageGenerationLoading] = useState(false);
   const [copilotOpenSignal, setCopilotOpenSignal] = useState(0);
   const [screenshotSource, setScreenshotSource] = useState("");
   const [screenshotBounds, setScreenshotBounds] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
@@ -1257,6 +1259,31 @@ export default function App() {
       pushToast("error", "图片上传失败", error instanceof Error ? error.message : "上传请求失败。");
     }
   }, [handleAttachImage, project, pushToast, refreshProjectState]);
+
+  const handleGenerateImage = useCallback(async ({
+    prompt,
+    model,
+    aspectRatio
+  }: { prompt: string; model: string; aspectRatio: string }) => {
+    if (!project || imageGenerationLoading) return;
+    setImageGenerationLoading(true);
+    try {
+      const response = await generateImageLibraryAsset(project.project_id, prompt, { model, aspectRatio });
+      await refreshProjectState(project.project_id);
+      handleAttachImage({
+        artifact_id: response.artifact.artifact_id,
+        title: response.artifact.title,
+        public_url: buildPublicFileUrl(String(response.artifact.metadata?.public_url || "")),
+        mime_type: String(response.artifact.metadata?.mime_type || "image/jpeg")
+      });
+      pushToast("success", "图片已生成", "已保存到项目图片库，并加入智能助教待发送附件。AI 示意图不替代权威 GIS 数据。");
+    } catch (error) {
+      pushToast("error", "图片生成失败", error instanceof Error ? error.message : "MiniMax 图片服务暂不可用。");
+      throw error;
+    } finally {
+      setImageGenerationLoading(false);
+    }
+  }, [handleAttachImage, imageGenerationLoading, project, pushToast, refreshProjectState]);
 
   const handleRenderedPptImport = useCallback(async (file: File) => {
     setPptLoading(true);
@@ -2932,6 +2959,10 @@ export default function App() {
           onImportResourceResult={handleImportResourceResult}
           onAttachImage={handleAttachImage}
           onUploadImage={(file) => void handleUploadImage(file)}
+          onGenerateImage={handleGenerateImage}
+          imageGenerationLoading={imageGenerationLoading}
+          imageGenerationConfigured={Boolean(health?.image_generation?.configured)}
+          imageGenerationModel={health?.image_generation?.model || "image-01"}
           onOpenLessonWorkflow={handleOpenLessonWorkflow}
         />
 

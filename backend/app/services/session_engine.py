@@ -1523,6 +1523,7 @@ class ToolExecutor:
             "search_poi": {"target": "webgis", "category": "search", "risk_level": "low", "reversible": True, "requires_confirmation": False, "requires_map_context": True},
             "toggle_teaching_map": {"target": "webgis", "category": "teaching_map", "risk_level": "low", "reversible": True, "requires_confirmation": False},
             "open_material": {"target": "webgis", "category": "material", "risk_level": "low", "reversible": True, "requires_confirmation": False},
+            "generate_image": {"target": "webgis", "category": "paid_generation", "risk_level": "high", "reversible": False, "requires_confirmation": True, "validator": self._require_image_generation_prompt},
             "run_visual_query": {"target": "webgis", "category": "analysis", "risk_level": "medium", "reversible": True, "requires_confirmation": False},
             "record_observation": {"target": "webgis", "category": "classroom", "risk_level": "medium", "reversible": False, "requires_confirmation": False, "validator": self._require_active_session},
             "launch_question": {"target": "webgis", "category": "classroom", "risk_level": "high", "reversible": False, "requires_confirmation": True, "validator": self._require_active_session},
@@ -1590,6 +1591,15 @@ class ToolExecutor:
         session = self.store.get_class_session(session_id)
         if session is None or session.status != "running":
             return "当前班课已结束，课堂工具（发布提问/记录学情）只在进行中的班课可用"
+        return ""
+
+    def _require_image_generation_prompt(self, params: Dict[str, Any], project_state: Dict[str, Any], map_context: Dict[str, Any]) -> str:
+        del project_state, map_context
+        prompt = str(params.get("prompt") or "").strip()
+        if not prompt:
+            return "图片生成需要明确的 prompt"
+        if len(prompt) > 1500:
+            return "图片生成 prompt 不能超过 1500 个字符"
         return ""
 
 
@@ -1804,6 +1814,16 @@ class AssistantSessionEngine:
                     if question_text
                     else "即将向学生端发布提问，发送后全班学生立即可见，请确认。"
                 )
+            image_action = next((item for item in actions if str(item.get("tool_name") or "") == "generate_image"), None)
+            if image_action is not None:
+                image_params = image_action.get("tool_params") or {}
+                image_prompt = str(image_params.get("prompt") or "").strip()
+                confirm_title = "使用 MiniMax 生成图片"
+                confirm_reason = (
+                    f"即将使用普通余额 API 生成并保存一张 AI 示意图：{image_prompt[:120]}。此操作会产生 API 费用，请确认。"
+                    if image_prompt
+                    else "即将使用普通余额 API 生成并保存一张 AI 示意图。此操作会产生 API 费用，请确认。"
+                )
             confirmation = self.store.create_confirmation(
                 project.project_id,
                 conversation.conversation_id,
@@ -1829,7 +1849,7 @@ class AssistantSessionEngine:
             stage_callback("confirmation", "success", "Confirmation created", confirmation.confirmation_id)
             assistant_message = (
                 f"{plan.get('assistant_message', '').strip()}\n\n"
-                "The planned action is high risk and awaits confirmation before execution."
+                "该操作会产生外部影响，正在等待你确认后执行。"
             ).strip()
             self.memory.append(
                 conversation.conversation_id,

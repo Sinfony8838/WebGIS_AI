@@ -167,6 +167,44 @@ describe("SideDrawer", () => {
     expect(onUploadImage).toHaveBeenCalledWith(file);
   });
 
+  it("generates a MiniMax image and shows generated artifacts", () => {
+    const onGenerateImage = vi.fn();
+    const { container } = render(
+      <SideDrawer
+        {...baseProps}
+        activeTab="images"
+        imageGenerationConfigured
+        imageGenerationModel="image-01"
+        onGenerateImage={onGenerateImage}
+        outputs={[
+          {
+            artifact_id: "generated_1",
+            project_id: "project_1",
+            job_id: "job_1",
+            artifact_type: "generated_image",
+            title: "AI生成示意图",
+            path: "outputs/generated.png",
+            metadata: { public_url: "/files/generated.png", mime_type: "image/png", ai_generated: true },
+            created_at: "2026-08-18T09:00:00+08:00"
+          }
+        ]}
+      />
+    );
+    const view = within(container);
+
+    expect(view.getAllByText("AI生成示意图").length).toBeGreaterThan(0);
+    expect(view.getByText(/生成结果会标记/)).toBeInTheDocument();
+    fireEvent.change(view.getByLabelText("MiniMax AI 生成"), { target: { value: "蓝绿色水循环教学示意图" } });
+    fireEvent.change(view.getByLabelText("图片比例"), { target: { value: "4:3" } });
+    fireEvent.click(view.getByRole("button", { name: "生成并保存" }));
+
+    expect(onGenerateImage).toHaveBeenCalledWith({
+      prompt: "蓝绿色水循环教学示意图",
+      model: "image-01",
+      aspectRatio: "4:3"
+    });
+  });
+
   it("renders one-map area statistics", () => {
     render(
       <SideDrawer
