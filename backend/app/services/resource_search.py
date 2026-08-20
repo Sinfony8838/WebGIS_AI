@@ -173,6 +173,7 @@ class ResourceSearchService:
                     "thumbnail_url": _as_text(item.get("thumbnail_url")),
                     "citations": [{"title": _as_text(item.get("title")) or item_url, "url": item_url}],
                     "confidence": float(item.get("confidence") or 0.62),
+                    "evidence_verified": bool(_as_text(item.get("summary") or item.get("snippet"))),
                 }
             )
         return rows
@@ -196,6 +197,9 @@ class ResourceSearchService:
                     "thumbnail_url": "",
                     "citations": [{"title": source["title"], "url": source["url"]}],
                     "confidence": score,
+                    # A homepage suggestion is useful for navigation, but it
+                    # is not evidence that a current statistic was verified.
+                    "evidence_verified": False,
                 }
             )
         rows.sort(key=lambda item: float(item["confidence"]), reverse=True)

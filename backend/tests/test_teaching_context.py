@@ -220,6 +220,13 @@ class TeachingContextIntegrationTest(unittest.TestCase):
             map_context={"teaching_context": {"phase": "course_prep"}},
             teaching_task="teaching_explain",
         )
+        self.assertEqual(fake_search.calls, [])
+
+        knowledge.answer(
+            "请联网核实今年胡焕庸线相关人口数据来源",
+            map_context={"teaching_context": {"phase": "course_prep"}},
+            teaching_task="teaching_explain",
+        )
         self.assertEqual(len(fake_search.calls), 1)
 
     # ------------------------------------------------------------------

@@ -221,6 +221,7 @@ class LLMPlanner:
             "search_poi",
             "toggle_teaching_map",
             "open_material",
+            "generate_image",
         }
         actions = plan.get("actions") or []
         return any(

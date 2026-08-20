@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import queue
@@ -7,6 +8,7 @@ import shlex
 import subprocess
 import threading
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..config import AppConfig
@@ -24,7 +26,7 @@ class MiniMaxMcpClient:
     so the FastAPI runtime does not need to manage a long-lived child process.
     """
 
-    def __init__(self, config: AppConfig, timeout_seconds: float = 60.0):
+    def __init__(self, config: AppConfig, timeout_seconds: float = 120.0):
         self.config = config
         self.timeout_seconds = timeout_seconds
         self._next_id = 1
@@ -32,17 +34,31 @@ class MiniMaxMcpClient:
     def understand_image(self, prompt: str, image_url: str) -> Dict[str, Any]:
         if not self.config.vision_status().get("configured"):
             raise MiniMaxMcpError("MiniMax Token Plan MCP is not configured")
+        image_source = self._compatible_image_source(image_url)
         response = self._call_tool(
             "understand_image",
             {
                 "prompt": prompt,
-                "image_url": image_url,
+                "image_url": image_source,
+                # minimax-coding-plan-mcp 0.0.4 renamed this argument while
+                # the published Token Plan guide still documents image_url.
+                # FastMCP ignores the extra compatibility key.
+                "image_source": image_source,
             },
         )
         text = self._extract_text(response.get("result", {}))
         if not text:
             raise MiniMaxMcpError("MiniMax MCP returned an empty image understanding result")
         return {"used_vision": True, "text": text, "raw": response.get("result", {})}
+
+    @staticmethod
+    def _compatible_image_source(image_source: str) -> str:
+        """Preserve GIF uploads despite an upstream local-path MIME bug."""
+        path = Path(image_source)
+        if path.suffix.lower() == ".gif" and path.is_file():
+            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+            return f"data:image/gif;base64,{encoded}"
+        return image_source
 
     def _call_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         process = None
@@ -56,8 +72,7 @@ class MiniMaxMcpClient:
                 stderr=subprocess.PIPE,
                 cwd=str(self.config.root_dir),
                 env=self._environment(),
-                universal_newlines=True,
-                bufsize=1,
+                bufsize=0,
             )
         except FileNotFoundError as exc:
             raise MiniMaxMcpError(
@@ -106,6 +121,10 @@ class MiniMaxMcpClient:
             if response.get("error"):
                 error = response["error"]
                 raise MiniMaxMcpError(str(error.get("message") or error))
+            tool_result = response.get("result") if isinstance(response.get("result"), dict) else {}
+            if tool_result.get("isError"):
+                detail = self._extract_text(tool_result) or f"MiniMax MCP tool {name} failed"
+                raise MiniMaxMcpError(detail)
             return response
         finally:
             self._close_process(process)
@@ -114,6 +133,12 @@ class MiniMaxMcpClient:
         command = shlex.split(self.config.minimax_mcp_command.strip())
         if not command:
             raise MiniMaxMcpError("WEBGIS_AI_MINIMAX_MCP_COMMAND is empty")
+        compat_package = self.config.minimax_mcp_compat_package.strip()
+        if compat_package:
+            # minimax-coding-plan-mcp 0.0.4 imports mcp.server.fastmcp,
+            # which was removed in mcp 2.x. Keep the short-lived uvx
+            # environment on the compatible 1.x API until upstream updates.
+            command.extend(["--with", compat_package])
         package = self.config.minimax_mcp_package.strip()
         if package:
             command.append(package)
@@ -124,6 +149,8 @@ class MiniMaxMcpClient:
         env = os.environ.copy()
         env["MINIMAX_API_KEY"] = self.config.minimax_token_plan_key.strip()
         env["MINIMAX_API_HOST"] = self.config.minimax_api_host.rstrip("/")
+        env["PYTHONUTF8"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
         if self.config.minimax_mcp_base_path.strip():
             env["MINIMAX_MCP_BASE_PATH"] = self.config.minimax_mcp_base_path.strip()
         if self.config.minimax_mcp_resource_mode.strip():
@@ -138,7 +165,7 @@ class MiniMaxMcpClient:
     def _send(self, process: subprocess.Popen, payload: Dict[str, Any]) -> None:
         if process.stdin is None:
             raise MiniMaxMcpError("MiniMax MCP stdin is unavailable")
-        process.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        process.stdin.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
         process.stdin.flush()
 
     def _wait_for_response(
@@ -169,8 +196,8 @@ class MiniMaxMcpClient:
         raise MiniMaxMcpError(f"Timed out waiting for MiniMax MCP response {request_id}.{detail} {stderr}".strip())
 
     def _read_stdout(self, stream: Any, stdout_queue: "queue.Queue[Dict[str, Any]]") -> None:
-        for line in iter(stream.readline, ""):
-            line = line.strip()
+        for line in iter(stream.readline, b""):
+            line = self._decode_stdio_line(line).strip()
             if not line:
                 continue
             try:
@@ -179,10 +206,23 @@ class MiniMaxMcpClient:
                 continue
 
     def _read_stderr(self, stream: Any, stderr_lines: List[str]) -> None:
-        for line in iter(stream.readline, ""):
-            line = line.strip()
+        for line in iter(stream.readline, b""):
+            line = self._decode_stdio_line(line).strip()
             if line:
                 stderr_lines.append(line)
+
+    @staticmethod
+    def _decode_stdio_line(line: Any) -> str:
+        if isinstance(line, str):
+            return line
+        if not isinstance(line, bytes):
+            return str(line)
+        for encoding in ("utf-8", "gb18030"):
+            try:
+                return line.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        return line.decode("utf-8", errors="replace")
 
     def _close_process(self, process: Optional[subprocess.Popen]) -> None:
         if process is None:

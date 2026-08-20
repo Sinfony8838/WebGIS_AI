@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -82,6 +83,64 @@ EXPLANATION_HINTS = ("解释", "讲解", "分析", "为什么", "说明", "读�
 CURRENT_MAP_HINTS = ("当前视图", "当前地图", "当前画面", "当前图层", "当前区域", "当前选区", "图中", "图上", "视图", "画面")
 MAP_READING_HINTS = ("读图", "判读", "图上", "图中", "视图", "地图", "图例", "等高线", "地貌", "地形", "地势", "空间格局", "分布特征")
 TIME_SENSITIVE_HINTS = ("最新", "目前", "今天", "近年", "recent", "latest", "today")
+LOCAL_RETRIEVAL_HINTS = (
+    "知识库",
+    "教材",
+    "课程资料",
+    "课堂资料",
+    "项目资料",
+    "本地资料",
+    "课本",
+)
+WEB_RETRIEVAL_HINTS = (
+    "最新",
+    "今年",
+    "当前数据",
+    "实时",
+    "核实",
+    "查证",
+    "来源",
+    "在线搜索",
+    "联网",
+    "recent",
+    "latest",
+    "verify",
+    "source",
+)
+IMAGE_WEB_RETRIEVAL_HINTS = (
+    "联网",
+    "在线搜索",
+    "联网核实",
+    "核实最新",
+    "查证最新",
+    "查询最新",
+    "查找最新",
+    "结合最新",
+    "补充最新",
+    "最新资料",
+    "今年数据",
+    "search online",
+    "verify latest",
+)
+IMAGE_FOLLOW_UP_HINTS = ("这张图", "这幅图", "刚才的图", "刚才的图片", "上一张图", "图里", "图中")
+MATCH_STOP_WORDS = {
+    "什么",
+    "怎么",
+    "为什么",
+    "当前",
+    "这个",
+    "那个",
+    "请问",
+    "分析",
+    "解释",
+    "说明",
+    "地图",
+    "图片",
+    "the",
+    "what",
+    "why",
+    "how",
+}
 
 TEACHING_TASKS = ("teaching_explain", "teaching_question", "teaching_action", "teaching_reflect")
 TEACHING_QUESTION_HINTS = ("追问", "提问", "设计问题", "出几道题", "几个问题", "还有什么问题", "进一步问", "follow-up")
@@ -114,52 +173,6 @@ def _utc_timestamp(minutes_from_now: int = 0) -> str:
     return (datetime.now(timezone.utc) + timedelta(minutes=minutes_from_now)).isoformat()
 
 
-def _teaching_scaffold_parts(knowledge: Dict[str, Any], map_context: Dict[str, Any]) -> Dict[str, str]:
-    """Deterministic three-part teaching contract (structured).
-
-    Returns 证据或观察点 / 给学生的问题 / 教师收束语或下一步 as separate strings
-    so the frontend can render them as distinct visual blocks. Guarantees the
-    structure even when the LLM is unavailable, and states missing evidence
-    explicitly instead of fabricating layer or student claims.
-    """
-    knowledge = knowledge or {}
-    grounding = str(knowledge.get("map_grounding") or "").strip()
-    has_evidence = grounding.startswith("基于当前地图")
-    evidence_line = grounding if has_evidence else "本回答缺少当前地图或素材证据，仅为一般性讲解。"
-    teaching_points = [str(item).strip() for item in list(knowledge.get("teaching_points") or []) if str(item).strip()]
-    question_line = (
-        teaching_points[0]
-        if teaching_points
-        else "请学生观察图中高值区与低值区的分布，并说明可能的影响因素。"
-    )
-    closing_line = "收束到区域认知方法：位置-格局-成因；下一步可切换图层或结合读图讲解继续验证。"
-    return {
-        "evidence": evidence_line,
-        "question": question_line,
-        "closing": closing_line,
-    }
-
-
-def _format_scaffold_text(parts: Optional[Dict[str, str]]) -> str:
-    """Render the structured teaching contract as the legacy text block.
-
-    Kept for ``assistant_message`` (consumed by voice/history/tests) so the
-    textual contract stays byte-identical; the frontend renders the structured
-    ``teaching_contract`` field instead of parsing this text.
-    """
-    parts = parts or {}
-    return (
-        "教学处理：\n"
-        f"- 证据或观察点：{parts.get('evidence', '')}\n"
-        f"- 给学生的问题：{parts.get('question', '')}\n"
-        f"- 教师收束语或下一步：{parts.get('closing', '')}"
-    )
-
-
-def _teaching_scaffold(knowledge: Dict[str, Any], map_context: Dict[str, Any]) -> str:
-    """Backward-compatible text scaffold; see ``_teaching_scaffold_parts``."""
-    return _format_scaffold_text(_teaching_scaffold_parts(knowledge, map_context))
-
 META_ANSWER_TYPES = {"assistant_identity", "assistant_model", "assistant_capability"}
 
 
@@ -185,8 +198,10 @@ class ToolPermissionContext:
         )
 
     def decision_for(self, risk_level: str, tool_name: str = "") -> str:
-        if tool_name and tool_name in self.rejected_tools:
-            return "deny"
+        # A rejected confirmation applies only to its frozen plan. Keep
+        # rejected_tools as audit history, but allow a later explicit request
+        # to create a fresh confirmation instead of permanently banning the
+        # tool for the conversation.
         if risk_level in self.deny_rules:
             return "deny"
         if risk_level in self.ask_rules:
@@ -476,7 +491,7 @@ class KnowledgeEngine:
         teaching_task: str = "",
     ) -> Dict[str, Any]:
         map_context = map_context or {}
-        answer_type = self._classify(question)
+        answer_type = "map_reading" if map_context.get("image_attachment") else self._classify(question)
         if answer_type in {"assistant_identity", "assistant_model", "assistant_capability"}:
             return self._meta_answer(answer_type)
 
@@ -485,7 +500,9 @@ class KnowledgeEngine:
         # in a generic canned KB item. Skipping loose KB matches here prevents
         # unrelated teaching points from leaking into image interpretation.
         references_current_map = self._references_current_map((question or "").lower())
-        entry = None if answer_type == "map_reading" and references_current_map else self._match_entry(question)
+        matched_entry = None if answer_type == "map_reading" and references_current_map else self._match_entry(question)
+        retrieval_mode = self._retrieval_mode(question, answer_type, matched_entry, map_context)
+        entry = matched_entry if retrieval_mode in {"local", "local_web"} else None
         citations = list(entry.get("citations", [])) if entry else []
         retrieval_trace: List[Dict[str, Any]] = []
         if map_context.get("vision_summary"):
@@ -506,9 +523,15 @@ class KnowledgeEngine:
         teaching_context = map_context.get("teaching_context") if isinstance(map_context.get("teaching_context"), dict) else {}
         teaching_phase = str((teaching_context or {}).get("phase") or "")
         web_context = ""
+        web_evidence_available = False
         # In-class requests skip online retrieval entirely: latency beats
         # coverage while the teacher is standing in front of the class.
-        if self.resource_search is not None and answer_type != "map_reading" and teaching_phase != "in_class":
+        should_search_web = retrieval_mode in {"web", "local_web"}
+        explicit_web = _contains_any(
+            question,
+            IMAGE_WEB_RETRIEVAL_HINTS if map_context.get("image_attachment") else WEB_RETRIEVAL_HINTS,
+        )
+        if self.resource_search is not None and should_search_web and (teaching_phase != "in_class" or explicit_web):
             try:
                 web_results = self.resource_search.search(query=question, scope="web", limit=5)
                 web_items = web_results.get("items", [])
@@ -517,7 +540,19 @@ class KnowledgeEngine:
                         title = str(item.get("title") or "").strip()
                         url = str(item.get("url") or "").strip()
                         summary = str(item.get("summary") or "").strip()
+                        evidence_verified = bool(item.get("evidence_verified", bool(summary)))
+                        if not evidence_verified:
+                            retrieval_trace.append(
+                                {
+                                    "source": "web_suggestion",
+                                    "title": title,
+                                    "url": url,
+                                    "status": "suggestion_only",
+                                }
+                            )
+                            continue
                         if title and url:
+                            web_evidence_available = True
                             citations.append({"title": title, "url": url})
                             retrieval_trace.append({
                                 "source": "web_search",
@@ -531,26 +566,50 @@ class KnowledgeEngine:
             except Exception:
                 retrieval_trace.append({"source": "web_search", "status": "error"})
 
-        if not citations:
-            citations = self._default_citations(answer_type)
-            retrieval_trace.extend(self._score_sources(citations, source_type="authority_fallback", timely=answer_type == "timely_fact"))
+        web_verification_failed = should_search_web and not web_evidence_available
+        if web_verification_failed:
+            retrieval_trace.append({"source": "web_verification", "status": "unavailable"})
 
         # --- Phase 3: LLM-powered answer (primary path) ---
         llm_used = False
-        if self.minimax_client is not None and self.config.minimax_enabled():
+        population_guardrail_answer = self._population_guardrail_answer(question)
+        verification_guardrail_answer = (
+            self._unverified_timely_answer(question, entry) if web_verification_failed and not population_guardrail_answer else ""
+        )
+        deterministic_answer = population_guardrail_answer or verification_guardrail_answer
+        if deterministic_answer:
+            direct_answer = deterministic_answer
+            mechanism_explanation = ""
+            teaching_points = []
+            confidence = 0.96 if population_guardrail_answer else 0.45
+            retrieval_trace.append(
+                {
+                    "source": "population_concept_guardrail" if population_guardrail_answer else "timely_verification_guardrail",
+                    "status": "success",
+                }
+            )
+        elif self.minimax_client is not None and self.config.minimax_enabled():
             try:
-                llm_answer = self._llm_answer(question, entry, answer_type, map_context, web_context, teaching_task=teaching_task)
+                llm_answer = self._llm_answer(
+                    question,
+                    entry,
+                    answer_type,
+                    map_context,
+                    web_context,
+                    teaching_task=teaching_task,
+                    web_verification_failed=web_verification_failed,
+                )
                 llm_used = True
                 retrieval_trace.append({"source": "llm_generation", "status": "success"})
                 direct_answer = llm_answer["direct_answer"]
                 mechanism_explanation = llm_answer.get("mechanism_explanation", "")
                 teaching_points = llm_answer.get("teaching_points", [])
-                confidence = 0.88 if entry else 0.78
+                confidence = 0.45 if web_verification_failed else (0.88 if entry else 0.78)
             except Exception as exc:
                 retrieval_trace.append({"source": "llm_generation", "status": "error", "detail": str(exc)})
                 llm_used = False
 
-        if not llm_used:
+        if not llm_used and not deterministic_answer:
             # Fallback to deterministic, classroom-safe templates.
             direct_answer = (
                 entry.get("canonical_answer")
@@ -562,8 +621,8 @@ class KnowledgeEngine:
                 direct_answer = self._map_reading_direct_answer(question, map_context)
             elif answer_type == "timely_fact":
                 direct_answer = (
-                    "这个问题具有时效性。系统应先核对权威实时来源，再给出最终结论。"
-                    "下面列出优先参考的权威来源。"
+                    "这个问题具有时效性，但当前没有取得可核验的在线资料，"
+                    "因此我不能把未经核实的数据当作当前结论。你可以明确要求联网核实后再问。"
                 )
             mechanism_explanation = self._mechanism_text(question, entry, answer_type)
             teaching_points = list(entry.get("teaching_points", [])) if entry else self._default_teaching_points(answer_type)
@@ -581,6 +640,8 @@ class KnowledgeEngine:
             "retrieval_trace": retrieval_trace,
             "presentation": self._presentation_policy(answer_type),
             "llm_used": llm_used,
+            "retrieval_mode": retrieval_mode,
+            "web_verified": web_evidence_available,
         }
 
     # ------------------------------------------------------------------
@@ -603,6 +664,90 @@ class KnowledgeEngine:
             cleaned = _re.sub(r"```\s*$", "", cleaned).strip()
         return cleaned
 
+    @staticmethod
+    def _sanitize_image_answer_coordinates(text: str, question: str) -> str:
+        """Remove unsolicited coordinate details from an image answer.
+
+        Vision summaries can contain graticule-derived latitude bands even
+        when the user asked only about a spatial pattern. The prompt remains
+        the primary control, while this small output guard prevents those
+        internal reading aids from leaking into the final conversation.
+        """
+        if _contains_any(
+            question,
+            ("经纬度", "经度", "纬度", "坐标", "经线", "纬线", "比例尺", "尺度", "coordinate", "latitude", "longitude"),
+        ):
+            return text
+        coordinate_pattern = re.compile(
+            r"(?:\b\d{1,3}(?:\.\d+)?\s*°\s*[NSEW]\b|北纬|南纬|东经|西经|纬度|经度)",
+            re.IGNORECASE,
+        )
+        kept: List[str] = []
+        for line in text.splitlines():
+            if not coordinate_pattern.search(line):
+                kept.append(line)
+                continue
+            fragments = re.split(r"(?<=[。！？；])", line)
+            kept.extend(fragment for fragment in fragments if fragment.strip() and not coordinate_pattern.search(fragment))
+        return "\n".join(kept).strip()
+
+    @staticmethod
+    def _population_legend_values(vision_summary: str) -> List[str]:
+        """Extract only explicitly printed population-legend values/classes."""
+        values: List[str] = []
+        in_legend = False
+        for raw_line in vision_summary.splitlines():
+            line = raw_line.strip()
+            lowered = line.lower()
+            if "legend" in lowered and not in_legend:
+                in_legend = True
+                continue
+            if not in_legend:
+                continue
+            if line.startswith("#") or (
+                line.startswith("**")
+                and not re.match(r"^\*\*\s*[<>≤≥]?\s*\d", line)
+                and "legend" not in lowered
+            ):
+                break
+            match = re.match(
+                r"^\s*-\s*(?:\*\*)?([<>≤≥]?\s*\d+(?:\.\d+)?(?:\s*[–—~-]\s*\d+(?:\.\d+)?)?\+?)",
+                line,
+            )
+            if match is None:
+                match = re.search(
+                    r":\s*(?:\*\*)?([<>≤≥]?\s*\d+(?:\.\d+)?(?:\s*[–—~-]\s*\d+(?:\.\d+)?)?\+?)",
+                    line,
+                )
+            if match:
+                value = re.sub(r"\s+", "", match.group(1)).replace("~", "–").replace("—", "–")
+                if value not in values:
+                    values.append(value)
+        if values and all(re.fullmatch(r"\d+(?:\.\d+)?", value) for value in values):
+            values.sort(key=float)
+        return values
+
+    @classmethod
+    def _ensure_population_legend_statement(cls, text: str, question: str, vision_summary: str) -> str:
+        if "人口" not in question or "图例" not in question:
+            return text
+        summary_lower = vision_summary.lower()
+        if "人口密度" not in vision_summary and "population density" not in summary_lower:
+            return text
+        values = cls._population_legend_values(vision_summary)
+        if len(values) < 2:
+            return text
+
+        kept: List[str] = []
+        for line in text.splitlines():
+            fragments = re.split(r"(?<=[。！？；])", line)
+            kept.extend(fragment for fragment in fragments if fragment.strip() and "图例" not in fragment)
+        unit = "人/km²" if any(token in vision_summary for token in ("人/km²", "persons/km²", "persons per square kilometer")) else ""
+        suffix = f"（{unit}）" if unit else ""
+        legend = f"图例标注了{'、'.join(values)}{suffix}，颜色由浅到深表示人口密度升高。"
+        body = "\n".join(kept).strip()
+        return f"{body}\n\n{legend}" if body else legend
+
     def _llm_answer(
         self,
         question: str,
@@ -611,42 +756,67 @@ class KnowledgeEngine:
         map_context: Dict[str, Any],
         web_context: str = "",
         teaching_task: str = "",
+        web_verification_failed: bool = False,
     ) -> Dict[str, Any]:
         """Call MiniMax LLM to generate a geography knowledge answer.
 
-        The prompt asks for *plain readable Chinese text* — NOT JSON — so that
-        the response can be displayed directly to the teacher in the classroom
-        copilot panel.  We post-process the text to extract an optional
-        "原理分析" section and "课堂要点" bullet list.
+        The prompt asks for one natural Chinese answer. Structured teaching
+        output is used only when the user explicitly asks for questions,
+        lesson design, or a reflection checklist.
         """
         system_prompt = (
-            "你是一位专业的高中地理教师助手，具有丰富的地理学科知识。\n"
-            "老师会向你提问地理相关问题，请用准确、权威、适合课堂讲解的方式直接回答。\n\n"
-            "格式要求（非常重要）：\n"
-            "- 直接用自然语言回答，不要输出 JSON、代码块或任何标记语言\n"
-            "- 不要输出 <think> 或任何 XML 标签\n"
-            "- 如果问题包含“当前视图、当前地图、当前画面、读图、判读”等表达，必须结合参考上下文中的地图状态作读图回答，不要把它当作时效性事实问题\n"
-            "- 回答分为三部分，用空行分隔：\n"
-            "  第一部分：直接回答问题（1-3 段）\n"
-            "  第二部分：以\"原理分析：\"开头，解释核心地理机制（1-2 段）\n"
-            "  第三部分：以\"课堂要点：\"开头，列出 2-4 个要点，每个要点以\"- \"开头换行书写\n"
-            "- 语言简洁专业，适合课堂直接朗读\n"
-            "- 用中文回答\n"
+            "你是一位专业、自然、耐心的地理教学助手。默认使用简体中文，先直接回答用户真正关心的问题。\n"
+            "回答应像真实交流：通常使用连贯短段落，只有比较、步骤或用户明确要求清单时才使用小标题或列表。\n"
+            "不要套用固定的“证据点、原理分析、课堂要点、教师收束语”模板，不要输出 JSON、代码块、<think> 或 XML 标签。\n"
+            "不要暴露检索轨迹、视觉摘要等内部字段，也不要主动报告经纬度、缩放等级或可见范围。\n"
+            "不要用“知识库认为”“系统提示”“内部资料显示”等措辞描述回答来源。\n"
+            "涉及图片时，把画面中可直接观察到的内容与地理推断区分开；文字、图例或边界看不清时自然说明不确定，不得编造。\n"
+            "如果参考资料不足，直接说明限制并给出仍然可靠的判断，不要用生硬的系统提示口吻。\n"
         )
-        if teaching_task:
+        if "人口" in question:
             system_prompt += (
-                "\n你正在“专业教学智能体”模式下支持地理课堂。除上述结构外，“课堂要点”必须依次覆盖：\n"
-                "- 证据或观察点：只能引用参考上下文里真实存在的图层、选区、素材或视觉读图结果\n"
-                "- 给学生的问题：1-2 个可以在课堂上直接提问的问题\n"
-                "- 教师收束语或下一步\n"
-                "如果参考上下文里没有地图或素材证据，必须明确说明“本回答缺少当前地图或素材证据”，"
-                "不得编造图层名称、数据或学生表现。\n"
+                "人口地理回答必须严格区分人口总量、人口密度、迁入、迁出、净迁移和自然增长，不能互相替代。"
+                "比较两个地区时先核对比较方向，结论必须与同一回答中的数字和表格一致。"
+                "参考上下文没有给出对应年份和数值时，优先做可靠的定性比较，不自行编造人口、比例、排名或面积数据。\n"
             )
+        if web_verification_failed:
+            system_prompt += (
+                "问题包含时效或核验意图，但本次没有取得包含具体事实的在线检索结果。"
+                "你可以回答本地知识中的稳定定义，但必须明确说明最新或当前部分尚未核实；"
+                "不得给出现时人口数、比例、排名，也不得把机构主页链接当成已经核验的证据。\n"
+            )
+        vision_summary = str(map_context.get("vision_summary") or "").strip()
+        if vision_summary:
+            system_prompt = (
+                "你是一个受约束的地理图片信息转述编辑器。默认使用自然、简洁的简体中文回答。\n"
+                "视觉读图结果是唯一事实来源，用户问题只决定从中挑选哪些内容，不授权你调用常识、记忆或外部知识补充答案。\n"
+                "只可忠实翻译、压缩和重组视觉读图结果已经明确陈述的内容。任何地名、水域名、山名、行政区名、"
+                "数值、方向和边界性质，必须在视觉读图结果中明确出现才能写入答案。\n"
+                "视觉读图结果中已有中文专名时必须逐字复制，禁止改写或重新音译；只有外文名时宁可保留外文。"
+                "数值、单位和大于小于等比较关系也必须保持原意，不得自行扩大或缩小范围。\n"
+                "严禁使用“很可能是”“应该是”后接视觉读图结果中没有的专名；无法确认名称时，只描述图中可见的形态和位置关系，"
+                "并明确说名称无法从图中确认。不要添加视觉摘要以外的成因、数量、历史或区域背景。\n"
+                "先回答核心问题，再用自然短段落补充必要的不确定性；不要输出固定教学模板、JSON、代码块或内部字段。\n"
+            )
+            system_prompt += (
+                "默认写成两到四个简短自然段；除非用户明确要求清单或逐项对照，不要使用 Markdown 标题。\n"
+                "图例数值必须逐项保持视觉读图结果中的原始区间、单位和不等号；不能合并等级，也不能把一个等级的颜色或范围移给另一个等级。\n"
+            )
+            if "人口" in question:
+                system_prompt += (
+                    "这是人口专题图片转述：全文通常不超过 260 个汉字，只回答用户询问的变量、时间和空间差异，不要枚举无关城市或区域。\n"
+                    "如果视觉结果只说图例印有若干刻度值，就按刻度值表述，不得擅自改写成闭区间或大于等于关系；只有视觉结果明确给出区间时才可逐字使用该区间。\n"
+                    "用户没有询问原因或影响因素时，不得补充气候、地形、水源、农业、工业化、城市化等成因。\n"
+                    "不要使用“像素”“内部读图结果”等机器处理词。线状标志只能按图中可见作用描述；除非图例明确说明，不得称为行政边界、法定边界或绝对分界线。\n"
+                )
+            if not _contains_any(question, ("经纬度", "坐标", "经线", "纬线", "比例尺", "尺度")):
+                system_prompt += "用户没有询问坐标或尺度，答案中不要出现经纬度、坐标或经纬网数值。\n"
+        if teaching_task:
             if teaching_task == "teaching_question":
-                system_prompt += "本次请求侧重课堂提问设计：问题要由浅入深，先观察描述，再比较分析，最后解释迁移，并给出常见误区。\n"
+                system_prompt += "\n用户明确需要课堂提问设计，可以用简短列表呈现由观察到解释的递进问题，并提示常见误区。\n"
             elif teaching_task == "teaching_reflect":
                 system_prompt += (
-                    "本次请求侧重课后复盘：以课堂小结口吻输出已讲要点、易错提醒和下一步建议；"
+                    "\n用户明确需要课后复盘，可以自然地概括已讲内容、易错提醒和下一步建议；"
                     "没有真实课堂记录时不得编造学生表现或掌握程度。\n"
                 )
 
@@ -658,10 +828,20 @@ class KnowledgeEngine:
                 "课堂要点最多保留 1 个给学生的问题，不要展开背景综述。\n"
             )
         elif phase == "course_prep":
-            system_prompt += (
-                "\n当前处于课前备课：可以输出较长的结构化内容（问题阶梯、地图证据路线、预演话术），"
-                "设计的问题要附预期答案要点和常见误区。\n"
+            asks_for_lesson_design = teaching_task == "teaching_question" or _contains_any(
+                question,
+                ("教学设计", "教案", "备课", "课堂活动", "问题链", "怎么教", "如何讲", "教学步骤"),
             )
+            if asks_for_lesson_design:
+                system_prompt += (
+                    "\n当前处于课前备课，用户明确需要教学设计：可以组织问题阶梯、地图证据路线和预演话术，"
+                    "设计的问题要附预期答案要点和常见误区。\n"
+                )
+            else:
+                system_prompt += (
+                    "\n当前虽处于课前备课，但这是普通知识问答：保持 2 至 4 个自然短段落，通常不超过 350 字，"
+                    "不要自动扩展成完整教案、历史综述或多级标题。\n"
+                )
         elif phase == "post_class":
             system_prompt += (
                 "\n当前处于课后复盘：必须优先引用参考上下文中“课堂真实记录”里的具体数字；"
@@ -677,11 +857,10 @@ class KnowledgeEngine:
                 context_parts.append(f"知识库要点：{'；'.join(kb_points)}")
         if web_context:
             context_parts.append(f"在线参考资料：\n{web_context}")
-        vision_summary = str(map_context.get("vision_summary") or "").strip()
         if vision_summary:
-            context_parts.append(f"视觉读图结果：{vision_summary}")
+            context_parts.append(f"视觉读图结果（图片事实仅限以下内容）：{vision_summary}")
 
-        map_summary = self._map_context_brief(map_context)
+        map_summary = "" if vision_summary else self._map_context_brief(map_context)
         if map_summary:
             context_parts.append(f"当前地图状态：{map_summary}")
 
@@ -698,11 +877,14 @@ class KnowledgeEngine:
             {"role": "user", "content": user_content},
         ]
 
-        raw = self.minimax_client.chat_completion(messages, temperature=0.3)
+        raw = self.minimax_client.chat_completion(messages, temperature=0.0 if vision_summary else 0.3)
 
         # --- Post-process: strip think tags, code fences, JSON wrappers ---
         cleaned = self._strip_think_tags(raw)
         cleaned = self._strip_code_fences(cleaned)
+        if vision_summary:
+            cleaned = self._sanitize_image_answer_coordinates(cleaned, question)
+            cleaned = self._ensure_population_legend_statement(cleaned, question, vision_summary)
 
         # If the model still returned JSON despite the prompt, extract text from it
         if cleaned.startswith("{"):
@@ -716,8 +898,11 @@ class KnowledgeEngine:
             except json.JSONDecodeError:
                 pass
 
-        # --- Split plain-text answer into structured parts ---
-        return self._parse_plain_answer(cleaned)
+        return {
+            "direct_answer": cleaned,
+            "mechanism_explanation": "",
+            "teaching_points": [],
+        }
 
     @staticmethod
     def _parse_plain_answer(text: str) -> Dict[str, Any]:
@@ -858,7 +1043,7 @@ class KnowledgeEngine:
             }
         return {
             "show_mechanism": True,
-            "show_map_grounding": True,
+            "show_map_grounding": answer_type == "map_reading",
             "show_teaching_points": True,
             "teaching_points_title": "课堂要点",
         }
@@ -925,26 +1110,158 @@ class KnowledgeEngine:
             "当前" in lowered_question and _contains_any(lowered_question, ("地图", "视图", "画面", "图层", "区域", "选区"))
         )
 
+    @staticmethod
+    def _population_guardrail_answer(question: str) -> str:
+        """Return concise, deterministic answers for common population misconceptions.
+
+        These concepts are frequently misanswered by swapping absolute and
+        relative indicators or by treating a one-way flow as net migration.
+        Keeping the core distinction deterministic prevents a fluent model
+        response from contradicting its own numbers or the map legend.
+        """
+        text = question or ""
+        if "人口密度" in text and _contains_any(text, ("人口总量", "总人口", "人口数量", "总量")):
+            answer = (
+                "人口总量回答一个地区“有多少人”，人口密度回答“单位面积上有多少人”，"
+                "计算上是人口总量除以土地面积。两者不能互相替代：总量大不一定密度高，密度高也不必然意味着总量更大。"
+            )
+            if "上海" in text and "西藏" in text:
+                answer += (
+                    "以上海和西藏为例，上海的人口总量和人口密度都高于西藏，所以这组地区不能用来证明“密度高但总量小”；"
+                    "它更适合说明土地面积差异会显著改变密度。若要做数量比较，还必须使用同一年、同一人口口径和同一级行政单元的数据。"
+                )
+            return answer
+
+        if "自然增长率" in text and _contains_any(text, ("下降", "降低", "放缓")) and _contains_any(
+            text, ("人口总量", "总人口", "人口增加", "继续增加")
+        ):
+            return (
+                "自然增长率下降只表示人口自然增长的速度放慢，不等于增长率已经为零或转为负值。"
+                "只要自然增长率仍为正，出生人数仍多于死亡人数，人口总量就可能继续增加；同样的增长率作用在不同人口基数上，带来的增量也不同。"
+                "判断一个地区的总人口变化时，还要把净迁移与自然增长合并考虑，不能只看增长率是升还是降。"
+            )
+
+        if "自然增长" in text and "负" in text and _contains_any(text, ("人口", "总量", "减少", "下降")):
+            return (
+                "自然增长为负只说明死亡人数多于出生人数，并不能单独决定人口总量一定减少。"
+                "一个地区的人口变化由自然增长和净迁移共同决定：如果净迁入大于自然减少，总量仍可增加；"
+                "如果净迁入不足以抵消自然减少，总量才会下降。比较时还要统一统计时期和常住人口等人口口径。"
+            )
+
+        if "净迁入" in text and _contains_any(text, ("常住人口", "人口总量", "总人口")) and _contains_any(
+            text, ("下降", "减少", "仍可能", "为什么")
+        ):
+            return (
+                "净迁入为正只说明迁入人数多于迁出人数，不代表人口总量必然增加。"
+                "常住人口变化可以概括为“自然增长加净迁移”：当自然减少的规模大于净迁入时，最终总量仍会下降；"
+                "反过来，净迁入足以抵消自然减少时，总量才会增加。判断时必须使用同一时期、同一人口口径的数据。"
+            )
+
+        if "常住人口" in text and "户籍人口" in text and _contains_any(text, ("比较", "混用", "口径", "规模")):
+            return (
+                "常住人口和户籍人口不能直接混用比较。常住人口反映实际在当地居住的人口，户籍人口按户籍登记地统计，"
+                "同一个人可能计入一个地区的户籍人口、同时计入另一个地区的常住人口。"
+                "比较城市人口规模时，应统一年份、行政范围和人口口径，并在图题、表头或注释中明确写出“常住人口”或“户籍人口”。"
+            )
+
+        if _contains_any(text.lower(), ("top", "排名", "排行")) and "人口" in text and _contains_any(
+            text, ("年份", "行政范围", "统计口径", "可比")
+        ):
+            return (
+                "人口排名要先统一比较对象，再进行排序。所有城市应使用同一统计年份、同一人口口径和同一行政范围，"
+                "例如不能把一个城市的全域常住人口与另一个城市的市辖区户籍人口放在同一榜单。"
+                "结果中应同时标明数据年份、统计单位、人口口径、行政层级和来源；缺少任一项时，排名只能视为不可直接比较的参考。"
+            )
+
+        if "迁移" in text and "流线" in text and _contains_any(text, ("净迁入", "净迁移", "净流入", "净迁出")):
+            return (
+                "流线越粗代表什么，必须先看图例；只有图例明确规定线宽表示迁移人数时，粗线才能说明该条起讫路径的迁移规模更大。"
+                "它仍不等于一个地区的全部迁入量。净迁入要用所有迁入量减去所有迁出量，"
+                "因此只看到单向流线或几条示意流线，不能判断净迁入；还需要完整的双向流量、统计时期和人口口径。"
+            )
+
+        if _contains_any(text, ("七普", "2020年", "2020 年")) and _contains_any(
+            text, ("当前数据", "历史数据", "现在", "最新", "时效", "实时")
+        ):
+            return (
+                "课堂上应把它明确称为“2020年第七次全国人口普查数据”，用来说明2020年的空间格局，而不要简称为“当前人口数据”。"
+                "讲解时可以先用七普数据比较区域分布，再单独提醒学生：格局判断有明确的数据时点，后续人口变化需要另找更新的官方统计。"
+                "课件、图例和口播都应同时标注年份、常住人口或户籍人口口径、统计单位和来源；没有完成最新核验时，不补写现时人口数。"
+            )
+
+        return ""
+
+    @staticmethod
+    def _unverified_timely_answer(question: str, entry: Optional[Dict[str, Any]]) -> str:
+        stable_answer = str((entry or {}).get("canonical_answer") or "").strip()
+        if stable_answer:
+            return (
+                f"{stable_answer}"
+                "不过，你问到的“今天、最新或当前”部分需要用带明确统计日期和口径的在线资料核验。"
+                "本次没有取得包含具体事实的有效在线结果，因此不能据此断言现状仍然相同，也不提供未经核实的现时比例、排名或人口数。"
+            )
+        return (
+            "这个问题需要最新或当前资料，但本次没有取得包含具体事实、统计日期和口径的有效在线结果。"
+            "因此我暂时不能给出当前数值或肯定结论；机构主页只能作为继续查找的入口，不能当作已经完成核验。"
+        )
+
     def _match_entry(self, question: str) -> Optional[Dict[str, Any]]:
         lowered = (question or "").lower()
+        lowered = (
+            lowered.replace("hu huanyong line", "胡焕庸线")
+            .replace("hu huanyong", "胡焕庸")
+            .replace("heihe-tengchong line", "胡焕庸线")
+            .replace("heihe-tengchong", "胡焕庸")
+        )
         for item in self.knowledge_units:
-            haystack = " ".join([item.get("title", ""), *item.get("tags", [])]).lower()
-            if any(tag.lower() in lowered for tag in item.get("tags", [])) or item.get("title", "").lower() in lowered:
+            title = str(item.get("title") or "").strip().lower()
+            tags = [str(tag or "").strip().lower() for tag in item.get("tags", [])]
+            meaningful_tags = [tag for tag in tags if len(tag) >= 2 and tag not in MATCH_STOP_WORDS]
+            if (len(title) >= 2 and title in lowered) or any(tag in lowered for tag in meaningful_tags):
                 return item
-            if haystack and any(token in haystack for token in lowered.split()):
+            query_tokens = {
+                token
+                for token in re.findall(r"[a-z0-9_-]{3,}|[\u4e00-\u9fff]{2,}", lowered)
+                if token not in MATCH_STOP_WORDS
+            }
+            haystack_tokens = {
+                token
+                for token in re.findall(r"[a-z0-9_-]{3,}|[\u4e00-\u9fff]{2,}", " ".join([title, *meaningful_tags]))
+                if token not in MATCH_STOP_WORDS
+            }
+            if query_tokens and len(query_tokens & haystack_tokens) >= 2:
                 return item
         return None
 
-    def _default_citations(self, answer_type: str) -> List[Dict[str, str]]:
-        if answer_type == "timely_fact":
-            return [
-                {"title": "World Bank Data", "url": "https://data.worldbank.org/"},
-                {"title": "UN Data", "url": "https://data.un.org/"},
-            ]
-        return [
-            {"title": "USGS", "url": "https://www.usgs.gov/"},
-            {"title": "NOAA", "url": "https://www.noaa.gov/"},
-        ]
+    def _retrieval_mode(
+        self,
+        question: str,
+        answer_type: str,
+        entry: Optional[Dict[str, Any]],
+        map_context: Dict[str, Any],
+    ) -> str:
+        if answer_type in META_ANSWER_TYPES:
+            return "none"
+        wants_local = _contains_any(question, LOCAL_RETRIEVAL_HINTS) or entry is not None
+        wants_web = answer_type == "timely_fact" or _contains_any(question, WEB_RETRIEVAL_HINTS)
+        teaching_context = map_context.get("teaching_context") if isinstance(map_context.get("teaching_context"), dict) else {}
+        if str((teaching_context or {}).get("phase") or "") == "in_class" and not _contains_any(question, WEB_RETRIEVAL_HINTS):
+            wants_web = False
+        if map_context.get("image_attachment"):
+            # An image question is grounded in the image by default. Merely
+            # mentioning words such as "current data" or "source" (including
+            # in a negation) must not silently turn visual reading into a web
+            # lookup. Only an explicit request to combine or verify newer
+            # material enables online retrieval.
+            wants_local = _contains_any(question, LOCAL_RETRIEVAL_HINTS)
+            wants_web = _contains_any(question, IMAGE_WEB_RETRIEVAL_HINTS)
+        if wants_local and wants_web:
+            return "local_web"
+        if wants_local:
+            return "local"
+        if wants_web:
+            return "web"
+        return "none"
 
     def _visible_layer_names(self, map_context: Dict[str, Any], limit: int = 6) -> List[str]:
         names: List[str] = []
@@ -970,9 +1287,9 @@ class KnowledgeEngine:
             parts.append(f"已选要素：{selected_feature[:160]}")
         vision_summary = str(map_context.get("vision_summary") or "").strip()
         if vision_summary:
-            parts.append("已完成页面截图视觉读图")
+            parts.append("已结合图片内容")
         elif map_context.get("vision_reason"):
-            parts.append("截图视觉读图未启用，已使用结构化地图上下文")
+            parts.append("图片识别当前不可用")
         active_materials = map_context.get("active_lesson_materials") or []
         if active_materials:
             material_titles = [
@@ -983,13 +1300,6 @@ class KnowledgeEngine:
             material_titles = [title for title in material_titles if title]
             if material_titles:
                 parts.append(f"已绑定教学资料：{', '.join(material_titles)}")
-        center = map_context.get("center")
-        zoom = map_context.get("zoom")
-        if center or zoom is not None:
-            parts.append(f"视图中心 {center or '未知'}，缩放级别 {zoom if zoom is not None else '未知'}")
-        extent = map_context.get("extent")
-        if extent:
-            parts.append(f"可见范围 {extent}")
         return "；".join(parts)
 
     def _map_reading_direct_answer(self, question: str, map_context: Dict[str, Any]) -> str:
@@ -1028,7 +1338,7 @@ class KnowledgeEngine:
         else:
             answer += "\n\n本次请求没有携带可见图层、选区或截图信息，因此只能给出通用读图框架；若要识别图面颜色、图例数值或具体地貌边界，请使用“读图讲解”截图识别。"
         if map_context.get("vision_reason"):
-            answer += "\n\n当前截图视觉读图尚未启用，以上是基于视图范围、缩放级别和图层状态的辅助判读；启用读图模型后可进一步识别颜色分层、图例数值和地形纹理。"
+            answer += "\n\n当前没有取得可用的图片识别结果，因此不能把图层状态当成画面内容继续推断。"
         return answer
 
     def _mechanism_text(self, question: str, entry: Optional[Dict[str, Any]], answer_type: str) -> str:
@@ -1062,6 +1372,10 @@ class KnowledgeEngine:
         ]
 
     def _map_grounding(self, map_context: Dict[str, Any], answer_type: str = "") -> str:
+        if map_context.get("image_attachment") or map_context.get("vision_summary"):
+            # The natural-language answer already explains the attached image.
+            # Do not append an internal-looking "based on current map" footer.
+            return ""
         map_brief = self._map_context_brief(map_context)
         if map_brief:
             return f"基于当前地图：{map_brief}。"
@@ -1211,6 +1525,7 @@ class ToolExecutor:
             "search_poi": {"target": "webgis", "category": "search", "risk_level": "low", "reversible": True, "requires_confirmation": False, "requires_map_context": True},
             "toggle_teaching_map": {"target": "webgis", "category": "teaching_map", "risk_level": "low", "reversible": True, "requires_confirmation": False},
             "open_material": {"target": "webgis", "category": "material", "risk_level": "low", "reversible": True, "requires_confirmation": False},
+            "generate_image": {"target": "webgis", "category": "paid_generation", "risk_level": "high", "reversible": False, "requires_confirmation": True, "validator": self._require_image_generation_prompt},
             "run_visual_query": {"target": "webgis", "category": "analysis", "risk_level": "medium", "reversible": True, "requires_confirmation": False},
             "record_observation": {"target": "webgis", "category": "classroom", "risk_level": "medium", "reversible": False, "requires_confirmation": False, "validator": self._require_active_session},
             "launch_question": {"target": "webgis", "category": "classroom", "risk_level": "high", "reversible": False, "requires_confirmation": True, "validator": self._require_active_session},
@@ -1280,6 +1595,15 @@ class ToolExecutor:
             return "当前班课已结束，课堂工具（发布提问/记录学情）只在进行中的班课可用"
         return ""
 
+    def _require_image_generation_prompt(self, params: Dict[str, Any], project_state: Dict[str, Any], map_context: Dict[str, Any]) -> str:
+        del project_state, map_context
+        prompt = str(params.get("prompt") or "").strip()
+        if not prompt:
+            return "图片生成需要明确的 prompt"
+        if len(prompt) > 1500:
+            return "图片生成 prompt 不能超过 1500 个字符"
+        return ""
+
 
 class AssistantSessionEngine:
     def __init__(
@@ -1342,12 +1666,38 @@ class AssistantSessionEngine:
             history=history,
             map_context=map_context,
         )
-        self.memory.append(conversation.conversation_id, "user", message, normalized_mode, metadata={"job_id": job_id})
+        attachments = list(map_context.get("image_attachments") or [])
+        image_attachment = attachments[0] if attachments and isinstance(attachments[0], dict) else None
+        if image_attachment is None and _contains_any(message, IMAGE_FOLLOW_UP_HINTS):
+            remembered = conversation.pinned_state.get("last_image_attachment")
+            if isinstance(remembered, dict) and remembered.get("path"):
+                image_attachment = dict(remembered)
+        if image_attachment is not None:
+            map_context = {**map_context, "image_attachment": image_attachment}
+        self.memory.append(
+            conversation.conversation_id,
+            "user",
+            message,
+            normalized_mode,
+            metadata={
+                "job_id": job_id,
+                "image_attachment": {
+                    "artifact_id": image_attachment.get("artifact_id", ""),
+                    "title": image_attachment.get("title", ""),
+                    "public_url": image_attachment.get("public_url", ""),
+                }
+                if image_attachment
+                else {},
+            },
+        )
 
         stage_callback("routing", "running", "Routing request", "")
         context = self.memory.build_context(conversation)
         route = self.router.route(normalized_mode, message, context["raw_messages"], map_context, {"project_id": project.project_id})
         intent = route["intent"]
+        if image_attachment is not None:
+            intent = "knowledge" if normalized_mode == "knowledge" else "teaching_explain"
+            route = {**route, "intent": intent, "reason": "image attachment requires visual understanding"}
         stage_callback("routing", "success", f"Intent: {intent}", route["reason"])
 
         if intent == "knowledge" or (intent in TEACHING_TASKS and intent != "teaching_action"):
@@ -1466,6 +1816,16 @@ class AssistantSessionEngine:
                     if question_text
                     else "即将向学生端发布提问，发送后全班学生立即可见，请确认。"
                 )
+            image_action = next((item for item in actions if str(item.get("tool_name") or "") == "generate_image"), None)
+            if image_action is not None:
+                image_params = image_action.get("tool_params") or {}
+                image_prompt = str(image_params.get("prompt") or "").strip()
+                confirm_title = "使用 MiniMax 生成图片"
+                confirm_reason = (
+                    f"即将使用普通余额 API 生成并保存一张 AI 示意图：{image_prompt[:120]}。此操作会产生 API 费用，请确认。"
+                    if image_prompt
+                    else "即将使用普通余额 API 生成并保存一张 AI 示意图。此操作会产生 API 费用，请确认。"
+                )
             confirmation = self.store.create_confirmation(
                 project.project_id,
                 conversation.conversation_id,
@@ -1491,7 +1851,7 @@ class AssistantSessionEngine:
             stage_callback("confirmation", "success", "Confirmation created", confirmation.confirmation_id)
             assistant_message = (
                 f"{plan.get('assistant_message', '').strip()}\n\n"
-                "The planned action is high risk and awaits confirmation before execution."
+                "该操作会产生外部影响，正在等待你确认后执行。"
             ).strip()
             self.memory.append(
                 conversation.conversation_id,
@@ -1557,9 +1917,6 @@ class AssistantSessionEngine:
                 knowledge = self.knowledge.answer(message, map_context=map_context, teaching_task="teaching_action")
                 citations = knowledge["citations"]
                 grounding_text = self.knowledge.render_public_answer(knowledge, include_teaching_points=True)
-                scaffold_parts = _teaching_scaffold_parts(knowledge, map_context)
-                teaching_contract = scaffold_parts
-                grounding_text = "\n\n".join(part for part in [grounding_text, _format_scaffold_text(scaffold_parts)] if part).strip()
             else:
                 knowledge = self.knowledge.answer(message, map_context=map_context)
                 citations = knowledge["citations"]
@@ -1692,9 +2049,6 @@ class AssistantSessionEngine:
                 knowledge = self.knowledge.answer(confirmed_message, map_context=map_context, teaching_task="teaching_action")
                 citations = list(knowledge.get("citations") or [])
                 grounding_text = self.knowledge.render_public_answer(knowledge, include_teaching_points=True)
-                scaffold_parts = _teaching_scaffold_parts(knowledge, map_context)
-                teaching_contract = scaffold_parts
-                grounding_text = "\n\n".join(part for part in [grounding_text, _format_scaffold_text(scaffold_parts)] if part).strip()
             else:
                 knowledge = self.knowledge.answer(confirmed_message, map_context=map_context)
                 citations = list(knowledge.get("citations") or [])
@@ -1808,6 +2162,52 @@ class AssistantSessionEngine:
             "permission_context": permission_context.to_dict(),
         }
 
+    def _enrich_image_attachment_with_vision(
+        self,
+        message: str,
+        map_context: Dict[str, Any],
+        stage_callback: Callable[[str, str, str, str], None],
+    ) -> Dict[str, Any]:
+        attachment = map_context.get("image_attachment")
+        if not isinstance(attachment, dict) or not attachment.get("path"):
+            return map_context
+        if self.vision_service is None:
+            return {**map_context, "vision_reason": "图片识别服务暂时不可用，请稍后重试。"}
+
+        stage_callback("grounding", "running", "正在识别图片内容", "")
+        try:
+            result = self.vision_service.understand_image(
+                image_path=str(attachment.get("path") or ""),
+                question=message,
+            )
+        except Exception as exc:  # pragma: no cover - defensive runtime branch
+            result = {"used_vision": False, "reason": f"图片识别失败：{exc}"}
+
+        enriched = {**map_context, "vision_result": result}
+        if result.get("used_vision") and str(result.get("summary") or "").strip():
+            summary = str(result.get("summary") or "").strip()
+            stage_callback("grounding", "success", "图片识别完成", summary[:180])
+            enriched.update(
+                {
+                    "vision_used": True,
+                    "vision_summary": summary,
+                    "vision_provider": result.get("provider", ""),
+                    "vision_snapshot_path": result.get("snapshot_path", ""),
+                }
+            )
+            return enriched
+
+        reason = str(result.get("reason") or "图片识别服务没有返回可用结果，请稍后重试。")
+        stage_callback("grounding", "success", "图片识别暂不可用", reason)
+        enriched.update(
+            {
+                "vision_used": False,
+                "vision_reason": reason,
+                "vision_snapshot_path": result.get("snapshot_path", ""),
+            }
+        )
+        return enriched
+
     def _enrich_map_reading_with_vision(
         self,
         project: ProjectRecord,
@@ -1833,8 +2233,8 @@ class AssistantSessionEngine:
                 screen_snapshot=screen_snapshot,
             )
         except Exception as exc:  # pragma: no cover - defensive runtime branch
-            reason = f"地图视觉读图调用异常，已回退到结构化地图上下文：{exc}"
-            stage_callback("grounding", "success", "截图读图回退", reason)
+            reason = f"地图图片识别服务暂时不可用：{exc}"
+            stage_callback("grounding", "success", "截图识别暂不可用", reason)
             return {**map_context, "vision_reason": reason}
 
         enriched = {**map_context, "vision_result": vision_result}
@@ -1851,8 +2251,8 @@ class AssistantSessionEngine:
             )
             return enriched
 
-        reason = str(vision_result.get("reason") or "地图视觉读图未返回可用结果，已回退到结构化地图上下文。")
-        stage_callback("grounding", "success", "截图读图回退", reason)
+        reason = str(vision_result.get("reason") or "地图图片识别服务暂时不可用，请稍后重试。")
+        stage_callback("grounding", "success", "截图识别暂不可用", reason)
         enriched.update(
             {
                 "vision_used": False,
@@ -1944,13 +2344,36 @@ class AssistantSessionEngine:
         stage_callback: Callable[[str, str, str, str], None],
         teaching_task: str = "",
     ) -> Dict[str, Any]:
-        map_context = self._enrich_map_reading_with_vision(project, message, map_context, stage_callback)
+        map_context = self._enrich_image_attachment_with_vision(message, map_context, stage_callback)
+        if not map_context.get("image_attachment"):
+            map_context = self._enrich_map_reading_with_vision(project, message, map_context, stage_callback)
         map_context = self._inject_session_digest(map_context, teaching_task)
         llm_available = self.knowledge.minimax_client is not None and self.config.minimax_enabled()
-        stage_label = "AI 通用知识 + 在线检索" if llm_available else "本地知识库检索"
+        if (map_context.get("image_attachment") or map_context.get("screen_snapshot")) and not map_context.get("vision_summary"):
+            reason = str(map_context.get("vision_reason") or "图片识别服务暂时不可用，请稍后重试。")
+            knowledge = {
+                "direct_answer": reason,
+                "mechanism_explanation": "",
+                "map_grounding": "",
+                "teaching_points": [],
+                "citations": [],
+                "confidence": 0.0,
+                "answer_type": "map_reading",
+                "retrieval_trace": [{"source": "map_vision", "status": "error", "reason": reason}],
+                "presentation": {"show_mechanism": False, "show_map_grounding": False, "show_teaching_points": False},
+                "llm_used": False,
+                "retrieval_mode": "none",
+            }
+        else:
+            knowledge = self.knowledge.answer(message, map_context=map_context, teaching_task=teaching_task)
+        retrieval_mode = str(knowledge.get("retrieval_mode") or "none")
+        stage_label = {
+            "local": "正在查找项目知识库",
+            "web": "正在核对在线资料",
+            "local_web": "正在结合知识库与在线资料",
+        }.get(retrieval_mode, "正在组织回答")
         stage_callback("retrieval", "running", stage_label, "")
-        knowledge = self.knowledge.answer(message, map_context=map_context, teaching_task=teaching_task)
-        if teaching_task:
+        if teaching_task in {"teaching_question", "teaching_reflect"}:
             knowledge["presentation"] = {
                 **dict(knowledge.get("presentation") or {}),
                 "teaching_points_title": "课堂教学要点",
@@ -1959,14 +2382,11 @@ class AssistantSessionEngine:
         source_label = "AI 回答" if llm_used else "本地知识库"
         stage_callback("retrieval", "success", f"{source_label} · {knowledge['answer_type']}", "")
         stage_callback("grounding", "running", "Composing grounded answer", "")
-        assistant_message = self.knowledge.render_public_answer(knowledge, include_teaching_points=True)
+        assistant_message = self.knowledge.render_public_answer(
+            knowledge,
+            include_teaching_points=teaching_task in {"teaching_question", "teaching_reflect"},
+        )
         teaching_contract: Optional[Dict[str, str]] = None
-        if teaching_task:
-            scaffold_parts = _teaching_scaffold_parts(knowledge, map_context)
-            teaching_contract = scaffold_parts
-            assistant_message = "\n\n".join(
-                part for part in [assistant_message, _format_scaffold_text(scaffold_parts)] if part
-            ).strip()
         stage_callback("grounding", "success", "Knowledge answer completed", "")
         result_intent = teaching_task or "knowledge"
         self.memory.append(
@@ -1980,7 +2400,14 @@ class AssistantSessionEngine:
             conversation,
             {"last_intent": result_intent},
             map_context,
-            pinned_state_updates={"last_answer_type": knowledge["answer_type"]},
+            pinned_state_updates={
+                "last_answer_type": knowledge["answer_type"],
+                **(
+                    {"last_image_attachment": dict(map_context.get("image_attachment") or {})}
+                    if map_context.get("image_attachment")
+                    else {}
+                ),
+            },
         )
         planner_label = "knowledge_llm" if llm_used else "knowledge_engine"
         return {
