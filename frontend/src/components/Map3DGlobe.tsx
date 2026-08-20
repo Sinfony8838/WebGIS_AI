@@ -43,6 +43,8 @@ export type Map3DGlobeHandle = {
   ) => void;
   resetView: () => void;
   getCameraState: () => CameraState | null;
+  captureImage: () => string;
+  getCanvasRect: () => { left: number; top: number; width: number; height: number } | null;
 };
 
 type Props = {
@@ -547,7 +549,25 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
           duration: 1.4
         });
       },
-      getCameraState: () => lastCameraStateRef.current
+      getCameraState: () => lastCameraStateRef.current,
+      captureImage: () => {
+        const viewer = viewerRef.current;
+        if (!viewer) {
+          return "";
+        }
+        try {
+          viewer.scene.render();
+          return viewer.canvas.toDataURL("image/png");
+        } catch {
+          return "";
+        }
+      },
+      getCanvasRect: () => {
+        const canvas = viewerRef.current?.canvas;
+        if (!canvas) return null;
+        const rect = canvas.getBoundingClientRect();
+        return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+      }
     })
   );
 

@@ -149,7 +149,7 @@ class AssistantV2RuntimeTest(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["focus"], "当前视图地形分析")
         self.assertEqual(job["result"]["knowledge"]["answer_type"], "map_reading")
-        self.assertIn("视觉读图", job["result"]["assistant_message"])
+        self.assertIn("当前画面", job["result"]["assistant_message"])
         self.assertIn("地势起伏明显", job["result"]["assistant_message"])
         self.assertNotIn("先用人口图", job["result"]["assistant_message"])
         self.assertTrue(any(item.get("source") == "map_vision" for item in job["result"]["retrieval_trace"]))
@@ -172,7 +172,7 @@ class AssistantV2RuntimeTest(unittest.TestCase):
 
         self.assertEqual(job["result"]["intent"], "hybrid")
         self.assertTrue(job["result"]["actions_executed"])
-        self.assertTrue(job["result"]["citations"])
+        self.assertEqual(job["result"]["citations"], [])
         # The hybrid message includes the tool plan message plus a knowledge grounding section
         self.assertIn("Switch the basemap first.", job["result"]["assistant_message"])
         self.assertGreater(len(job["result"]["assistant_message"]), 40)
@@ -228,13 +228,10 @@ class AssistantV2RuntimeTest(unittest.TestCase):
         self.assertEqual(job["request"]["assistant_mode"], "teaching")
         self.assertEqual(job["result"]["intent"], "teaching_explain")
         message = job["result"]["assistant_message"]
-        self.assertIn("回答总结", message)
         self.assertNotIn("证据或观察点", message)
         self.assertNotIn("给学生的问题", message)
         self.assertNotIn("教师收束语或下一步", message)
-        contract = job["result"]["teaching_contract"]
-        self.assertEqual(set(contract.keys()), {"summary"})
-        self.assertTrue(all(contract.values()))
+        self.assertIsNone(job["result"]["teaching_contract"])
 
     def test_teaching_plain_question_never_suggests_switching_modes(self) -> None:
         runtime, project_id = self.build_runtime()
@@ -253,7 +250,7 @@ class AssistantV2RuntimeTest(unittest.TestCase):
         message = job["result"]["assistant_message"]
         self.assertNotIn("switch to knowledge mode", message)
         self.assertNotIn("请切换", message)
-        self.assertIn("回答总结", message)
+        self.assertNotIn("教学处理", message)
 
     def test_brainstorm_fails_explicitly_when_ai_is_unavailable(self) -> None:
         runtime, project_id = self.build_runtime()
@@ -292,13 +289,9 @@ class AssistantV2RuntimeTest(unittest.TestCase):
         self.assertIsNotNone(job["result"]["knowledge"])
         message = job["result"]["assistant_message"]
         self.assertIn("先切换到浅色底图。", message)
-        self.assertIn("回答总结", message)
+        self.assertNotIn("教学处理", message)
         self.assertNotIn("证据或观察点", message)
-        self.assertNotIn("给学生的问题", message)
-        self.assertNotIn("教师收束语或下一步", message)
-        contract = job["result"]["teaching_contract"]
-        self.assertEqual(set(contract.keys()), {"summary"})
-        self.assertTrue(all(contract.values()))
+        self.assertIsNone(job["result"]["teaching_contract"])
 
     def test_teaching_confirmation_executes_with_teaching_explanation(self) -> None:
         runtime, project_id = self.build_runtime()
@@ -327,13 +320,9 @@ class AssistantV2RuntimeTest(unittest.TestCase):
 
         self.assertTrue(confirm_job["result"]["actions_executed"])
         message = confirm_job["result"]["assistant_message"]
-        self.assertIn("回答总结", message)
+        self.assertNotIn("教学处理", message)
         self.assertNotIn("证据或观察点", message)
-        self.assertNotIn("给学生的问题", message)
-        self.assertNotIn("教师收束语或下一步", message)
-        contract = confirm_job["result"]["teaching_contract"]
-        self.assertEqual(set(contract.keys()), {"summary"})
-        self.assertTrue(all(contract.values()))
+        self.assertIsNone(confirm_job["result"]["teaching_contract"])
 
     def test_legacy_tool_mode_keeps_clarification_copy(self) -> None:
         runtime, project_id = self.build_runtime()
@@ -353,12 +342,10 @@ class AssistantV2RuntimeTest(unittest.TestCase):
 
         self.assertEqual(job["result"]["intent"], "teaching_reflect")
         message = job["result"]["assistant_message"]
-        self.assertIn("回答总结", message)
+        self.assertNotIn("教学处理", message)
         self.assertNotIn("学生掌握率", message)
         self.assertNotIn("正确率", message)
-        contract = job["result"]["teaching_contract"]
-        self.assertEqual(set(contract.keys()), {"summary"})
-        self.assertTrue(contract["summary"])
+        self.assertIsNone(job["result"]["teaching_contract"])
 
 
 if __name__ == "__main__":

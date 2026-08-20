@@ -288,6 +288,14 @@ export type ChatMessage = {
   intent?: string | null;
   /** Tools the agent executed for this reply - drives the collapsible tool-use trace. */
   actions_executed?: ExecutedAction[] | null;
+  image_attachment?: ImageAttachment | null;
+};
+
+export type ImageAttachment = {
+  artifact_id: string;
+  title: string;
+  public_url: string;
+  mime_type?: string;
 };
 
 export type CitationRecord = {
@@ -554,6 +562,18 @@ export type HealthResponse = {
     configured?: boolean;
     provider: string;
     token_plan_key_source?: string;
+    api_key_source?: string;
+    billing?: string;
+  };
+  image_generation?: {
+    enabled: boolean;
+    configured?: boolean;
+    provider: string;
+    model: string;
+    base_url?: string;
+    api_key_source?: string;
+    billing?: string;
+    error?: string;
   };
   gis_workflow?: {
     enabled: boolean;

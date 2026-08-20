@@ -1,0 +1,317 @@
+from __future__ import annotations
+
+import unittest
+from pathlib import Path
+
+from backend.app.config import AppConfig
+from backend.app.services.knowledge_base import KnowledgeBaseService
+from backend.app.services.resource_search import ResourceSearchService
+from backend.app.services.session_engine import KnowledgeEngine
+
+
+class CapturingClient:
+    def __init__(self, response: str = "回答") -> None:
+        self.response = response
+        self.calls: list[dict] = []
+
+    def chat_completion(self, messages, temperature=0.3, **kwargs):
+        self.calls.append({"messages": messages, "temperature": temperature})
+        return self.response
+
+
+class PopulationAssistantTest(unittest.TestCase):
+    def build_config(self, *, with_llm: bool = False) -> AppConfig:
+        config = AppConfig(root_dir=Path(__file__).resolve().parents[2])
+        config.llm_provider = "minimax"
+        config.minimax_api_key = "test-key" if with_llm else ""
+        return config
+
+    def test_density_and_total_are_not_swapped_for_shanghai_and_tibet(self) -> None:
+        engine = KnowledgeEngine(self.build_config())
+
+        result = engine.answer("人口密度高是否等于人口总量大？以上海和西藏为例。")
+
+        answer = result["direct_answer"]
+        self.assertIn("人口总量回答", answer)
+        self.assertIn("上海的人口总量和人口密度都高于西藏", answer)
+        self.assertIn("不能用来证明", answer)
+        self.assertNotIn("上海的人口总量反而远低于西藏", answer)
+        self.assertEqual(result["retrieval_mode"], "local")
+
+    def test_migration_flow_does_not_imply_net_migration(self) -> None:
+        engine = KnowledgeEngine(self.build_config())
+
+        result = engine.answer("人口迁移流线越粗是不是表示迁入人口越多？能否据此判断净迁入？")
+
+        answer = result["direct_answer"]
+        self.assertIn("必须先看图例", answer)
+        self.assertIn("所有迁入量减去所有迁出量", answer)
+        self.assertIn("不能判断净迁入", answer)
+        self.assertNotIn("沿海地区一定是净迁入", answer)
+
+    def test_population_change_and_comparability_concepts_stay_source_free(self) -> None:
+        engine = KnowledgeEngine(self.build_config())
+        cases = [
+            (
+                "人口自然增长率下降，为什么人口总量还可能继续增加？",
+                ("不等于增长率已经为零", "净迁移"),
+            ),
+            (
+                "自然增长为负是否等于人口一定减少？还要看什么？",
+                ("自然增长和净迁移共同决定", "统计时期"),
+            ),
+            (
+                "比较两个城市人口规模时，常住人口和户籍人口能混用吗？",
+                ("不能直接混用", "统一年份、行政范围和人口口径"),
+            ),
+            (
+                "人口净迁入为正，为什么常住人口总量仍可能下降？",
+                ("自然增长加净迁移", "自然减少的规模大于净迁入"),
+            ),
+            (
+                "做城市人口Top20时，怎样保证年份、行政范围和统计口径可比？",
+                ("同一统计年份", "同一行政范围"),
+            ),
+        ]
+
+        for question, expected in cases:
+            with self.subTest(question=question):
+                result = engine.answer(question)
+                answer = result["direct_answer"]
+                for phrase in expected:
+                    self.assertIn(phrase, answer)
+                self.assertFalse(result["llm_used"])
+                self.assertNotIn("知识库", answer)
+                self.assertNotRegex(answer, r"\d+\s*(?:万|亿|%)")
+
+    def test_census_data_is_labeled_as_2020_not_current(self) -> None:
+        engine = KnowledgeEngine(self.build_config())
+
+        result = engine.answer("课堂上如何使用2020年七普数据，同时避免把历史数据说成当前数据？")
+
+        answer = result["direct_answer"]
+        self.assertIn("2020年第七次全国人口普查数据", answer)
+        self.assertIn("不要简称为“当前人口数据”", answer)
+        self.assertIn("没有完成最新核验时，不补写现时人口数", answer)
+
+    def test_authority_homepage_suggestions_are_not_verified_evidence(self) -> None:
+        config = self.build_config(with_llm=True)
+        knowledge_base = KnowledgeBaseService(config)
+        resource_search = ResourceSearchService(config, knowledge_base)
+        client = CapturingClient("胡焕庸线不是行政边界；当前比例尚未取得可核验的在线结果。")
+        engine = KnowledgeEngine(config, minimax_client=client, resource_search=resource_search)
+
+        result = engine.answer("胡焕庸线是行政边界吗？今天还有效吗？")
+
+        self.assertEqual(result["retrieval_mode"], "local_web")
+        self.assertFalse(result["web_verified"])
+        self.assertNotIn("World Bank Data", {item["title"] for item in result["citations"]})
+        self.assertEqual(client.calls, [])
+        self.assertIn("不能据此断言现状仍然相同", result["direct_answer"])
+        self.assertIn("不提供未经核实的现时比例", result["direct_answer"])
+
+    def test_unverified_latest_population_without_local_entry_is_explicitly_deferred(self) -> None:
+        config = self.build_config(with_llm=True)
+
+        class EmptySearch:
+            def search(self, query: str, scope: str, limit: int):
+                return {"items": []}
+
+        client = CapturingClient("中国当前人口为一个未经验证的数值。")
+        engine = KnowledgeEngine(config, minimax_client=client, resource_search=EmptySearch())
+
+        result = engine.answer("请核实今年最新人口总量和来源")
+
+        self.assertFalse(result["web_verified"])
+        self.assertEqual(client.calls, [])
+        self.assertIn("暂时不能给出当前数值", result["direct_answer"])
+        self.assertIn("机构主页", result["direct_answer"])
+
+    def test_verified_web_result_enters_answer_context_and_citations(self) -> None:
+        config = self.build_config(with_llm=True)
+
+        class VerifiedSearch:
+            def search(self, query: str, scope: str, limit: int):
+                return {
+                    "items": [
+                        {
+                            "title": "国家统计局核验页",
+                            "url": "https://www.stats.gov.cn/example",
+                            "summary": "已核验的官方统计摘要。",
+                            "confidence": 0.95,
+                            "evidence_verified": True,
+                        }
+                    ]
+                }
+
+        client = CapturingClient("已根据官方统计摘要回答。")
+        engine = KnowledgeEngine(config, minimax_client=client, resource_search=VerifiedSearch())
+
+        result = engine.answer("请核实今年最新人口数据及来源")
+
+        self.assertTrue(result["web_verified"])
+        self.assertIn("国家统计局核验页", {item["title"] for item in result["citations"]})
+        user_prompt = client.calls[0]["messages"][1]["content"]
+        self.assertIn("已核验的官方统计摘要", user_prompt)
+
+    def test_population_image_negated_current_data_does_not_trigger_web_search(self) -> None:
+        config = self.build_config(with_llm=True)
+
+        class FailingSearch:
+            def search(self, query: str, scope: str, limit: int):
+                raise AssertionError("pure image reading must not search the web")
+
+        client = CapturingClient("图中显示人口密度总体东南高、西北低。")
+        engine = KnowledgeEngine(config, minimax_client=client, resource_search=FailingSearch())
+
+        result = engine.answer(
+            "请描述图中的人口密度分布，不要把图中比例说成当前数据。",
+            {
+                "image_attachment": {"artifact_id": "population-map"},
+                "vision_summary": "The legend is population density. The printed data year is 2014.",
+            },
+        )
+
+        self.assertEqual(result["retrieval_mode"], "none")
+        self.assertTrue(result["llm_used"])
+        self.assertEqual(result["citations"], [])
+        system_prompt = client.calls[0]["messages"][0]["content"]
+        self.assertIn("全文通常不超过 260 个汉字", system_prompt)
+        self.assertIn("只有视觉结果明确给出区间时", system_prompt)
+        self.assertIn("用户没有询问原因或影响因素时", system_prompt)
+        self.assertIn("不得称为行政边界", system_prompt)
+
+    def test_population_image_can_explicitly_request_latest_web_material(self) -> None:
+        config = self.build_config(with_llm=True)
+
+        class VerifiedSearch:
+            def search(self, query: str, scope: str, limit: int):
+                return {
+                    "items": [
+                        {
+                            "title": "官方最新人口资料",
+                            "url": "https://www.stats.gov.cn/example",
+                            "summary": "带统计日期和口径的核验摘要。",
+                            "confidence": 0.95,
+                            "evidence_verified": True,
+                        }
+                    ]
+                }
+
+        client = CapturingClient("图中年份与最新资料需要分开说明。")
+        engine = KnowledgeEngine(config, minimax_client=client, resource_search=VerifiedSearch())
+
+        result = engine.answer(
+            "请分析这张人口图，并联网核实最新资料。",
+            {
+                "image_attachment": {"artifact_id": "population-map"},
+                "vision_summary": "The map title says population density in 2014.",
+            },
+        )
+
+        self.assertEqual(result["retrieval_mode"], "web")
+        self.assertTrue(result["web_verified"])
+        self.assertIn("官方最新人口资料", {item["title"] for item in result["citations"]})
+
+    def test_image_answer_removes_unsolicited_coordinate_sentence(self) -> None:
+        answer = "芬兰人口密度总体南高北低。主要密集带位于北纬60°至64°。南部颜色更深。"
+
+        cleaned = KnowledgeEngine._sanitize_image_answer_coordinates(answer, "请分析芬兰人口密度的南北差异。")
+        preserved = KnowledgeEngine._sanitize_image_answer_coordinates(answer, "请说明人口密集带的纬度范围。")
+
+        self.assertIn("南高北低", cleaned)
+        self.assertNotIn("北纬60°", cleaned)
+        self.assertIn("南部颜色更深", cleaned)
+        self.assertIn("北纬60°", preserved)
+
+    def test_population_legend_statement_uses_every_printed_tick(self) -> None:
+        summary = """Mapped variable: Population Density, persons/km².
+**Legend — Class Boundaries as Printed**
+The legend shows these exact values:
+- 200 (darkest)
+- 100
+- 50
+- 10
+- 1
+- 0 (lightest)
+
+**Color Scheme**
+- Sequential warm ramp.
+"""
+        answer = "高值区集中在东亚和南亚。图例共设五个等级，为0、1、50、100、200人/km²。"
+
+        cleaned = KnowledgeEngine._ensure_population_legend_statement(
+            answer,
+            "请根据图例分析世界人口密度分布。",
+            summary,
+        )
+
+        self.assertIn("图例标注了0、1、10、50、100、200", cleaned)
+        self.assertNotIn("五个等级", cleaned)
+
+    def test_population_legend_values_support_color_first_format(self) -> None:
+        summary = """### Legend (Population Density)
+- **Dark brown**: 200
+- **Orange**: 100
+- **Yellow**: 50
+- **Pale yellow**: 10
+- **Cream**: 1
+- **White**: 0
+
+### Spatial Pattern
+"""
+
+        self.assertEqual(
+            KnowledgeEngine._population_legend_values(summary),
+            ["0", "1", "10", "50", "100", "200"],
+        )
+
+    def test_migration_flow_legend_is_not_rewritten_as_population_density_colors(self) -> None:
+        summary = """### Legend for migration flow
+- 10,000 people: thin line
+- 50,000 people: thick line
+"""
+        answer = "图例显示线越粗，单条迁移路径的规模越大。"
+
+        cleaned = KnowledgeEngine._ensure_population_legend_statement(
+            answer,
+            "请根据图例分析人口迁移流线。",
+            summary,
+        )
+
+        self.assertEqual(cleaned, answer)
+
+    def test_plain_course_prep_population_answer_stays_compact(self) -> None:
+        config = self.build_config(with_llm=True)
+        client = CapturingClient("中国人口分布受自然和社会经济因素共同影响。")
+        engine = KnowledgeEngine(config, minimax_client=client)
+
+        engine.answer(
+            "为什么我国人口东南多、西北少？不要只归因于自然条件。",
+            {"teaching_context": {"phase": "course_prep"}},
+            teaching_task="teaching_explain",
+        )
+
+        system_prompt = client.calls[0]["messages"][0]["content"]
+        self.assertIn("通常不超过 350 字", system_prompt)
+        self.assertIn("严格区分人口总量、人口密度", system_prompt)
+        self.assertIn("不要用“知识库认为”", system_prompt)
+        self.assertNotIn("可以组织问题阶梯", system_prompt)
+
+    def test_explicit_lesson_design_keeps_structured_prep_guidance(self) -> None:
+        config = self.build_config(with_llm=True)
+        client = CapturingClient("教学设计")
+        engine = KnowledgeEngine(config, minimax_client=client)
+
+        engine.answer(
+            "请设计一节胡焕庸线教学课的问题链。",
+            {"teaching_context": {"phase": "course_prep"}},
+            teaching_task="teaching_question",
+        )
+
+        system_prompt = client.calls[0]["messages"][0]["content"]
+        self.assertIn("可以组织问题阶梯", system_prompt)
+
+
+if __name__ == "__main__":
+    unittest.main()

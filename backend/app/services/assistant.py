@@ -25,6 +25,7 @@ ASSISTANT_TOOL_SCHEMA = [
     {"name": "run_visual_query", "description": "运行人口等结构化指标查询并生成可高亮地图图层。", "parameters": {"dataset": "string?", "year": "number?", "geo_level": "string?", "metric": "string?", "operation": "string?", "order": "string?", "limit": "number?"}},
     {"name": "toggle_teaching_map", "description": "叠加或隐藏教学地图（课本插图）。", "parameters": {"map_id": "string", "visible": "boolean?"}},
     {"name": "open_material", "description": "打开课堂素材或外部教学资料。", "parameters": {"material_id": "string?", "material": "object?"}},
+    {"name": "generate_image", "description": "使用 MiniMax 生成一张 AI 教学示意图并保存到项目图片库。该操作会消耗 API 余额，执行前必须确认。", "parameters": {"prompt": "string", "model": "string?", "aspect_ratio": "string?"}},
     {"name": "record_observation", "description": "记录课堂学情观察到正在进行的班课（verdict 取值 correct/partial/misconception），供课后报告统计。仅在进行中的班课可用。", "parameters": {"verdict": "string", "tag": "string?", "note": "string?", "question_id": "string?"}},
     {"name": "launch_question", "description": "在教师课堂工作台呈现一道口头提问并记录为课堂证据（question_id 指教案题目，或用 text/options 现场出题）。不向学生端发送。仅在进行中的班课可用。", "parameters": {"question_id": "string?", "text": "string?", "options": "string[]?", "answer_index": "number?"}},
 ]
@@ -240,6 +241,14 @@ class AssistantService:
         target_layer = None if is_material_video_request else self._resolve_target_layer(message, project)
         active_layer = next((layer for layer in project.layers if layer.layer_id == project.active_layer_id), None)
         search_result = self._resolve_search_result(message, project)
+        visual_query_action = self._resolve_visual_query_action(message, lowered)
+
+        image_generation_action = None if visual_query_action else self._resolve_image_generation_action(message, lowered)
+        if image_generation_action:
+            return {
+                "assistant_message": "我可以按这段描述生成一张 AI 教学示意图。生成会消耗 MiniMax API 余额，需要你确认后执行。",
+                "actions": [image_generation_action],
+            }
 
         template_action = None if "视频" in lowered else self._resolve_template_action(lowered)
         if template_action:
@@ -292,7 +301,6 @@ class AssistantService:
             actions.append(poi_action)
             narrative_parts.append("我会在当前课堂范围内执行 POI 检索。")
 
-        visual_query_action = self._resolve_visual_query_action(message, lowered)
         if visual_query_action:
             actions.append(visual_query_action["action"])
             narrative_parts.append(visual_query_action["narrative"])
@@ -345,6 +353,28 @@ class AssistantService:
             narrative_parts.append("我先基于当前地图画面给出可直接使用的讲解。")
 
         return {"assistant_message": "".join(narrative_parts), "actions": actions}
+
+    @staticmethod
+    def _resolve_image_generation_action(message: str, lowered: str) -> Optional[Dict[str, Any]]:
+        action_hints = ("生成", "画一张", "画一个", "绘制", "创作", "制作一张", "做一张")
+        image_hints = ("图", "图片", "插画", "示意图", "海报")
+        if not any(hint in lowered for hint in action_hints) or not any(hint in lowered for hint in image_hints):
+            return None
+        if "图层" in lowered:
+            return None
+        if any(hint in lowered for hint in ("识别", "分析这张", "读这张", "看看这张")):
+            return None
+        ratio_match = re.search(r"(?<!\d)(21:9|16:9|9:16|4:3|3:4|3:2|2:3|1:1)(?!\d)", message)
+        aspect_ratio = ratio_match.group(1) if ratio_match else "16:9"
+        model = "image-01-live" if "image-01-live" in lowered else "image-01"
+        return {
+            "tool_name": "generate_image",
+            "tool_params": {
+                "prompt": message.strip(),
+                "model": model,
+                "aspect_ratio": aspect_ratio,
+            },
+        }
 
     def plan_voice_actions(
         self,
@@ -480,7 +510,7 @@ class AssistantService:
         return f"当前视域的近似尺度为：东西约 {approximate_width_km:.0f} 千米，南北约 {approximate_height_km:.0f} 千米。"
 
     def build_export_hint(self) -> str:
-        return "当前任务包含导出意图。请点击顶部“导出截图”，系统会把当前课堂画面保存为本地成果。"
+        return "当前任务包含截图意图。请点击顶部“截图”并框选地图区域，保存后可在项目图片库中查看或加入智能助教。"
 
     def build_poi_hint(self, keyword: str, count: int) -> str:
         if count <= 0:

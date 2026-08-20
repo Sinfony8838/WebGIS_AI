@@ -83,18 +83,20 @@
 
 专业教学智能体以可拖动、可缩放、可最小化的悬浮窗口呈现，是课堂中唯一的 AI 入口，支持：
 
-- 教学讲解：地理概念、区域地理、地图判读与 GIS 方法问答；答复包含证据或观察点、给学生的问题和教师收束语。
+- 教学讲解：地理概念、区域地理、地图判读与 GIS 方法问答；默认使用自然、准确的中文回答，仅在用户明确需要教学设计时组织课堂提问等结构。
 - 课堂地图操作：切换底图、显示图层、应用模板、检索 POI、添加标注、读图讲解等；任何地图操作执行后都会附带教学解释。
 - 课堂追问与课后复盘：支持带上下文的连续追问，以及课后要点收束与下一步建议。
 - 文本输入和浏览器语音识别输入。
 - 对话记忆、阶段状态展示和引用来源展示；高风险操作需教师确认后才执行。
-- 地图截图读图：配置视觉模型后可调用多模态模型；未配置时回退到结构化地图上下文解释。
+- 项目图片库：地图框选截图、本地图片和 AI 生成示意图都按项目保存，可加入助教进行连续识图问答。
+- MiniMax 图片生成：图片库可直接调用 `image-01` 或 `image-01-live`；生成结果使用 Base64 立即持久化，不依赖 24 小时临时 URL。
 
 支持的 LLM / Vision 配置包括：
 
 - MiniMax：推荐 provider，走 Anthropic 兼容接口（`https://api.minimaxi.com/anthropic`，默认模型 `MiniMax-M2.7-highspeed`；若把 `WEBGIS_AI_MINIMAX_BASE_URL` 指到不含 `/anthropic` 的地址则回退 OpenAI Chat Completions 格式）。设置 `WEBGIS_AI_LLM_PROVIDER=minimax` + `WEBGIS_AI_MINIMAX_API_KEY` 启用；文档见 https://platform.minimaxi.com/docs/api-reference/text-anthropic-api 。
 - Xiaomi MiMo：旧默认 provider，兼容 OpenAI Chat Completions 风格接口（服务不可用时请切换到 MiniMax）。
-- MiniMax Token Plan MCP：图片理解视觉通道（`WEBGIS_AI_MINIMAX_TOKEN_PLAN_KEY`）。
+- MiniMax 图片理解 MCP：`understand_image` 视觉通道；可复用 `WEBGIS_AI_MINIMAX_API_KEY` 按量计费，旧的 `WEBGIS_AI_MINIMAX_TOKEN_PLAN_KEY` 名称继续兼容。
+- MiniMax 图片生成 API：普通余额直连 `https://api.minimaxi.com/v1/image_generation`，默认模型 `image-01`，复用 `WEBGIS_AI_MINIMAX_API_KEY`。
 
 ### 8. GIS 分析工作流
 
@@ -246,6 +248,8 @@ LLM / Vision：
 - `WEBGIS_AI_MINIMAX_API_KEY`
 - `WEBGIS_AI_MINIMAX_BASE_URL`
 - `WEBGIS_AI_MINIMAX_MODEL`
+- `WEBGIS_AI_MINIMAX_IMAGE_BASE_URL`：默认 `https://api.minimaxi.com`
+- `WEBGIS_AI_MINIMAX_IMAGE_MODEL`：默认 `image-01`，也可设为 `image-01-live`
 - `WEBGIS_AI_VISION_ENABLED`
 - `WEBGIS_AI_VISION_PROVIDER`
 - `WEBGIS_AI_VISION_MODEL`
@@ -287,6 +291,7 @@ GIS 工作流：
 - `GET /basemaps`
 - `GET /teaching-maps`
 - `POST /projects`
+- `POST /image-generation`
 - `GET /projects/{project_id}`
 - `PATCH /projects/{project_id}/basemap`
 - `GET /layers?project_id=...`

@@ -24,6 +24,7 @@ import { getCenter } from "ol/extent";
 import {
   addCatalogDatasetLayer,
   activateLessonResourceSet,
+  buildPublicFileUrl,
   createKbMaterialLink,
   confirmAssistantAction,
   createProject,
@@ -37,6 +38,7 @@ import {
   fetchLayers,
   fetchOutputs,
   fetchProject,
+  generateImageLibraryAsset,
   getApiBase,
   patchLayer,
   registerKbLayer,
@@ -51,6 +53,7 @@ import {
   summarizeCatalogLayers,
   upsertKbItem,
   uploadDataset,
+  uploadImageLibraryAsset,
   uploadKbMaterial,
   fetchTeachingMaps,
   toggleTeachingMap,
@@ -70,6 +73,7 @@ import { MapToolRail } from "./components/MapToolRail";
 import { LessonWorkflowShell } from "./components/LessonWorkflowShell";
 import { RegionFocusOverlay } from "./components/RegionFocusOverlay";
 import { SideDrawer, type DrawerTab } from "./components/SideDrawer";
+import { ScreenshotSelector, type ScreenshotSelection } from "./components/ScreenshotSelector";
 import { TeachingMaterialViewer } from "./components/TeachingMaterialViewer";
 import { ToastStack, type ToastItem } from "./components/ToastStack";
 import { UploadDialog } from "./components/UploadDialog";
@@ -99,6 +103,7 @@ import type {
   DatasetStatsResponse,
   ExecutedAction,
   HealthResponse,
+  ImageAttachment,
   JobRecord,
   KnowledgeBaseItem,
   KnowledgeTopicSummary,
@@ -111,7 +116,6 @@ import type {
   ProjectRecord,
   RegionBinding,
   ResourceSearchResult,
-  ScreenSnapshot,
   SlideContent,
   TeachingContext,
   TeachingContract,
@@ -268,15 +272,47 @@ function captureMapSnapshot(map: Map): Promise<string> {
   });
 }
 
-function shouldAttachMapSnapshot(message: string): boolean {
-  const text = message.trim().toLowerCase();
-  if (!text) {
-    return false;
-  }
-  const currentMapIntent = /(当前|这张|这幅|此图|图中|图上|视图|画面|读图|判读)/.test(text);
-  const visualGeoIntent = /(地形|地貌|地势|等高线|图例|空间格局|分布|高值|低值|降水|气温|人口|河流|水系|山地|平原|盆地)/.test(text);
-  const analysisIntent = /(分析|讲解|解释|说明|特征|怎么看|如何看)/.test(text);
-  return currentMapIntent || (visualGeoIntent && analysisIntent);
+function cropSnapshot(dataUrl: string, selection: ScreenshotSelection): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      const scaleX = image.naturalWidth / Math.max(selection.viewportWidth, 1);
+      const scaleY = image.naturalHeight / Math.max(selection.viewportHeight, 1);
+      const sourceX = Math.max(0, Math.round(selection.left * scaleX));
+      const sourceY = Math.max(0, Math.round(selection.top * scaleY));
+      const sourceWidth = Math.min(image.naturalWidth - sourceX, Math.max(1, Math.round(selection.width * scaleX)));
+      const sourceHeight = Math.min(image.naturalHeight - sourceY, Math.max(1, Math.round(selection.height * scaleY)));
+      const canvas = document.createElement("canvas");
+      canvas.width = sourceWidth;
+      canvas.height = sourceHeight;
+      const context = canvas.getContext("2d");
+      if (!context) {
+        reject(new Error("浏览器无法创建截图画布。"));
+        return;
+      }
+      context.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, sourceWidth, sourceHeight);
+      const pixels = context.getImageData(0, 0, sourceWidth, sourceHeight).data;
+      const first = [pixels[0], pixels[1], pixels[2], pixels[3]];
+      let hasVisibleVariation = false;
+      const stride = Math.max(4, Math.floor(pixels.length / 4096 / 4) * 4);
+      for (let index = 0; index < pixels.length; index += stride) {
+        if (
+          pixels[index + 3] !== 0 &&
+          (pixels[index] !== first[0] || pixels[index + 1] !== first[1] || pixels[index + 2] !== first[2] || pixels[index + 3] !== first[3])
+        ) {
+          hasVisibleVariation = true;
+          break;
+        }
+      }
+      if (!hasVisibleVariation) {
+        reject(new Error("所选区域没有可保存的地图内容，请重新框选。"));
+        return;
+      }
+      resolve(canvas.toDataURL("image/png"));
+    };
+    image.onerror = () => reject(new Error("截图画面读取失败。"));
+    image.src = dataUrl;
+  });
 }
 
 function formatFeatureSummary(properties: Record<string, unknown>): string {
@@ -459,6 +495,10 @@ export default function App({
   ]);
   const [conversationId, setConversationId] = useState("");
   const [assistantInput, setAssistantInput] = useState("");
+  const [pendingImage, setPendingImage] = useState<ImageAttachment | null>(null);
+  const [imageGenerationLoading, setImageGenerationLoading] = useState(false);
+  const [screenshotSource, setScreenshotSource] = useState("");
+  const [screenshotBounds, setScreenshotBounds] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const [interactionMode, setInteractionMode] = useState<InteractionMode>("browse");
   const [measureText, setMeasureText] = useState("");
   const [measureTotalKm, setMeasureTotalKm] = useState<number | null>(null);
@@ -636,9 +676,10 @@ export default function App({
       text: string,
       teachingContract?: TeachingContract | null,
       intent?: string | null,
-      actionsExecuted?: ExecutedAction[] | null
+      actionsExecuted?: ExecutedAction[] | null,
+      imageAttachment?: ImageAttachment | null
     ) => {
-      if (!text.trim()) {
+      if (!text.trim() && !imageAttachment) {
         return;
       }
       setChatLog((previous) => [
@@ -649,7 +690,8 @@ export default function App({
           timestamp: timestamp(),
           teaching_contract: teachingContract ?? undefined,
           intent: intent ?? undefined,
-          actions_executed: actionsExecuted ?? undefined
+          actions_executed: actionsExecuted ?? undefined,
+          image_attachment: imageAttachment ?? undefined
         }
       ]);
     },
@@ -1147,31 +1189,20 @@ export default function App({
       overrides?: Partial<MapContext>,
       target: AssistantTarget = "webgis",
       inputMode: AssistantInputMode = "text",
-      screenSnapshot?: ScreenSnapshot,
+      imageAttachment?: ImageAttachment | null,
       displayMessage?: string
     ) => {
       if (!project) {
         return;
       }
-      appendChat("user", displayMessage || message);
-      let effectiveSnapshot = screenSnapshot;
-      if (!effectiveSnapshot && mapRef.current && shouldAttachMapSnapshot(message)) {
-        const size = mapRef.current.getSize() || [0, 0];
-        const imageDataUrl = await captureMapSnapshot(mapRef.current);
-        if (imageDataUrl) {
-          effectiveSnapshot = {
-            image_data_url: imageDataUrl,
-            width: Number(size[0] || 0),
-            height: Number(size[1] || 0),
-            captured_at: new Date().toISOString()
-          };
-        }
-      }
-      const response = await sendAssistantMessage(project.project_id, message, buildMapContext(overrides), target, inputMode, {
+      const effectiveMessage = message.trim() || (imageAttachment ? "请识别并分析这张图片中的地理信息。" : "");
+      if (!effectiveMessage) return;
+      appendChat("user", displayMessage || effectiveMessage, null, null, null, imageAttachment);
+      const response = await sendAssistantMessage(project.project_id, effectiveMessage, buildMapContext(overrides), target, inputMode, {
         assistantMode,
         conversationId: health?.ui.assistant_v2_enabled ? conversationId : undefined,
         history: health?.ui.assistant_v2_enabled ? chatLog : undefined,
-        screenSnapshot: effectiveSnapshot,
+        imageAttachments: imageAttachment ? [{ artifact_id: imageAttachment.artifact_id }] : [],
         teachingContext: teachingContextRef.current || undefined
       });
       if (response.conversation_id) {
@@ -1200,20 +1231,108 @@ export default function App({
     [project, subscribeToJob]
   );
 
-  const handleExportSnapshot = useCallback(async () => {
-    if (!project || !mapRef.current) {
+  const handleStartScreenshot = useCallback(async () => {
+    if (!project) {
       return;
     }
-    const imageDataUrl = await captureMapSnapshot(mapRef.current);
+    const imageDataUrl = viewMode === "globe" ? globeRef.current?.captureImage() || "" : mapRef.current ? await captureMapSnapshot(mapRef.current) : "";
+    const rect = viewMode === "globe"
+      ? globeRef.current?.getCanvasRect() || null
+      : mapElementRef.current
+        ? (() => {
+            const value = mapElementRef.current!.getBoundingClientRect();
+            return { left: value.left, top: value.top, width: value.width, height: value.height };
+          })()
+        : null;
     if (!imageDataUrl) {
-      pushToast("error", "导出失败", "当前地图画面没有可用图层。");
+      pushToast("error", "截图失败", "当前地图画面暂时无法读取，请稍后重试。");
       return;
     }
-    await exportSnapshot(project.project_id, "课堂截图", imageDataUrl, "由 WebGIS 实时交互系统导出");
-    await refreshProjectState(project.project_id);
-    appendChat("system", "当前课堂画面已导出到课堂产物列表。");
-    pushToast("success", "导出完成", "课堂截图已进入左侧产物页。");
-  }, [appendChat, project, pushToast, refreshProjectState]);
+    if (!rect || rect.width < 24 || rect.height < 24) {
+      pushToast("error", "截图失败", "当前地图区域尺寸无效。");
+      return;
+    }
+    setScreenshotSource(imageDataUrl);
+    setScreenshotBounds(rect);
+  }, [project, pushToast, viewMode]);
+
+  const handleCompleteScreenshot = useCallback(async (selection: ScreenshotSelection) => {
+    if (!project || !screenshotSource) return;
+    try {
+      const cropped = await cropSnapshot(screenshotSource, selection);
+      await exportSnapshot(project.project_id, `地图截图 ${new Date().toLocaleString("zh-CN")}`, cropped, "地图区域框选截图");
+      await refreshProjectState(project.project_id);
+      setDrawerOpen(true);
+      setDrawerTab("images");
+      pushToast("success", "截图已保存", "可在图片库中预览，或加入智能助教进行识图问答。");
+    } catch (error) {
+      pushToast("error", "截图失败", error instanceof Error ? error.message : "截图保存失败。");
+    } finally {
+      setScreenshotSource("");
+      setScreenshotBounds(null);
+    }
+  }, [project, pushToast, refreshProjectState, screenshotSource]);
+
+  const handleAttachImage = useCallback((image: ImageAttachment) => {
+    setPendingImage((current) => {
+      if (current && current.artifact_id !== image.artifact_id) {
+        pushToast("info", "已替换待发送图片", image.title || "新图片已加入智能助教");
+      }
+      return image;
+    });
+    setCopilotOpenSignal((value) => value + 1);
+  }, [pushToast]);
+
+  const handleUploadImage = useCallback(async (file: File) => {
+    if (!project) return;
+    const supported = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+    if (!supported.has(file.type)) {
+      pushToast("error", "图片格式不支持", "请选择 JPEG、PNG、WebP 或 GIF 图片。");
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      pushToast("error", "图片过大", "单张图片不能超过 20MB。");
+      return;
+    }
+    try {
+      const response = await uploadImageLibraryAsset(project.project_id, file, file.name.replace(/\.[^.]+$/, ""));
+      await refreshProjectState(project.project_id);
+      handleAttachImage({
+        artifact_id: response.artifact.artifact_id,
+        title: response.artifact.title,
+        public_url: buildPublicFileUrl(String(response.artifact.metadata?.public_url || "")),
+        mime_type: String(response.artifact.metadata?.mime_type || file.type)
+      });
+      pushToast("success", "图片已上传", "图片已保存到项目图片库，并加入智能助教。");
+    } catch (error) {
+      pushToast("error", "图片上传失败", error instanceof Error ? error.message : "上传请求失败。");
+    }
+  }, [handleAttachImage, project, pushToast, refreshProjectState]);
+
+  const handleGenerateImage = useCallback(async ({
+    prompt,
+    model,
+    aspectRatio
+  }: { prompt: string; model: string; aspectRatio: string }) => {
+    if (!project || imageGenerationLoading) return;
+    setImageGenerationLoading(true);
+    try {
+      const response = await generateImageLibraryAsset(project.project_id, prompt, { model, aspectRatio });
+      await refreshProjectState(project.project_id);
+      handleAttachImage({
+        artifact_id: response.artifact.artifact_id,
+        title: response.artifact.title,
+        public_url: buildPublicFileUrl(String(response.artifact.metadata?.public_url || "")),
+        mime_type: String(response.artifact.metadata?.mime_type || "image/jpeg")
+      });
+      pushToast("success", "图片已生成", "已保存到项目图片库，并加入智能助教待发送附件。AI 示意图不替代权威 GIS 数据。");
+    } catch (error) {
+      pushToast("error", "图片生成失败", error instanceof Error ? error.message : "MiniMax 图片服务暂不可用。");
+      throw error;
+    } finally {
+      setImageGenerationLoading(false);
+    }
+  }, [handleAttachImage, imageGenerationLoading, project, pushToast, refreshProjectState]);
 
   const handleRenderedPptImport = useCallback(async (file: File) => {
     setPptLoading(true);
@@ -2953,8 +3072,8 @@ export default function App({
           >
             {pptLoading ? "解析中…" : "导入 PPT"}
           </button>
-          <button type="button" className="toolbar-button" onClick={() => void handleExportSnapshot()}>
-            导出截图
+          <button type="button" className="toolbar-button" onClick={() => void handleStartScreenshot()}>
+            截图
           </button>
           <button type="button" className="toolbar-button" onClick={handleResetView}>
             复位视图
@@ -2995,6 +3114,7 @@ export default function App({
           resourceScope={resourceScope}
           resourceLoading={resourceLoading}
           resourceResults={resourceResults}
+          outputs={outputs}
           onToggleOpen={() => setDrawerOpen((value) => !value)}
           onChangeTab={setDrawerTab}
           onToggleLayer={(layerId, visible) => {
@@ -3019,6 +3139,12 @@ export default function App({
           onResourceScopeChange={setResourceScope}
           onOpenResourceResult={handleOpenResourceResult}
           onImportResourceResult={handleImportResourceResult}
+          onAttachImage={handleAttachImage}
+          onUploadImage={(file) => void handleUploadImage(file)}
+          onGenerateImage={handleGenerateImage}
+          imageGenerationLoading={imageGenerationLoading}
+          imageGenerationConfigured={Boolean(health?.image_generation?.configured)}
+          imageGenerationModel={health?.image_generation?.model || "image-01"}
           onOpenLessonWorkflow={handleOpenLessonWorkflow}
         />
 
@@ -3145,18 +3271,22 @@ export default function App({
           onInputChange={setAssistantInput}
           onSubmit={() => {
             const message = assistantInput.trim();
-            if (!message) {
+            if (!message && !pendingImage) {
               return;
             }
-            void submitAssistantText(message);
+            const image = pendingImage;
+            void submitAssistantText(message, undefined, "webgis", "text", image);
             setAssistantInput("");
+            setPendingImage(null);
           }}
           onQuickPrompt={(prompt) => {
             const message = prompt.trim();
             if (!message) {
               return;
             }
-            void submitAssistantText(message);
+            const image = pendingImage;
+            void submitAssistantText(message, undefined, "webgis", "text", image);
+            setPendingImage(null);
           }}
           onConfirm={(confirmationId, decision = "approve") => {
             void confirmAssistantAction(confirmationId, decision).then((response) => subscribeToJob(response.job_id));
@@ -3166,14 +3296,31 @@ export default function App({
             if (!transcript) {
               return;
             }
-            void submitAssistantText(transcript, undefined, "webgis", "voice");
+            const image = pendingImage;
+            void submitAssistantText(transcript, undefined, "webgis", "voice", image);
+            setPendingImage(null);
           }}
           onVoiceNotice={(tone, title, detail) => {
             pushToast(tone, title, detail);
           }}
           busy={busy}
           teachingPhase={teachingPhase}
+          pendingImage={pendingImage}
           openSignal={copilotOpenSignal}
+          onAttachImage={handleAttachImage}
+          onUploadImage={(file) => void handleUploadImage(file)}
+          onRemoveImage={() => setPendingImage(null)}
+        />
+      ) : null}
+
+      {screenshotSource && screenshotBounds ? (
+        <ScreenshotSelector
+          bounds={screenshotBounds}
+          onComplete={(selection) => void handleCompleteScreenshot(selection)}
+          onCancel={() => {
+            setScreenshotSource("");
+            setScreenshotBounds(null);
+          }}
         />
       ) : null}
 

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import type { DragEvent as ReactDragEvent, PointerEvent as ReactPointerEvent } from "react";
 import { getSpeechRecognitionConstructor, getSpeechRecognitionErrorMessage, type BrowserSpeechRecognition } from "../speechRecognition";
-import type { ChatMessage, JobRecord } from "../types";
+import type { ChatMessage, ImageAttachment, JobRecord } from "../types";
 import { TeachingPet } from "./TeachingPet";
 
 type PanelRect = {
@@ -32,19 +32,23 @@ type Props = {
   /** Current lesson-workflow phase; drives the header chip and chip ordering. */
   teachingPhase?: "course_prep" | "in_class" | "post_class" | "";
   /** Increment to bring the GeoBot panel forward for a classroom AI activity. */
+  pendingImage?: ImageAttachment | null;
+  onAttachImage?: (image: ImageAttachment) => void;
+  onUploadImage?: (file: File) => void;
+  onRemoveImage?: () => void;
   openSignal?: number;
 };
 
 // One-tap teaching capabilities. Each chip sends a templated prompt that the
-// backend router maps to one of the four teaching intents; "读图" relies on
-// shouldAttachMapSnapshot auto-attaching the current view because the prompt
-// references "当前视图". Surfacing these as chips (rather than a sidebar
+// backend router maps to one of the four teaching intents. "读图" only fills
+// the composer; the teacher explicitly chooses a screenshot or library image.
+// Surfacing these as chips (rather than a sidebar
 // button) makes the agent's capabilities visible inside the agent itself.
 const CAPABILITY_CHIPS: Array<{ key: string; label: string; prompt: string }> = [
   {
     key: "read-map",
     label: "读图",
-    prompt: "请结合当前视图进行课堂读图讲解，突出关键空间关系、层级结构与区位判断。"
+    prompt: "请结合我附加的图片进行地理读图分析，说明画面中的主要要素、空间关系和可能成因。"
   },
   {
     key: "follow-up",
@@ -125,25 +129,6 @@ function roleLabel(role: string): string {
     return "教师";
   }
   return "系统";
-}
-
-// The backend appends a deterministic "回答总结：" text block to teaching
-// answers for voice/history/tests. When the structured teaching_contract is
-// rendered as visual blocks, strip that trailing text block so the contract
-// is not shown twice (once as blocks, once as plain text).
-function splitScaffoldBody(text: string): string {
-  const marker = "回答总结：";
-  const idx = text.indexOf(marker);
-  if (idx === -1) {
-    return text;
-  }
-  return text.slice(0, idx).trim();
-}
-
-function copyToClipboard(text: string): void {
-  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(text).catch(() => undefined);
-  }
 }
 
 function MicrophoneIcon({ active }: { active: boolean }) {
@@ -365,6 +350,10 @@ export function CopilotWidget({
   onVoiceNotice,
   busy,
   teachingPhase = "",
+  pendingImage = null,
+  onAttachImage = () => undefined,
+  onUploadImage = () => undefined,
+  onRemoveImage = () => undefined,
   openSignal = 0
 }: Props) {
   const speechSupported = useMemo(() => Boolean(getSpeechRecognitionConstructor()), []);
@@ -392,11 +381,19 @@ export function CopilotWidget({
   const [voiceStatusText, setVoiceStatusText] = useState<string>(() => initialVoiceText(speechSupported));
   const [lastTranscript, setLastTranscript] = useState("");
   const [expandedTraces, setExpandedTraces] = useState<Record<string, boolean>>({});
+  const [imageDragActive, setImageDragActive] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const preventRestoreOnClickRef = useRef(false);
   const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const manualVoiceStopRef = useRef(false);
   const voiceTranscriptRef = useRef("");
   const voiceErrorRef = useRef(false);
+
+  useEffect(() => {
+    if (openSignal > 0) {
+      setMinimized(false);
+    }
+  }, [openSignal]);
   const dragStateRef = useRef<
     | {
         kind: "orb" | "panel" | "resize";
@@ -721,6 +718,31 @@ export function CopilotWidget({
     }
   }
 
+  function handleImageDrop(event: ReactDragEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setImageDragActive(false);
+    if (busy) {
+      return;
+    }
+    const file = event.dataTransfer.files?.[0];
+    if (file) {
+      onUploadImage(file);
+      return;
+    }
+    const serialized = event.dataTransfer.getData("application/x-webgis-image");
+    if (!serialized) {
+      return;
+    }
+    try {
+      const image = JSON.parse(serialized) as ImageAttachment;
+      if (image.artifact_id && image.public_url) {
+        onAttachImage(image);
+      }
+    } catch {
+      // Ignore malformed drag payloads from outside the application.
+    }
+  }
+
   if (minimized) {
     return (
       <div className="copilot-orb-shell" style={{ left: orbPosition.x, top: orbPosition.y }}>
@@ -873,8 +895,7 @@ export function CopilotWidget({
 
           <div className="copilot-chat-log" data-testid="copilot-chat-log">
             {chatLog.map((message, index) => {
-              const contract = message.teaching_contract;
-              const body = contract ? splitScaffoldBody(message.text) : message.text;
+              const body = message.text;
               const badge = message.role === "assistant" ? intentBadge(message.intent) : null;
               const actions = message.actions_executed || [];
               const traceKey = `trace-${index}`;
@@ -889,26 +910,14 @@ export function CopilotWidget({
                       </span>
                     ) : null}
                   </span>
-                  {contract ? (
-                    <>
-                      {body ? <p>{body}</p> : null}
-                      <div className="copilot-teaching-blocks" data-testid="copilot-teaching-blocks">
-                        <div className="copilot-teaching-block summary">
-                          <span className="copilot-teaching-label">回答总结</span>
-                          <p>{contract.summary}</p>
-                          <button
-                            type="button"
-                            className="copilot-teaching-copy"
-                            onClick={() => copyToClipboard(contract.summary)}
-                          >
-                            复制总结
-                          </button>
-                        </div>
-                      </div>
-                    </>
-                  ) : (
-                    <p>{body}</p>
-                  )}
+                  {message.image_attachment ? (
+                    <img
+                      className="copilot-message-image"
+                      src={message.image_attachment.public_url}
+                      alt={message.image_attachment.title || "对话图片"}
+                    />
+                  ) : null}
+                  {body ? <p>{body}</p> : null}
                   {actions.length ? (
                     <div className="copilot-tool-trace" data-testid={`copilot-tool-trace-${index}`}>
                       <button
@@ -959,7 +968,18 @@ export function CopilotWidget({
         </div>
 
         <form
-          className="copilot-widget-form"
+          className={`copilot-widget-form${imageDragActive ? " image-drag-active" : ""}`}
+          onDragEnter={(event) => {
+            event.preventDefault();
+            if (!busy) setImageDragActive(true);
+          }}
+          onDragOver={(event) => event.preventDefault()}
+          onDragLeave={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+              setImageDragActive(false);
+            }
+          }}
+          onDrop={handleImageDrop}
           onSubmit={(event) => {
             event.preventDefault();
             onSubmit();
@@ -972,13 +992,31 @@ export function CopilotWidget({
                 type="button"
                 className="copilot-capability-chip"
                 data-testid={`copilot-chip-${chip.key}`}
-                onClick={() => onQuickPrompt(chip.prompt)}
+                onClick={() => {
+                  if (chip.key === "read-map") {
+                    onInputChange(chip.prompt);
+                    return;
+                  }
+                  onQuickPrompt(chip.prompt);
+                }}
                 disabled={busy}
               >
                 {chip.label}
               </button>
             ))}
           </div>
+          {pendingImage ? (
+            <div className="copilot-image-preview" data-testid="copilot-image-preview">
+              <img src={pendingImage.public_url} alt={pendingImage.title || "待发送图片"} />
+              <div>
+                <strong>{pendingImage.title || "待发送图片"}</strong>
+                <small>将结合你的问题识别图片内容</small>
+              </div>
+              <button type="button" onClick={onRemoveImage} aria-label="移除待发送图片">
+                ×
+              </button>
+            </div>
+          ) : null}
           <div className="copilot-composer">
             <textarea
               data-testid="copilot-input"
@@ -986,13 +1024,34 @@ export function CopilotWidget({
               placeholder={inputPlaceholder}
               onChange={(event) => onInputChange(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && inputValue.trim() && !busy) {
+                if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && (inputValue.trim() || pendingImage) && !busy) {
                   event.preventDefault();
                   onSubmit();
                 }
               }}
             />
             <div className="copilot-composer-actions">
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                className="copilot-image-input"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) onUploadImage(file);
+                  event.currentTarget.value = "";
+                }}
+              />
+              <button
+                type="button"
+                className="copilot-attach-button"
+                onClick={() => imageInputRef.current?.click()}
+                disabled={busy}
+                aria-label="上传图片"
+                title="上传图片"
+              >
+                ＋ 图片
+              </button>
               <button
                 type="button"
                 className={`copilot-voice-button ${isListening ? "listening" : ""}`}
@@ -1007,7 +1066,7 @@ export function CopilotWidget({
               <span className="copilot-composer-hint" aria-hidden="true">
                 ⌘ / Ctrl + Enter 发送
               </span>
-              <button type="submit" className="copilot-send-button" disabled={busy || !inputValue.trim()}>
+              <button type="submit" className="copilot-send-button" disabled={busy || (!inputValue.trim() && !pendingImage)}>
                 发送给助教
               </button>
             </div>

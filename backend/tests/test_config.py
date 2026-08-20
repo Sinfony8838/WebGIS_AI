@@ -235,6 +235,10 @@ class AppConfigTest(unittest.TestCase):
             status = config.vision_status()
             self.assertTrue(status["configured"])
             self.assertEqual(status["provider"], "minimax_mcp")
+            self.assertEqual(config.minimax_mcp_command, "uvx")
+            self.assertEqual(config.minimax_mcp_package, "minimax-coding-plan-mcp")
+            self.assertEqual(config.minimax_mcp_compat_package, "mcp>=1.2,<2")
+            self.assertEqual(config.minimax_api_host, "https://api.minimaxi.com")
 
     def test_vision_provider_explicit_minimax_mcp_overrides_default(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
