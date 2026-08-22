@@ -8,6 +8,7 @@ import {
   fetchPopulationSources,
   preparePopulationLesson,
   generateImageLibraryAsset,
+  logSessionEvent,
   registerKbLayer,
   resolvePopulationLessonPrep,
   searchKb,
@@ -240,7 +241,8 @@ describe("api.sendAssistantMessage", () => {
       prompt: "水循环示意图",
       model: "image-01",
       aspect_ratio: "4:3",
-      prompt_optimizer: true
+      prompt_optimizer: true,
+      confirmed: true
     });
   });
 
@@ -258,6 +260,29 @@ describe("api.sendAssistantMessage", () => {
     expect(String(url)).toContain("/assistant/confirm");
     expect(String(init?.body)).toContain('"confirmation_id":"confirm_1"');
     expect(String(init?.body)).toContain('"decision":"reject"');
+  });
+
+  it("records a project snapshot artifact in the classroom event stream", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ status: "success" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+
+    await logSessionEvent("session_1", {
+      event_type: "snapshot",
+      stage_id: "s2",
+      payload: { artifact_id: "snapshot_1" }
+    });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/class-sessions/session_1/events");
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      event_type: "snapshot",
+      stage_id: "s2",
+      payload: { artifact_id: "snapshot_1" }
+    });
   });
 
   it("requests kb manifest from /kb/manifest", async () => {

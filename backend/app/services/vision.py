@@ -64,14 +64,14 @@ class MapVisionService:
             return {
                 "used_vision": False,
                 "snapshot_path": "",
-                "reason": "未收到可用的课堂地图截图，已回退到结构化地图上下文读图。",
+                "reason": "未收到可用的课堂地图截图，无法判断当前画面内容。",
             }
 
         if not status.get("configured"):
             return {
                 "used_vision": False,
                 "snapshot_path": str(snapshot_path),
-                "reason": self._not_configured_message(provider),
+                "reason": self._not_configured_message(),
             }
 
         prompt = self._build_prompt(project, map_context, focus)
@@ -81,10 +81,7 @@ class MapVisionService:
         return {
             "used_vision": False,
             "snapshot_path": str(snapshot_path),
-            "reason": (
-                f"未配置受支持的视觉读图后端（vision_provider={provider}），"
-                "已回退到结构化地图上下文读图。"
-            ),
+            "reason": "图片识别服务暂时不可用，未对当前画面内容作出判断。",
         }
 
     def understand_image(
@@ -125,7 +122,6 @@ class MapVisionService:
         return self._understand_via_mcp(
             path,
             prompt,
-            allow_structured_fallback=False,
             include_coordinates=self._asks_for_coordinates(question),
         )
 
@@ -137,20 +133,15 @@ class MapVisionService:
         self,
         snapshot_path: Path,
         prompt: str,
-        allow_structured_fallback: bool = True,
         include_coordinates: bool = False,
     ) -> Dict[str, Any]:
         try:
             result = self.mcp_client.understand_image(prompt=prompt, image_url=str(snapshot_path))
-        except MiniMaxMcpError as exc:
+        except MiniMaxMcpError:
             return {
                 "used_vision": False,
                 "snapshot_path": str(snapshot_path),
-                "reason": (
-                    f"MiniMax Token Plan MCP 图片理解调用失败，已回退到结构化地图上下文读图：{exc}"
-                    if allow_structured_fallback
-                    else f"图片识别服务暂时不可用：{exc}"
-                ),
+                "reason": "图片识别服务暂时不可用，未对图片内容作出判断。",
             }
         return {
             "used_vision": True,
@@ -167,10 +158,8 @@ class MapVisionService:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _not_configured_message(self, provider: str) -> str:
-        if provider == "minimax_mcp":
-            return "未配置 MiniMax Token Plan MCP 图片理解，已回退到结构化地图上下文读图。"
-        return f"未配置受支持的视觉读图后端（vision_provider={provider}），已回退到结构化地图上下文读图。"
+    def _not_configured_message(self) -> str:
+        return "图片识别服务尚未配置，未对当前画面内容作出判断。"
 
     @staticmethod
     def _sanitize_vision_summary(text: str, include_coordinates: bool = False) -> str:

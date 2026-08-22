@@ -439,7 +439,8 @@ export async function generateImageLibraryAsset(
       title: options?.title || "",
       model: options?.model || "",
       aspect_ratio: options?.aspectRatio || "16:9",
-      prompt_optimizer: options?.promptOptimizer ?? true
+      prompt_optimizer: options?.promptOptimizer ?? true,
+      confirmed: true
     })
   });
 }
@@ -691,6 +692,17 @@ export async function addSessionObservation(
   payload: { stage_id?: string; question_id?: string; verdict: string; tag?: string; note?: string }
 ): Promise<{ status: string }> {
   return requestJson<{ status: string }>(`/class-sessions/${encodeURIComponent(sessionId)}/observations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function logSessionEvent(
+  sessionId: string,
+  payload: { event_type: "snapshot" | "annotation" | "note" | "assistant_exchange"; stage_id?: string; payload?: Record<string, unknown> }
+): Promise<{ status: string }> {
+  return requestJson<{ status: string }>(`/class-sessions/${encodeURIComponent(sessionId)}/events`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)

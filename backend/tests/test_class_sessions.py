@@ -198,6 +198,20 @@ class ClassSessionTest(unittest.TestCase):
         self.assertIn("教师口头呈现", markdown)
         self.assertIn("未采集学生端作答数据", diagnosis["text"])
 
+    def test_default_anonymous_nickname_is_not_counted_as_a_participant(self) -> None:
+        runtime, store, project_id = self.build_runtime()
+        session_id = self.start_session(runtime, project_id)["session"]["session_id"]
+        runtime.classroom.enter_session_stage(session_id, "s1")
+        runtime.classroom.launch_session_question(session_id, question_id="s1q1")
+        join_code = store.get_class_session(session_id).join_code
+
+        runtime.classroom.student_answer(join_code, {"question_id": "s1q1", "choice_index": 1})
+
+        session = store.get_class_session(session_id)
+        lesson = store.get_lesson(session.lesson_id)
+        statistics = runtime.classroom.report_service.build_statistics(session, lesson)
+        self.assertEqual(statistics["participant_count"], 0)
+
     def test_report_generation_with_rule_fallback(self) -> None:
         runtime, store, project_id = self.build_runtime()
         # 本用例断言规则诊断路径：即使宿主机配置了 MiniMax key 也不走真实 LLM。

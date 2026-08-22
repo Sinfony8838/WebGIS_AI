@@ -113,12 +113,41 @@ class AuthApiTest(unittest.TestCase):
                 teacher_client.get(f"/projects/{admin_project['project_id']}").status_code,
                 404,
             )
+            with patch.object(app_main.runtime, "upload_image_asset") as upload_image, patch.object(
+                app_main.runtime, "generate_image_asset"
+            ) as generate_image:
+                forbidden_upload = teacher_client.post(
+                    "/image-library/upload",
+                    data={"project_id": admin_project["project_id"]},
+                    files={"file": ("map.png", b"png", "image/png")},
+                    headers={"X-WebGIS-CSRF": teacher_csrf},
+                )
+                forbidden_generation = teacher_client.post(
+                    "/image-generation",
+                    json={
+                        "project_id": admin_project["project_id"],
+                        "prompt": "生成地理示意图",
+                        "confirmed": True,
+                    },
+                    headers={"X-WebGIS-CSRF": teacher_csrf},
+                )
+            self.assertEqual(forbidden_upload.status_code, 404)
+            self.assertEqual(forbidden_generation.status_code, 404)
+            upload_image.assert_not_called()
+            generate_image.assert_not_called()
             own = teacher_client.post(
                 "/projects",
                 json={"name": "teacher project"},
                 headers={"X-WebGIS-CSRF": teacher_csrf},
             )
             self.assertEqual(own.status_code, 200, own.text)
+            unconfirmed_generation = teacher_client.post(
+                "/image-generation",
+                json={"project_id": own.json()["project_id"], "prompt": "生成地理示意图"},
+                headers={"X-WebGIS-CSRF": teacher_csrf},
+            )
+            self.assertEqual(unconfirmed_generation.status_code, 409)
+            self.assertIn("付费调用", unconfirmed_generation.text)
         finally:
             teacher_client.close()
 

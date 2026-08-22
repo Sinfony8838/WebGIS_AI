@@ -402,6 +402,7 @@ class ImageGenerationRequest(BaseModel):
     model: str = ""
     aspect_ratio: str = "16:9"
     prompt_optimizer: bool = True
+    confirmed: bool = False
 
 
 class KnowledgeItemRequest(BaseModel):
@@ -1150,10 +1151,12 @@ def submit_assistant_message(
 
 @app.post("/image-library/upload")
 async def upload_image_library_asset(
+    request: Request,
     project_id: str = Form(...),
     file: UploadFile = File(...),
     title: str = Form(""),
 ) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
     try:
         raw = await file.read()
         return runtime.upload_image_asset(
@@ -1169,15 +1172,18 @@ async def upload_image_library_asset(
 
 
 @app.post("/image-generation")
-def generate_image(request: ImageGenerationRequest) -> Dict[str, Any]:
+def generate_image(payload: ImageGenerationRequest, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, payload.project_id)
+    if not payload.confirmed:
+        raise HTTPException(status_code=409, detail="图片生成会产生 MiniMax API 费用，请先确认本次付费调用。")
     try:
         return runtime.generate_image_asset(
-            project_id=request.project_id,
-            prompt=request.prompt,
-            title=request.title,
-            model=request.model,
-            aspect_ratio=request.aspect_ratio,
-            prompt_optimizer=request.prompt_optimizer,
+            project_id=payload.project_id,
+            prompt=payload.prompt,
+            title=payload.title,
+            model=payload.model,
+            aspect_ratio=payload.aspect_ratio,
+            prompt_optimizer=payload.prompt_optimizer,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

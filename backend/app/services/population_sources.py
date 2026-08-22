@@ -207,9 +207,9 @@ class PopulationSourceRegistryService:
         try:
             payload = json.loads(self.index_path.read_text(encoding="utf-8"))
         except FileNotFoundError as exc:
-            raise ValueError(f"Population source index is missing: {self.index_path}") from exc
+            raise ValueError("Population source index is missing") from exc
         except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"Population source index is invalid: {self.index_path}") from exc
+            raise ValueError("Population source index is invalid") from exc
         versions = [item for item in _safe_list(payload.get("versions")) if isinstance(item, dict)]
         if not versions:
             raise ValueError("Population source index declares no versions")
@@ -232,11 +232,11 @@ class PopulationSourceRegistryService:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError as exc:
-            raise ValueError(f"Population source manifest is missing: {path}") from exc
+            raise ValueError("Population source manifest is missing") from exc
         except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"Population source manifest is invalid: {path}") from exc
+            raise ValueError("Population source manifest is invalid") from exc
         if str(payload.get("version") or "") != version:
-            raise ValueError(f"Population source manifest version mismatch: {path}")
+            raise ValueError("Population source manifest version mismatch")
         return payload
 
     def _normalize_card(self, raw: Dict[str, Any], version: str) -> Dict[str, Any]:

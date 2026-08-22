@@ -104,7 +104,9 @@ class MapVisionServiceTest(unittest.TestCase):
         )
 
         self.assertFalse(result["used_vision"])
-        self.assertIn("已回退", result["reason"])
+        self.assertIn("暂时不可用", result["reason"])
+        self.assertNotIn("已回退", result["reason"])
+        self.assertNotIn("network down", result["reason"])
         # Snapshot still saved so the operator can inspect what was sent.
         self.assertTrue(Path(result["snapshot_path"]).exists())
 

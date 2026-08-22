@@ -389,11 +389,6 @@ export function CopilotWidget({
   const voiceTranscriptRef = useRef("");
   const voiceErrorRef = useRef(false);
 
-  useEffect(() => {
-    if (openSignal > 0) {
-      setMinimized(false);
-    }
-  }, [openSignal]);
   const dragStateRef = useRef<
     | {
         kind: "orb" | "panel" | "resize";

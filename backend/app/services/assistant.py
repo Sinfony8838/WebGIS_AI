@@ -360,7 +360,7 @@ class AssistantService:
         image_hints = ("图", "图片", "插画", "示意图", "海报")
         if not any(hint in lowered for hint in action_hints) or not any(hint in lowered for hint in image_hints):
             return None
-        if "图层" in lowered:
+        if any(hint in lowered for hint in ("图层", "标注", "注释", "底图", "图例")):
             return None
         if any(hint in lowered for hint in ("识别", "分析这张", "读这张", "看看这张")):
             return None

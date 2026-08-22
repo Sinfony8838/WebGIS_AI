@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { SideDrawer } from "../components/SideDrawer";
 
@@ -23,6 +23,10 @@ const baseProps = {
   onImportResourceResult: vi.fn(),
   onOpenLessonWorkflow: vi.fn()
 };
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("SideDrawer", () => {
   it("renders layers and search results across tabs", () => {
@@ -168,6 +172,7 @@ describe("SideDrawer", () => {
   });
 
   it("generates a MiniMax image and shows generated artifacts", () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     const onGenerateImage = vi.fn();
     const { container } = render(
       <SideDrawer
@@ -203,9 +208,28 @@ describe("SideDrawer", () => {
       model: "image-01",
       aspectRatio: "4:3"
     });
+    expect(confirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call the paid image endpoint when the teacher cancels confirmation", () => {
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    const onGenerateImage = vi.fn();
+    const { container } = render(
+      <SideDrawer
+        {...baseProps}
+        activeTab="images"
+        imageGenerationConfigured
+        onGenerateImage={onGenerateImage}
+      />
+    );
+    const view = within(container);
+    fireEvent.change(view.getByLabelText("MiniMax AI 生成"), { target: { value: "季风环流图" } });
+    fireEvent.click(view.getByRole("button", { name: "生成并保存" }));
+    expect(onGenerateImage).not.toHaveBeenCalled();
   });
 
   it("prevents duplicate paid generation submissions while a request is pending", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     let resolveGeneration: (() => void) | undefined;
     const onGenerateImage = vi.fn(
       () => new Promise<void>((resolve) => {
