@@ -25,6 +25,8 @@ import type {
   ClassSessionResponse,
   LessonResourceResponse,
   LessonResourceSet,
+  LessonDesignSession,
+  LessonDesignTurnResult,
   LessonRecord,
   LessonStage,
   MaterialWriteResponse,
@@ -388,8 +390,8 @@ export async function sendAssistantMessage(
     teachingContext?: TeachingContext;
     imageAttachments?: Array<Pick<ImageAttachment, "artifact_id">>;
   }
-): Promise<{ job_id: string; conversation_id?: string; assistant_mode?: AssistantMode }> {
-  return requestJson<{ job_id: string; conversation_id?: string; assistant_mode?: AssistantMode }>("/assistant/messages", {
+): Promise<{ job_id: string; conversation_id?: string; assistant_mode?: AssistantMode; lesson_design?: LessonDesignSession }> {
+  return requestJson<{ job_id: string; conversation_id?: string; assistant_mode?: AssistantMode; lesson_design?: LessonDesignSession }>("/assistant/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -439,7 +441,8 @@ export async function generateImageLibraryAsset(
       title: options?.title || "",
       model: options?.model || "",
       aspect_ratio: options?.aspectRatio || "16:9",
-      prompt_optimizer: options?.promptOptimizer ?? true
+      prompt_optimizer: options?.promptOptimizer ?? true,
+      confirmed: true
     })
   });
 }
@@ -514,9 +517,77 @@ export async function fetchLesson(lessonId: string): Promise<LessonRecord & { st
   return requestJson<LessonRecord & { status: string }>(`/lessons/${encodeURIComponent(lessonId)}`);
 }
 
+export async function createLessonDesign(
+  projectId: string,
+  baseLessonId = "",
+  requirements: Record<string, unknown> = {}
+): Promise<LessonDesignSession & { status: string; capabilities?: unknown[] }> {
+  return requestJson(`/lesson-design/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: projectId, base_lesson_id: baseLessonId, requirements })
+  });
+}
+
+export async function fetchLessonDesign(designId: string): Promise<LessonDesignSession & { status: string }> {
+  return requestJson(`/lesson-design/sessions/${encodeURIComponent(designId)}`);
+}
+
+export async function turnLessonDesign(
+  designId: string,
+  message: string,
+  revision?: number,
+  step?: string
+): Promise<LessonDesignTurnResult> {
+  return requestJson(`/lesson-design/sessions/${encodeURIComponent(designId)}/turns`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, expected_revision: revision, step })
+  });
+}
+
+export async function resolveLessonDesignSection(
+  designId: string,
+  sectionId: string,
+  decision: "accept" | "revise" | "edit",
+  teacherNote = "",
+  revision?: number,
+  value?: unknown
+): Promise<{ status: string; design: LessonDesignSession }> {
+  return requestJson(`/lesson-design/sessions/${encodeURIComponent(designId)}/sections/${encodeURIComponent(sectionId)}/resolve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ decision, teacher_note: teacherNote, expected_revision: revision, value })
+  });
+}
+
+export async function finalizeLessonDesign(
+  designId: string,
+  revision?: number,
+  applyBase = false
+): Promise<{ status: string; lesson: LessonRecord; design: LessonDesignSession; capability_report: Record<string, unknown> }> {
+  return requestJson(`/lesson-design/sessions/${encodeURIComponent(designId)}/finalize`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ expected_revision: revision, apply_base: applyBase })
+  });
+}
+
+export async function exportLessonDocx(
+  lessonId: string,
+  projectId: string,
+  designId = ""
+): Promise<{ status: string; artifact: ArtifactRecord; job_id: string }> {
+  return requestJson(`/lessons/${encodeURIComponent(lessonId)}/exports/docx`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: projectId, design_id: designId })
+  });
+}
+
 export async function updateLesson(
   lessonId: string,
-  payload: Partial<Pick<LessonRecord, "title" | "subject" | "grade" | "objectives" | "stages" | "metadata">>
+  payload: Partial<Pick<LessonRecord, "title" | "subject" | "grade" | "objectives" | "stages" | "metadata" | "plan">>
 ): Promise<LessonRecord & { status: string }> {
   return requestJson<LessonRecord & { status: string }>(`/lessons/${encodeURIComponent(lessonId)}`, {
     method: "PUT",
@@ -691,6 +762,17 @@ export async function addSessionObservation(
   payload: { stage_id?: string; question_id?: string; verdict: string; tag?: string; note?: string }
 ): Promise<{ status: string }> {
   return requestJson<{ status: string }>(`/class-sessions/${encodeURIComponent(sessionId)}/observations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function logSessionEvent(
+  sessionId: string,
+  payload: { event_type: "snapshot" | "annotation" | "note" | "assistant_exchange"; stage_id?: string; payload?: Record<string, unknown> }
+): Promise<{ status: string }> {
+  return requestJson<{ status: string }>(`/class-sessions/${encodeURIComponent(sessionId)}/events`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)

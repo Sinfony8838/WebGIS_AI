@@ -221,6 +221,7 @@ export function SideDrawer({
                   event.preventDefault();
                   const prompt = generationPrompt.trim();
                   if (!prompt || generationSubmittingRef.current || imageGenerationLoading || !imageGenerationConfigured) return;
+                  if (!window.confirm("图片生成会调用 MiniMax 按量计费 API。确认生成并产生本次费用吗？")) return;
                   generationSubmittingRef.current = true;
                   setGenerationSubmitting(true);
                   let submission: Promise<void> | void;

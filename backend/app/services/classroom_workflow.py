@@ -9,6 +9,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from .lessons import LessonService
+from .lesson_design import LessonDesignService
 from .population_lesson_prep import PopulationLessonPrepService
 from .reports import ReportService
 from .visual_query import VisualQueryService
@@ -43,6 +44,16 @@ class ClassroomWorkflowRuntime:
             self.store,
             self.lesson_service,
             runtime.population_source_registry_service,
+        )
+        self.lesson_design = LessonDesignService(
+            self.config,
+            self.store,
+            self.lesson_service,
+            minimax_client=runtime.minimax_client if self.config.minimax_enabled() else None,
+            template_service=runtime.template_service,
+            catalog_service=runtime.one_map_catalog_service,
+            knowledge_base_service=runtime.knowledge_base_service,
+            resource_search_service=runtime.resource_search_service,
         )
         self._student_presence: Dict[str, Dict[str, float]] = {}
 
@@ -109,6 +120,30 @@ class ClassroomWorkflowRuntime:
 
     def submit_population_lesson_prep(self, project_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self.population_lesson_prep.submit(project_id, payload)
+
+    # ------------------------------------------------------------------
+    # Guided lesson-plan co-creation
+    # ------------------------------------------------------------------
+
+    def create_lesson_design(self, project_id: str, owner_user_id: str, base_lesson_id: str = "", requirements: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        design = self.lesson_design.create_or_resume(project_id, owner_user_id, base_lesson_id, requirements)
+        return {"status": "success", **design.to_dict(), "capabilities": self.lesson_design.capability_catalog()}
+
+    def get_lesson_design(self, design_id: str) -> Dict[str, Any]:
+        design = self.lesson_design.get(design_id)
+        return {"status": "success", **design.to_dict(), "capabilities": self.lesson_design.capability_catalog()}
+
+    def turn_lesson_design(self, design_id: str, message: str, expected_revision: Optional[int] = None, step: str = "") -> Dict[str, Any]:
+        return self.lesson_design.turn(design_id, message, expected_revision, step)
+
+    def resolve_lesson_design(self, design_id: str, section_id: str, decision: str = "accept", teacher_note: str = "", expected_revision: Optional[int] = None, value: Any = None) -> Dict[str, Any]:
+        return self.lesson_design.resolve(design_id, section_id, decision, teacher_note, expected_revision, value)
+
+    def finalize_lesson_design(self, design_id: str, expected_revision: Optional[int] = None, apply_base: bool = False) -> Dict[str, Any]:
+        return self.lesson_design.finalize(design_id, expected_revision, apply_base)
+
+    def export_lesson_docx(self, lesson_id: str, project_id: str, design_id: str = "") -> Dict[str, Any]:
+        return self.lesson_design.export_docx(lesson_id, project_id, design_id)
 
     def resolve_population_lesson_prep(
         self,

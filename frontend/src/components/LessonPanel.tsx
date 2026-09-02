@@ -30,6 +30,7 @@ type Props = {
   onChangePopulationSourceVersion?: (version: string) => void;
   onResolvePrepChangeSet?: (decision: "apply" | "reject", acceptedStageIds: string[]) => void;
   onStartClass: () => void;
+  onStartDesign?: () => void;
   onClose: () => void;
 };
 
@@ -75,6 +76,7 @@ export function LessonPanel({
   onChangePopulationSourceVersion,
   onResolvePrepChangeSet,
   onStartClass,
+  onStartDesign,
   onClose
 }: Props) {
   const [expandedStageId, setExpandedStageId] = useState("");
@@ -163,6 +165,11 @@ export function LessonPanel({
         <button type="button" className="toolbar-button compact" onClick={() => setImportOpen((value) => !value)}>
           AI 导入教案
         </button>
+        {onStartDesign ? (
+          <button type="button" className="toolbar-button compact primary" onClick={onStartDesign} disabled={busy} data-testid="lesson-design-toggle">
+            共创教案
+          </button>
+        ) : null}
         {onPrepareLesson ? (
           <button
             type="button"

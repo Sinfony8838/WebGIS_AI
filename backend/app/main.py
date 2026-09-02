@@ -31,6 +31,11 @@ auth_service = (
     else None
 )
 
+LESSON_DESIGN_REQUEST_HINTS = (
+    "共创教案", "教案共创", "备一节课", "生成整节教案", "设计整节课", "规划整节课", "完整课时",
+    "逐步设计教案", "教案助手", "完整教案",
+)
+
 app = FastAPI(title="WebGIS-AI Runtime", version="1.1.0")
 app.add_middleware(
     CORSMiddleware,
@@ -191,6 +196,17 @@ def _require_project_access(request: Request, project_id: str) -> Any:
     if context.user.get("role") != "admin" and project.owner_user_id != context.user.get("user_id"):
         raise HTTPException(status_code=404, detail="Unknown project")
     return project
+
+
+def _require_lesson_design_access(request: Request, design_id: str) -> Any:
+    design = runtime.store.get_lesson_design(design_id)
+    if design is None:
+        raise HTTPException(status_code=404, detail="Unknown lesson design")
+    _require_project_access(request, design.project_id)
+    context = _current_auth(request)
+    if context.user.get("role") != "admin" and design.owner_user_id != context.user.get("user_id"):
+        raise HTTPException(status_code=404, detail="Unknown lesson design")
+    return design
 
 
 def _require_lesson_access(request: Request, lesson_id: str) -> Any:
@@ -402,6 +418,7 @@ class ImageGenerationRequest(BaseModel):
     model: str = ""
     aspect_ratio: str = "16:9"
     prompt_optimizer: bool = True
+    confirmed: bool = False
 
 
 class KnowledgeItemRequest(BaseModel):
@@ -451,6 +468,36 @@ class LessonPayloadRequest(BaseModel):
     objectives: list[str] = Field(default_factory=list)
     stages: list[Dict[str, Any]] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    plan: Dict[str, Any] = Field(default_factory=dict)
+
+
+class LessonDesignCreateRequest(BaseModel):
+    project_id: str
+    base_lesson_id: str = ""
+    requirements: Dict[str, Any] = Field(default_factory=dict)
+
+
+class LessonDesignTurnRequest(BaseModel):
+    message: str
+    step: str = ""
+    expected_revision: Optional[int] = None
+
+
+class LessonDesignResolveRequest(BaseModel):
+    decision: str = "accept"
+    teacher_note: str = ""
+    value: Any = None
+    expected_revision: Optional[int] = None
+
+
+class LessonDesignFinalizeRequest(BaseModel):
+    expected_revision: Optional[int] = None
+    apply_base: bool = False
+
+
+class LessonDocxExportRequest(BaseModel):
+    project_id: str = ""
+    design_id: str = ""
 
 
 class LessonImportRequest(BaseModel):
@@ -1129,7 +1176,7 @@ def submit_assistant_message(
 ) -> Dict[str, Any]:
     _require_project_access(request, payload.project_id)
     try:
-        return runtime.submit_assistant_message(
+        response = runtime.submit_assistant_message(
             payload.project_id,
             payload.message,
             payload.map_context,
@@ -1142,6 +1189,22 @@ def submit_assistant_message(
             payload.teaching_context,
             payload.image_attachments,
         )
+        assistant_message = str(payload.message or "")
+        wants_lesson_design = any(hint in assistant_message for hint in LESSON_DESIGN_REQUEST_HINTS) or (
+            "教案" in assistant_message and any(token in assistant_message for token in ("共创", "设计", "生成", "备课", "规划"))
+        )
+        if wants_lesson_design:
+            context = _current_auth(request)
+            base_lesson_id = str((payload.teaching_context or {}).get("lesson_id") or "")
+            if base_lesson_id:
+                _require_lesson_access(request, base_lesson_id)
+            response["lesson_design"] = runtime.classroom.create_lesson_design(
+                payload.project_id,
+                str(context.user["user_id"]),
+                base_lesson_id,
+                {"trigger": "assistant", "initial_request": payload.message},
+            )
+        return response
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -1150,10 +1213,12 @@ def submit_assistant_message(
 
 @app.post("/image-library/upload")
 async def upload_image_library_asset(
+    request: Request,
     project_id: str = Form(...),
     file: UploadFile = File(...),
     title: str = Form(""),
 ) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
     try:
         raw = await file.read()
         return runtime.upload_image_asset(
@@ -1169,15 +1234,18 @@ async def upload_image_library_asset(
 
 
 @app.post("/image-generation")
-def generate_image(request: ImageGenerationRequest) -> Dict[str, Any]:
+def generate_image(payload: ImageGenerationRequest, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, payload.project_id)
+    if not payload.confirmed:
+        raise HTTPException(status_code=409, detail="图片生成会产生 MiniMax API 费用，请先确认本次付费调用。")
     try:
         return runtime.generate_image_asset(
-            project_id=request.project_id,
-            prompt=request.prompt,
-            title=request.title,
-            model=request.model,
-            aspect_ratio=request.aspect_ratio,
-            prompt_optimizer=request.prompt_optimizer,
+            project_id=payload.project_id,
+            prompt=payload.prompt,
+            title=payload.title,
+            model=payload.model,
+            aspect_ratio=payload.aspect_ratio,
+            prompt_optimizer=payload.prompt_optimizer,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1356,6 +1424,78 @@ def list_lessons(request: Request) -> Dict[str, Any]:
     )
 
 
+@app.get("/lesson-design/sessions")
+def list_lesson_design_sessions(project_id: str, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
+    context = _current_auth(request)
+    designs = runtime.store.list_lesson_designs(
+        project_id=project_id,
+        owner_user_id=str(context.user["user_id"]) if context.user.get("role") != "admin" else "",
+    )
+    return {"status": "success", "items": [item.to_dict() for item in designs]}
+
+
+@app.post("/lesson-design/sessions")
+def create_lesson_design_session(payload: LessonDesignCreateRequest, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, payload.project_id)
+    context = _current_auth(request)
+    if payload.base_lesson_id:
+        _require_lesson_access(request, payload.base_lesson_id)
+    try:
+        return runtime.classroom.create_lesson_design(
+            payload.project_id,
+            str(context.user["user_id"]),
+            payload.base_lesson_id,
+            payload.requirements,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/lesson-design/sessions/{design_id}")
+def get_lesson_design_session(design_id: str, request: Request) -> Dict[str, Any]:
+    _require_lesson_design_access(request, design_id)
+    try:
+        return runtime.classroom.get_lesson_design(design_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/lesson-design/sessions/{design_id}/turns")
+def turn_lesson_design(design_id: str, payload: LessonDesignTurnRequest, request: Request) -> Dict[str, Any]:
+    _require_lesson_design_access(request, design_id)
+    try:
+        return runtime.classroom.turn_lesson_design(design_id, payload.message, payload.expected_revision, payload.step)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409 if "更新" in str(exc) else 400, detail=str(exc)) from exc
+
+
+@app.post("/lesson-design/sessions/{design_id}/sections/{section_id}/resolve")
+def resolve_lesson_design_section(design_id: str, section_id: str, payload: LessonDesignResolveRequest, request: Request) -> Dict[str, Any]:
+    _require_lesson_design_access(request, design_id)
+    try:
+        return runtime.classroom.resolve_lesson_design(design_id, section_id, payload.decision, payload.teacher_note, payload.expected_revision, payload.value)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409 if "更新" in str(exc) else 400, detail=str(exc)) from exc
+
+
+@app.post("/lesson-design/sessions/{design_id}/finalize")
+def finalize_lesson_design(design_id: str, payload: LessonDesignFinalizeRequest, request: Request) -> Dict[str, Any]:
+    _require_lesson_design_access(request, design_id)
+    try:
+        return runtime.classroom.finalize_lesson_design(design_id, payload.expected_revision, payload.apply_base)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409 if "更新" in str(exc) else 400, detail=str(exc)) from exc
+
+
 @app.get("/population-sources/versions")
 def list_population_source_versions(request: Request, project_id: str = Query("")) -> Dict[str, Any]:
     if project_id:
@@ -1521,6 +1661,30 @@ def import_lesson(payload: LessonImportRequest, request: Request) -> Dict[str, A
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/lessons/{lesson_id}/exports/docx")
+def export_lesson_docx(lesson_id: str, payload: LessonDocxExportRequest, request: Request) -> Dict[str, Any]:
+    lesson = _require_lesson_access(request, lesson_id)
+    project_id = str(payload.project_id or (lesson.metadata or {}).get("project_id") or "")
+    if not project_id:
+        context = _current_auth(request)
+        projects = [p for p in runtime.store.projects.values() if p.owner_user_id == context.user.get("user_id") or context.user.get("role") == "admin"]
+        if len(projects) == 1:
+            project_id = projects[0].project_id
+    if not project_id:
+        raise HTTPException(status_code=400, detail="请指定项目")
+    _require_project_access(request, project_id)
+    if payload.design_id:
+        design = _require_lesson_design_access(request, payload.design_id)
+        if design.project_id != project_id:
+            raise HTTPException(status_code=400, detail="教案会话不属于当前项目")
+    try:
+        return runtime.classroom.export_lesson_docx(lesson_id, project_id, payload.design_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/lessons/{lesson_id}/stages/{stage_id}/scene/apply")

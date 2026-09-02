@@ -15,6 +15,7 @@ from .models import (
     ConversationRecord,
     JobRecord,
     LayerRecord,
+    LessonDesignRecord,
     LessonRecord,
     MessageRecord,
     ProjectRecord,
@@ -36,6 +37,7 @@ class RuntimeStore:
         self.jobs: Dict[str, JobRecord] = {}
         self.artifacts: Dict[str, ArtifactRecord] = {}
         self.lessons: Dict[str, LessonRecord] = {}
+        self.lesson_designs: Dict[str, LessonDesignRecord] = {}
         self.class_sessions: Dict[str, ClassSessionRecord] = {}
         self.conversations: Dict[str, ConversationRecord] = {}
         self.messages: Dict[str, MessageRecord] = {}
@@ -82,8 +84,12 @@ class RuntimeStore:
                 artifact_id: ArtifactRecord(**data) for artifact_id, data in payload.get("artifacts", {}).items()
             }
             self.lessons = {
-                lesson_id: LessonRecord(**data)
+                lesson_id: LessonRecord(**{**data, "plan": data.get("plan") or {}})
                 for lesson_id, data in payload.get("lessons", {}).items()
+            }
+            self.lesson_designs = {
+                design_id: LessonDesignRecord(**data)
+                for design_id, data in payload.get("lesson_designs", {}).items()
             }
             self.class_sessions = {
                 session_id: ClassSessionRecord(**data)
@@ -112,6 +118,7 @@ class RuntimeStore:
             self.jobs = {}
             self.artifacts = {}
             self.lessons = {}
+            self.lesson_designs = {}
             self.class_sessions = {}
             self.conversations = {}
             self.messages = {}
@@ -123,6 +130,7 @@ class RuntimeStore:
             self.jobs = {}
             self.artifacts = {}
             self.lessons = {}
+            self.lesson_designs = {}
             self.class_sessions = {}
             self.conversations = {}
             self.messages = {}
@@ -209,6 +217,9 @@ class RuntimeStore:
             "jobs": {job_id: job.to_dict() for job_id, job in self.jobs.items()},
             "artifacts": {artifact_id: artifact.to_dict() for artifact_id, artifact in self.artifacts.items()},
             "lessons": {lesson_id: lesson.to_dict() for lesson_id, lesson in self.lessons.items()},
+            "lesson_designs": {
+                design_id: design.to_dict() for design_id, design in self.lesson_designs.items()
+            },
             "class_sessions": {
                 session_id: session.to_dict()
                 for session_id, session in self.class_sessions.items()
@@ -678,6 +689,38 @@ class RuntimeStore:
                 raise KeyError(f"Unknown lesson: {lesson_id}")
             del self.lessons[lesson_id]
             self._save()
+
+    # ------------------------------------------------------------------
+    # Lesson design sessions
+    # ------------------------------------------------------------------
+
+    def upsert_lesson_design(self, design: LessonDesignRecord) -> LessonDesignRecord:
+        with self._lock:
+            design.touch()
+            self.lesson_designs[design.design_id] = design
+            self._save()
+            return design
+
+    def get_lesson_design(self, design_id: str) -> Optional[LessonDesignRecord]:
+        with self._lock:
+            return self.lesson_designs.get(design_id)
+
+    def list_lesson_designs(
+        self,
+        project_id: str = "",
+        owner_user_id: str = "",
+        active_only: bool = False,
+    ) -> List[LessonDesignRecord]:
+        with self._lock:
+            designs = list(self.lesson_designs.values())
+            if project_id:
+                designs = [item for item in designs if item.project_id == project_id]
+            if owner_user_id:
+                designs = [item for item in designs if item.owner_user_id == owner_user_id]
+            if active_only:
+                designs = [item for item in designs if item.status == "active"]
+            designs.sort(key=lambda item: item.updated_at, reverse=True)
+            return designs
 
     # ------------------------------------------------------------------
     # Class sessions

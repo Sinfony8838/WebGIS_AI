@@ -291,6 +291,7 @@ class LessonRecord:
     stages: List[Dict[str, Any]] = field(default_factory=list)
     source: str = "manual"  # builtin | imported | manual
     metadata: Dict[str, Any] = field(default_factory=dict)
+    plan: Dict[str, Any] = field(default_factory=dict)
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
 
@@ -305,6 +306,7 @@ class LessonRecord:
         stages: Optional[List[Dict[str, Any]]] = None,
         source: str = "manual",
         metadata: Optional[Dict[str, Any]] = None,
+        plan: Optional[Dict[str, Any]] = None,
         lesson_id: str = "",
     ) -> "LessonRecord":
         return cls(
@@ -317,6 +319,7 @@ class LessonRecord:
             stages=stages or [],
             source=source,
             metadata=metadata or {},
+            plan=plan or {},
         )
 
     def touch(self) -> None:
@@ -330,6 +333,63 @@ class LessonRecord:
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+@dataclass
+class LessonDesignRecord:
+    """Persisted guided lesson-plan co-creation session."""
+
+    design_id: str
+    project_id: str
+    owner_user_id: str
+    base_lesson_id: str = ""
+    current_step: str = "requirements"
+    requirements: Dict[str, Any] = field(default_factory=dict)
+    draft: Dict[str, Any] = field(default_factory=dict)
+    base_draft: Dict[str, Any] = field(default_factory=dict)
+    diff_summary: List[Dict[str, Any]] = field(default_factory=list)
+    section_status: Dict[str, str] = field(default_factory=dict)
+    source_refs: List[Dict[str, Any]] = field(default_factory=list)
+    capability_bindings: List[Dict[str, Any]] = field(default_factory=list)
+    turns: List[Dict[str, Any]] = field(default_factory=list)
+    status: str = "active"
+    revision: int = 0
+    final_lesson_id: str = ""
+    pending_next_step: str = ""
+    created_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
+
+    @classmethod
+    def create(
+        cls,
+        project_id: str,
+        owner_user_id: str,
+        base_lesson_id: str = "",
+        requirements: Optional[Dict[str, Any]] = None,
+        draft: Optional[Dict[str, Any]] = None,
+        base_draft: Optional[Dict[str, Any]] = None,
+    ) -> "LessonDesignRecord":
+        return cls(
+            design_id=f"design_{uuid4().hex}",
+            project_id=project_id,
+            owner_user_id=owner_user_id,
+            base_lesson_id=base_lesson_id,
+            requirements=requirements or {},
+            draft=draft or {},
+            base_draft=base_draft or {},
+            section_status={},
+        )
+
+    def touch(self) -> None:
+        self.updated_at = utc_now()
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+# Public domain name used by the lesson-design API; Record remains the storage
+# naming convention used by the rest of the runtime.
+LessonDesignSession = LessonDesignRecord
 
 
 @dataclass

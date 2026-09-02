@@ -140,9 +140,12 @@
   position: fixed;
   left: 16px;
   bottom: 16px;
-  z-index: 60;
+  z-index: 64;
   max-width: min(240px, calc(100vw - 32px));
   pointer-events: auto;
+}
+body:has(.class-run-panel) .account-dock {
+  left: min(348px, calc(100vw - 256px));
 }
 .account-dock .user-menu { width: 100%; }
 .account-dock .user-menu-trigger {

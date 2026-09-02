@@ -77,6 +77,12 @@ class AuthApiTest(unittest.TestCase):
             json={"name": "admin project"},
             headers={"X-WebGIS-CSRF": csrf},
         ).json()
+        admin_design = self.client.post(
+            "/lesson-design/sessions",
+            json={"project_id": admin_project["project_id"], "requirements": {"topic": "人口分布"}},
+            headers={"X-WebGIS-CSRF": csrf},
+        )
+        self.assertEqual(admin_design.status_code, 200, admin_design.text)
         created = self.client.post(
             "/admin/users",
             json={
@@ -113,12 +119,51 @@ class AuthApiTest(unittest.TestCase):
                 teacher_client.get(f"/projects/{admin_project['project_id']}").status_code,
                 404,
             )
+            self.assertEqual(
+                teacher_client.get(f"/lesson-design/sessions/{admin_design.json()['design_id']}").status_code,
+                404,
+            )
+            forbidden_design = teacher_client.post(
+                "/lesson-design/sessions",
+                json={"project_id": admin_project["project_id"], "requirements": {}},
+                headers={"X-WebGIS-CSRF": teacher_csrf},
+            )
+            self.assertEqual(forbidden_design.status_code, 404)
+            with patch.object(app_main.runtime, "upload_image_asset") as upload_image, patch.object(
+                app_main.runtime, "generate_image_asset"
+            ) as generate_image:
+                forbidden_upload = teacher_client.post(
+                    "/image-library/upload",
+                    data={"project_id": admin_project["project_id"]},
+                    files={"file": ("map.png", b"png", "image/png")},
+                    headers={"X-WebGIS-CSRF": teacher_csrf},
+                )
+                forbidden_generation = teacher_client.post(
+                    "/image-generation",
+                    json={
+                        "project_id": admin_project["project_id"],
+                        "prompt": "生成地理示意图",
+                        "confirmed": True,
+                    },
+                    headers={"X-WebGIS-CSRF": teacher_csrf},
+                )
+            self.assertEqual(forbidden_upload.status_code, 404)
+            self.assertEqual(forbidden_generation.status_code, 404)
+            upload_image.assert_not_called()
+            generate_image.assert_not_called()
             own = teacher_client.post(
                 "/projects",
                 json={"name": "teacher project"},
                 headers={"X-WebGIS-CSRF": teacher_csrf},
             )
             self.assertEqual(own.status_code, 200, own.text)
+            unconfirmed_generation = teacher_client.post(
+                "/image-generation",
+                json={"project_id": own.json()["project_id"], "prompt": "生成地理示意图"},
+                headers={"X-WebGIS-CSRF": teacher_csrf},
+            )
+            self.assertEqual(unconfirmed_generation.status_code, 409)
+            self.assertIn("付费调用", unconfirmed_generation.text)
         finally:
             teacher_client.close()
 
@@ -172,6 +217,27 @@ class AuthApiTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json(), expected)
+
+    def test_assistant_whole_lesson_request_returns_design_session(self) -> None:
+        _admin, csrf = self.bootstrap_admin()
+        project = self.client.post(
+            "/projects",
+            json={"name": "lesson co-creation"},
+            headers={"X-WebGIS-CSRF": csrf},
+        ).json()
+        with patch.object(
+            app_main.runtime,
+            "submit_assistant_message",
+            return_value={"job_id": "job_test", "conversation_id": "conv_test"},
+        ):
+            response = self.client.post(
+                "/assistant/messages",
+                json={"project_id": project["project_id"], "message": "请帮我生成整节人口地理教案"},
+                headers={"X-WebGIS-CSRF": csrf},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["lesson_design"]["project_id"], project["project_id"])
+        self.assertEqual(response.json()["lesson_design"]["current_step"], "requirements")
 
 
 if __name__ == "__main__":

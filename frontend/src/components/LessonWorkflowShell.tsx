@@ -4,10 +4,10 @@ import {
   activatePopulationSourceVersion,
   applyLessonScene,
   captureLessonScene,
-  closeSessionQuestion,
   createClassSession,
   endClassSession,
   enterSessionStage,
+  fetchClassSessions,
   fetchJob,
   fetchLesson,
   fetchLessons,
@@ -37,11 +37,11 @@ import type {
 } from "../types";
 import { ClassRunPanel } from "./ClassRunPanel";
 import { LessonPanel } from "./LessonPanel";
-import { QuizOverlay } from "./QuizOverlay";
+import { LessonDesignPanel } from "./LessonDesignPanel";
 import { ReportPanel } from "./ReportPanel";
 import { VisualQueryPopup, type VisualizationItem } from "./VisualQueryPopup";
 
-type LessonMode = "off" | "prep" | "teach" | "review";
+type LessonMode = "off" | "prep" | "design" | "teach" | "review";
 
 type Props = {
   project: (ProjectRecord & { status?: string }) | null;
@@ -52,6 +52,8 @@ type Props = {
   statusBar?: ReactNode;
   /** 每次递增时打开课堂工作流：有进行中课堂则展开课中面板，否则打开课前备课。 */
   openSignal?: number;
+  /** 助教识别到整节课设计请求时自动打开共创面板。 */
+  designOpenSignal?: number;
   /** 课堂工作流状态（lesson/session/stage/phase）变化时上报给 App，随助教请求发往后端。 */
   onTeachingContextChange?: (ctx: TeachingContext | null) => void;
   /** 课中一键把预设追问派发给教学智能体。 */
@@ -64,6 +66,8 @@ type Props = {
   onFocusEvidenceLayer?: (datasetId: string, stageDatasetIds: string[]) => void;
   /** 三维宏观导入结束后，教师一键回到二维规范专题图判读。 */
   onRequestPlaneView?: () => void;
+  /** 框选真实地图截图并将 Artifact 记入当前课堂事件。 */
+  onCaptureEvidence?: (sessionId: string, stageId: string) => void;
 };
 
 function currentLayerSnapshot(
@@ -101,9 +105,15 @@ async function waitForLessonImport(jobId: string): Promise<LessonRecord | null> 
 
 async function waitForPopulationPrep(
   jobId: string,
-  onProgress: (label: string) => void
+  onProgress: (label: string) => void,
+  signal: AbortSignal
 ): Promise<PopulationLessonPrepResult> {
   for (let attempt = 0; attempt < 240; attempt += 1) {
+    if (signal.aborted) {
+      const error = new Error("人口专题智能备课已取消");
+      error.name = "AbortError";
+      throw error;
+    }
     const job = await fetchJob(jobId);
     const activeStage = Object.values(job.stages || {}).find((stage) => stage.status === "running");
     if (activeStage?.summary) {
@@ -119,7 +129,19 @@ async function waitForPopulationPrep(
     if (job.status === "failed") {
       throw new Error(job.error || "人口专题智能备课失败");
     }
-    await new Promise((resolve) => window.setTimeout(resolve, 500));
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        window.clearTimeout(timer);
+        const error = new Error("人口专题智能备课已取消");
+        error.name = "AbortError";
+        reject(error);
+      };
+      const timer = window.setTimeout(() => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, 500);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
   }
   throw new Error("人口专题智能备课超时");
 }
@@ -131,20 +153,20 @@ export function LessonWorkflowShell({
   onRefresh,
   statusBar,
   openSignal = 0,
+  designOpenSignal = 0,
   onTeachingContextChange,
   onAssistantPrompt,
   onApplyGlobeScene,
   getGlobeSceneSnapshot,
   onFocusEvidenceLayer,
-  onRequestPlaneView
+  onRequestPlaneView,
+  onCaptureEvidence
 }: Props) {
   const [lessonMode, setLessonMode] = useState<LessonMode>("off");
   const [lessons, setLessons] = useState<LessonRecord[]>([]);
   const [activeLesson, setActiveLesson] = useState<LessonRecord | null>(null);
   const [activeSession, setActiveSession] = useState<ClassSessionRecord | null>(null);
-  const [studentJoinUrl, setStudentJoinUrl] = useState("");
   const [stageEnteredAt, setStageEnteredAt] = useState<number | null>(null);
-  const [quizVisible, setQuizVisible] = useState(false);
   const [panelCollapsed, setPanelCollapsed] = useState(true);
   const [localBusy, setLocalBusy] = useState(false);
   const [error, setError] = useState("");
@@ -155,6 +177,7 @@ export function LessonWorkflowShell({
   const [populationSourceVersions, setPopulationSourceVersions] = useState<PopulationSourceVersion[]>([]);
   const [populationSourceVersion, setPopulationSourceVersion] = useState("");
   const visualQuerySignatureRef = useRef("");
+  const prepAbortRef = useRef<AbortController | null>(null);
 
   // 侧栏“上课模式”入口：有进行中课堂直接展开课中面板，否则进入课前备课。
   useEffect(() => {
@@ -172,6 +195,12 @@ export function LessonWorkflowShell({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openSignal]);
 
+  useEffect(() => {
+    if (!designOpenSignal) return;
+    setPanelCollapsed(false);
+    setLessonMode("design");
+  }, [designOpenSignal]);
+
   // 把课堂工作流状态上报给 App：备课=course_prep、上课中=in_class、复盘=post_class。
   // session_id 在课堂结束后仍保留（课后复盘需要用它读取真实课堂记录）。
   useEffect(() => {
@@ -187,7 +216,7 @@ export function LessonWorkflowShell({
     // 班课已结束则进入 post_class；否则跟随面板模式。
     const phase: TeachingContext["phase"] = running
       ? "in_class"
-      : lessonMode === "prep"
+      : lessonMode === "prep" || lessonMode === "design"
         ? "course_prep"
         : activeSession || lessonMode === "review"
           ? "post_class"
@@ -237,6 +266,42 @@ export function LessonWorkflowShell({
     void loadLessons();
   }, [loadLessons]);
 
+  useEffect(() => {
+    if (!project) {
+      setActiveSession(null);
+      return;
+    }
+    setActiveSession(null);
+    let cancelled = false;
+    void fetchClassSessions({ projectId: project.project_id })
+      .then(async ({ items }) => {
+        const running = [...items]
+          .filter((item) => item.status === "running")
+          .sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)))[0];
+        if (!running) return;
+        const lesson = await fetchLesson(running.lesson_id);
+        if (cancelled) return;
+        setActiveSession(running);
+        setActiveLesson(lesson);
+        setLessons((previous) => previous.some((item) => item.lesson_id === lesson.lesson_id)
+          ? previous.map((item) => (item.lesson_id === lesson.lesson_id ? lesson : item))
+          : [lesson, ...previous]);
+        setStageEnteredAt(Date.now());
+        setLessonMode("teach");
+        setPanelCollapsed(false);
+      })
+      .catch((exc) => {
+        if (!cancelled) setError(exc instanceof Error ? exc.message : String(exc));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [project?.project_id]);
+
+  useEffect(() => () => {
+    prepAbortRef.current?.abort();
+  }, []);
+
   const loadPopulationSources = useCallback(async () => {
     if (!project) return;
     const [sourcePayload, versionPayload] = await Promise.all([
@@ -261,6 +326,7 @@ export function LessonWorkflowShell({
     try {
       await operation();
     } catch (exc) {
+      if (exc instanceof Error && exc.name === "AbortError") return;
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
       setLocalBusy(false);
@@ -346,12 +412,17 @@ export function LessonWorkflowShell({
     async (input: PopulationLessonPrepInput) => {
       if (!project || !activeLesson) return;
       await runWithBusy(async () => {
+        prepAbortRef.current?.abort();
+        const controller = new AbortController();
+        prepAbortRef.current = controller;
         setPrepResult(null);
         setPrepProgress("正在建立人口专题备课任务…");
         const accepted = await preparePopulationLesson(project.project_id, activeLesson.lesson_id, input);
-        const result = await waitForPopulationPrep(accepted.job_id, setPrepProgress);
+        const result = await waitForPopulationPrep(accepted.job_id, setPrepProgress, controller.signal);
+        if (controller.signal.aborted) return;
         setPrepResult(result);
         setPrepProgress("预演通过，等待教师确认。");
+        prepAbortRef.current = null;
       });
     },
     [activeLesson, project, runWithBusy]
@@ -401,7 +472,6 @@ export function LessonWorkflowShell({
     await runWithBusy(async () => {
       const response = await createClassSession(activeLesson.lesson_id, project.project_id);
       setActiveSession(response.session);
-      setStudentJoinUrl(response.student_join_url || "");
       setLessonMode("teach");
       const firstStage = activeLesson.stages[0];
       if (firstStage) {
@@ -415,7 +485,6 @@ export function LessonWorkflowShell({
     await runWithBusy(async () => {
       const response = await endClassSession(activeSession.session_id);
       setActiveSession(response.session);
-      setQuizVisible(false);
       setLessonMode("review");
       await onRefresh();
     });
@@ -449,14 +518,6 @@ export function LessonWorkflowShell({
     [activeSession, runWithBusy]
   );
 
-  const closeQuestion = useCallback(async () => {
-    if (!activeSession) return;
-    await runWithBusy(async () => {
-      await closeSessionQuestion(activeSession.session_id);
-      setQuizVisible(false);
-    });
-  }, [activeSession, runWithBusy]);
-
   const recordObservation = useCallback(
     (verdict: ObservationVerdict, tag: string, note: string, questionId: string) => {
       if (!activeSession) return;
@@ -475,6 +536,7 @@ export function LessonWorkflowShell({
 
   const workflowBusy = busy || localBusy;
   const teachPanelVisible = lessonMode === "teach" && Boolean(activeSession) && Boolean(activeLesson);
+  const designPanelVisible = lessonMode === "design" && Boolean(project);
 
   return (
     <>
@@ -485,14 +547,14 @@ export function LessonWorkflowShell({
           currentStageId={activeSession.current_stage_id}
           stageEnteredAt={stageEnteredAt}
           busy={workflowBusy}
-          quizActive={quizVisible}
+          quizActive={Boolean(activeSession.active_question?.question_id)}
           collapsed={panelCollapsed}
           onToggleCollapsed={() => setPanelCollapsed((value) => !value)}
           onEnterStage={(stageId) => void applyScene(stageId, true)}
           onLaunchQuestion={(questionId, stageId) => void launchQuestion(questionId, stageId)}
           onLaunchAdhocQuestion={(text, options) => void launchAdhocQuestion(text, options)}
           onObservation={recordObservation}
-          onSnapshot={() => void onRefresh()}
+          onSnapshot={() => onCaptureEvidence?.(activeSession.session_id, activeSession.current_stage_id)}
           onEndSession={() => void endSession()}
           visibleCatalogLayerIds={(layerState?.items || [])
             .filter((layer) => layer.visible && layer.source === "one_map_catalog")
@@ -520,6 +582,14 @@ export function LessonWorkflowShell({
               onClick={() => setLessonMode((value) => (value === "teach" ? "off" : "teach"))}
             >
               课中
+            </button>
+            <button
+              type="button"
+              className={"toolbar-button compact " + (lessonMode === "design" ? "active" : "")}
+              onClick={() => setLessonMode((value) => (value === "design" ? "off" : "design"))}
+              data-testid="lesson-design-launcher"
+            >
+              共创教案
             </button>
             <button
               type="button"
@@ -553,20 +623,26 @@ export function LessonWorkflowShell({
           onChangePopulationSourceVersion={(version) => void changePopulationSourceVersion(version)}
           onResolvePrepChangeSet={(decision, stageIds) => void resolvePrepChangeSet(decision, stageIds)}
           onStartClass={() => void startClass()}
+          onStartDesign={() => setLessonMode("design")}
           onClose={() => setLessonMode("off")}
         />
       ) : null}
 
-      {project && lessonMode === "review" ? <ReportPanel projectId={project.project_id} onClose={() => setLessonMode("off")} /> : null}
-
-      {quizVisible && activeSession ? (
-        <QuizOverlay
-          sessionId={activeSession.session_id}
-          joinUrl={studentJoinUrl}
-          onCloseQuestion={() => void closeQuestion()}
-          onDismiss={() => setQuizVisible(false)}
+      {designPanelVisible && project ? (
+        <LessonDesignPanel
+          projectId={project.project_id}
+          activeLesson={activeLesson}
+          onFinalized={(lesson) => {
+            setActiveLesson(lesson);
+            setLessons((previous) => [...previous.filter((item) => item.lesson_id !== lesson.lesson_id), lesson]);
+            setLessonMode("prep");
+            void onRefresh();
+          }}
+          onClose={() => setLessonMode("prep")}
         />
       ) : null}
+
+      {project && lessonMode === "review" ? <ReportPanel projectId={project.project_id} onClose={() => setLessonMode("off")} /> : null}
 
       {visualQueryDismissed || !visualQueryLayer ? null : (
         <VisualQueryPopup

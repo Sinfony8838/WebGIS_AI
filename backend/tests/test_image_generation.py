@@ -111,7 +111,8 @@ class ImageGenerationRuntimeTest(unittest.TestCase):
         return runtime, project_id
 
     def wait_for_job(self, runtime: WebGISRuntime, job_id: str) -> dict:
-        for _ in range(200):
+        # Full-suite runs can briefly saturate the Windows worker pool.
+        for _ in range(500):
             job = runtime.get_job(job_id)
             if job["status"] in {"completed", "failed"}:
                 return job
@@ -208,6 +209,16 @@ class ImageGenerationRuntimeTest(unittest.TestCase):
 
         self.assertFalse(any(action["tool_name"] == "generate_image" for action in plan["actions"]))
         self.assertTrue(any(action["tool_name"] == "run_visual_query" for action in plan["actions"]))
+
+    def test_gis_annotation_generation_does_not_trigger_paid_image(self) -> None:
+        runtime, project_id = self.build_runtime()
+        project = runtime.store.get_project(project_id)
+        self.assertIsNotNone(project)
+
+        plan = runtime.assistant_service.plan_actions("请生成地图标注：季风区边界", project)
+
+        self.assertFalse(any(action["tool_name"] == "generate_image" for action in plan["actions"]))
+        self.assertTrue(any(action["tool_name"] == "draw_annotation" for action in plan["actions"]))
 
     def test_rejected_generation_can_be_requested_again_and_then_approved(self) -> None:
         runtime, project_id = self.build_runtime()

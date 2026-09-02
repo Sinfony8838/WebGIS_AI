@@ -216,6 +216,7 @@ class LessonService:
                 stages=self._normalize_stages(payload.get("stages", [])),
                 source="builtin",
                 metadata=dict(payload.get("metadata") or {}),
+                plan=dict(payload.get("plan") or {}),
             )
             self.store.upsert_lesson(lesson)
 
@@ -250,6 +251,7 @@ class LessonService:
             stages=self._normalize_stages(payload.get("stages", [])),
             source=source,
             metadata=dict(payload.get("metadata") or {}),
+            plan=dict(payload.get("plan") or {}),
         )
         return self.store.upsert_lesson(lesson)
 
@@ -267,6 +269,8 @@ class LessonService:
             lesson.stages = self._normalize_stages(payload["stages"])
         if "metadata" in payload and isinstance(payload["metadata"], dict):
             lesson.metadata = {**lesson.metadata, **payload["metadata"]}
+        if "plan" in payload and isinstance(payload["plan"], dict):
+            lesson.plan = {**lesson.plan, **payload["plan"]}
         return self.store.upsert_lesson(lesson)
 
     def delete_lesson(self, lesson_id: str) -> None:
@@ -668,6 +672,12 @@ class LessonService:
                     "script": [str(item) for item in raw.get("script") or []],
                     "questions": questions,
                     "assistant_prompts": [str(item) for item in raw.get("assistant_prompts") or []],
+                    "knowledge_unit": str(raw.get("knowledge_unit") or ""),
+                    "knowledge_point": str(raw.get("knowledge_point") or ""),
+                    "content": str(raw.get("content") or raw.get("teaching_activity") or ""),
+                    "activities": [str(item) for item in raw.get("activities") or []],
+                    "design_intent": str(raw.get("design_intent") or ""),
+                    "system_steps": [str(item) for item in raw.get("system_steps") or []],
                     "brainstorm": normalize_brainstorm(raw.get("brainstorm")),
                     "evidence_refs": normalize_evidence_refs(raw.get("evidence_refs")),
                     "teacher_guidance": normalize_teacher_guidance(raw.get("teacher_guidance")),

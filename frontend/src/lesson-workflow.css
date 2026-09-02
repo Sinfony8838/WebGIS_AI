@@ -2133,3 +2133,66 @@
   color: #ecf6ff;
   white-space: nowrap;
 }
+
+/* Guided lesson-plan co-creation */
+.lesson-design-panel {
+  position: fixed;
+  top: 76px;
+  right: 24px;
+  z-index: 72;
+  width: min(720px, calc(100vw - 48px));
+  max-height: calc(100vh - 108px);
+  overflow: auto;
+  padding: 20px;
+}
+.lesson-design-header { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; }
+.lesson-design-header h2 { margin:4px 0; }
+.lesson-design-header p:last-child { color:var(--muted-text,#64748b); margin:0; font-size:12px; }
+.lesson-design-steps { display:grid; grid-template-columns:repeat(7,1fr); gap:5px; margin:16px 0; }
+.lesson-design-step { display:flex; flex-direction:column; align-items:center; gap:4px; color:#94a3b8; font-size:10px; text-align:center; }
+.lesson-design-step span { width:24px; height:24px; display:grid; place-items:center; border:1px solid #cbd5e1; border-radius:50%; background:#fff; }
+.lesson-design-step.current, .lesson-design-step.confirmed { color:#2563eb; }
+.lesson-design-step.current span { border-color:#2563eb; box-shadow:0 0 0 3px #dbeafe; }
+.lesson-design-step.confirmed span { background:#2563eb; color:#fff; border-color:#2563eb; }
+.lesson-design-draft { border:1px solid #dbe4f0; border-radius:12px; padding:12px; display:grid; grid-template-columns:1fr 140px; gap:10px; background:#f8fbff; }
+.lesson-design-draft-title, .lesson-design-draft > div { grid-column:1/-1; }
+.lesson-design-draft label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:#64748b; }
+.lesson-design-draft input { border:1px solid #dbe4f0; border-radius:6px; padding:6px 8px; background:#fff; color:#0f172a; }
+.lesson-design-draft p { margin:4px 0 0; color:#334155; line-height:1.55; }
+.lesson-design-chat { display:flex; flex-direction:column; gap:8px; margin:14px 0; max-height:240px; overflow:auto; }
+.lesson-design-message { display:grid; grid-template-columns:38px 1fr; gap:8px; align-items:start; }
+.lesson-design-message span { color:#64748b; font-size:11px; padding-top:4px; }
+.lesson-design-message p { margin:0; border-radius:10px; padding:9px 11px; line-height:1.55; white-space:pre-wrap; background:#f1f5f9; }
+.lesson-design-message.teacher p { background:#dbeafe; }
+.lesson-design-report { display:flex; gap:10px; flex-wrap:wrap; border:1px solid #bfdbfe; background:#eff6ff; border-radius:8px; padding:8px 10px; font-size:12px; }
+.lesson-design-report small { width:100%; color:#92400e; }
+.lesson-design-error { color:#b91c1c; font-size:12px; }
+.lesson-design-composer textarea { width:100%; min-height:76px; resize:vertical; }
+.lesson-design-actions { display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; margin-top:8px; }
+@media (max-width: 720px) {
+  .lesson-design-panel { top:56px; right:10px; width:calc(100vw - 20px); padding:14px; }
+  .lesson-design-steps { gap:2px; }
+  .lesson-design-step em { font-size:9px; }
+}
+.lesson-design-inline-edit { display:flex; gap:6px; align-items:center; }
+.lesson-design-inline-edit input { flex:1; min-width:0; }
+.lesson-design-section-editor {
+  grid-column: 1 / -1;
+  display: grid !important;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 8px !important;
+}
+.lesson-design-section-editor textarea {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-height: 124px;
+  resize: vertical;
+  border: 1px solid #dbe4f0;
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: #fff;
+  color: #0f172a;
+  line-height: 1.5;
+  font: inherit;
+}

@@ -21,6 +21,7 @@ import { getDistance, getLength } from "ol/sphere";
 import { Circle as CircleStyle, Fill, RegularShape, Stroke, Style, Text } from "ol/style";
 import { easeOut } from "ol/easing";
 import { getCenter } from "ol/extent";
+import { resolveCanvasDrawSize } from "./mapScreenshot";
 import {
   addCatalogDatasetLayer,
   activateLessonResourceSet,
@@ -40,6 +41,7 @@ import {
   fetchProject,
   generateImageLibraryAsset,
   getApiBase,
+  logSessionEvent,
   patchLayer,
   registerKbLayer,
   renderPptx,
@@ -218,7 +220,7 @@ function currentExtentFromMap(map: Map): [number, number, number, number] {
   return transformExtent(extent, "EPSG:3857", "EPSG:4326") as [number, number, number, number];
 }
 
-function captureMapSnapshot(map: Map): Promise<string> {
+export function captureMapSnapshot(map: Map): Promise<string> {
   return new Promise((resolve) => {
     map.once("rendercomplete", () => {
       const size = map.getSize();
@@ -244,6 +246,7 @@ function captureMapSnapshot(map: Map): Promise<string> {
         const opacity = Number(parent?.style.opacity || "1");
         context.globalAlpha = Number.isFinite(opacity) ? opacity : 1;
         const transform = sourceCanvas.style.transform;
+        let transformValues: number[] | null = null;
         if (transform) {
           const values = transform
             .replace("matrix(", "")
@@ -251,6 +254,7 @@ function captureMapSnapshot(map: Map): Promise<string> {
             .split(",")
             .map((value) => Number(value.trim()));
           if (values.length === 6) {
+            transformValues = values;
             context.setTransform(values[0], values[1], values[2], values[3], values[4], values[5]);
           } else {
             context.setTransform(1, 0, 0, 1, 0, 0);
@@ -258,7 +262,18 @@ function captureMapSnapshot(map: Map): Promise<string> {
         } else {
           context.setTransform(1, 0, 0, 1, 0, 0);
         }
-        context.drawImage(sourceCanvas, 0, 0);
+        const drawSize = resolveCanvasDrawSize(sourceCanvas, transformValues);
+        context.drawImage(
+          sourceCanvas,
+          0,
+          0,
+          sourceCanvas.width,
+          sourceCanvas.height,
+          0,
+          0,
+          drawSize.width,
+          drawSize.height
+        );
       });
 
       context.setTransform(1, 0, 0, 1, 0, 0);
@@ -479,6 +494,9 @@ export default function App({
   const [copilotOpenSignal, setCopilotOpenSignal] = useState(0);
   const activeJobStreamsRef = useRef(0);
   const jobStreamsRef = useRef<Set<EventSource>>(new Set());
+  const assistantSubmittingRef = useRef(false);
+  const resourceSearchRequestRef = useRef(0);
+  const pendingEvidenceSnapshotRef = useRef<{ sessionId: string; stageId: string } | null>(null);
 
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [project, setProject] = useState<(ProjectRecord & { status: string }) | null>(null);
@@ -583,6 +601,7 @@ export default function App({
   const brushTargetHasContent = pptViewerOpen && pptPresentationReady ? pptBrushHasContent : mapBrushHasContent;
   // 单调递增信号：侧栏“上课模式”按钮触发 LessonWorkflowShell 打开课中/课前面板。
   const [lessonWorkflowOpenSignal, setLessonWorkflowOpenSignal] = useState(0);
+  const [lessonDesignOpenSignal, setLessonDesignOpenSignal] = useState(0);
   const [initAttempt, setInitAttempt] = useState(0);
   const [initError, setInitError] = useState("");
   const connectionReady = Boolean(project && health && !initError);
@@ -758,18 +777,32 @@ export default function App({
 
     useEffect(() => {
       const query = resourceQuery.trim();
+      const requestId = ++resourceSearchRequestRef.current;
       const timer = window.setTimeout(() => {
         setResourceLoading(true);
         searchResources({ query, scope: resourceScope, limit: 16 })
           .then((response) => {
-            setResourceResults(response.items);
+            if (resourceSearchRequestRef.current === requestId) {
+              setResourceResults(response.items);
+            }
           })
           .catch((error: Error) => {
-            pushToast("error", "资料搜索失败", error.message);
+            if (resourceSearchRequestRef.current === requestId) {
+              pushToast("error", "资料搜索失败", error.message);
+            }
           })
-          .finally(() => setResourceLoading(false));
+          .finally(() => {
+            if (resourceSearchRequestRef.current === requestId) {
+              setResourceLoading(false);
+            }
+          });
       }, 320);
-      return () => window.clearTimeout(timer);
+      return () => {
+        window.clearTimeout(timer);
+        if (resourceSearchRequestRef.current === requestId) {
+          resourceSearchRequestRef.current += 1;
+        }
+      };
     }, [pushToast, resourceQuery, resourceScope]);
 
   const handleKbSaveItem = useCallback(async () => {
@@ -1191,26 +1224,38 @@ export default function App({
       inputMode: AssistantInputMode = "text",
       imageAttachment?: ImageAttachment | null,
       displayMessage?: string
-    ) => {
+    ): Promise<boolean> => {
       if (!project) {
-        return;
+        return false;
       }
       const effectiveMessage = message.trim() || (imageAttachment ? "请识别并分析这张图片中的地理信息。" : "");
-      if (!effectiveMessage) return;
-      appendChat("user", displayMessage || effectiveMessage, null, null, null, imageAttachment);
-      const response = await sendAssistantMessage(project.project_id, effectiveMessage, buildMapContext(overrides), target, inputMode, {
-        assistantMode,
-        conversationId: health?.ui.assistant_v2_enabled ? conversationId : undefined,
-        history: health?.ui.assistant_v2_enabled ? chatLog : undefined,
-        imageAttachments: imageAttachment ? [{ artifact_id: imageAttachment.artifact_id }] : [],
-        teachingContext: teachingContextRef.current || undefined
-      });
-      if (response.conversation_id) {
-        setConversationId(response.conversation_id);
+      if (!effectiveMessage || assistantSubmittingRef.current) return false;
+      assistantSubmittingRef.current = true;
+      try {
+        const response = await sendAssistantMessage(project.project_id, effectiveMessage, buildMapContext(overrides), target, inputMode, {
+          assistantMode,
+          conversationId: health?.ui.assistant_v2_enabled ? conversationId : undefined,
+          history: health?.ui.assistant_v2_enabled ? chatLog : undefined,
+          imageAttachments: imageAttachment ? [{ artifact_id: imageAttachment.artifact_id }] : [],
+          teachingContext: teachingContextRef.current || undefined
+        });
+        appendChat("user", displayMessage || effectiveMessage, null, null, null, imageAttachment);
+        if (response.conversation_id) {
+          setConversationId(response.conversation_id);
+        }
+        if (response.lesson_design) {
+          setLessonDesignOpenSignal((value) => value + 1);
+        }
+        subscribeToJob(response.job_id);
+        return true;
+      } catch (error) {
+        pushToast("error", "助教消息发送失败", error instanceof Error ? error.message : "请检查网络后重试，输入内容已保留。");
+        return false;
+      } finally {
+        assistantSubmittingRef.current = false;
       }
-      subscribeToJob(response.job_id);
     },
-    [appendChat, buildMapContext, chatLog, conversationId, health?.ui.assistant_v2_enabled, project, subscribeToJob]
+    [appendChat, buildMapContext, chatLog, conversationId, health?.ui.assistant_v2_enabled, project, pushToast, subscribeToJob]
   );
 
   assistantDispatchRef.current = (message, overrides, displayMessage) => {
@@ -1231,9 +1276,9 @@ export default function App({
     [project, subscribeToJob]
   );
 
-  const handleStartScreenshot = useCallback(async () => {
+  const handleStartScreenshot = useCallback(async (): Promise<boolean> => {
     if (!project) {
-      return;
+      return false;
     }
     const imageDataUrl = viewMode === "globe" ? globeRef.current?.captureImage() || "" : mapRef.current ? await captureMapSnapshot(mapRef.current) : "";
     const rect = viewMode === "globe"
@@ -1246,28 +1291,46 @@ export default function App({
         : null;
     if (!imageDataUrl) {
       pushToast("error", "截图失败", "当前地图画面暂时无法读取，请稍后重试。");
-      return;
+      return false;
     }
     if (!rect || rect.width < 24 || rect.height < 24) {
       pushToast("error", "截图失败", "当前地图区域尺寸无效。");
-      return;
+      return false;
     }
     setScreenshotSource(imageDataUrl);
     setScreenshotBounds(rect);
+    return true;
   }, [project, pushToast, viewMode]);
 
   const handleCompleteScreenshot = useCallback(async (selection: ScreenshotSelection) => {
     if (!project || !screenshotSource) return;
     try {
       const cropped = await cropSnapshot(screenshotSource, selection);
-      await exportSnapshot(project.project_id, `地图截图 ${new Date().toLocaleString("zh-CN")}`, cropped, "地图区域框选截图");
+      const saved = await exportSnapshot(project.project_id, `地图截图 ${new Date().toLocaleString("zh-CN")}`, cropped, "地图区域框选截图");
+      const evidence = pendingEvidenceSnapshotRef.current;
+      let evidenceRecorded = true;
+      if (evidence) {
+        try {
+          await logSessionEvent(evidence.sessionId, {
+            event_type: "snapshot",
+            stage_id: evidence.stageId,
+            payload: { artifact_id: saved.artifact.artifact_id, title: saved.artifact.title }
+          });
+        } catch (error) {
+          evidenceRecorded = false;
+          pushToast("error", "课堂存证未记录", error instanceof Error ? error.message : "图片已保存，但课堂事件写入失败。请重试存证。");
+        }
+      }
       await refreshProjectState(project.project_id);
       setDrawerOpen(true);
       setDrawerTab("images");
-      pushToast("success", "截图已保存", "可在图片库中预览，或加入智能助教进行识图问答。");
+      if (evidenceRecorded) {
+        pushToast("success", "截图已保存", "可在图片库中预览，或加入智能助教进行识图问答。");
+      }
     } catch (error) {
       pushToast("error", "截图失败", error instanceof Error ? error.message : "截图保存失败。");
     } finally {
+      pendingEvidenceSnapshotRef.current = null;
       setScreenshotSource("");
       setScreenshotBounds(null);
     }
@@ -3275,9 +3338,11 @@ export default function App({
               return;
             }
             const image = pendingImage;
-            void submitAssistantText(message, undefined, "webgis", "text", image);
-            setAssistantInput("");
-            setPendingImage(null);
+            void submitAssistantText(message, undefined, "webgis", "text", image).then((sent) => {
+              if (!sent) return;
+              setAssistantInput((current) => (current.trim() === message ? "" : current));
+              setPendingImage((current) => (current?.artifact_id === image?.artifact_id ? null : current));
+            });
           }}
           onQuickPrompt={(prompt) => {
             const message = prompt.trim();
@@ -3285,8 +3350,9 @@ export default function App({
               return;
             }
             const image = pendingImage;
-            void submitAssistantText(message, undefined, "webgis", "text", image);
-            setPendingImage(null);
+            void submitAssistantText(message, undefined, "webgis", "text", image).then((sent) => {
+              if (sent) setPendingImage((current) => (current?.artifact_id === image?.artifact_id ? null : current));
+            });
           }}
           onConfirm={(confirmationId, decision = "approve") => {
             void confirmAssistantAction(confirmationId, decision).then((response) => subscribeToJob(response.job_id));
@@ -3297,8 +3363,9 @@ export default function App({
               return;
             }
             const image = pendingImage;
-            void submitAssistantText(transcript, undefined, "webgis", "voice", image);
-            setPendingImage(null);
+            void submitAssistantText(transcript, undefined, "webgis", "voice", image).then((sent) => {
+              if (sent) setPendingImage((current) => (current?.artifact_id === image?.artifact_id ? null : current));
+            });
           }}
           onVoiceNotice={(tone, title, detail) => {
             pushToast(tone, title, detail);
@@ -3318,6 +3385,7 @@ export default function App({
           bounds={screenshotBounds}
           onComplete={(selection) => void handleCompleteScreenshot(selection)}
           onCancel={() => {
+            pendingEvidenceSnapshotRef.current = null;
             setScreenshotSource("");
             setScreenshotBounds(null);
           }}
@@ -3329,6 +3397,7 @@ export default function App({
           layerState={layerState}
           busy={busy}
           openSignal={lessonWorkflowOpenSignal}
+          designOpenSignal={lessonDesignOpenSignal}
           onRefresh={() => (project ? refreshProjectState(project.project_id) : undefined)}
           onTeachingContextChange={(ctx) => {
             teachingContextRef.current = ctx;
@@ -3341,6 +3410,12 @@ export default function App({
             void handleFocusLessonEvidenceLayer(datasetId, stageDatasetIds);
           }}
           onRequestPlaneView={() => handleViewModeToggle("plane")}
+          onCaptureEvidence={(sessionId, stageId) => {
+            pendingEvidenceSnapshotRef.current = { sessionId, stageId };
+            void handleStartScreenshot().then((started) => {
+              if (!started) pendingEvidenceSnapshotRef.current = null;
+            });
+          }}
           statusBar={
             <MapStatusBar
               mode={viewMode}

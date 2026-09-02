@@ -6,6 +6,7 @@ import type { LessonRecord } from "../types";
 const apiMocks = vi.hoisted(() => ({
   fetchLessons: vi.fn(),
   fetchLesson: vi.fn(),
+  fetchClassSessions: vi.fn().mockResolvedValue({ status: "success", items: [] }),
   applyLessonScene: vi.fn(),
   captureLessonScene: vi.fn(),
   fetchPopulationSources: vi.fn(),
@@ -129,5 +130,18 @@ describe("LessonWorkflowShell globe scene orchestration", () => {
         })
       )
     );
+  });
+
+  it("restores a running class after refresh and requests a real evidence screenshot", async () => {
+    const item = lesson();
+    const running = { session_id: "session_running", lesson_id: item.lesson_id, project_id: "project_1", status: "running", join_code: "123456", current_stage_id: "s4", started_at: "2026-08-22T08:00:00Z", ended_at: "", events: [], active_question: {}, responses: {}, metadata: {}, updated_at: "" };
+    apiMocks.fetchLessons.mockResolvedValue({ status: "success", items: [item] });
+    apiMocks.fetchLesson.mockResolvedValue(item);
+    apiMocks.fetchClassSessions.mockResolvedValue({ status: "success", items: [running] });
+    const onCaptureEvidence = vi.fn();
+    render(<LessonWorkflowShell project={{ project_id: "project_1" } as never} layerState={null} onRefresh={vi.fn()} onCaptureEvidence={onCaptureEvidence} />);
+    await waitFor(() => expect(screen.getByText("截图存证")).toBeTruthy());
+    fireEvent.click(screen.getByText("截图存证"));
+    expect(onCaptureEvidence).toHaveBeenCalledWith("session_running", "s4");
   });
 });

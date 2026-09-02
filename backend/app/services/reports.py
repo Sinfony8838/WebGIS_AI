@@ -211,7 +211,7 @@ class ReportService:
         for responses in session.responses.values():
             for item in responses:
                 nickname = str(item.get("nickname") or "").strip()
-                if nickname and nickname != "匿名":
+                if nickname and nickname not in {"匿名", "anonymous"}:
                     participants.add(nickname)
         return participants
 

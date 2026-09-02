@@ -143,7 +143,8 @@ MATCH_STOP_WORDS = {
     "how",
 }
 
-TEACHING_TASKS = ("teaching_explain", "teaching_question", "teaching_action", "teaching_reflect")
+TEACHING_TASKS = ("teaching_explain", "teaching_question", "teaching_action", "teaching_reflect", "teaching_prepare")
+TEACHING_PREPARE_HINTS = ("共创教案", "教案共创", "备一节课", "生成整节教案", "逐步设计教案", "教案助手", "完整教案")
 TEACHING_QUESTION_HINTS = ("追问", "提问", "设计问题", "出几道题", "几个问题", "还有什么问题", "进一步问", "follow-up")
 TEACHING_REFLECT_HINTS = ("复盘", "课堂小结", "小结一下", "回顾一下", "总结本课", "总结这节课", "课后总结", "复习切口")
 
@@ -472,6 +473,14 @@ class AssistantRouter:
         operation becomes a teaching action, reflection/question prompts keep
         their classroom framing, and everything else defaults to a teaching
         explanation."""
+        if _contains_any(message, TEACHING_PREPARE_HINTS):
+            return {
+                "intent": "teaching_prepare",
+                "reason": "explicit guided lesson-plan co-creation request",
+                "confidence": "0.95",
+                "ambiguity_reason": "",
+                "recommended_clarification": "",
+            }
         if _contains_any(message, TOOL_ACTION_HINTS):
             return {
                 "intent": "teaching_action",
@@ -871,7 +880,12 @@ class KnowledgeEngine:
             if not _contains_any(question, ("经纬度", "坐标", "经线", "纬线", "比例尺", "尺度")):
                 system_prompt += "用户没有询问坐标或尺度，答案中不要出现经纬度、坐标或经纬网数值。\n"
         if teaching_task:
-            if teaching_task == "teaching_question":
+            if teaching_task == "teaching_prepare":
+                system_prompt += (
+                    "\n用户准备共创一整节课。只说明已进入分步教案共创，并邀请用户先提供年级、课题、课时和学情；"
+                    "不要在聊天中一次性输出长教案，也不要输出内部字段。\n"
+                )
+            elif teaching_task == "teaching_question":
                 system_prompt += "\n用户明确需要课堂提问设计，可以用简短列表呈现由观察到解释的递进问题，并提示常见误区。\n"
             elif teaching_task == "teaching_reflect":
                 system_prompt += (

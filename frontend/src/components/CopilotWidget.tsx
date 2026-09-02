@@ -56,6 +56,11 @@ const CAPABILITY_CHIPS: Array<{ key: string; label: string; prompt: string }> = 
     prompt: "请围绕当前教学主题设计一组递进式课堂追问，并说明每问的认知层次。"
   },
   {
+    key: "lesson-design",
+    label: "共创教案",
+    prompt: "教案共创"
+  },
+  {
     key: "reflect",
     label: "复盘",
     prompt: "请对本节课进行小结，指出可强化的区域认知方法与下一步建议。"
@@ -71,9 +76,9 @@ const CAPABILITY_CHIPS: Array<{ key: string; label: string; prompt: string }> = 
 // header chip surfaces that awareness to the teacher, and the capability
 // chips are re-ordered so the most phase-relevant action always comes first.
 const PHASE_META: Record<string, { label: string; cls: string; chipOrder: string[] }> = {
-  course_prep: { label: "课前备课", cls: "phase-prep", chipOrder: ["follow-up", "read-map", "reflect", "switch-basemap"] },
-  in_class: { label: "课堂进行中", cls: "phase-class", chipOrder: ["read-map", "follow-up", "switch-basemap", "reflect"] },
-  post_class: { label: "课后复盘", cls: "phase-review", chipOrder: ["reflect", "follow-up", "read-map", "switch-basemap"] }
+  course_prep: { label: "课前备课", cls: "phase-prep", chipOrder: ["lesson-design", "follow-up", "read-map", "reflect", "switch-basemap"] },
+  in_class: { label: "课堂进行中", cls: "phase-class", chipOrder: ["read-map", "follow-up", "switch-basemap", "reflect", "lesson-design"] },
+  post_class: { label: "课后复盘", cls: "phase-review", chipOrder: ["reflect", "follow-up", "read-map", "switch-basemap", "lesson-design"] }
 };
 
 // Map the routed intent to a short badge so the teacher can see how the agent
@@ -83,6 +88,7 @@ const INTENT_BADGES: Record<string, { label: string; cls: string }> = {
   teaching_question: { label: "追问", cls: "intent-question" },
   teaching_action: { label: "操作", cls: "intent-action" },
   teaching_reflect: { label: "复盘", cls: "intent-reflect" },
+  teaching_prepare: { label: "教案", cls: "intent-explain" },
   knowledge: { label: "知识", cls: "intent-knowledge" },
   tool: { label: "操作", cls: "intent-action" },
   hybrid: { label: "操作", cls: "intent-action" }
@@ -389,11 +395,6 @@ export function CopilotWidget({
   const voiceTranscriptRef = useRef("");
   const voiceErrorRef = useRef(false);
 
-  useEffect(() => {
-    if (openSignal > 0) {
-      setMinimized(false);
-    }
-  }, [openSignal]);
   const dragStateRef = useRef<
     | {
         kind: "orb" | "panel" | "resize";

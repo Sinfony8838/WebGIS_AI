@@ -685,6 +685,71 @@ export type LessonStage = {
   brainstorm?: LessonBrainstorm;
   evidence_refs?: LessonEvidenceRef[];
   teacher_guidance?: LessonTeacherGuidance;
+  knowledge_unit?: string;
+  knowledge_point?: string;
+  content?: string;
+  activities?: string[];
+  design_intent?: string;
+  system_steps?: string[];
+};
+
+export type LessonPlanProfile = {
+  title?: string;
+  subject?: string;
+  grade?: string;
+  duration_minutes?: number;
+  topic?: string;
+  requirements?: Record<string, unknown>;
+  curriculum_interpretation?: string;
+  student_analysis?: string;
+  textbook_analysis?: string;
+  objectives?: string[];
+  key_difficulties?: { key?: string[]; difficult?: string[] };
+  methods?: string[];
+  knowledge_structure?: string[];
+  stages?: LessonStage[];
+  capabilities?: Array<{ id: string; label?: string; reason?: string; available?: boolean }>;
+  references?: Array<{ id?: string; title?: string; year?: string; url?: string } | string>;
+  reflection?: string;
+};
+
+export type LessonDesignSession = {
+  design_id: string;
+  project_id: string;
+  owner_user_id: string;
+  base_lesson_id: string;
+  current_step: string;
+  requirements: Record<string, unknown>;
+  draft: LessonPlanProfile;
+  base_draft: LessonPlanProfile;
+  diff_summary: Array<{ section: string; label: string; changed: boolean }>;
+  section_status: Record<string, string>;
+  source_refs: Array<Record<string, unknown>>;
+  capability_bindings: Array<{ id: string; label?: string; reason?: string }>;
+  turns: Array<{ revision: number; step: string; message: string; reply: string }>;
+  status: string;
+  revision: number;
+  final_lesson_id: string;
+  pending_next_step: string;
+  created_at: string;
+  updated_at: string;
+  capabilities?: Array<{ id: string; label?: string; kind?: string; available?: boolean }>;
+};
+
+export type LessonDesignTurnResult = {
+  status: string;
+  assistant_message: string;
+  next_step: string;
+  step_label: string;
+  draft: LessonPlanProfile;
+  section_status: Record<string, string>;
+  source_refs: Array<Record<string, unknown>>;
+  capability_bindings: Array<{ id: string; label?: string; reason?: string }>;
+  revision: number;
+  suggestions: string[];
+  diff_summary?: Array<{ section: string; label: string; changed: boolean }>;
+  review_sections?: string[];
+  rehearsal_report?: Record<string, unknown>;
 };
 
 export type LessonRecord = {
@@ -696,6 +761,7 @@ export type LessonRecord = {
   stages: LessonStage[];
   source: string;
   metadata: Record<string, unknown>;
+  plan?: LessonPlanProfile;
   created_at: string;
   updated_at: string;
 };

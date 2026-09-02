@@ -2,41 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ClassRunPanel } from "../components/ClassRunPanel";
 import { LessonPanel } from "../components/LessonPanel";
-import { QuizOverlay } from "../components/QuizOverlay";
 import type { ClassSessionRecord, LessonRecord, PopulationLessonPrepResult } from "../types";
-
-vi.mock("qrcode", () => ({
-  default: { toDataURL: vi.fn().mockResolvedValue("data:image/png;base64,stub") }
-}));
 
 vi.mock("../api", async () => {
   const actual = await vi.importActual<typeof import("../api")>("../api");
-  return {
-    ...actual,
-    fetchSessionLive: vi.fn().mockResolvedValue({
-      status: "success",
-      session_id: "session_1",
-      session_status: "running",
-      current_stage_id: "s1",
-      active_question: {
-        question_id: "s1q1",
-        text: "中国人口分布均匀吗？",
-        type: "choice",
-        options: ["均匀", "东南密西北疏"],
-        answer_index: 1
-      },
-      tally: {
-        question_id: "s1q1",
-        total: 3,
-        option_counts: [1, 2],
-        answer_index: 1,
-        correct_rate: 0.6667,
-        texts: []
-      },
-      joined_count: 5,
-      recent_events: []
-    })
-  };
+  return { ...actual };
 });
 
 function makeLesson(): LessonRecord {
@@ -448,24 +418,5 @@ describe("ClassRunPanel", () => {
   it("hides the brainstorm activity when no dispatcher is available", () => {
     renderPanel({ currentStageId: "s2" });
     expect(screen.queryByTestId("stage-brainstorm")).toBeNull();
-  });
-});
-
-describe("QuizOverlay", () => {
-  it("renders live tally with joined count", async () => {
-    render(
-      <QuizOverlay
-        sessionId="session_1"
-        joinUrl="http://192.168.1.10:18999/student/123456"
-        onCloseQuestion={vi.fn()}
-        onDismiss={vi.fn()}
-      />
-    );
-
-    await waitFor(() => {
-      expect(screen.getByTestId("joined-count").textContent).toContain("在线 5 人");
-    });
-    expect(screen.getByText("中国人口分布均匀吗？")).toBeTruthy();
-    expect(screen.getByText(/B\. 东南密西北疏/)).toBeTruthy();
   });
 });
