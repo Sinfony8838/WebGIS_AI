@@ -965,6 +965,13 @@ class KnowledgeEngine:
         if vision_summary:
             cleaned = self._sanitize_image_answer_coordinates(cleaned, question)
             cleaned = self._ensure_population_legend_statement(cleaned, question, vision_summary)
+        if phase == "post_class" and session_digest:
+            try:
+                digest = json.loads(session_digest)
+            except (TypeError, json.JSONDecodeError):
+                digest = {}
+            if isinstance(digest, dict) and digest.get("response_data_collected") is False:
+                cleaned = self._render_teacher_only_reflection(digest)
 
         # If the model still returned JSON despite the prompt, extract text from it
         if cleaned.startswith("{"):
@@ -983,6 +990,44 @@ class KnowledgeEngine:
             "mechanism_explanation": "",
             "teaching_points": [],
         }
+
+    @staticmethod
+    def _render_teacher_only_reflection(digest: Dict[str, Any]) -> str:
+        """Render a post-class summary without inferring uncollected student data."""
+        observations = digest.get("observations") if isinstance(digest.get("observations"), dict) else {}
+        verdicts = observations.get("verdict_counts") if isinstance(observations.get("verdict_counts"), dict) else {}
+        questions = [item for item in list(digest.get("questions") or []) if isinstance(item, dict)]
+        stages = [item for item in list(digest.get("stages") or []) if isinstance(item, dict)]
+        total = int(observations.get("total") or 0)
+        parts = [
+            "本次未采集学生端作答数据，因此不能据此判断正确率、最易错题或全班掌握程度。",
+            (
+                f"系统现有证据为：教师口头呈现 {len(questions)} 个问题，记录教师观察 {total} 条"
+                f"（答对 {int(verdicts.get('correct') or 0)}、部分 {int(verdicts.get('partial') or 0)}、"
+                f"误区 {int(verdicts.get('misconception') or 0)}），保存课堂截图 {int(digest.get('snapshot_count') or 0)} 张。"
+            ),
+        ]
+        tags = [
+            item
+            for item in list(observations.get("misconception_tags") or [])
+            if isinstance(item, (list, tuple)) and len(item) >= 2
+        ]
+        if tags:
+            parts.append("教师明确记录的误区标签为：" + "、".join(f"{item[0]} {item[1]} 次" for item in tags[:3]) + "。")
+        overtime = []
+        for item in stages:
+            try:
+                actual = float(item.get("actual_minutes") or 0)
+                planned = float(item.get("planned_minutes") or 0)
+            except (TypeError, ValueError):
+                continue
+            if planned > 0 and actual > planned * 1.3:
+                overtime.append(str(item.get("title") or item.get("stage_id") or "未命名环节"))
+        if overtime:
+            parts.append("按系统计时，超出计划的环节有：" + "、".join(overtime[:2]) + "；请结合是否存在暂停或演示等待再判断是否调整教案。")
+        else:
+            parts.append("下一步建议依据教师观察设计一题同类复测；如需判断班级掌握度，应在下次课采集学生端作答或补充有内容的观察备注。")
+        return "\n\n".join(parts)
 
     @staticmethod
     def _parse_plain_answer(text: str) -> Dict[str, Any]:
@@ -2377,7 +2422,8 @@ class AssistantSessionEngine:
                         "text": str(item.get("text") or "")[:60],
                         "type": item.get("type"),
                         "stage_id": item.get("stage_id"),
-                        "total": item.get("total"),
+                        "collection_mode": item.get("collection_mode"),
+                        "response_count": item.get("response_count"),
                         "correct_rate": item.get("correct_rate"),
                         "option_counts": item.get("option_counts"),
                     }
@@ -2398,6 +2444,7 @@ class AssistantSessionEngine:
                 "lesson_title": statistics.get("lesson_title"),
                 "duration_minutes": statistics.get("duration_minutes"),
                 "participant_count": statistics.get("participant_count"),
+                "response_data_collected": bool(statistics.get("response_data_collected")),
                 "observations": statistics.get("observations"),
                 "assistant_exchange_count": statistics.get("assistant_exchange_count"),
                 "snapshot_count": statistics.get("snapshot_count"),

@@ -64,6 +64,17 @@ vi.mock("../api", () => ({
         event_count: 4
       },
       diagnosis: { text: "### 学情诊断\n仅依据教师观察。", generator: "rules" },
+      practice_recommendations: [
+        {
+          practice_id: "population_metric_check",
+          level: "基础必做",
+          title: "人口总量与人口密度辨析",
+          suggested_minutes: 6,
+          prompt: "计算两地人口密度并解释差异。",
+          answer_points: ["人口密度需同时考虑人口与面积"],
+          evidence_basis: "教师记录到一次部分正确，安排核心目标复测。"
+        }
+      ],
       report_url: ""
     }
   })
@@ -86,6 +97,10 @@ describe("ReportPanel", () => {
     await waitFor(() => expect(screen.getByText("未采集")).toBeTruthy());
     expect(screen.getByText("学生端作答")).toBeTruthy();
     expect(screen.getByText(/教师口头呈现 · 表现见教师观察/)).toBeTruthy();
+    expect(screen.getByText(/规则生成 · 证据保护/)).toBeTruthy();
+    expect(screen.getByText("课后推荐练习巩固")).toBeTruthy();
+    expect(screen.getByText(/人口总量与人口密度辨析/)).toBeTruthy();
+    expect(screen.getByText(/不计入40分钟课时/)).toBeTruthy();
     expect(screen.queryByText(/正确率/)).toBeNull();
   });
 });

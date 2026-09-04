@@ -188,7 +188,8 @@ class ClassSessionTest(unittest.TestCase):
         lesson = store.get_lesson(session.lesson_id)
         statistics = runtime.classroom.report_service.build_statistics(session, lesson)
         diagnosis = runtime.classroom.report_service.compose_diagnosis(statistics)
-        markdown = runtime.classroom.report_service.render_markdown(statistics, diagnosis)
+        practice = runtime.classroom.report_service.build_practice_recommendations(statistics, lesson)
+        markdown = runtime.classroom.report_service.render_markdown(statistics, diagnosis, practice)
 
         self.assertFalse(statistics["response_data_collected"])
         self.assertEqual(statistics["participant_count"], 0)
@@ -197,6 +198,42 @@ class ClassSessionTest(unittest.TestCase):
         self.assertIn("学生端作答数据：未采集", markdown)
         self.assertIn("教师口头呈现", markdown)
         self.assertIn("未采集学生端作答数据", diagnosis["text"])
+        self.assertEqual(len(practice), 3)
+        self.assertEqual(practice[0]["title"], "人口总量与人口密度辨析")
+        self.assertIn("没有足够证据判定全班共性误区", practice[0]["evidence_basis"])
+        self.assertIn("课后推荐练习巩固", markdown)
+        self.assertIn("不计入40分钟正式课时", markdown)
+
+    def test_teacher_only_report_never_uses_llm_to_infer_student_performance(self) -> None:
+        class HallucinatingClient:
+            def chat_completion(self, *_args, **_kwargs):
+                return "学生错误率达到 80%，并且普遍误解了胡焕庸线。"
+
+        runtime, store, project_id = self.build_runtime()
+        runtime.classroom.report_service.minimax_client = HallucinatingClient()
+        session_id = self.start_session(runtime, project_id)["session"]["session_id"]
+        runtime.classroom.enter_session_stage(session_id, "s1")
+        runtime.classroom.launch_session_question(
+            session_id,
+            stage_id="s1",
+            question_id="s1q1",
+            delivery="teacher_oral",
+        )
+        runtime.classroom.add_session_observation(
+            session_id,
+            {"stage_id": "s1", "question_id": "s1q1", "verdict": "partial", "tag": "", "note": ""},
+        )
+        runtime.classroom.end_class_session(session_id)
+
+        session = store.get_class_session(session_id)
+        lesson = store.get_lesson(session.lesson_id)
+        statistics = runtime.classroom.report_service.build_statistics(session, lesson)
+        diagnosis = runtime.classroom.report_service.compose_diagnosis(statistics)
+
+        self.assertEqual(diagnosis["generator"], "rules")
+        self.assertIn("未采集学生端作答数据", diagnosis["text"])
+        self.assertNotIn("80%", diagnosis["text"])
+        self.assertNotIn("普遍误解", diagnosis["text"])
 
     def test_default_anonymous_nickname_is_not_counted_as_a_participant(self) -> None:
         runtime, store, project_id = self.build_runtime()
@@ -246,6 +283,7 @@ class ClassSessionTest(unittest.TestCase):
         # 无 LLM 环境走规则诊断
         self.assertEqual(job["result"]["diagnosis"]["generator"], "rules")
         self.assertIn("学情诊断", job["result"]["diagnosis"]["text"])
+        self.assertEqual(len(job["result"]["practice_recommendations"]), 3)
 
         report_artifacts = [item for item in store.list_outputs(project_id) if item["artifact_type"] == "class_report"]
         self.assertEqual(len(report_artifacts), 1)
@@ -254,6 +292,7 @@ class ClassSessionTest(unittest.TestCase):
         content = report_path.read_text(encoding="utf-8")
         self.assertIn("课堂报告", content)
         self.assertIn("只见城市不见格局", content)
+        self.assertIn("课后推荐练习巩固", content)
 
 
 if __name__ == "__main__":

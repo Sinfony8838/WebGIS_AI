@@ -948,9 +948,20 @@ export type SessionReportStatistics = {
   event_count: number;
 };
 
+export type ReportPracticeRecommendation = {
+  practice_id: string;
+  level: string;
+  title: string;
+  suggested_minutes: number;
+  prompt: string;
+  answer_points: string[];
+  evidence_basis: string;
+};
+
 export type SessionReportResult = {
   statistics: SessionReportStatistics;
   diagnosis: { text: string; generator: string };
+  practice_recommendations: ReportPracticeRecommendation[];
   report_url: string;
 };
 

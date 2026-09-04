@@ -43,8 +43,13 @@ _merge_backup_*/
 
 # --- Private / out-of-band assets ---
 docs/
+!docs/
+docs/*
+!docs/人口分布_40分钟全流程产品演示脚本_0902.md
 TEACHING_AGENT_CLAUDE_HANDOFF.md
 专业教学智能体_最终调研与落地报告.md
+Agent设计/
+人口专题题库/
 人口地图/
 人口课程数据/
 人口分布_WebGIS-AI_40分钟融合教案.md

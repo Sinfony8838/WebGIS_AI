@@ -258,6 +258,12 @@ class TeachingContextIntegrationTest(unittest.TestCase):
         user_content = fake_llm.calls[-1][-1]["content"]
         self.assertIn("课堂真实记录", user_content)
         self.assertIn("混淆数量与密度", user_content)
+        self.assertIn('"response_data_collected": false', user_content)
+
+        public_answer = job["result"]["assistant_message"]
+        self.assertIn("未采集学生端作答数据", public_answer)
+        self.assertIn("误区 1", public_answer)
+        self.assertNotIn("整体表现稳定", public_answer)
 
     # ------------------------------------------------------------------
     # P1-3: record_observation tool

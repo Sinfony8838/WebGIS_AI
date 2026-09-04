@@ -38,6 +38,10 @@ class LessonServiceTest(unittest.TestCase):
         self.assertIsNotNone(lesson)
         self.assertEqual(lesson.source, "builtin")
         self.assertGreaterEqual(len(lesson.stages), 8)
+        self.assertEqual(sum(int(stage.get("minutes") or 0) for stage in lesson.stages), 40)
+        self.assertEqual(lesson.find_stage("s7")["title"], "当堂复盘：证据链定格")
+        self.assertEqual(lesson.find_stage("s8")["title"], "当堂巩固：四步法检测")
+        self.assertEqual(lesson.metadata.get("builtin_version"), "7")
         listing = runtime.classroom.list_lessons()
         self.assertTrue(any(item["lesson_id"] == BUILTIN_LESSON_ID for item in listing["items"]))
 

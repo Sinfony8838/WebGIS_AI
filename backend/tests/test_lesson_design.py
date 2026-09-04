@@ -63,6 +63,54 @@ class LessonDesignServiceTest(unittest.TestCase):
         self.assertIsNotNone(restored)
         self.assertEqual(restored.draft["topic"], "胡焕庸线")
 
+    def test_natural_requirement_sentence_keeps_short_book_title(self) -> None:
+        design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
+        message = (
+            "高一必修二《人口分布》，单课时40分钟。学生已经学过人口密度，但容易把人口总量、"
+            "人口密度和实时人口混为一谈。请围绕胡焕庸线安排Top20数据探究和课后复盘。"
+        )
+        result = self.runtime.classroom.turn_lesson_design(design["design_id"], message, 0)
+        self.assertEqual(result["draft"]["title"], "人口分布")
+        self.assertEqual(result["draft"]["topic"], "人口分布")
+        self.assertEqual(result["draft"]["grade"], "高一")
+        self.assertEqual(result["draft"]["duration_minutes"], 40)
+        self.assertEqual(result["draft"]["requirements"]["raw"], message)
+        self.assertNotIn("学生已经学过", result["draft"]["title"])
+
+    def test_rehearsal_blocks_a_plan_that_does_not_fill_the_declared_class_time(self) -> None:
+        design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
+        record = self.store.get_lesson_design(design["design_id"])
+        record.draft.update({
+            "title": "人口分布",
+            "grade": "高一",
+            "duration_minutes": 40,
+            "objectives": ["描述人口分布规律"],
+            "stages": [
+                {
+                    "stage_id": "s1", "title": "导入", "minutes": 8,
+                    "content": "观察人口分布图", "design_intent": "发现空间差异",
+                    "questions": [{"text": "人口主要分布在哪里？"}],
+                },
+                {
+                    "stage_id": "s2", "title": "探究", "minutes": 18,
+                    "content": "分析胡焕庸线", "design_intent": "解释空间格局",
+                    "questions": [{"text": "界线两侧为何差异明显？"}],
+                },
+                {
+                    "stage_id": "s3", "title": "复盘", "minutes": 13,
+                    "content": "完成证据链", "design_intent": "当堂检测目标",
+                    "questions": [{"text": "如何用证据说明人口分布规律？"}],
+                },
+            ],
+        })
+        self.store.upsert_lesson_design(record)
+
+        report = self.runtime.classroom.lesson_design.rehearse(design["design_id"])
+
+        self.assertFalse(report["ready"])
+        self.assertEqual(report["total_minutes"], 39)
+        self.assertTrue(any("与课堂时长 40 分钟不一致" in item for item in report["errors"]))
+
     def test_direct_edit_revision_conflict_and_confirmed_section_stability(self) -> None:
         design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
         design_id = design["design_id"]

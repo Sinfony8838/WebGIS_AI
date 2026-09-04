@@ -220,6 +220,11 @@ class ReportService:
     # ------------------------------------------------------------------
 
     def compose_diagnosis(self, statistics: Dict[str, Any]) -> Dict[str, Any]:
+        # Teacher-only sessions intentionally do not contain student answers.
+        # A model completion cannot add evidence here, but it can accidentally
+        # turn lesson content into invented claims about student performance.
+        if not statistics.get("response_data_collected"):
+            return {"text": self._diagnose_with_rules(statistics), "generator": "rules"}
         if self.minimax_client is not None:
             try:
                 text = self._diagnose_with_llm(statistics)
@@ -228,6 +233,98 @@ class ReportService:
             except Exception:
                 pass
         return {"text": self._diagnose_with_rules(statistics), "generator": "rules"}
+
+    def build_practice_recommendations(
+        self, statistics: Dict[str, Any], lesson: Optional[LessonRecord]
+    ) -> List[Dict[str, Any]]:
+        """Build evidence-bounded after-class practice, separate from the 40-minute lesson."""
+        del lesson  # The current population pack is keyed by the persisted lesson title.
+        title = str(statistics.get("lesson_title") or "")
+        observations = statistics.get("observations") if isinstance(statistics.get("observations"), dict) else {}
+        verdicts = observations.get("verdict_counts") if isinstance(observations.get("verdict_counts"), dict) else {}
+        tags = [
+            item
+            for item in list(observations.get("misconception_tags") or [])
+            if isinstance(item, (list, tuple)) and len(item) >= 2
+        ]
+        rated = [
+            item
+            for item in list(statistics.get("questions") or [])
+            if isinstance(item, dict) and item.get("correct_rate") is not None
+        ]
+        if statistics.get("response_data_collected") and rated:
+            weakest = min(rated, key=lambda item: float(item.get("correct_rate") or 0))
+            evidence_basis = (
+                f"学生端已采集作答；最低正确率题为“{weakest.get('text', '')}”"
+                f"（{float(weakest.get('correct_rate') or 0):.0%}），优先安排同类变式。"
+            )
+        elif tags:
+            evidence_basis = f"教师明确记录的首要误区为“{tags[0][0]}”（{tags[0][1]}次），练习优先针对该误区。"
+        elif int(verdicts.get("partial") or 0) > 0:
+            evidence_basis = (
+                f"学生端作答未采集；教师记录到部分正确 {int(verdicts.get('partial') or 0)} 次，"
+                "但没有足够证据判定全班共性误区，因此安排核心目标复测。"
+            )
+        else:
+            evidence_basis = "未取得足够学生作答或明确误区证据，以下为依据本课核心目标生成的通用巩固题，不代表学情诊断。"
+
+        if "人口" in title:
+            return [
+                {
+                    "practice_id": "population_metric_check",
+                    "level": "基础必做",
+                    "title": "人口总量与人口密度辨析",
+                    "suggested_minutes": 6,
+                    "prompt": "甲地人口500万、面积50万平方千米；乙地人口300万、面积10万平方千米。计算两地人口密度，并解释为什么人口总量较大的地区不一定更稠密。",
+                    "answer_points": ["甲地10人/平方千米", "乙地30人/平方千米", "人口密度需同时考虑人口与面积"],
+                    "evidence_basis": evidence_basis,
+                },
+                {
+                    "practice_id": "population_evidence_chain",
+                    "level": "核心必做",
+                    "title": "胡焕庸线地图证据链",
+                    "suggested_minutes": 8,
+                    "prompt": "依据本节人口密度图、胡焕庸线和至少两类影响因素图层，用80—120字完成“指标与尺度—总体格局—分界与例外—自然和人文成因”的四步表达。",
+                    "answer_points": ["明确指标、年份或尺度", "描述东南稠密和西北稀疏", "说明胡焕庸线不是绝对边界", "至少形成一条因素—证据—机制链"],
+                    "evidence_basis": "对应40分钟课堂中Top20、胡焕庸线和影响因素探究的核心目标；用于检查学生能否把观察组织成规范论证。",
+                },
+                {
+                    "practice_id": "population_scale_transfer",
+                    "level": "迁移选做",
+                    "title": "上海城市内部尺度迁移",
+                    "suggested_minutes": 6,
+                    "prompt": "比较上海中心城区与崇明的人口密度差异，指出城市内部尺度下更重要的两项影响因素，并说明为什么不能主要用全国尺度的气候差异解释。",
+                    "answer_points": ["中心城区密度较高、生态与外围空间较低", "城市功能、交通、土地利用、公共服务或规划", "尺度改变后主导因素会变化"],
+                    "evidence_basis": "对应课堂上海区县尺度迁移环节；作为选做题检验方法迁移，不计入40分钟课堂时间。",
+                },
+            ]
+
+        questions = [item for item in list(statistics.get("questions") or []) if isinstance(item, dict)]
+        seed_question = (
+            str(questions[0].get("text") or "概括本课核心概念并说明依据")
+            if questions
+            else "概括本课核心概念并说明依据"
+        )
+        return [
+            {
+                "practice_id": "core_recheck",
+                "level": "基础必做",
+                "title": "核心目标复测",
+                "suggested_minutes": 6,
+                "prompt": seed_question,
+                "answer_points": ["写出明确结论", "引用本课材料或地图证据"],
+                "evidence_basis": evidence_basis,
+            },
+            {
+                "practice_id": "transfer_task",
+                "level": "迁移选做",
+                "title": "新情境迁移",
+                "suggested_minutes": 8,
+                "prompt": "选择一个新的区域或材料，沿用本课的观察、比较和解释方法完成一段证据论证。",
+                "answer_points": ["说明情境或尺度", "引用证据", "解释形成机制"],
+                "evidence_basis": "依据本课教学目标生成的迁移任务，不代表未采集的学生表现。",
+            },
+        ]
 
     def _diagnose_with_llm(self, statistics: Dict[str, Any]) -> str:
         if self.minimax_client is None:
@@ -301,7 +398,10 @@ class ReportService:
         ]
         if overtime:
             names = "、".join(str(item.get("title") or item.get("stage_id")) for item in overtime[:2])
-            lines.append(f"环节“{names}”明显超时，建议压缩讲解或将部分任务前置为课前预习。")
+            lines.append(
+                f"系统计时显示环节“{names}”明显超时；请先核对是否存在暂停或演示等待，"
+                "确认属于真实课堂节奏后，再压缩讲解或将部分任务前置为课前预习。"
+            )
         if tags:
             lines.append(f"建议围绕“{tags[0][0]}”设计一道对比辨析题，在下节课导入环节即时检测。")
         if not overtime and not tags:
@@ -312,7 +412,12 @@ class ReportService:
     # Markdown rendering
     # ------------------------------------------------------------------
 
-    def render_markdown(self, statistics: Dict[str, Any], diagnosis: Dict[str, Any]) -> str:
+    def render_markdown(
+        self,
+        statistics: Dict[str, Any],
+        diagnosis: Dict[str, Any],
+        practice_recommendations: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
         lines: List[str] = [
             f"# 课堂报告：{statistics.get('lesson_title', '')}",
             "",
@@ -372,6 +477,19 @@ class ReportService:
             lines.append(f"- [{VERDICT_LABELS.get(note.get('verdict', ''), '记录')}] {note.get('note', '')}")
 
         lines.extend(["", "## 学情诊断与建议", "", diagnosis.get("text", ""), ""])
-        generator = "AI 生成（MiniMax）" if diagnosis.get("generator") == "minimax" else "规则生成（离线兜底）"
+        generator = "AI 生成（MiniMax）" if diagnosis.get("generator") == "minimax" else "规则生成（证据保护）"
         lines.append(f"> 诊断内容来源：{generator}")
+        lines.extend(["", "## 课后推荐练习巩固", "", "以下练习在课堂结束后使用，不计入40分钟正式课时。", ""])
+        for index, item in enumerate(practice_recommendations or [], start=1):
+            lines.extend(
+                [
+                    f"### {index}. [{item.get('level', '')}] {item.get('title', '')}（建议 {item.get('suggested_minutes', '—')} 分钟）",
+                    "",
+                    str(item.get("prompt") or ""),
+                    "",
+                    "- 答案要点：" + "；".join(str(point) for point in item.get("answer_points") or []),
+                    "- 推荐依据：" + str(item.get("evidence_basis") or ""),
+                    "",
+                ]
+            )
         return "\n".join(lines)

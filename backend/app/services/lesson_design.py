@@ -171,6 +171,8 @@ class LessonDesignService:
             current_step = STEP_KEYS[max(0, current_index - 1)]
             design.current_step = current_step
         result = self._ask_minimax(design, current_step, message) or self._fallback_turn(design, current_step, message)
+        if current_step == "requirements":
+            result = self._normalize_requirements_result(result, message, design.draft)
         patch = result.get("section_patch") if isinstance(result, dict) else {}
         patch = patch if isinstance(patch, dict) else {}
         # 已确认章节默认是稳定约束；只有教师明确提出修改/返回时才重新打开。
@@ -342,8 +344,11 @@ class LessonDesignService:
                 if unknown_themes:
                     errors.append(f"环节“{stage.get('title') or index}”引用了不可用三维主题：{'、'.join(map(str, unknown_themes))}。")
         duration = int(draft.get("duration_minutes") or 0)
-        if duration and total and abs(total - duration) > 5:
-            warnings.append(f"各环节合计 {total} 分钟，与预设 {duration} 分钟有差异。")
+        if duration > 0 and total != duration:
+            errors.append(
+                f"各环节合计 {total} 分钟，与课堂时长 {duration} 分钟不一致；"
+                "请先调整环节时长，再定稿。"
+            )
         if not design.source_refs:
             warnings.append("目前没有引用资料；如需课标或年份核验，请在下一轮明确提出。")
         for source in design.source_refs:
@@ -459,8 +464,7 @@ class LessonDesignService:
         if step == "requirements":
             duration_match = re.search(r"(\d+)\s*分钟", clean)
             grade_match = re.search(r"(高[一二三]|初[一二三]|七年级|八年级|九年级)", clean)
-            topic = re.sub(r"(高[一二三]|初[一二三]|七年级|八年级|九年级|\d+\s*分钟)", "", clean).strip(" ，,。、")
-            topic = topic.replace("我想上", "").replace("请设计", "").replace("共创", "").strip(" ，,。")
+            topic = self._extract_topic(clean) or str(draft.get("topic") or draft.get("title") or "人口地理专题课")
             patch = {"title": topic or draft.get("title") or "人口地理专题课", "topic": topic or draft.get("topic") or "人口地理", "grade": grade_match.group(1) if grade_match else draft.get("grade") or "", "duration_minutes": int(duration_match.group(1)) if duration_match else int(draft.get("duration_minutes") or 40), "requirements": {"raw": clean}}
             reply = f"我理解你想做一节“{patch['title']}”。目前先按 {patch['duration_minutes']} 分钟、{patch['grade'] or '年级待定'}来搭框架。接下来我们先确认学生最需要带走的核心认识，可以吗？"
             next_step = "analysis"
@@ -492,6 +496,59 @@ class LessonDesignService:
         else:
             patch, next_step, reply = {}, "confirmation", "如果内容已经符合你的课堂设想，可以确认保存；若要调整，直接告诉我具体章节或环节。"
         return {"reply": reply, "section_patch": patch, "next_step": next_step, "source_refs": [], "capability_bindings": patch.get("capabilities", []), "suggestions": []}
+
+    @staticmethod
+    def _extract_topic(message: str) -> str:
+        """Extract a short lesson topic from a natural multi-part requirement."""
+        clean = str(message or "").strip()
+        book_title = re.search(r"《\s*([^》\r\n]{1,80}?)\s*》", clean)
+        if book_title:
+            return book_title.group(1).strip()
+        explicit = re.search(
+            r"(?:课题|标题)\s*(?:改为|调整为|改成|为|是)?\s*[:：]?\s*[\"“]?([^，,。；;\n”\"]{1,80})",
+            clean,
+        )
+        if explicit:
+            return explicit.group(1).strip()
+        simplified = re.sub(r"(高[一二三]|初[一二三]|七年级|八年级|九年级|\d+\s*分钟|单课时)", "", clean)
+        simplified = simplified.replace("我想上", "").replace("请设计", "").replace("共创", "")
+        parts = [item.strip(" ：:，,。、") for item in re.split(r"[，,。；;\n、]", simplified)]
+        parts = [item for item in parts if item and len(item) <= 40]
+        return parts[0] if parts else simplified.strip(" ：:，,。、")[:80]
+
+    @classmethod
+    def _normalize_requirements_result(
+        cls, result: Dict[str, Any], message: str, draft: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Keep model output usable when one sentence contains topic plus constraints."""
+        normalized = copy.deepcopy(result) if isinstance(result, dict) else {}
+        patch = normalized.get("section_patch")
+        patch = patch if isinstance(patch, dict) else {}
+        topic = cls._extract_topic(message)
+        duration_match = re.search(r"(\d+)\s*分钟", message)
+        grade_match = re.search(r"(高[一二三]|初[一二三]|七年级|八年级|九年级)", message)
+        original_title = str(patch.get("title") or patch.get("topic") or "").strip()
+        if topic:
+            patch["title"] = topic
+            patch["topic"] = topic
+        if duration_match:
+            patch["duration_minutes"] = int(duration_match.group(1))
+        if grade_match:
+            patch["grade"] = grade_match.group(1)
+        requirements = patch.get("requirements")
+        if not isinstance(requirements, dict):
+            requirements = {}
+        requirements["raw"] = str(message or "").strip()
+        patch["requirements"] = requirements
+        normalized["section_patch"] = patch
+        if topic and (len(original_title) > 60 or topic not in original_title):
+            grade = str(patch.get("grade") or draft.get("grade") or "年级待定")
+            duration = int(patch.get("duration_minutes") or draft.get("duration_minutes") or 40)
+            normalized["reply"] = (
+                f"我已记录：{grade}《{topic}》，{duration} 分钟；其余内容作为学情、证据主线和课堂任务要求保存。"
+                "下一步我们确认课标与学情分析，可以吗？"
+            )
+        return normalized
 
     @staticmethod
     def _make_stages(topic: str, duration: int) -> List[Dict[str, Any]]:

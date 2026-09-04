@@ -63,6 +63,7 @@ export function ReportPanel({ projectId, onClose }: Props) {
           setReport({
             statistics: result.statistics,
             diagnosis: result.diagnosis,
+            practice_recommendations: result.practice_recommendations || [],
             report_url: result.report_url || ""
           });
           setGenerating(false);
@@ -81,6 +82,7 @@ export function ReportPanel({ projectId, onClose }: Props) {
   }
 
   const statistics: SessionReportStatistics | null = report?.statistics || null;
+  const practiceRecommendations = report?.practice_recommendations || [];
 
   return (
     <section className="report-panel glass-panel" data-testid="report-panel">
@@ -244,7 +246,7 @@ export function ReportPanel({ projectId, onClose }: Props) {
           <h3>
             学情诊断与建议
             <em className="diagnosis-source">
-              {report?.diagnosis.generator === "minimax" ? "（AI 生成）" : "（规则生成 · 离线兜底）"}
+              {report?.diagnosis.generator === "minimax" ? "（AI 生成）" : "（规则生成 · 证据保护）"}
             </em>
           </h3>
           <div className="report-diagnosis" data-testid="report-diagnosis">
@@ -255,6 +257,26 @@ export function ReportPanel({ projectId, onClose }: Props) {
                 <p key={lineIndex}>{line}</p>
               ) : null
             )}
+          </div>
+
+          <h3>
+            课后推荐练习巩固
+            <em className="diagnosis-source">（课堂结束后 · 不计入40分钟课时）</em>
+          </h3>
+          <div className="report-practice-list" data-testid="report-practice-list">
+            {practiceRecommendations.map((item) => (
+              <article key={item.practice_id} className="report-question">
+                <p className="report-question-text">
+                  [{item.level}] {item.title} · 建议 {item.suggested_minutes} 分钟
+                </p>
+                <p>{item.prompt}</p>
+                <p className="report-note">答案要点：{item.answer_points.join("；")}</p>
+                <p className="report-note">推荐依据：{item.evidence_basis}</p>
+              </article>
+            ))}
+            {!practiceRecommendations.length ? (
+              <p className="lesson-empty">当前课堂记录尚未生成推荐练习。</p>
+            ) : null}
           </div>
         </div>
       ) : null}
