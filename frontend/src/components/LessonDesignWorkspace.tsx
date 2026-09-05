@@ -394,7 +394,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
   }
 
   const viewSections = STEP_SECTION_KEYS[viewStep] || [];
-  const stages = draft.stages || [];
+  const stages = stageList(draft);
 
   return (
     <section className="ldw-backdrop" data-testid="lesson-design-workspace">
@@ -649,7 +649,7 @@ function SectionBody({
   if (sectionId === "stages") {
     return (
       <div className="ldw-stages" data-testid="ldw-stages">
-        {(draft.stages || []).map((stage, index) => (
+        {stageList(draft).map((stage, index) => (
           <div key={stage.stage_id || index} className="ldw-stage">
             <div className="ldw-card-head">
               <strong>
@@ -820,7 +820,7 @@ function serializeSection(sectionId: string, draft: Record<string, unknown> & { 
     case "capabilities":
       return (draft.capabilities || []).map((item: { id: string; reason?: string; label?: string }) => `${item.id}｜${item.reason || item.label || ""}`).join("\n");
     case "stages":
-      return (draft.stages || []).map((stage: LessonStage, index: number) =>
+      return stageList(draft).map((stage: LessonStage, index: number) =>
         [
           `环节${index + 1}｜${stage.title}｜${stage.minutes}分钟`,
           `知识点：${stage.knowledge_point || ""}`,
@@ -876,8 +876,13 @@ function parseSection(sectionId: string, text: string): unknown {
   }
 }
 
+function stageList(draft: { stages?: unknown } | undefined): LessonStage[] {
+  // 历史数据可能存在被写坏的非数组 stages（直接编辑缺陷），渲染层统一容错。
+  return Array.isArray(draft?.stages) ? (draft.stages as LessonStage[]) : [];
+}
+
 function parseStages(text: string, draft: { stages?: Array<Record<string, any>> }): unknown {
-  const previous = draft.stages || [];
+  const previous = Array.isArray(draft.stages) ? draft.stages : [];
   const blocks = text.split(/\r?\n\s*\r?\n/);
   const stages = blocks
     .map((block, index) => {
@@ -903,7 +908,9 @@ function parseStages(text: string, draft: { stages?: Array<Record<string, any>> 
       };
     })
     .filter((stage) => stage.title);
-  return { stages };
+  // 直接编辑走 SECTION 级 resolve：value 必须是 stages 数组本身；
+  // 包一层 {stages:[…]} 会被原样写入 draft.stages 导致白屏（历史缺陷）。
+  return stages;
 }
 
 // ----------------------------------------------------------------------
@@ -985,7 +992,7 @@ function QuestionMatchingCard({
   onBindManual: (stageId: string) => void;
   onBindSearchResult: (stageId: string, questionId: string) => void;
 }) {
-  const stages = design?.draft.stages || [];
+  const stages = stageList(design?.draft || {});
   const [targetStage, setTargetStage] = useState("");
   const activeStage = targetStage && stages.some((stage) => stage.stage_id === targetStage) ? targetStage : stages[0]?.stage_id || "";
   if (!banks.length) {

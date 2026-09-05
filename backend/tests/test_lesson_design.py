@@ -150,6 +150,54 @@ class LessonDesignServiceTest(unittest.TestCase):
         self.assertEqual(result["draft"]["requirements"]["raw"], "高一、45分钟、人口迁移")
         self.assertEqual(result["section_status"]["requirements"], "confirmed")
 
+    def test_direct_edit_stages_stores_array_and_plan_items_stay_renderable(self) -> None:
+        """回归（E2E 验收发现）：直接编辑教学过程必须把数组写入 draft.stages。
+
+        前端曾把 ``{"stages": [...]}`` 包装对象作为 value 提交，SECTION 级
+        resolve edit 会把它原样写入 ``draft.stages``，双端渲染环节列表时
+        ``.map``/``stage.get`` 崩溃（前端白屏、后端 plan_items AttributeError）。
+        """
+        design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
+        design_id = design["design_id"]
+        revision = design["revision"]
+        for message in ("高一、40分钟、人口分布", "课标强调空间分布", "描述规律", "核心问题按建议", "继续设计课堂过程"):
+            _, revision = self.advance(design_id, message, revision)
+        stages_value = [
+            {
+                "stage_id": "s1", "title": "情境导入", "minutes": 10, "material": "人口密度图",
+                "question_chain": ["分布有何差异？"], "teacher_activities": ["引导读图"],
+                "student_activities": ["观察并描述"], "knowledge_conclusion": "分布不均",
+                "design_intent": "从证据进入",
+            },
+            {
+                "stage_id": "s2", "title": "成因探究", "minutes": 20, "material": "地形气候图",
+                "question_chain": ["哪些因素？"], "teacher_activities": ["组织对比"],
+                "student_activities": ["小组归因"], "knowledge_conclusion": "自然加人文",
+                "design_intent": "由描述到解释",
+            },
+            {
+                "stage_id": "s3", "title": "归纳迁移", "minutes": 10, "material": "板书要点",
+                "question_chain": ["如何迁移？"], "teacher_activities": ["收束规律"],
+                "student_activities": ["结论卡片"], "knowledge_conclusion": "方法迁移",
+                "design_intent": "检查目标",
+            },
+        ]
+        result = self.runtime.classroom.resolve_lesson_design(
+            design_id, "stages", "edit", "", revision, stages_value
+        )
+        stored = self.store.get_lesson_design(design_id)
+        self.assertIsInstance(stored.draft["stages"], list)
+        self.assertEqual(
+            [stage["title"] for stage in stored.draft["stages"]],
+            ["情境导入", "成因探究", "归纳迁移"],
+        )
+        # 会话视图（plan_items）必须可渲染，不得再抛 'str' object has no attribute 'get'
+        stored.current_step = "process"  # 教学过程步骤的 plan_items 会逐个映射环节
+        plan_items = self.runtime.classroom.lesson_design.session_view(stored)["plan_items"]
+        stage_items = [item for item in plan_items if item["section_key"] == "stages"]
+        self.assertEqual(len(stage_items[0]["value"]), 3)
+        self.assertEqual(stored.section_status.get("stages"), "proposed")
+
     def test_rehearsal_rejects_unknown_registered_capabilities(self) -> None:
         design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
         with self.assertRaisesRegex(ValueError, "不可用系统能力"):
