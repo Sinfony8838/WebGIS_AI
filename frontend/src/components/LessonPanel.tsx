@@ -38,24 +38,29 @@ type Props = {
 
 function sceneSummary(stage: LessonStage): string {
   const parts: string[] = [];
-  if (stage.scene.basemap_id) {
-    parts.push(`底图 ${stage.scene.basemap_id.replace("amap_", "")}`);
+  // 教案设计/题库流程产出的环节可能没有 scene 对象（后端视为可选）。
+  const scene = stage.scene;
+  if (!scene) {
+    return "尚未绑定场景";
   }
-  if (stage.scene.templates.length) {
-    parts.push(`${stage.scene.templates.length} 个模板`);
+  if (scene.basemap_id) {
+    parts.push(`底图 ${scene.basemap_id.replace("amap_", "")}`);
   }
-  const visible = Object.values(stage.scene.layer_visibility).filter(Boolean).length;
+  if (scene.templates?.length) {
+    parts.push(`${scene.templates.length} 个模板`);
+  }
+  const visible = Object.values(scene.layer_visibility || {}).filter(Boolean).length;
   if (visible) {
     parts.push(`${visible} 个可见图层`);
   }
-  if (stage.scene.annotations.length) {
-    parts.push(`${stage.scene.annotations.length} 处标注`);
+  if (scene.annotations?.length) {
+    parts.push(`${scene.annotations.length} 处标注`);
   }
-  if (stage.scene.visual_query) {
+  if (scene.visual_query) {
     parts.push("指标查询");
   }
-  if (stage.scene.globe?.enabled) {
-    parts.push(`3D ${stage.scene.globe.themes?.length || 0} 个主题`);
+  if (scene.globe?.enabled) {
+    parts.push(`3D ${scene.globe.themes?.length || 0} 个主题`);
   }
   return parts.length ? parts.join(" · ") : "尚未绑定场景";
 }
