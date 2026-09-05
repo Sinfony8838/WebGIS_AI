@@ -6,6 +6,7 @@ import secrets
 import socket
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from ..models import ClassSessionRecord, LessonRecord
@@ -454,18 +455,51 @@ class ClassroomWorkflowRuntime:
             )
         return {"status": "success", "session": session.to_dict(), "student_join_url": self._student_join_url(join_code)}
 
+    def _record_question_closed(self, session: ClassSessionRecord, active: Dict[str, Any]) -> None:
+        """按事实记录 question_closed 事件；是否清理活跃题由调用方决定。"""
+        tally = self._question_tally(session, str(active["question_id"]), active)
+        payload: Dict[str, Any] = {"question_id": active["question_id"], "tally": tally}
+        timer = self._finalize_active_timer(active)
+        if timer:
+            payload.update(
+                {
+                    "revealed": bool(timer.get("revealed")),
+                    "actual_seconds": int(timer.get("actual_seconds") or 0),
+                    "overtime_seconds": int(timer.get("overtime_seconds") or 0),
+                    "source": str(timer.get("question_source") or ""),
+                }
+            )
+        self.store.append_session_event(
+            session.session_id,
+            "question_closed",
+            stage_id=str(active.get("stage_id") or ""),
+            payload=payload,
+        )
+
+    def _session_public_view(self, session: ClassSessionRecord) -> Dict[str, Any]:
+        """会话对外视图：投屏计时改为实时计算值，前端拿到即可直接倒计时。"""
+        data = session.to_dict()
+        active = data.get("active_question")
+        if isinstance(active, dict) and isinstance(active.get("timer"), dict):
+            active["timer"] = self._timer_view(active["timer"])
+        return data
+
     def get_class_session(self, session_id: str) -> Dict[str, Any]:
         session = self._require_session(session_id)
-        return {"status": "success", "session": session.to_dict(), "student_join_url": self._student_join_url(session.join_code)}
+        return {"status": "success", "session": self._session_public_view(session), "student_join_url": self._student_join_url(session.join_code)}
 
     def list_class_sessions(self, lesson_id: Optional[str] = None, project_id: Optional[str] = None) -> Dict[str, Any]:
         sessions = self.store.list_class_sessions(lesson_id=lesson_id, project_id=project_id)
-        return {"status": "success", "items": [session.to_dict() for session in sessions]}
+        return {"status": "success", "items": [self._session_public_view(item) for item in sessions]}
 
     def end_class_session(self, session_id: str) -> Dict[str, Any]:
         session = self._require_session(session_id)
         if session.status == "running":
             with self.store.batch():
+                active = dict(session.active_question or {})
+                if active.get("question_id"):
+                    # 结束课堂时仍有未收的投屏题：按事实收口（未揭示即记录未揭示），保留用时证据。
+                    self._record_question_closed(session, active)
                 self.store.append_session_event(session_id, "session_end")
                 session = self.store.end_class_session(session_id)
                 self.store.add_recent_action(session.project_id, "End class", "Class session ended.", status="success")
@@ -534,6 +568,7 @@ class ClassroomWorkflowRuntime:
             question = {
                 "question_id": f"adhoc_{secrets.token_hex(4)}",
                 "type": "choice" if options else "open",
+                "source": "adhoc",
                 "text": str(adhoc["text"]).strip(),
                 "options": options,
                 "answer_index": adhoc.get("answer_index") if isinstance(adhoc.get("answer_index"), int) else None,
@@ -553,6 +588,10 @@ class ClassroomWorkflowRuntime:
             "launched_at": self._utc_now(),
             "delivery": delivery_mode,
         }
+        if delivery_mode == "student":
+            # 投屏模式：服务端维护作答计时状态，刷新/断线后可恢复；
+            # 答案仍只留在教师可读的 active_question，学生端始终白名单脱敏。
+            active["timer"] = self._init_question_timer(question)
         if delivery_mode == "teacher_oral":
             event = self.store.append_session_event(
                 session_id,
@@ -569,6 +608,10 @@ class ClassroomWorkflowRuntime:
             return {"status": "success", "active_question": {}, "presented_question": active, "event": event}
 
         with self.store.batch():
+            previous = dict(session.active_question or {})
+            if previous.get("question_id") and str(previous["question_id"]) != str(active["question_id"]):
+                # 直接换题投屏：上一题按事实收口（未揭示则记录未揭示），不丢用时证据。
+                self._record_question_closed(session, previous)
             self.store.set_active_question(session_id, active)
             self.store.append_session_event(
                 session_id,
@@ -588,16 +631,285 @@ class ClassroomWorkflowRuntime:
         active = dict(session.active_question or {})
         if not active.get("question_id"):
             return {"status": "success", "active_question": {}}
-        tally = self._question_tally(session, str(active["question_id"]), active)
         with self.store.batch():
+            self._record_question_closed(session, active)
+            self.store.set_active_question(session_id, {})
+        return {"status": "success", "tally": self._question_tally(session, str(active["question_id"]), active)}
+
+    # ------------------------------------------------------------------
+    # 投屏题目计时与揭示
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _init_question_timer(question: Dict[str, Any]) -> Dict[str, Any]:
+        """投屏题目的服务端计时状态：刷新/断线后随 active_question 一并恢复。"""
+        try:
+            suggested = int(question.get("suggested_seconds") or 120)
+        except (TypeError, ValueError):
+            suggested = 120
+        return {
+            "status": "idle",  # idle | running | paused | revealed | closed
+            "suggested_seconds": suggested,
+            "elapsed_seconds": 0,
+            "running_since": "",
+            # 题目来源：question_bank / teacher_manual / adhoc / lesson（内置或早期教案题）。
+            "question_source": str(question.get("source") or "lesson"),
+            "revealed": False,
+            "revealed_at": "",
+            "actual_seconds": None,
+            "overtime_seconds": 0,
+            "reset_count": 0,
+            "ai_explanation": None,
+        }
+
+    @staticmethod
+    def _normalize_timer(raw: Any) -> Dict[str, Any]:
+        """读取持久化计时字段；旧数据的活跃题（无 timer）返回空 dict。"""
+        if not isinstance(raw, dict):
+            return {}
+        timer = dict(raw)
+        timer.setdefault("status", "idle")
+        timer.setdefault("suggested_seconds", 120)
+        timer.setdefault("elapsed_seconds", 0)
+        timer.setdefault("running_since", "")
+        timer.setdefault("question_source", "")
+        timer.setdefault("revealed", False)
+        timer.setdefault("revealed_at", "")
+        timer.setdefault("actual_seconds", None)
+        timer.setdefault("overtime_seconds", 0)
+        timer.setdefault("reset_count", 0)
+        timer.setdefault("ai_explanation", None)
+        return timer
+
+    def _timer_elapsed(self, timer: Dict[str, Any]) -> int:
+        """计时器当前累计秒数：持久化的累计值 + 正在运行段的实时增量。"""
+        elapsed = int(timer.get("elapsed_seconds") or 0)
+        running_since = str(timer.get("running_since") or "")
+        if str(timer.get("status")) == "running" and running_since:
+            try:
+                started = datetime.fromisoformat(running_since)
+            except ValueError:
+                return elapsed
+            delta = (datetime.now(timezone.utc) - started).total_seconds()
+            if delta > 0:
+                elapsed += int(delta)
+        return elapsed
+
+    def _timer_view(self, timer: Dict[str, Any]) -> Dict[str, Any]:
+        """对外返回的计时视图：把实时累计计算出来，其余字段原样透出。"""
+        view = dict(timer)
+        view["elapsed_seconds"] = self._timer_elapsed(timer)
+        return view
+
+    def _finalize_active_timer(self, active: Dict[str, Any]) -> Dict[str, Any]:
+        """收题前的计时收口：未揭示则按当前累计固化用时，已揭示保持不变。"""
+        timer = self._normalize_timer(active.get("timer"))
+        if not timer:
+            return {}
+        if not timer.get("revealed"):
+            timer = dict(timer)
+            actual = self._timer_elapsed(timer)
+            timer["status"] = "closed"
+            timer["actual_seconds"] = actual
+            timer["overtime_seconds"] = max(0, actual - int(timer.get("suggested_seconds") or 0))
+        return timer
+
+    def update_question_timer(self, session_id: str, action: str) -> Dict[str, Any]:
+        """投屏题目计时控制：开始 / 暂停 / 继续 / 重置。"""
+        session = self._require_session(session_id)
+        if session.status != "running":
+            raise ValueError("Class session has already ended")
+        action = str(action or "").strip().lower()
+        if action not in {"start", "pause", "resume", "reset"}:
+            raise ValueError(f"Unsupported timer action: {action}")
+        active = dict(session.active_question or {})
+        if not active.get("question_id"):
+            raise ValueError("No active question to time")
+        timer = self._normalize_timer(active.get("timer")) or self._init_question_timer(active)
+        if timer.get("revealed"):
+            raise ValueError("答案已揭示，计时已结束")
+
+        now = self._utc_now()
+        if action == "start":
+            if timer["status"] != "idle":
+                raise ValueError(f"Timer cannot start from status {timer['status']}")
+            timer["status"] = "running"
+            timer["running_since"] = now
+        elif action == "pause":
+            if timer["status"] != "running":
+                raise ValueError(f"Timer cannot pause from status {timer['status']}")
+            timer["elapsed_seconds"] = self._timer_elapsed(timer)
+            timer["status"] = "paused"
+            timer["running_since"] = ""
+        elif action == "resume":
+            if timer["status"] != "paused":
+                raise ValueError(f"Timer cannot resume from status {timer['status']}")
+            timer["status"] = "running"
+            timer["running_since"] = now
+        else:  # reset
+            if timer["status"] not in {"running", "paused"}:
+                raise ValueError(f"Timer cannot reset from status {timer['status']}")
+            timer["status"] = "idle"
+            timer["elapsed_seconds"] = 0
+            timer["running_since"] = ""
+            timer["reset_count"] = int(timer.get("reset_count") or 0) + 1
+
+        view = self._timer_view(timer)
+        active["timer"] = timer
+        with self.store.batch():
+            self.store.set_active_question(session_id, active)
             self.store.append_session_event(
                 session_id,
-                "question_closed",
+                "question_timer",
                 stage_id=str(active.get("stage_id") or ""),
-                payload={"question_id": active["question_id"], "tally": tally},
+                payload={
+                    "question_id": str(active["question_id"]),
+                    "action": action,
+                    "suggested_seconds": int(timer["suggested_seconds"]),
+                    "elapsed_seconds": view["elapsed_seconds"],
+                },
             )
-            self.store.set_active_question(session_id, {})
-        return {"status": "success", "tally": tally}
+        return {"status": "success", "timer": view, "server_now": now}
+
+    def reveal_session_question(self, session_id: str) -> Dict[str, Any]:
+        """揭示投屏题目答案：停止计时并记录实际用时/超时/来源，答案只回给教师端。"""
+        session = self._require_session(session_id)
+        if session.status != "running":
+            raise ValueError("Class session has already ended")
+        active = dict(session.active_question or {})
+        if not active.get("question_id"):
+            raise ValueError("No active question to reveal")
+        timer = self._normalize_timer(active.get("timer")) or self._init_question_timer(active)
+        now = self._utc_now()
+        if timer.get("revealed"):
+            # 幂等：刷新后重复请求不再生成新事件，也不重复生成讲解。
+            return self._reveal_payload(active, timer, now)
+
+        actual = self._timer_elapsed(timer)
+        timer["status"] = "revealed"
+        timer["revealed"] = True
+        timer["revealed_at"] = now
+        timer["actual_seconds"] = actual
+        timer["overtime_seconds"] = max(0, actual - int(timer["suggested_seconds"]))
+        timer["ai_explanation"] = self._compose_ai_explanation(active)
+        active["timer"] = timer
+        with self.store.batch():
+            self.store.set_active_question(session_id, active)
+            self.store.append_session_event(
+                session_id,
+                "question_revealed",
+                stage_id=str(active.get("stage_id") or ""),
+                payload={
+                    "question_id": str(active["question_id"]),
+                    "suggested_seconds": int(timer["suggested_seconds"]),
+                    "actual_seconds": actual,
+                    "overtime_seconds": int(timer["overtime_seconds"]),
+                    "source": str(timer.get("question_source") or ""),
+                },
+            )
+        return self._reveal_payload(active, timer, now)
+
+    def _reveal_payload(
+        self, active: Dict[str, Any], timer: Dict[str, Any], now: str
+    ) -> Dict[str, Any]:
+        subs = [
+            {
+                "index": str(sub.get("index") or ""),
+                "text": str(sub.get("text") or ""),
+                "answer": str(sub.get("answer") or ""),
+                "explanation": str(sub.get("explanation") or ""),
+            }
+            for sub in active.get("sub_questions") or []
+            if isinstance(sub, dict)
+        ]
+        return {
+            "status": "success",
+            "timer": self._timer_view(timer),
+            "server_now": now,
+            "official": {
+                "question_id": str(active.get("question_id") or ""),
+                "answer": str(active.get("answer") or ""),
+                "answer_letter": str(active.get("answer_letter") or ""),
+                "answer_index": active.get("answer_index") if isinstance(active.get("answer_index"), int) else None,
+                "explanation": str(active.get("explanation") or ""),
+                "sub_questions": subs,
+                "knowledge_points": [str(item) for item in active.get("knowledge_points") or []],
+                "answer_complete": bool(active.get("answer_complete")),
+            },
+            "ai_explanation": timer.get("ai_explanation") or {"text": "", "generator": "unavailable"},
+        }
+
+    def _compose_ai_explanation(self, question: Dict[str, Any]) -> Dict[str, Any]:
+        """AI 讲解：MiniMax 优先；失败或未配置时退回规则拼装，绝不编造证据。"""
+        official_answer = str(question.get("answer") or "").strip()
+        options = [str(item) for item in question.get("options") or []]
+        answer_index = question.get("answer_index")
+        if not official_answer and isinstance(answer_index, int) and 0 <= answer_index < len(options):
+            official_answer = f"正确选项：{chr(65 + answer_index)}. {options[answer_index]}"
+        knowledge = [str(item) for item in question.get("knowledge_points") or []]
+        if self.config.minimax_enabled() and self.runtime.minimax_client is not None:
+            try:
+                text = self._ai_explanation_with_llm(question, official_answer, knowledge)
+                if text.strip():
+                    return {"text": text.strip(), "generator": "minimax"}
+            except Exception:
+                pass
+        return self._rule_explanation(question, official_answer, knowledge)
+
+    def _ai_explanation_with_llm(
+        self, question: Dict[str, Any], official_answer: str, knowledge: List[str]
+    ) -> str:
+        client = self.runtime.minimax_client
+        if client is None:
+            raise RuntimeError("LLM client unavailable")
+        parts = [
+            "你是高中地理教师，正在课堂上讲评一道题。请基于给出的官方答案、官方解析与考点，用 120—200 字给学生讲清解题思路。",
+            "只能使用下方信息，不得补充教材之外的新事实；信息不足时明确说明。",
+            "",
+            f"题干：{str(question.get('text') or '')}",
+        ]
+        material = str(question.get("material") or "").strip()
+        if material:
+            parts.append(f"材料：{material}")
+        options = [str(item) for item in question.get("options") or []]
+        if options:
+            parts.append("选项：" + "；".join(options))
+        for sub in question.get("sub_questions") or []:
+            if isinstance(sub, dict) and str(sub.get("answer") or "").strip():
+                parts.append(f"小题 {sub.get('index')}：{sub.get('text')} → {sub.get('answer')}")
+        parts.extend(
+            [
+                f"官方答案：{official_answer or '（无）'}",
+                f"官方解析：{str(question.get('explanation') or '').strip() or '（无）'}",
+                f"考点：{'、'.join(knowledge) if knowledge else '（无）'}",
+                "",
+                "输出分三段，段首分别为「思路」「关键点」「一句话总结」。",
+            ]
+        )
+        messages = [
+            {"role": "system", "content": "你是严谨的高中地理讲评教师，只依据给定信息讲解，不编造数据。"},
+            {"role": "user", "content": "\n".join(parts)},
+        ]
+        return client.chat_completion(messages, temperature=0.3, timeout=30.0)
+
+    @staticmethod
+    def _rule_explanation(
+        question: Dict[str, Any], official_answer: str, knowledge: List[str]
+    ) -> Dict[str, Any]:
+        lines = ["【讲解要点】"]
+        if official_answer:
+            lines.append(f"官方答案：{official_answer}")
+        explanation = str(question.get("explanation") or "").strip()
+        if explanation:
+            lines.append(f"官方解析：{explanation}")
+        if knowledge:
+            lines.append("涉及考点：" + "、".join(knowledge))
+        expected = [str(item) for item in question.get("expected_points") or []]
+        if expected:
+            lines.append("作答需要覆盖：" + "；".join(expected))
+        if not official_answer and not explanation:
+            lines.append("本题暂无官方答案与解析，建议教师现场补充讲解。")
+        return {"text": "\n".join(lines), "generator": "rules"}
 
     def add_session_observation(self, session_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         session = self._require_session(session_id)
@@ -636,6 +948,8 @@ class ClassroomWorkflowRuntime:
     def session_live(self, session_id: str) -> Dict[str, Any]:
         session = self._require_session(session_id)
         active = dict(session.active_question or {})
+        if isinstance(active.get("timer"), dict):
+            active["timer"] = self._timer_view(active["timer"])
         tally: Optional[Dict[str, Any]] = None
         if active.get("question_id"):
             tally = self._question_tally(session, str(active["question_id"]), active)

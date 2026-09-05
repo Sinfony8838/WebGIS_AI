@@ -573,6 +573,10 @@ class QuestionLaunchRequest(BaseModel):
     delivery: str = "student"
 
 
+class QuestionTimerRequest(BaseModel):
+    action: str
+
+
 class ObservationRequest(BaseModel):
     stage_id: str = ""
     question_id: str = ""
@@ -2074,6 +2078,28 @@ def close_session_question(session_id: str, request: Request) -> Dict[str, Any]:
         return runtime.classroom.close_session_question(session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/class-sessions/{session_id}/questions/timer")
+def update_session_question_timer(session_id: str, payload: QuestionTimerRequest, request: Request) -> Dict[str, Any]:
+    _require_session_access(request, session_id)
+    try:
+        return runtime.classroom.update_question_timer(session_id, payload.action)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/class-sessions/{session_id}/questions/reveal")
+def reveal_session_question(session_id: str, request: Request) -> Dict[str, Any]:
+    _require_session_access(request, session_id)
+    try:
+        return runtime.classroom.reveal_session_question(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/class-sessions/{session_id}/observations")

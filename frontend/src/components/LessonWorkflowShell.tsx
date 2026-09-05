@@ -4,6 +4,7 @@ import {
   activatePopulationSourceVersion,
   applyLessonScene,
   captureLessonScene,
+  closeSessionQuestion,
   createClassSession,
   endClassSession,
   enterSessionStage,
@@ -17,13 +18,16 @@ import {
   launchSessionQuestion,
   populationLessonPrepResult,
   preparePopulationLesson,
+  revealSessionQuestion,
   resolvePopulationLessonPrep,
-  updateLesson
+  updateLesson,
+  updateSessionQuestionTimer
 } from "../api";
 import type {
   ClassSessionRecord,
   LayersResponse,
   LessonRecord,
+  LessonQuestion,
   LessonGlobeScene,
   LessonStage,
   ObservationVerdict,
@@ -38,6 +42,7 @@ import type {
 import { ClassRunPanel } from "./ClassRunPanel";
 import { LessonPanel } from "./LessonPanel";
 import { LessonDesignPanel } from "./LessonDesignPanel";
+import { QuestionPracticeModal } from "./QuestionPracticeModal";
 import { RehearsalPanel } from "./RehearsalPanel";
 import { ReportPanel } from "./ReportPanel";
 import { VisualQueryPopup, type VisualizationItem } from "./VisualQueryPopup";
@@ -576,6 +581,74 @@ export function LessonWorkflowShell({
     [activeSession, runWithBusy]
   );
 
+  // ------------------------------------------------------------------
+  // 正式课堂题目投屏与计时（服务端计时状态，刷新/断线自动恢复）
+  // ------------------------------------------------------------------
+
+  const projectQuestion = useCallback(
+    async (questionId: string, stageId: string) => {
+      if (!activeSession) return;
+      await runWithBusy(async () => {
+        const response = await launchSessionQuestion(activeSession.session_id, {
+          question_id: questionId,
+          stage_id: stageId,
+          delivery: "student"
+        });
+        setActiveSession((previous) =>
+          previous ? { ...previous, active_question: response.active_question } : previous
+        );
+      });
+    },
+    [activeSession, runWithBusy]
+  );
+
+  const projectionTimerAction = useCallback(
+    async (action: "start" | "pause" | "resume" | "reset") => {
+      if (!activeSession) return;
+      await runWithBusy(async () => {
+        const response = await updateSessionQuestionTimer(activeSession.session_id, action);
+        setActiveSession((previous) =>
+          previous
+            ? { ...previous, active_question: { ...previous.active_question, timer: response.timer } }
+            : previous
+        );
+      });
+    },
+    [activeSession, runWithBusy]
+  );
+
+  const projectionReveal = useCallback(async () => {
+    if (!activeSession) return;
+    await runWithBusy(async () => {
+      const response = await revealSessionQuestion(activeSession.session_id);
+      setActiveSession((previous) =>
+        previous
+          ? { ...previous, active_question: { ...previous.active_question, timer: response.timer } }
+          : previous
+      );
+    });
+  }, [activeSession, runWithBusy]);
+
+  const closeProjection = useCallback(async () => {
+    if (!activeSession) return;
+    await runWithBusy(async () => {
+      await closeSessionQuestion(activeSession.session_id);
+      setActiveSession((previous) =>
+        previous ? { ...previous, active_question: {} } : previous
+      );
+    });
+  }, [activeSession, runWithBusy]);
+
+  // 投屏题直接取自班课 active_question：它是开课时刻的完整题目快照（含答案与计时状态），
+  // 服务端保证计时字段为实时计算值；无计时的活跃题（历史学生作答题）不进入投屏弹窗。
+  const projectionQuestion = useMemo(() => {
+    const active = activeSession?.active_question as Partial<LessonQuestion> | undefined;
+    if (activeSession?.status !== "running" || !active?.question_id || !active?.timer) {
+      return null;
+    }
+    return active as unknown as LessonQuestion;
+  }, [activeSession]);
+
   const recordObservation = useCallback(
     (verdict: ObservationVerdict, tag: string, note: string, questionId: string) => {
       if (!activeSession) return;
@@ -610,6 +683,7 @@ export function LessonWorkflowShell({
           onToggleCollapsed={() => setPanelCollapsed((value) => !value)}
           onEnterStage={(stageId) => void applyScene(stageId, true)}
           onLaunchQuestion={(questionId, stageId) => void launchQuestion(questionId, stageId)}
+          onProjectQuestion={(questionId, stageId) => void projectQuestion(questionId, stageId)}
           onLaunchAdhocQuestion={(text, options) => void launchAdhocQuestion(text, options)}
           onObservation={recordObservation}
           onSnapshot={() => onCaptureEvidence?.(activeSession.session_id, activeSession.current_stage_id)}
@@ -620,6 +694,17 @@ export function LessonWorkflowShell({
           onFocusEvidenceLayer={onFocusEvidenceLayer}
           onRequestPlaneView={onRequestPlaneView}
           onAssistantPrompt={onAssistantPrompt}
+        />
+      ) : null}
+      {teachPanelVisible && projectionQuestion ? (
+        <QuestionPracticeModal
+          question={projectionQuestion}
+          busy={workflowBusy}
+          onTimerAction={(action) => void projectionTimerAction(action)}
+          onReveal={() => void projectionReveal()}
+          onClose={() => void closeProjection()}
+          onObservation={(verdict, tag, note) =>
+            recordObservation(verdict, tag, note, String(projectionQuestion.question_id || ""))}
         />
       ) : null}
       <div className="bottom-stack">

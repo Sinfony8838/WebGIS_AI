@@ -698,6 +698,40 @@ export type LessonQuestion = {
   number?: string;
   suggested_seconds?: number;
   explanation_source?: string;
+  /** 正式课堂投屏时的服务端计时状态（随 active_question 一起持久化与恢复）。 */
+  timer?: QuestionTimerState;
+};
+
+export type QuestionTimerState = {
+  status: "idle" | "running" | "paused" | "revealed" | "closed";
+  suggested_seconds: number;
+  /** 已累计秒数；running 时服务端返回实时计算值（含当前计时段）。 */
+  elapsed_seconds: number;
+  running_since: string;
+  question_source: string;
+  revealed: boolean;
+  revealed_at: string;
+  actual_seconds: number | null;
+  overtime_seconds: number;
+  reset_count: number;
+  ai_explanation: { text: string; generator: string } | null;
+};
+
+export type QuestionRevealResult = {
+  status: string;
+  timer: QuestionTimerState;
+  server_now: string;
+  official: {
+    question_id: string;
+    answer: string;
+    answer_letter: string;
+    answer_index: number | null;
+    explanation: string;
+    sub_questions: Array<{ index: string; text: string; answer: string; explanation: string }>;
+    knowledge_points: string[];
+    answer_complete: boolean;
+  };
+  ai_explanation: { text: string; generator: string };
 };
 
 export type LessonScene = {

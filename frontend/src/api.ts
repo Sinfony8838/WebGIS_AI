@@ -50,6 +50,8 @@ import type {
   QuestionBankQuestion,
   QuestionBankSummary,
   QuestionRetrievalCandidate,
+  QuestionRevealResult,
+  QuestionTimerState,
   RegionBinding,
   ResourceSearchResponse,
   ScreenSnapshot,
@@ -968,6 +970,27 @@ export async function closeSessionQuestion(sessionId: string): Promise<{ status:
   return requestJson<{ status: string }>(`/class-sessions/${encodeURIComponent(sessionId)}/questions/close`, {
     method: "POST"
   });
+}
+
+export async function updateSessionQuestionTimer(
+  sessionId: string,
+  action: "start" | "pause" | "resume" | "reset"
+): Promise<{ status: string; timer: QuestionTimerState; server_now: string }> {
+  return requestJson<{ status: string; timer: QuestionTimerState; server_now: string }>(
+    `/class-sessions/${encodeURIComponent(sessionId)}/questions/timer`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action })
+    }
+  );
+}
+
+export async function revealSessionQuestion(sessionId: string): Promise<QuestionRevealResult> {
+  return requestJson<QuestionRevealResult>(
+    `/class-sessions/${encodeURIComponent(sessionId)}/questions/reveal`,
+    { method: "POST" }
+  );
 }
 
 export async function addSessionObservation(
