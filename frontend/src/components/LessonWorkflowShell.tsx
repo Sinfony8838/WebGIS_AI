@@ -95,6 +95,14 @@ function currentLayerSnapshot(
   };
 }
 
+function lessonSnapshotFromSession(session: ClassSessionRecord): LessonRecord | null {
+  const snapshot = session.metadata?.lesson_snapshot;
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return null;
+  const candidate = snapshot as Partial<LessonRecord>;
+  if (candidate.lesson_id !== session.lesson_id || !Array.isArray(candidate.stages)) return null;
+  return candidate as LessonRecord;
+}
+
 async function waitForLessonImport(jobId: string): Promise<LessonRecord | null> {
   for (let attempt = 0; attempt < 120; attempt += 1) {
     const job = await fetchJob(jobId);
@@ -329,7 +337,7 @@ export function LessonWorkflowShell({
           .filter((item) => item.status === "running")
           .sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)))[0];
         if (!running) return;
-        const lesson = await fetchLesson(running.lesson_id);
+        const lesson = lessonSnapshotFromSession(running) || await fetchLesson(running.lesson_id);
         if (cancelled) return;
         setActiveSession(running);
         setActiveLesson(lesson);

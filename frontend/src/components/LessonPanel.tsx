@@ -201,7 +201,8 @@ export function LessonPanel({
           <button
             type="button"
             className="toolbar-button compact"
-            disabled={busy}
+            disabled={busy || activeLesson.source === "builtin"}
+            title={activeLesson.source === "builtin" ? "内置课时需先另存为教师课时" : undefined}
             onClick={() => activeLesson && onStartRehearsal(activeLesson)}
             data-testid="start-rehearsal"
           >

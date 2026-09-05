@@ -38,7 +38,7 @@ const TEST_ITEMS: Array<{ key: string; label: string; hint: string }> = [
   { key: "map_test", label: "地图与图层", hint: "各环节场景能正确切换、图层显示符合预期" },
   { key: "screenshot_test", label: "截图存证", hint: "地图截图可作为课堂证据保存" },
   { key: "assistant_test", label: "教学助教", hint: "预设追问能把助教带回教学主线" },
-  { key: "projection_test", label: "题目投影", hint: "题面、题图与选项投影清晰可读" }
+  { key: "question_preview_test", label: "题面预览", hint: "题面、题图与选项在模拟测试面板中清晰可读" }
 ];
 
 function questionLabel(question: LessonQuestion): string {
@@ -294,7 +294,7 @@ export function RehearsalPanel({
           <p>
             已发布新版本 <strong>v{String(meta.lesson_version || 1)}</strong>：{completedLesson.title}
           </p>
-          <p className="ldw-hint">课时已标记「可开真实课堂」，课堂与课后练习都会使用当前版本快照。</p>
+          <p className="ldw-hint">课时已标记「可开真实课堂」，真实课堂将使用当前版本快照。</p>
           <div className="ldw-actions">
             {completedExportUrl ? (
               <a className="toolbar-button compact" href={completedExportUrl} target="_blank" rel="noopener noreferrer">

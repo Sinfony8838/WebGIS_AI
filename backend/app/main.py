@@ -507,11 +507,11 @@ class LessonRehearsalUpdateRequest(BaseModel):
     image_bind: Optional[Dict[str, Any]] = None
     scene_capture: Optional[Dict[str, Any]] = None
     test_result: Optional[Dict[str, Any]] = None
-    expected_revision: Optional[int] = None
+    expected_revision: int = Field(ge=0)
 
 
 class LessonRehearsalCompleteRequest(BaseModel):
-    expected_revision: Optional[int] = None
+    expected_revision: int = Field(ge=0)
 
 
 class LessonRehearsalStageRequest(BaseModel):

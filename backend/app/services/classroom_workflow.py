@@ -8,6 +8,7 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
+from ..models import ClassSessionRecord, LessonRecord
 from .lessons import LessonService
 from .lesson_design import LessonDesignService
 from .lesson_rehearsal import LessonRehearsalService
@@ -391,6 +392,20 @@ class ClassroomWorkflowRuntime:
     # Class sessions
     # ------------------------------------------------------------------
 
+    def _lesson_for_session(self, session: ClassSessionRecord) -> Optional[LessonRecord]:
+        """Return the immutable lesson captured when the class started.
+
+        Older sessions do not have ``lesson_snapshot``; they intentionally fall
+        back to the current lesson so existing runtime data remains readable.
+        """
+        snapshot = (session.metadata or {}).get("lesson_snapshot")
+        if isinstance(snapshot, dict) and str(snapshot.get("lesson_id") or "") == session.lesson_id:
+            try:
+                return LessonRecord(**snapshot)
+            except (TypeError, ValueError):
+                pass
+        return self.store.get_lesson(session.lesson_id)
+
     def create_class_session(self, lesson_id: str, project_id: str) -> Dict[str, Any]:
         self.runtime._require_project(project_id)
         lesson = self.lesson_service.get_lesson(lesson_id)
@@ -402,8 +417,23 @@ class ClassroomWorkflowRuntime:
             ready = ready.strip().lower() == "true"
         if str(metadata.get("created_from") or "") == "lesson_design" and not ready:
             raise ValueError("教案还未通过模拟测试，不能开始真实课堂。")
+        active_rehearsals = self.store.list_lesson_rehearsals(
+            project_id=project_id,
+            lesson_id=lesson_id,
+            status="active",
+        )
+        if active_rehearsals:
+            raise ValueError("该课时正在模拟测试，完成或取消后才能开始真实课堂。")
         join_code = self._generate_join_code()
         with self.store.batch():
+            # Recheck while holding the store lock so a concurrent rehearsal
+            # create cannot slip between the gate above and session creation.
+            if self.store.list_lesson_rehearsals(
+                project_id=project_id,
+                lesson_id=lesson_id,
+                status="active",
+            ):
+                raise ValueError("该课时正在模拟测试，完成或取消后才能开始真实课堂。")
             session = self.store.create_class_session(
                 lesson_id=lesson_id,
                 project_id=project_id,
@@ -446,7 +476,9 @@ class ClassroomWorkflowRuntime:
         session = self._require_session(session_id)
         if session.status != "running":
             raise ValueError("Class session has already ended")
-        lesson = self.lesson_service.get_lesson(session.lesson_id)
+        lesson = self._lesson_for_session(session)
+        if lesson is None:
+            raise KeyError(f"Unknown lesson: {session.lesson_id}")
         stage = lesson.find_stage(stage_id)
         if stage is None:
             raise KeyError(f"Unknown stage: {stage_id}")
@@ -458,7 +490,17 @@ class ClassroomWorkflowRuntime:
                 stage_id=stage_id,
                 payload={"stage_title": stage.get("title", ""), "planned_minutes": stage.get("minutes", 0)},
             )
-            scene_result = self.apply_lesson_scene(session.project_id, session.lesson_id, stage_id)
+            scene_result = self.lesson_service.apply_stage_scene_data(
+                session.project_id,
+                stage,
+                lesson_id=session.lesson_id,
+            )
+            self.store.append_session_event(
+                session_id,
+                "scene_applied",
+                stage_id=stage_id,
+                payload={"stage_title": scene_result.get("stage_title", "")},
+            )
         return {"status": "success", "session_id": session_id, "stage": stage, "scene": scene_result}
 
     def launch_session_question(
@@ -474,7 +516,9 @@ class ClassroomWorkflowRuntime:
             raise ValueError("Class session has already ended")
         question: Optional[Dict[str, Any]] = None
         if question_id:
-            lesson = self.lesson_service.get_lesson(session.lesson_id)
+            lesson = self._lesson_for_session(session)
+            if lesson is None:
+                raise KeyError(f"Unknown lesson: {session.lesson_id}")
             for stage in lesson.stages:
                 for item in stage.get("questions", []):
                     if str(item.get("question_id")) == question_id:
@@ -616,7 +660,7 @@ class ClassroomWorkflowRuntime:
             raise KeyError("Unknown or ended join code")
         if nickname.strip():
             self._touch_presence(session.session_id, nickname.strip())
-        lesson = self.store.get_lesson(session.lesson_id)
+        lesson = self._lesson_for_session(session)
         stage_title = ""
         if lesson is not None and session.current_stage_id:
             stage = lesson.find_stage(session.current_stage_id)
@@ -684,7 +728,7 @@ class ClassroomWorkflowRuntime:
     def _run_session_report_job(self, job_id: str, session_id: str) -> None:
         try:
             session = self._require_session(session_id)
-            lesson = self.store.get_lesson(session.lesson_id)
+            lesson = self._lesson_for_session(session)
             self.store.set_job_status(job_id, "running")
             self.store.update_job_stage(job_id, "analysis", "running", "Aggregating class events and answers.")
             statistics = self.report_service.build_statistics(session, lesson)

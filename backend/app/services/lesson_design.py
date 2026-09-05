@@ -389,7 +389,7 @@ class LessonDesignService:
         elif question_id:
             if any(str(item.get("question_id")) == str(question_id) for item in questions):
                 raise ValueError("这道题已经在本环节中。")
-            snapshot = self._snapshot_bank_question(question_id)
+            snapshot = self._snapshot_bank_question(question_id, design.project_id)
             if position is not None and isinstance(position, int) and 0 <= position <= len(questions):
                 questions.insert(position, snapshot)
             else:
@@ -431,11 +431,11 @@ class LessonDesignService:
             "stage": copy.deepcopy(stage),
         }
 
-    def _snapshot_bank_question(self, question_id: str) -> Dict[str, Any]:
+    def _snapshot_bank_question(self, question_id: str, project_id: str) -> Dict[str, Any]:
         """从题库取题并做成不可变快照（含材料/题图/答案/解析）。"""
         if self.question_bank_service is None:
             raise ValueError("题库服务不可用。")
-        return self.question_bank_service.snapshot_question(question_id)
+        return self.question_bank_service.snapshot_question(question_id, project_id=project_id)
 
     def _normalize_snapshot_question(self, question: Dict[str, Any]) -> Dict[str, Any]:
         """压平为题目快照；逻辑收敛在题库服务，教案设计与模拟测试共用。"""

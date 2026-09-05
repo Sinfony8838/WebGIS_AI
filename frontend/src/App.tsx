@@ -3479,7 +3479,7 @@ export default function App({
             }}
             onEnterRehearsal={(lesson) => {
               closeLessonDesignWorkspace();
-              setRehearsalTarget({ lessonId: lesson.lesson_id, signal: rehearsalTarget.signal + 1 });
+              setRehearsalTarget((previous) => ({ lessonId: lesson.lesson_id, signal: previous.signal + 1 }));
             }}
           />
         ) : null}

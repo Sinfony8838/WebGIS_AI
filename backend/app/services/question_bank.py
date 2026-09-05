@@ -639,23 +639,43 @@ class QuestionBankService:
             },
         }
 
-    def get_questions_by_ids(self, question_ids: Sequence[str]) -> List[Dict[str, Any]]:
-        """按 ID 批量取题（教案快照、候选替换等场景）。未知 ID 静默跳过。"""
+    def get_questions_by_ids(
+        self,
+        question_ids: Sequence[str],
+        project_id: str = "",
+    ) -> List[Dict[str, Any]]:
+        """按 ID 批量取题（教案快照、候选替换等场景）。
+
+        ``project_id`` 用于服务层的归属校验，避免调用方绕过题库列表/检索
+        接口后，仅凭另一个项目的 ``question_id`` 把私有题目复制进当前教案。
+        未知或不属于当前项目的 ID 均静默跳过。
+        """
         if not question_ids:
             return []
         ids = [str(item) for item in question_ids]
         with self._lock, self._connect() as connection:
             placeholders = ",".join("?" for _ in ids)
-            rows = connection.execute(
-                f"SELECT * FROM questions WHERE question_id IN ({placeholders}) ORDER BY bank_id, group_index, question_index",
-                ids,
-            ).fetchall()
+            if project_id:
+                rows = connection.execute(
+                    f"""
+                    SELECT q.* FROM questions q
+                    JOIN banks b ON q.bank_id = b.bank_id
+                    WHERE q.question_id IN ({placeholders}) AND b.project_id = ?
+                    ORDER BY q.bank_id, q.group_index, q.question_index
+                    """,
+                    [*ids, project_id],
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    f"SELECT * FROM questions WHERE question_id IN ({placeholders}) ORDER BY bank_id, group_index, question_index",
+                    ids,
+                ).fetchall()
             images_by_question = self._images_for_questions(connection, [str(row["question_id"]) for row in rows])
         return [self._question_payload(row, images_by_question) for row in rows]
 
-    def snapshot_question(self, question_id: str) -> Dict[str, Any]:
+    def snapshot_question(self, question_id: str, project_id: str = "") -> Dict[str, Any]:
         """从题库取单题并压平成教案/模拟测试共用的不可变题目快照。"""
-        items = self.get_questions_by_ids([question_id])
+        items = self.get_questions_by_ids([question_id], project_id=project_id)
         if not items:
             raise KeyError(f"Unknown question: {question_id}")
         return self.normalize_snapshot_question(items[0])

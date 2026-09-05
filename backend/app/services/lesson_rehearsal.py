@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import copy
+import threading
+from functools import wraps
 from typing import Any, Dict, List, Optional
 
 from ..models import LessonRehearsalRecord, LessonRecord, utc_now
@@ -27,6 +29,17 @@ PATCHABLE_KEYS = (
 )
 
 
+def _serialized_mutation(method: Any) -> Any:
+    """Serialize rehearsal mutations so expected_revision is checked atomically."""
+
+    @wraps(method)
+    def wrapped(self: "LessonRehearsalService", *args: Any, **kwargs: Any) -> Any:
+        with self._mutation_lock:
+            return method(self, *args, **kwargs)
+
+    return wrapped
+
+
 class LessonRehearsalService:
     def __init__(
         self,
@@ -41,19 +54,37 @@ class LessonRehearsalService:
         self.lesson_service = lesson_service
         self.lesson_design = lesson_design_service
         self.question_bank = question_bank_service
+        self._mutation_lock = threading.RLock()
 
     # ------------------------------------------------------------------
     # 生命周期
     # ------------------------------------------------------------------
 
+    @_serialized_mutation
     def create(self, project_id: str, lesson_id: str, owner_user_id: str = "") -> Dict[str, Any]:
         lesson = self.lesson_service.get_lesson(lesson_id)
         if lesson.source == "builtin":
             raise ValueError("内置课时请先另存为教师课时，再进入模拟测试。")
+        lesson_project_id = str((lesson.metadata or {}).get("project_id") or "")
+        if lesson_project_id and lesson_project_id != project_id:
+            raise ValueError("课时不属于当前项目。")
+        running_sessions = self.store.list_class_sessions(
+            project_id=project_id,
+            lesson_id=lesson_id,
+            status="running",
+        )
+        if running_sessions:
+            raise ValueError("真实课堂进行中，不能同时开启模拟测试。")
         existing = self.store.list_lesson_rehearsals(lesson_id=lesson_id, status="active")
         if existing:
             # 已有进行中的模拟测试：直接续用（教师刷新/重开面板的场景）。
-            return {"status": "success", "rehearsal": existing[0].to_dict(), "resumed": True}
+            matching = next(
+                (item for item in existing if item.owner_user_id == owner_user_id),
+                None,
+            )
+            if matching is None:
+                raise ValueError("该课时已有其他用户进行中的模拟测试。")
+            return {"status": "success", "rehearsal": matching.to_dict(), "resumed": True}
         base_version = self._lesson_version(lesson)
         record = LessonRehearsalRecord.create(
             project_id=project_id,
@@ -65,7 +96,14 @@ class LessonRehearsalService:
         record.modification_events.append(
             {"action": "rehearsal_start", "base_version": base_version, "at": utc_now()}
         )
-        self.store.upsert_lesson_rehearsal(record)
+        with self.store.batch():
+            if self.store.list_class_sessions(
+                project_id=project_id,
+                lesson_id=lesson_id,
+                status="running",
+            ):
+                raise ValueError("真实课堂进行中，不能同时开启模拟测试。")
+            self.store.upsert_lesson_rehearsal(record)
         return {"status": "success", "rehearsal": record.to_dict(), "resumed": False}
 
     def get(self, rehearsal_id: str) -> LessonRehearsalRecord:
@@ -89,6 +127,7 @@ class LessonRehearsalService:
     # 工作副本调整
     # ------------------------------------------------------------------
 
+    @_serialized_mutation
     def update(
         self,
         rehearsal_id: str,
@@ -100,7 +139,9 @@ class LessonRehearsalService:
         test_result: Optional[Dict[str, Any]] = None,
         expected_revision: Optional[int] = None,
     ) -> Dict[str, Any]:
-        record = self.get(rehearsal_id)
+        # Store 返回的是持久对象本身；使用深拷贝保证组合操作中任一步失败时，
+        # 不会把前面已经原地修改的半成品泄漏进内存状态。
+        record = copy.deepcopy(self.get(rehearsal_id))
         if record.status != "active":
             raise ValueError("模拟测试已结束，无法继续修改。")
         if expected_revision is not None and int(expected_revision) != record.revision:
@@ -126,6 +167,8 @@ class LessonRehearsalService:
         if test_result:
             events.append(self._record_test_result(record, test_result))
 
+        if not events:
+            raise ValueError("没有可保存的模拟测试修改。")
         record.modification_events.extend(events)
         record.revision += 1
         self.store.upsert_lesson_rehearsal(record)
@@ -154,27 +197,50 @@ class LessonRehearsalService:
             "report": validation,
         }
 
+    @_serialized_mutation
     def complete(self, rehearsal_id: str, expected_revision: Optional[int] = None) -> Dict[str, Any]:
         record = self.get(rehearsal_id)
         if record.status != "active":
             raise ValueError("模拟测试已结束，不能重复完成。")
         if expected_revision is not None and int(expected_revision) != record.revision:
             raise ValueError("模拟测试内容已更新，请刷新后再操作。")
+        lesson = self.lesson_service.get_lesson(record.lesson_id)
+        if self._lesson_version(lesson) != record.base_version:
+            record.modification_events.append(
+                {
+                    "action": "complete_blocked",
+                    "errors": ["课时已在模拟测试之外更新，请取消本次模拟测试后重新开启。"],
+                    "at": utc_now(),
+                }
+            )
+            self.store.upsert_lesson_rehearsal(record)
+            raise ValueError("课时已更新，请取消本次模拟测试后重新开启。")
+
         validation = self.lesson_design.validate_plan(record.working_copy, [])
         if not validation.get("ready"):
             record.modification_events.append(
                 {"action": "complete_blocked", "errors": validation.get("errors") or [], "at": utc_now()}
             )
-            record.revision += 1
             self.store.upsert_lesson_rehearsal(record)
             raise ValueError("模拟测试未通过：" + " ".join(validation.get("errors") or []))
 
-        lesson = self.lesson_service.get_lesson(record.lesson_id)
         if lesson.source == "builtin":
             raise ValueError("内置课时不能被模拟测试覆盖。")
         new_version = self._lesson_version(lesson) + 1
         working = copy.deepcopy(record.working_copy)
         with self.store.batch():
+            latest_lesson = self.lesson_service.get_lesson(record.lesson_id)
+            if self._lesson_version(latest_lesson) != record.base_version:
+                record.modification_events.append(
+                    {
+                        "action": "complete_blocked",
+                        "errors": ["课时已在模拟测试之外更新，请取消本次模拟测试后重新开启。"],
+                        "at": utc_now(),
+                    }
+                )
+                self.store.upsert_lesson_rehearsal(record)
+                raise ValueError("课时已更新，请取消本次模拟测试后重新开启。")
+            lesson = latest_lesson
             lesson.title = str(working.get("title") or lesson.title)
             lesson.grade = str(working.get("grade") or lesson.grade)
             lesson.objectives = [str(item) for item in working.get("objectives") or []]
@@ -218,6 +284,7 @@ class LessonRehearsalService:
             "export": export_result,
         }
 
+    @_serialized_mutation
     def cancel(self, rehearsal_id: str) -> Dict[str, Any]:
         record = self.get(rehearsal_id)
         if record.status != "active":
@@ -237,7 +304,7 @@ class LessonRehearsalService:
         stage = self._find_stage(record, stage_id)
         questions = stage.setdefault("questions", [])
         position = bind.get("position")
-        if isinstance(position, bool) or not isinstance(position, int) or not (0 <= int(position) < max(len(questions), 1)):
+        if isinstance(position, bool) or not isinstance(position, int) or not (0 <= int(position) < len(questions)):
             position = None
         manual = bind.get("manual")
         if isinstance(manual, dict) and str(manual.get("text") or "").strip():
@@ -253,7 +320,7 @@ class LessonRehearsalService:
                 raise ValueError("换题需要 question_id 或 manual 题干。")
             if self.question_bank is None:
                 raise ValueError("题库服务不可用。")
-            snapshot = self.question_bank.snapshot_question(question_id)
+            snapshot = self.question_bank.snapshot_question(question_id, project_id=record.project_id)
             label = str(snapshot.get("number") or snapshot.get("question_id") or "")
         if position is not None:
             questions[int(position)] = snapshot
@@ -273,12 +340,17 @@ class LessonRehearsalService:
     def _remove_question(self, record: LessonRehearsalRecord, payload: Dict[str, Any]) -> Dict[str, Any]:
         stage_id = str(payload.get("stage_id") or "")
         question_id = str(payload.get("question_id") or "")
+        if not question_id:
+            raise ValueError("移除题目需要 question_id。")
         stage = self._find_stage(record, stage_id)
         questions = stage.setdefault("questions", [])
+        before = len(questions)
         stage["questions"] = [
             item for item in questions
             if not (isinstance(item, dict) and str(item.get("question_id")) == question_id)
         ]
+        if len(stage["questions"]) == before:
+            raise KeyError(f"环节 {stage_id} 中没有题目 {question_id}")
         return {"action": "remove_question", "stage_id": stage_id, "question_id": question_id, "at": utc_now()}
 
     def _bind_image(self, record: LessonRehearsalRecord, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -287,6 +359,14 @@ class LessonRehearsalService:
         image = payload.get("image")
         if not isinstance(image, dict) or not str(image.get("url") or "").strip():
             raise ValueError("绑定题图需要 image.url。")
+        image_url = str(image.get("url") or "").strip()
+        allowed_image_urls = {
+            str((artifact.get("metadata") or {}).get("public_url") or "")
+            for artifact in self.store.list_outputs(project_id=record.project_id)
+            if str(artifact.get("artifact_type") or "") in {"uploaded_image", "generated_image"}
+        }
+        if image_url not in allowed_image_urls:
+            raise ValueError("题图必须来自当前项目图片库。")
         stage = self._find_stage(record, stage_id)
         question = next(
             (item for item in stage.get("questions") or []
@@ -296,7 +376,7 @@ class LessonRehearsalService:
         if question is None:
             raise KeyError(f"Unknown question: {question_id}")
         entry = {
-            "url": str(image.get("url") or ""),
+            "url": image_url,
             "width": int(image.get("width") or 0),
             "height": int(image.get("height") or 0),
             "content_type": str(image.get("content_type") or ""),
