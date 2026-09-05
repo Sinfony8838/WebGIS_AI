@@ -1932,6 +1932,28 @@
   padding-left: 8px;
 }
 
+.report-practice-export {
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.report-practice-export .report-note {
+  font-size: 11px;
+  color: var(--text-soft);
+}
+
+.report-practice-links {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .diagnosis-source {
   font-style: normal;
   font-size: 11px;

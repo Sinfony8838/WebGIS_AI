@@ -14,6 +14,7 @@ from .lessons import LessonService
 from .lesson_design import LessonDesignService
 from .lesson_rehearsal import LessonRehearsalService
 from .population_lesson_prep import PopulationLessonPrepService
+from .practice_export import PracticeExportService
 from .question_bank import QuestionBankService
 from .reports import ReportService
 from .visual_query import VisualQueryService
@@ -70,6 +71,11 @@ class ClassroomWorkflowRuntime:
             self.lesson_service,
             self.lesson_design,
             self.question_bank,
+        )
+        self.practice_export = PracticeExportService(
+            self.config,
+            self.store,
+            question_bank_service=self.question_bank,
         )
         self._student_presence: Dict[str, Dict[str, float]] = {}
 
@@ -1038,6 +1044,12 @@ class ClassroomWorkflowRuntime:
         )
         threading.Thread(target=self._run_session_report_job, args=(job.job_id, session_id), daemon=True).start()
         return {"status": "accepted", "job_id": job.job_id, "session_id": session_id}
+
+    def export_session_practice(self, session_id: str) -> Dict[str, Any]:
+        """课后练习卷双卷导出（学生卷/教师卷），读取开课时刻的课时快照。"""
+        session = self._require_session(session_id)
+        lesson = self._lesson_for_session(session)
+        return self.practice_export.export(session, lesson)
 
     def _run_session_report_job(self, job_id: str, session_id: str) -> None:
         try:

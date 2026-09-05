@@ -57,6 +57,7 @@ import type {
   ScreenSnapshot,
   SceneSnapshot,
   SessionLiveState,
+  SessionPracticeExportResult,
   TeachingContext,
   TimelineData,
   TimelineGenerateResponse,
@@ -1023,6 +1024,13 @@ export async function generateSessionReport(sessionId: string): Promise<{ status
   return requestJson<{ status: string; job_id: string }>(`/class-sessions/${encodeURIComponent(sessionId)}/report`, {
     method: "POST"
   });
+}
+
+export async function exportSessionPractice(sessionId: string): Promise<SessionPracticeExportResult> {
+  return requestJson<SessionPracticeExportResult>(
+    `/class-sessions/${encodeURIComponent(sessionId)}/practice-export`,
+    { method: "POST" }
+  );
 }
 
 export async function fetchKbManifest(): Promise<KnowledgeManifestResponse> {

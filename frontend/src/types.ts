@@ -1222,6 +1222,31 @@ export type SessionReportResult = {
   report_url: string;
 };
 
+export type PracticePaperArtifact = {
+  artifact_id: string;
+  artifact_type: string;
+  title: string;
+  path: string;
+  metadata: { public_url?: string; session_id?: string; format?: string };
+};
+
+export type PracticeSelectionSummary = {
+  origin: string;
+  label: string;
+  level: string;
+  count: number;
+};
+
+export type SessionPracticeExportResult = {
+  status: string;
+  job_id: string;
+  session_id: string;
+  student_artifact: PracticePaperArtifact;
+  teacher_artifact: PracticePaperArtifact;
+  selection_summary: PracticeSelectionSummary[];
+  notes: string[];
+};
+
 export type ConversationResponse = {
   status: string;
   conversation_id: string;

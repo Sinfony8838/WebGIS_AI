@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { buildAuthenticatedUrl, fetchClassSessions, fetchJob, generateSessionReport } from "../api";
-import type { ClassSessionRecord, SessionReportResult, SessionReportStatistics } from "../types";
+import { buildAuthenticatedUrl, exportSessionPractice, fetchClassSessions, fetchJob, generateSessionReport } from "../api";
+import type { ClassSessionRecord, SessionPracticeExportResult, SessionReportResult, SessionReportStatistics } from "../types";
 
 type Props = {
   projectId: string;
@@ -29,6 +29,8 @@ export function ReportPanel({ projectId, onClose }: Props) {
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [report, setReport] = useState<SessionReportResult | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [practiceExport, setPracticeExport] = useState<SessionPracticeExportResult | null>(null);
+  const [exportingPractice, setExportingPractice] = useState(false);
   const [error, setError] = useState("");
 
   const loadSessions = useCallback(async () => {
@@ -84,6 +86,23 @@ export function ReportPanel({ projectId, onClose }: Props) {
   const statistics: SessionReportStatistics | null = report?.statistics || null;
   const practiceRecommendations = report?.practice_recommendations || [];
 
+  async function exportPractice() {
+    if (!selectedSessionId) {
+      return;
+    }
+    setExportingPractice(true);
+    setError("");
+    setPracticeExport(null);
+    try {
+      const result = await exportSessionPractice(selectedSessionId);
+      setPracticeExport(result);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setExportingPractice(false);
+    }
+  }
+
   return (
     <section className="report-panel glass-panel" data-testid="report-panel">
       <header className="lesson-panel-header">
@@ -117,6 +136,15 @@ export function ReportPanel({ projectId, onClose }: Props) {
         >
           {generating ? "生成中…" : "生成课堂报告"}
         </button>
+        <button
+          type="button"
+          className="toolbar-button compact"
+          disabled={!selectedSessionId || exportingPractice}
+          onClick={() => void exportPractice()}
+          data-testid="export-practice"
+        >
+          {exportingPractice ? "导出中…" : "导出练习卷"}
+        </button>
         {report?.report_url ? (
           <a
             className="toolbar-button compact"
@@ -128,6 +156,43 @@ export function ReportPanel({ projectId, onClose }: Props) {
           </a>
         ) : null}
       </div>
+
+      {practiceExport ? (
+        <div className="report-practice-export" data-testid="practice-export-result">
+          <p className="report-note">
+            选题来源：
+            {practiceExport.selection_summary
+              .filter((entry) => entry.count > 0)
+              .map((entry) => `${entry.label} ×${entry.count}`)
+              .join(" · ") || "无可选题内容"}
+          </p>
+          {practiceExport.notes.map((note, noteIndex) => (
+            <p key={noteIndex} className="report-note">
+              {note}
+            </p>
+          ))}
+          <div className="report-practice-links">
+            <a
+              className="toolbar-button compact primary"
+              href={buildAuthenticatedUrl(practiceExport.student_artifact.metadata?.public_url || "")}
+              target="_blank"
+              rel="noreferrer"
+              data-testid="practice-student-link"
+            >
+              下载学生卷（无答案）
+            </a>
+            <a
+              className="toolbar-button compact"
+              href={buildAuthenticatedUrl(practiceExport.teacher_artifact.metadata?.public_url || "")}
+              target="_blank"
+              rel="noreferrer"
+              data-testid="practice-teacher-link"
+            >
+              下载教师卷（含答案与课堂实测）
+            </a>
+          </div>
+        </div>
+      ) : null}
 
       {error ? <p className="report-error">{error}</p> : null}
       {!sessions.length ? <p className="lesson-empty">该项目还没有课堂会话记录。先在「上课」模式完成一次课堂吧。</p> : null}

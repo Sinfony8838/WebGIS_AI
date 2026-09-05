@@ -2138,6 +2138,17 @@ def generate_session_report(session_id: str, request: Request) -> Dict[str, Any]
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.post("/class-sessions/{session_id}/practice-export")
+def export_session_practice(session_id: str, request: Request) -> Dict[str, Any]:
+    _require_session_access(request, session_id)
+    try:
+        return runtime.classroom.export_session_practice(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/class-sessions/{session_id}/live")
 def session_live(session_id: str, request: Request) -> Dict[str, Any]:
     _require_session_access(request, session_id)
