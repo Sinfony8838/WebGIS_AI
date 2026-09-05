@@ -649,9 +649,28 @@ export type LessonBrainstorm = {
   button_label: string;
 };
 
+export type LessonQuestionImage = {
+  image_id?: string;
+  url: string;
+  width?: number;
+  height?: number;
+  content_type?: string;
+  anchor?: string;
+  order?: number;
+};
+
+export type LessonSubQuestion = {
+  index: string;
+  text: string;
+  options: string[];
+  answer: string;
+  answer_index: number | null;
+  explanation: string;
+};
+
 export type LessonQuestion = {
   question_id: string;
-  type: "choice" | "open";
+  type: "choice" | "open" | "composite";
   text: string;
   options: string[];
   answer_index: number | null;
@@ -660,6 +679,25 @@ export type LessonQuestion = {
   evidence_refs?: LessonEvidenceRef[];
   argument_chain?: string[];
   remediation_task?: string;
+  // 题库快照 / 手动题目扩展（教案设计新流程）
+  source?: "question_bank" | "teacher_manual" | "design";
+  task_text?: string;
+  material?: string;
+  answer?: string;
+  answer_letter?: string;
+  explanation?: string;
+  sub_questions?: LessonSubQuestion[];
+  images?: LessonQuestionImage[];
+  answer_complete?: boolean;
+  knowledge_points?: string[];
+  year?: string;
+  region?: string;
+  source_paper?: string;
+  bank_id?: string;
+  group_key?: string;
+  number?: string;
+  suggested_seconds?: number;
+  explanation_source?: string;
 };
 
 export type LessonScene = {
@@ -691,6 +729,128 @@ export type LessonStage = {
   activities?: string[];
   design_intent?: string;
   system_steps?: string[];
+  // 教研培训模板新增字段
+  material?: string;
+  question_chain?: string[];
+  teacher_activities?: string[];
+  student_activities?: string[];
+  knowledge_conclusion?: string;
+  objective_refs?: number[];
+};
+
+// ------------------------------------------------------------------
+// 题库（question bank）与教案设计工作台类型
+// ------------------------------------------------------------------
+
+export type QuestionBankSummary = {
+  bank_id: string;
+  project_id: string;
+  title: string;
+  base_name: string;
+  import_mode: "paired" | "analysis_only" | "original_only";
+  answer_missing: boolean;
+  section_count: number;
+  group_count: number;
+  question_count: number;
+  answer_complete_count: number;
+  answer_coverage: number;
+  image_count: number;
+  pairing_note_count: number;
+  stats: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type QuestionBankQuestion = {
+  question_id: string;
+  bank_id: string;
+  group_id: string;
+  group_key: string;
+  number: string;
+  type: "choice" | "open" | "composite";
+  is_composite: boolean;
+  section_index: number;
+  section_title: string;
+  knowledge_points: string[];
+  year: string;
+  region: string;
+  source_paper: string;
+  material: string;
+  stem: string;
+  task_text: string;
+  options: string[];
+  answer: string;
+  answer_letter: string;
+  answer_index: number | null;
+  explanation: string;
+  sub_questions: LessonSubQuestion[];
+  answer_complete: boolean;
+  relevance?: number;
+  auto_selectable?: boolean;
+  selection_reason?: string;
+  images: LessonQuestionImage[];
+};
+
+export type QuestionBankGroup = {
+  group_id: string;
+  group_key: string;
+  section_title: string;
+  material: string;
+  year: string;
+  region: string;
+  source_paper: string;
+  is_composite: boolean;
+  questions: QuestionBankQuestion[];
+  images: LessonQuestionImage[];
+};
+
+export type QuestionRetrievalCandidate = {
+  stage_id: string;
+  stage_title: string;
+  question_id: string;
+  bank_id: string;
+  group_key: string;
+  number: string;
+  type: string;
+  stem: string;
+  material: string;
+  year: string;
+  region: string;
+  source_paper: string;
+  answer_complete: boolean;
+  relevance: number;
+  auto_selectable: boolean;
+  selection_reason: string;
+  image_count: number;
+};
+
+export type QuestionCitation = {
+  question_id: string;
+  bank_id?: string;
+  group_key?: string;
+  stage_id?: string;
+  source?: string;
+  number?: string;
+  year?: string;
+  region?: string;
+  source_paper?: string;
+  bound_at_revision?: number;
+  relevance?: number;
+  selection_reason?: string;
+};
+
+export type DesignPlanItem = {
+  key: string;
+  label: string;
+  status: string;
+  value: string | Array<Record<string, unknown>>;
+};
+
+export type QuestionBankImportJobResult = {
+  banks?: QuestionBankSummary[];
+  assistant_message?: string;
+  summary?: string;
+  [key: string]: unknown;
 };
 
 export type LessonPlanProfile = {
@@ -707,8 +867,13 @@ export type LessonPlanProfile = {
   key_difficulties?: { key?: string[]; difficult?: string[] };
   methods?: string[];
   knowledge_structure?: string[];
+  core_questions?: { core: string; sub_questions: string[] };
   stages?: LessonStage[];
+  board_design?: string;
+  question_citations?: QuestionCitation[];
+  homework?: { basic: string[]; inquiry: string[] };
   capabilities?: Array<{ id: string; label?: string; reason?: string; available?: boolean }>;
+  design_thinking?: string;
   references?: Array<{ id?: string; title?: string; year?: string; url?: string } | string>;
   reflection?: string;
 };
@@ -734,6 +899,11 @@ export type LessonDesignSession = {
   created_at: string;
   updated_at: string;
   capabilities?: Array<{ id: string; label?: string; kind?: string; available?: boolean }>;
+  // 会话响应扩展字段（create/get/finalize 都会返回）
+  plan_items?: DesignPlanItem[];
+  retrieval_candidates?: QuestionRetrievalCandidate[];
+  auto_bound_questions?: LessonDesignTurnResult["auto_bound_questions"];
+  active_design_question?: string;
 };
 
 export type LessonDesignTurnResult = {
@@ -750,6 +920,59 @@ export type LessonDesignTurnResult = {
   diff_summary?: Array<{ section: string; label: string; changed: boolean }>;
   review_sections?: string[];
   rehearsal_report?: Record<string, unknown>;
+  plan_items?: DesignPlanItem[];
+  retrieval_candidates?: QuestionRetrievalCandidate[];
+  auto_bound_questions?: Array<{
+    stage_id: string;
+    question_id: string;
+    number: string;
+    stem: string;
+    relevance: number;
+    selection_reason: string;
+  }>;
+  active_design_question?: string;
+};
+
+// ------------------------------------------------------------------
+// 上课模拟测试（lesson rehearsal）
+// ------------------------------------------------------------------
+
+export type LessonRehearsalRecord = {
+  rehearsal_id: string;
+  project_id: string;
+  owner_user_id: string;
+  lesson_id: string;
+  base_version: number;
+  working_copy: LessonPlanProfile;
+  modification_events: Array<{ action: string; at?: string; [key: string]: unknown }>;
+  test_results: Record<string, { passed: boolean; note?: string; at?: string }>;
+  revision: number;
+  status: "active" | "completed" | "cancelled";
+  committed_version: number;
+  completed_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type LessonRehearsalReport = {
+  ready: boolean;
+  errors: string[];
+  warnings: string[];
+  total_minutes: number;
+  duration_minutes: number;
+  capabilities?: Array<{ id: string; label?: string }>;
+};
+
+export type LessonRehearsalCompleteResult = {
+  status: string;
+  lesson: LessonRecord;
+  rehearsal: LessonRehearsalRecord;
+  report: LessonRehearsalReport;
+  export?: {
+    status: string;
+    message?: string;
+    artifact?: ArtifactRecord;
+  };
 };
 
 export type LessonRecord = {

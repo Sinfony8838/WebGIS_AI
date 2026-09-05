@@ -495,6 +495,29 @@ class LessonDesignFinalizeRequest(BaseModel):
     apply_base: bool = False
 
 
+class LessonRehearsalCreateRequest(BaseModel):
+    project_id: str
+    lesson_id: str
+
+
+class LessonRehearsalUpdateRequest(BaseModel):
+    patch: Optional[Dict[str, Any]] = None
+    question_bind: Optional[Dict[str, Any]] = None
+    question_remove: Optional[Dict[str, Any]] = None
+    image_bind: Optional[Dict[str, Any]] = None
+    scene_capture: Optional[Dict[str, Any]] = None
+    test_result: Optional[Dict[str, Any]] = None
+    expected_revision: Optional[int] = None
+
+
+class LessonRehearsalCompleteRequest(BaseModel):
+    expected_revision: Optional[int] = None
+
+
+class LessonRehearsalStageRequest(BaseModel):
+    stage_id: str
+
+
 class LessonDocxExportRequest(BaseModel):
     project_id: str = ""
     design_id: str = ""
@@ -569,6 +592,26 @@ class StudentAnswerRequest(BaseModel):
     question_id: str
     choice_index: Optional[int] = None
     text: str = ""
+
+
+class QuestionBankSearchRequest(BaseModel):
+    project_id: str
+    bank_ids: list[str] = Field(default_factory=list)
+    topic: str = ""
+    knowledge: str = ""
+    objectives: list[str] = Field(default_factory=list)
+    type: str = ""
+    exclude_ids: list[str] = Field(default_factory=list)
+    limit: int = 5
+
+
+class LessonDesignQuestionBindRequest(BaseModel):
+    stage_id: str
+    question_id: str = ""
+    manual: Dict[str, Any] = Field(default_factory=dict)
+    action: str = "add"
+    position: Optional[int] = None
+    expected_revision: Optional[int] = None
 
 
 @app.get("/health")
@@ -1458,7 +1501,9 @@ def create_lesson_design_session(payload: LessonDesignCreateRequest, request: Re
 def get_lesson_design_session(design_id: str, request: Request) -> Dict[str, Any]:
     _require_lesson_design_access(request, design_id)
     try:
-        return runtime.classroom.get_lesson_design(design_id)
+        result = runtime.classroom.get_lesson_design(design_id)
+        _grant_response_files(request, result)
+        return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -1467,7 +1512,30 @@ def get_lesson_design_session(design_id: str, request: Request) -> Dict[str, Any
 def turn_lesson_design(design_id: str, payload: LessonDesignTurnRequest, request: Request) -> Dict[str, Any]:
     _require_lesson_design_access(request, design_id)
     try:
-        return runtime.classroom.turn_lesson_design(design_id, payload.message, payload.expected_revision, payload.step)
+        result = runtime.classroom.turn_lesson_design(design_id, payload.message, payload.expected_revision, payload.step)
+        _grant_response_files(request, result)
+        return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409 if "更新" in str(exc) else 400, detail=str(exc)) from exc
+
+
+@app.post("/lesson-design/sessions/{design_id}/questions/bind")
+def bind_lesson_design_question(design_id: str, payload: LessonDesignQuestionBindRequest, request: Request) -> Dict[str, Any]:
+    _require_lesson_design_access(request, design_id)
+    try:
+        result = runtime.classroom.bind_lesson_design_question(
+            design_id,
+            payload.stage_id,
+            question_id=payload.question_id,
+            manual=payload.manual or None,
+            action=payload.action,
+            position=payload.position,
+            expected_revision=payload.expected_revision,
+        )
+        _grant_response_files(request, result)
+        return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -1478,7 +1546,9 @@ def turn_lesson_design(design_id: str, payload: LessonDesignTurnRequest, request
 def resolve_lesson_design_section(design_id: str, section_id: str, payload: LessonDesignResolveRequest, request: Request) -> Dict[str, Any]:
     _require_lesson_design_access(request, design_id)
     try:
-        return runtime.classroom.resolve_lesson_design(design_id, section_id, payload.decision, payload.teacher_note, payload.expected_revision, payload.value)
+        result = runtime.classroom.resolve_lesson_design(design_id, section_id, payload.decision, payload.teacher_note, payload.expected_revision, payload.value)
+        _grant_response_files(request, result)
+        return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -1489,11 +1559,218 @@ def resolve_lesson_design_section(design_id: str, section_id: str, payload: Less
 def finalize_lesson_design(design_id: str, payload: LessonDesignFinalizeRequest, request: Request) -> Dict[str, Any]:
     _require_lesson_design_access(request, design_id)
     try:
-        return runtime.classroom.finalize_lesson_design(design_id, payload.expected_revision, payload.apply_base)
+        result = runtime.classroom.finalize_lesson_design(design_id, payload.expected_revision, payload.apply_base)
+        _grant_response_files(request, result)
+        return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409 if "更新" in str(exc) else 400, detail=str(exc)) from exc
+
+
+def _require_rehearsal_access(request: Request, rehearsal_id: str) -> Any:
+    rehearsal = runtime.store.get_lesson_rehearsal(rehearsal_id)
+    if rehearsal is None:
+        raise HTTPException(status_code=404, detail="Unknown lesson rehearsal")
+    _require_project_access(request, rehearsal.project_id)
+    context = _current_auth(request)
+    if context.user.get("role") != "admin" and rehearsal.owner_user_id != context.user.get("user_id"):
+        raise HTTPException(status_code=404, detail="Unknown lesson rehearsal")
+    return rehearsal
+
+
+@app.post("/lesson-rehearsals")
+def create_lesson_rehearsal(payload: LessonRehearsalCreateRequest, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, payload.project_id)
+    _require_lesson_access(request, payload.lesson_id)
+    try:
+        return runtime.classroom.create_lesson_rehearsal(
+            payload.project_id,
+            payload.lesson_id,
+            owner_user_id=str(_current_auth(request)["user"]["user_id"]),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/lesson-rehearsals")
+def list_lesson_rehearsals(project_id: str, request: Request, lesson_id: str = Query(""), status: str = Query("")) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
+    return runtime.classroom.list_lesson_rehearsals(project_id=project_id, lesson_id=lesson_id, status=status)
+
+
+@app.get("/lesson-rehearsals/{rehearsal_id}")
+def get_lesson_rehearsal(rehearsal_id: str, request: Request) -> Dict[str, Any]:
+    _require_rehearsal_access(request, rehearsal_id)
+    return runtime.classroom.get_lesson_rehearsal(rehearsal_id)
+
+
+@app.patch("/lesson-rehearsals/{rehearsal_id}")
+def update_lesson_rehearsal(rehearsal_id: str, payload: LessonRehearsalUpdateRequest, request: Request) -> Dict[str, Any]:
+    _require_rehearsal_access(request, rehearsal_id)
+    try:
+        return runtime.classroom.update_lesson_rehearsal(
+            rehearsal_id,
+            patch=payload.patch,
+            question_bind=payload.question_bind,
+            question_remove=payload.question_remove,
+            image_bind=payload.image_bind,
+            scene_capture=payload.scene_capture,
+            test_result=payload.test_result,
+            expected_revision=payload.expected_revision,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409 if "已更新" in str(exc) else 400, detail=str(exc)) from exc
+
+
+@app.post("/lesson-rehearsals/{rehearsal_id}/apply-scene")
+def apply_rehearsal_stage_scene(rehearsal_id: str, payload: LessonRehearsalStageRequest, request: Request) -> Dict[str, Any]:
+    _require_rehearsal_access(request, rehearsal_id)
+    try:
+        return runtime.classroom.apply_rehearsal_stage_scene(rehearsal_id, payload.stage_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/lesson-rehearsals/{rehearsal_id}/report")
+def lesson_rehearsal_report(rehearsal_id: str, request: Request) -> Dict[str, Any]:
+    _require_rehearsal_access(request, rehearsal_id)
+    return runtime.classroom.lesson_rehearsal_report(rehearsal_id)
+
+
+@app.post("/lesson-rehearsals/{rehearsal_id}/complete")
+def complete_lesson_rehearsal(rehearsal_id: str, payload: LessonRehearsalCompleteRequest, request: Request) -> Dict[str, Any]:
+    _require_rehearsal_access(request, rehearsal_id)
+    try:
+        result = runtime.classroom.complete_lesson_rehearsal(rehearsal_id, expected_revision=payload.expected_revision)
+        _grant_response_files(request, result)
+        return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409 if "已更新" in str(exc) else 400, detail=str(exc)) from exc
+
+
+@app.post("/lesson-rehearsals/{rehearsal_id}/cancel")
+def cancel_lesson_rehearsal(rehearsal_id: str, request: Request) -> Dict[str, Any]:
+    _require_rehearsal_access(request, rehearsal_id)
+    try:
+        return runtime.classroom.cancel_lesson_rehearsal(rehearsal_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _require_question_bank_access(request: Request, bank_id: str) -> Any:
+    try:
+        bank = runtime.classroom.question_bank.get_bank(bank_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _require_project_access(request, bank["project_id"])
+
+
+@app.post("/question-banks/import")
+async def import_question_banks(
+    request: Request,
+    project_id: str = Form(...),
+    files: List[UploadFile] = File(...),
+) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
+    if not files:
+        raise HTTPException(status_code=400, detail="未选择任何文件。")
+    if len(files) > 4:
+        raise HTTPException(status_code=400, detail="单次导入最多 4 个文件。")
+    payload = []
+    for upload in files:
+        raw = await upload.read()
+        payload.append({"filename": upload.filename or "题库.docx", "raw": raw})
+    return runtime.classroom.submit_question_bank_import(
+        project_id,
+        payload,
+        owner_user_id=str(_current_auth(request)["user"]["user_id"]),
+    )
+
+
+@app.get("/question-banks")
+def list_question_banks(project_id: str, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
+    result = runtime.classroom.list_question_banks(project_id)
+    _grant_response_files(request, result)
+    return result
+
+
+@app.delete("/question-banks/{bank_id}")
+def delete_question_bank(bank_id: str, request: Request) -> Dict[str, Any]:
+    _require_question_bank_access(request, bank_id)
+    return runtime.classroom.delete_question_bank(bank_id)
+
+
+@app.get("/question-banks/{bank_id}/questions")
+def list_question_bank_questions(
+    bank_id: str,
+    request: Request,
+    section: str = Query(""),
+    type: str = Query(""),
+    answer_complete: Optional[bool] = Query(None),
+    search: str = Query(""),
+    page: int = Query(1),
+    page_size: int = Query(20),
+) -> Dict[str, Any]:
+    _require_question_bank_access(request, bank_id)
+    try:
+        result = runtime.classroom.get_question_bank_questions(
+            bank_id,
+            section=section,
+            qtype=type,
+            answer_complete=answer_complete,
+            search=search,
+            page=page,
+            page_size=page_size,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _grant_response_files(request, result)
+    return result
+
+
+@app.get("/question-banks/{bank_id}/groups/{group_key}")
+def get_question_bank_group(bank_id: str, group_key: str, request: Request) -> Dict[str, Any]:
+    _require_question_bank_access(request, bank_id)
+    try:
+        result = runtime.classroom.get_question_bank_group(bank_id, group_key)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    _grant_response_files(request, result)
+    return result
+
+
+@app.post("/question-banks/search")
+def search_question_banks(payload: QuestionBankSearchRequest, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, payload.project_id)
+    for bank_id in payload.bank_ids:
+        _require_question_bank_access(request, bank_id)
+    try:
+        result = runtime.classroom.search_question_banks(
+            payload.project_id,
+            bank_ids=payload.bank_ids,
+            topic=payload.topic,
+            knowledge=payload.knowledge,
+            objectives=payload.objectives,
+            qtype=payload.type,
+            exclude_ids=payload.exclude_ids,
+            limit=payload.limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _grant_response_files(request, result)
+    return result
 
 
 @app.get("/population-sources/versions")

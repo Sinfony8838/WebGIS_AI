@@ -10,7 +10,9 @@ from typing import Any, Dict, List, Optional
 
 from .lessons import LessonService
 from .lesson_design import LessonDesignService
+from .lesson_rehearsal import LessonRehearsalService
 from .population_lesson_prep import PopulationLessonPrepService
+from .question_bank import QuestionBankService
 from .reports import ReportService
 from .visual_query import VisualQueryService
 
@@ -45,6 +47,10 @@ class ClassroomWorkflowRuntime:
             self.lesson_service,
             runtime.population_source_registry_service,
         )
+        self.question_bank = QuestionBankService(
+            self.config,
+            minimax_client=runtime.minimax_client if self.config.minimax_enabled() else None,
+        )
         self.lesson_design = LessonDesignService(
             self.config,
             self.store,
@@ -54,6 +60,14 @@ class ClassroomWorkflowRuntime:
             catalog_service=runtime.one_map_catalog_service,
             knowledge_base_service=runtime.knowledge_base_service,
             resource_search_service=runtime.resource_search_service,
+            question_bank_service=self.question_bank,
+        )
+        self.lesson_rehearsal = LessonRehearsalService(
+            self.config,
+            self.store,
+            self.lesson_service,
+            self.lesson_design,
+            self.question_bank,
         )
         self._student_presence: Dict[str, Dict[str, float]] = {}
 
@@ -127,11 +141,11 @@ class ClassroomWorkflowRuntime:
 
     def create_lesson_design(self, project_id: str, owner_user_id: str, base_lesson_id: str = "", requirements: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         design = self.lesson_design.create_or_resume(project_id, owner_user_id, base_lesson_id, requirements)
-        return {"status": "success", **design.to_dict(), "capabilities": self.lesson_design.capability_catalog()}
+        return {"status": "success", **design.to_dict(), **self.lesson_design.session_view(design), "capabilities": self.lesson_design.capability_catalog()}
 
     def get_lesson_design(self, design_id: str) -> Dict[str, Any]:
         design = self.lesson_design.get(design_id)
-        return {"status": "success", **design.to_dict(), "capabilities": self.lesson_design.capability_catalog()}
+        return {"status": "success", **design.to_dict(), **self.lesson_design.session_view(design), "capabilities": self.lesson_design.capability_catalog()}
 
     def turn_lesson_design(self, design_id: str, message: str, expected_revision: Optional[int] = None, step: str = "") -> Dict[str, Any]:
         return self.lesson_design.turn(design_id, message, expected_revision, step)
@@ -139,11 +153,200 @@ class ClassroomWorkflowRuntime:
     def resolve_lesson_design(self, design_id: str, section_id: str, decision: str = "accept", teacher_note: str = "", expected_revision: Optional[int] = None, value: Any = None) -> Dict[str, Any]:
         return self.lesson_design.resolve(design_id, section_id, decision, teacher_note, expected_revision, value)
 
+    def bind_lesson_design_question(
+        self,
+        design_id: str,
+        stage_id: str,
+        question_id: str = "",
+        manual: Optional[Dict[str, Any]] = None,
+        action: str = "add",
+        position: Optional[int] = None,
+        expected_revision: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        return self.lesson_design.bind_question(
+            design_id, stage_id,
+            question_id=question_id, manual=manual, action=action,
+            position=position, expected_revision=expected_revision,
+        )
+
     def finalize_lesson_design(self, design_id: str, expected_revision: Optional[int] = None, apply_base: bool = False) -> Dict[str, Any]:
         return self.lesson_design.finalize(design_id, expected_revision, apply_base)
 
     def export_lesson_docx(self, lesson_id: str, project_id: str, design_id: str = "") -> Dict[str, Any]:
         return self.lesson_design.export_docx(lesson_id, project_id, design_id)
+
+    # ------------------------------------------------------------------
+    # Question banks（题库导入/检索）
+    # ------------------------------------------------------------------
+
+    def submit_question_bank_import(
+        self,
+        project_id: str,
+        files: List[Dict[str, Any]],
+        owner_user_id: str = "",
+    ) -> Dict[str, Any]:
+        """``files`` 为 [{"filename": ..., "raw": bytes}]；导入在后台线程执行。"""
+        job = self.store.create_job(
+            project_id=project_id,
+            job_type="question_bank_import",
+            title="Import question bank",
+            workflow_type="question_bank_import",
+            request={"file_count": len(files), "filenames": [str(item.get("filename") or "") for item in files]},
+        )
+        threading.Thread(
+            target=self._run_question_bank_import_job,
+            args=(job.job_id, project_id, files, owner_user_id),
+            daemon=True,
+        ).start()
+        return {"status": "accepted", "job_id": job.job_id, "project_id": project_id}
+
+    def _run_question_bank_import_job(
+        self,
+        job_id: str,
+        project_id: str,
+        files: List[Dict[str, Any]],
+        owner_user_id: str,
+    ) -> None:
+        try:
+            self.store.set_job_status(job_id, "running")
+            payload = [
+                (str(item.get("filename") or ""), bytes(item.get("raw") or b""))
+                for item in files
+            ]
+
+            def progress(stage: str, message: str) -> None:
+                key = "analysis" if stage == "validate" else "actions"
+                self.store.update_job_stage(job_id, key, "running", message)
+
+            self.store.update_job_stage(job_id, "analysis", "running", "Validating DOCX files.")
+            banks = self.question_bank.import_files(project_id, owner_user_id, payload, progress=progress)
+            self.store.update_job_stage(job_id, "analysis", "success", "Question bank files parsed.")
+            self.store.update_job_stage(job_id, "actions", "success", f"Imported {len(banks)} question bank(s).")
+            self.store.update_job_stage(job_id, "map", "skipped", "Question bank import does not change the map.")
+            self.store.update_job_stage(job_id, "artifacts", "success", "Question bank stored.")
+            summary_parts = [
+                f"{bank.get('title', '')}：{bank.get('question_count', 0)} 题"
+                for bank in banks
+            ]
+            self.store.set_job_status(
+                job_id,
+                "completed",
+                result={
+                    "status": "success",
+                    "workflow_type": "question_bank_import",
+                    "summary": "；".join(summary_parts),
+                    "assistant_message": f"题库导入完成（{len(banks)} 套）。可在教案设计的题目匹配环节检索使用。",
+                    "banks": banks,
+                    "stages": self.store.get_job(job_id).stages,
+                },
+            )
+        except Exception as exc:
+            self.runtime._fail_job(job_id, "question_bank_import", str(exc))
+
+    def list_question_banks(self, project_id: str) -> Dict[str, Any]:
+        return {"status": "success", "items": self.question_bank.list_banks(project_id)}
+
+    def get_question_bank_questions(
+        self,
+        bank_id: str,
+        section: str = "",
+        qtype: str = "",
+        answer_complete: Optional[bool] = None,
+        search: str = "",
+        page: int = 1,
+        page_size: int = 20,
+    ) -> Dict[str, Any]:
+        return self.question_bank.list_questions(
+            bank_id,
+            section=section,
+            qtype=qtype,
+            answer_complete=answer_complete,
+            search=search,
+            page=page,
+            page_size=page_size,
+        )
+
+    def get_question_bank_group(self, bank_id: str, group_key: str) -> Dict[str, Any]:
+        return self.question_bank.get_group(bank_id, group_key)
+
+    def search_question_banks(
+        self,
+        project_id: str,
+        bank_ids: Optional[List[str]] = None,
+        topic: str = "",
+        knowledge: str = "",
+        objectives: Optional[List[str]] = None,
+        qtype: str = "",
+        exclude_ids: Optional[List[str]] = None,
+        limit: int = 5,
+    ) -> Dict[str, Any]:
+        return self.question_bank.search(
+            project_id=project_id,
+            bank_ids=bank_ids,
+            topic=topic,
+            knowledge=knowledge,
+            objectives=objectives,
+            qtype=qtype,
+            exclude_ids=exclude_ids,
+            limit=limit,
+        )
+
+    def delete_question_bank(self, bank_id: str) -> Dict[str, Any]:
+        return self.question_bank.delete_bank(bank_id)
+
+    # ------------------------------------------------------------------
+    # 上课模拟测试（教案草稿 → 真实课堂的闸门）
+    # ------------------------------------------------------------------
+
+    def create_lesson_rehearsal(self, project_id: str, lesson_id: str, owner_user_id: str = "") -> Dict[str, Any]:
+        self.runtime._require_project(project_id)
+        return self.lesson_rehearsal.create(project_id, lesson_id, owner_user_id=owner_user_id)
+
+    def get_lesson_rehearsal(self, rehearsal_id: str) -> Dict[str, Any]:
+        record = self.lesson_rehearsal.get(rehearsal_id)
+        return {"status": "success", "rehearsal": record.to_dict()}
+
+    def list_lesson_rehearsals(
+        self,
+        project_id: str = "",
+        lesson_id: str = "",
+        status: str = "",
+    ) -> Dict[str, Any]:
+        return self.lesson_rehearsal.list(project_id=project_id, lesson_id=lesson_id, status=status)
+
+    def update_lesson_rehearsal(
+        self,
+        rehearsal_id: str,
+        patch: Optional[Dict[str, Any]] = None,
+        question_bind: Optional[Dict[str, Any]] = None,
+        question_remove: Optional[Dict[str, Any]] = None,
+        image_bind: Optional[Dict[str, Any]] = None,
+        scene_capture: Optional[Dict[str, Any]] = None,
+        test_result: Optional[Dict[str, Any]] = None,
+        expected_revision: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        return self.lesson_rehearsal.update(
+            rehearsal_id,
+            patch=patch,
+            question_bind=question_bind,
+            question_remove=question_remove,
+            image_bind=image_bind,
+            scene_capture=scene_capture,
+            test_result=test_result,
+            expected_revision=expected_revision,
+        )
+
+    def apply_rehearsal_stage_scene(self, rehearsal_id: str, stage_id: str) -> Dict[str, Any]:
+        return self.lesson_rehearsal.apply_stage_scene(rehearsal_id, stage_id)
+
+    def lesson_rehearsal_report(self, rehearsal_id: str) -> Dict[str, Any]:
+        return self.lesson_rehearsal.report(rehearsal_id)
+
+    def complete_lesson_rehearsal(self, rehearsal_id: str, expected_revision: Optional[int] = None) -> Dict[str, Any]:
+        return self.lesson_rehearsal.complete(rehearsal_id, expected_revision=expected_revision)
+
+    def cancel_lesson_rehearsal(self, rehearsal_id: str) -> Dict[str, Any]:
+        return self.lesson_rehearsal.cancel(rehearsal_id)
 
     def resolve_population_lesson_prep(
         self,
@@ -191,13 +394,25 @@ class ClassroomWorkflowRuntime:
     def create_class_session(self, lesson_id: str, project_id: str) -> Dict[str, Any]:
         self.runtime._require_project(project_id)
         lesson = self.lesson_service.get_lesson(lesson_id)
+        # 教案设计产出的课时必须先通过模拟测试才能开真实课堂；
+        # 内置/导入/手动课时保持原有开课路径，不回溯设卡。
+        metadata = dict(lesson.metadata or {})
+        ready = metadata.get("ready_for_class")
+        if isinstance(ready, str):
+            ready = ready.strip().lower() == "true"
+        if str(metadata.get("created_from") or "") == "lesson_design" and not ready:
+            raise ValueError("教案还未通过模拟测试，不能开始真实课堂。")
         join_code = self._generate_join_code()
         with self.store.batch():
             session = self.store.create_class_session(
                 lesson_id=lesson_id,
                 project_id=project_id,
                 join_code=join_code,
-                metadata={"lesson_title": lesson.title},
+                # 真实课堂读取开课时刻的课时快照，之后的课时版本演进不影响已下课报告。
+                metadata={
+                    "lesson_title": lesson.title,
+                    "lesson_snapshot": lesson.to_dict(),
+                },
             )
             self.store.append_session_event(session.session_id, "session_start", payload={"lesson_title": lesson.title})
             self.store.add_recent_action(

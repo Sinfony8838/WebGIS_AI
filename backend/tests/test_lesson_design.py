@@ -32,7 +32,10 @@ class LessonDesignServiceTest(unittest.TestCase):
         current = self.store.get_lesson_design(design_id).current_step
         result = self.runtime.classroom.turn_lesson_design(design_id, message, revision)
         revision = result["revision"]
-        if current in {"requirements", "analysis", "objectives", "process", "capabilities"}:
+        if current in {
+            "requirements", "analysis", "objectives", "core_questions", "process",
+            "question_matching", "capabilities",
+        }:
             resolved = self.runtime.classroom.resolve_lesson_design(design_id, current, "accept", "", revision)
             revision = resolved["design"]["revision"]
         return result, revision
@@ -41,14 +44,25 @@ class LessonDesignServiceTest(unittest.TestCase):
         design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
         design_id = design["design_id"]
         revision = design["revision"]
-        for message in ("高一、40分钟、人口分布", "课标强调空间分布和区域差异", "描述规律并解释原因", "继续设计课堂过程", "使用二维地图"):
+        messages = (
+            "高一、40分钟、人口分布",  # 需求确认
+            "课标强调空间分布和区域差异",  # 课标与学情
+            "描述规律并解释原因",  # 目标与重难点
+            "核心问题就按建议来",  # 核心问题与问题链
+            "继续设计课堂过程",  # 教学过程
+            "从题库匹配题目并补作业",  # 题目匹配
+            "使用二维地图",  # GIS/AI能力
+        )
+        for message in messages:
             result, revision = self.advance(design_id, message, revision)
         result = self.runtime.classroom.turn_lesson_design(design_id, "运行预演", revision)
+        revision = result["revision"]
+        result = self.runtime.classroom.turn_lesson_design(design_id, "补充设计思路与反思", revision)
         revision = result["revision"]
         persisted = self.store.get_lesson_design(design_id)
         self.assertIsNotNone(persisted)
         self.assertEqual(persisted.revision, revision)
-        self.assertEqual(len(persisted.turns), 6)
+        self.assertEqual(len(persisted.turns), 9)
         result = self.runtime.classroom.finalize_lesson_design(design_id, revision)
         self.assertEqual(result["lesson"]["source"], "assistant_draft")
         self.assertEqual(result["lesson"]["metadata"]["project_id"], self.project)
@@ -188,9 +202,20 @@ class LessonDesignServiceTest(unittest.TestCase):
     def test_docx_export_has_five_column_process_and_page_field(self) -> None:
         design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
         revision = 0
-        for message in ("高一、40分钟、人口分布", "课标", "描述规律", "设计过程", "二维地图"):
+        messages = (
+            "高一、40分钟、人口分布",
+            "课标",
+            "描述规律",
+            "核心问题就按建议来",
+            "设计过程",
+            "从题库匹配题目并补作业",
+            "二维地图",
+        )
+        for message in messages:
             result, revision = self.advance(design["design_id"], message, revision)
         result = self.runtime.classroom.turn_lesson_design(design["design_id"], "运行预演", revision)
+        revision = result["revision"]
+        result = self.runtime.classroom.turn_lesson_design(design["design_id"], "补充设计思路与反思", revision)
         revision = result["revision"]
         lesson = self.runtime.classroom.finalize_lesson_design(design["design_id"], revision)["lesson"]
         exported = self.runtime.classroom.export_lesson_docx(lesson["lesson_id"], self.project, design["design_id"])

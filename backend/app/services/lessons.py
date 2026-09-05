@@ -285,6 +285,13 @@ class LessonService:
         stage = lesson.find_stage(stage_id)
         if stage is None:
             raise KeyError(f"Unknown stage: {stage_id}")
+        return self.apply_stage_scene_data(project_id, stage, lesson_id=lesson_id)
+
+    def apply_stage_scene_data(
+        self, project_id: str, stage: Dict[str, Any], lesson_id: str = ""
+    ) -> Dict[str, Any]:
+        """把一个环节的场景声明作用到项目；模拟测试的工作副本环节同样可用。"""
+        stage_id = str(stage.get("stage_id") or "")
         project = self.store.get_project(project_id)
         if project is None:
             raise KeyError(f"Unknown project: {project_id}")
@@ -406,12 +413,10 @@ class LessonService:
                 if layer.visible:
                     self.store.patch_layer(project_id, layer_id, {"visible": False})
 
-    def capture_stage_scene(self, lesson_id: str, stage_id: str, snapshot: Dict[str, Any]) -> Dict[str, Any]:
-        lesson = self.get_lesson(lesson_id)
-        stage = lesson.find_stage(stage_id)
-        if stage is None:
-            raise KeyError(f"Unknown stage: {stage_id}")
-        scene = {**default_scene(), **(stage.get("scene") or {})}
+    @staticmethod
+    def merge_scene_snapshot(scene: Dict[str, Any], snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        """把当前地图快照并入环节场景声明（模拟测试存图与课时存图共用）。"""
+        scene = {**default_scene(), **(scene or {})}
 
         if snapshot.get("basemap_id"):
             scene["basemap_id"] = str(snapshot["basemap_id"])
@@ -430,6 +435,14 @@ class LessonService:
             scene["templates"] = [str(item) for item in snapshot["templates"]]
         if isinstance(snapshot.get("globe"), dict):
             scene["globe"] = normalize_scene_globe(snapshot["globe"])
+        return scene
+
+    def capture_stage_scene(self, lesson_id: str, stage_id: str, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        lesson = self.get_lesson(lesson_id)
+        stage = lesson.find_stage(stage_id)
+        if stage is None:
+            raise KeyError(f"Unknown stage: {stage_id}")
+        scene = self.merge_scene_snapshot(stage.get("scene") or {}, snapshot)
 
         stage["scene"] = scene
         self.store.upsert_lesson(lesson)
@@ -635,34 +648,12 @@ class LessonService:
             for q_index, question in enumerate(raw.get("questions") or [], start=1):
                 if not isinstance(question, dict):
                     continue
-                q_type = str(question.get("type") or "open")
-                options = [str(option) for option in question.get("options") or []]
-                answer_index = question.get("answer_index")
-                if q_type != "choice" or not options:
-                    q_type = "choice" if options else "open"
-                if not isinstance(answer_index, int) or not (0 <= answer_index < len(options)):
-                    answer_index = None
-                questions.append(
-                    {
-                        "question_id": str(question.get("question_id") or f"{stage_id}q{q_index}"),
-                        "type": q_type,
-                        "text": str(question.get("text") or ""),
-                        "options": options,
-                        "answer_index": answer_index,
-                        "expected_points": [str(item) for item in question.get("expected_points") or []],
-                        "misconceptions": [
-                            {
-                                "tag": str(item.get("tag") or ""),
-                                "description": str(item.get("description") or ""),
-                            }
-                            for item in question.get("misconceptions") or []
-                            if isinstance(item, dict)
-                        ],
-                        "evidence_refs": normalize_evidence_refs(question.get("evidence_refs")),
-                        "argument_chain": [str(item) for item in question.get("argument_chain") or [] if str(item)],
-                        "remediation_task": str(question.get("remediation_task") or ""),
-                    }
-                )
+                questions.append(self._normalize_stage_question(question, stage_id, q_index))
+            objective_refs = [
+                int(item)
+                for item in raw.get("objective_refs") or []
+                if isinstance(item, int) or (isinstance(item, str) and item.isdigit())
+            ]
             normalized.append(
                 {
                     "stage_id": stage_id,
@@ -676,14 +667,115 @@ class LessonService:
                     "knowledge_point": str(raw.get("knowledge_point") or ""),
                     "content": str(raw.get("content") or raw.get("teaching_activity") or ""),
                     "activities": [str(item) for item in raw.get("activities") or []],
+                    "material": str(raw.get("material") or ""),
+                    "question_chain": [str(item) for item in raw.get("question_chain") or [] if str(item)],
+                    "teacher_activities": [str(item) for item in raw.get("teacher_activities") or [] if str(item)],
+                    "student_activities": [str(item) for item in raw.get("student_activities") or [] if str(item)],
+                    "knowledge_conclusion": str(raw.get("knowledge_conclusion") or ""),
                     "design_intent": str(raw.get("design_intent") or ""),
                     "system_steps": [str(item) for item in raw.get("system_steps") or []],
+                    "objective_refs": objective_refs,
                     "brainstorm": normalize_brainstorm(raw.get("brainstorm")),
                     "evidence_refs": normalize_evidence_refs(raw.get("evidence_refs")),
                     "teacher_guidance": normalize_teacher_guidance(raw.get("teacher_guidance")),
                 }
             )
         return normalized
+
+    @staticmethod
+    def _normalize_stage_question(question: Dict[str, Any], stage_id: str, q_index: int) -> Dict[str, Any]:
+        """环节题目规范化：保留旧 choice/open 题型，新增 composite 与题库/手动快照字段。
+
+        题库快照（source=question_bank）与教师手动题（source=teacher_manual）
+        的答案、解析、题图、小问等字段原样保留，保证快照不可变。
+        """
+        options = [str(option) for option in question.get("options") or []]
+        sub_questions = [
+            {
+                "index": str(sub.get("index") or sub_index + 1),
+                "text": str(sub.get("text") or ""),
+                "options": [str(item) for item in sub.get("options") or []],
+                "answer": str(sub.get("answer") or ""),
+                "answer_index": sub.get("answer_index") if isinstance(sub.get("answer_index"), int) else None,
+                "explanation": str(sub.get("explanation") or ""),
+            }
+            for sub_index, sub in enumerate(question.get("sub_questions") or [])
+            if isinstance(sub, dict)
+        ]
+        q_type = str(question.get("type") or "open").strip()
+        if sub_questions:
+            q_type = "composite"
+        elif options:
+            q_type = "choice"
+        elif q_type not in {"choice", "open", "composite"}:
+            q_type = "open"
+        answer_index = question.get("answer_index")
+        if not isinstance(answer_index, int) or not (0 <= answer_index < len(options)):
+            answer_index = None
+        source = str(question.get("source") or "").strip()
+        if source not in {"question_bank", "teacher_manual"}:
+            source = "design"
+        answer = str(question.get("answer") or "")
+        answer_complete = question.get("answer_complete")
+        if not isinstance(answer_complete, bool):
+            if sub_questions:
+                answer_complete = all(str(sub.get("answer") or "").strip() for sub in sub_questions)
+            elif options:
+                answer_complete = answer_index is not None or bool(answer.strip())
+            else:
+                answer_complete = bool(answer.strip())
+        try:
+            suggested_seconds = int(question.get("suggested_seconds") or 0)
+        except (TypeError, ValueError):
+            suggested_seconds = 0
+        return {
+            "question_id": str(question.get("question_id") or f"{stage_id}q{q_index}"),
+            "type": q_type,
+            "source": source,
+            "text": str(question.get("text") or ""),
+            "task_text": str(question.get("task_text") or ""),
+            "material": str(question.get("material") or ""),
+            "options": options,
+            "answer": answer,
+            "answer_letter": str(question.get("answer_letter") or ""),
+            "answer_index": answer_index,
+            "explanation": str(question.get("explanation") or ""),
+            "sub_questions": sub_questions,
+            "images": [
+                {
+                    "url": str(image.get("url") or ""),
+                    "width": int(image.get("width") or 0),
+                    "height": int(image.get("height") or 0),
+                    "content_type": str(image.get("content_type") or ""),
+                    "anchor": str(image.get("anchor") or "group"),
+                    "order": int(image.get("order") or 0),
+                }
+                for image in question.get("images") or []
+                if isinstance(image, dict)
+            ],
+            "answer_complete": answer_complete,
+            "knowledge_points": [str(item) for item in question.get("knowledge_points") or []],
+            "year": str(question.get("year") or ""),
+            "region": str(question.get("region") or ""),
+            "source_paper": str(question.get("source_paper") or ""),
+            "bank_id": str(question.get("bank_id") or ""),
+            "group_key": str(question.get("group_key") or ""),
+            "number": str(question.get("number") or ""),
+            "suggested_seconds": suggested_seconds,
+            "expected_points": [str(item) for item in question.get("expected_points") or []],
+            "misconceptions": [
+                {
+                    "tag": str(item.get("tag") or ""),
+                    "description": str(item.get("description") or ""),
+                }
+                for item in question.get("misconceptions") or []
+                if isinstance(item, dict)
+            ],
+            "evidence_refs": normalize_evidence_refs(question.get("evidence_refs")),
+            "argument_chain": [str(item) for item in question.get("argument_chain") or [] if str(item)],
+            "remediation_task": str(question.get("remediation_task") or ""),
+            "explanation_source": str(question.get("explanation_source") or ("official" if source == "question_bank" else "")),
+        }
 
 
 def _extract_json_payload(content: str) -> Dict[str, Any]:

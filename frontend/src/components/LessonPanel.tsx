@@ -31,6 +31,8 @@ type Props = {
   onResolvePrepChangeSet?: (decision: "apply" | "reject", acceptedStageIds: string[]) => void;
   onStartClass: () => void;
   onStartDesign?: () => void;
+  /** 进入该课时的模拟测试（试讲 → 通过后发布为新版本）。 */
+  onStartRehearsal?: (lesson: LessonRecord) => void;
   onClose: () => void;
 };
 
@@ -77,6 +79,7 @@ export function LessonPanel({
   onResolvePrepChangeSet,
   onStartClass,
   onStartDesign,
+  onStartRehearsal,
   onClose
 }: Props) {
   const [expandedStageId, setExpandedStageId] = useState("");
@@ -94,6 +97,15 @@ export function LessonPanel({
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
 
   const totalMinutes = activeLesson?.stages.reduce((sum, stage) => sum + (stage.minutes || 0), 0) || 0;
+  // 课程卡片：版本 / 课中练习 / 最近模拟测试 / 可开课状态（来自教案设计流程的课时须先过模拟测试）。
+  const lessonMeta = activeLesson?.metadata || {};
+  const lessonVersion = Number(lessonMeta.lesson_version || 1);
+  const readyForClass = lessonMeta.ready_for_class === true || String(lessonMeta.ready_for_class) === "true";
+  const fromLessonDesign = String(lessonMeta.created_from || "") === "lesson_design";
+  const needsRehearsal = fromLessonDesign && !readyForClass;
+  const inClassQuestionCount =
+    activeLesson?.stages.reduce((sum, stage) => sum + (stage.questions?.length || 0), 0) || 0;
+  const lastRehearsal = (lessonMeta.last_rehearsal as { completed_at?: string; committed_version?: number } | undefined) || null;
 
   useEffect(() => {
     if (!prepResult?.change_set) {
@@ -167,7 +179,7 @@ export function LessonPanel({
         </button>
         {onStartDesign ? (
           <button type="button" className="toolbar-button compact primary" onClick={onStartDesign} disabled={busy} data-testid="lesson-design-toggle">
-            共创教案
+            教案设计
           </button>
         ) : null}
         {onPrepareLesson ? (
@@ -185,10 +197,22 @@ export function LessonPanel({
             人口专题智能备课
           </button>
         ) : null}
+        {onStartRehearsal && activeLesson ? (
+          <button
+            type="button"
+            className="toolbar-button compact"
+            disabled={busy}
+            onClick={() => activeLesson && onStartRehearsal(activeLesson)}
+            data-testid="start-rehearsal"
+          >
+            模拟测试
+          </button>
+        ) : null}
         <button
           type="button"
           className="toolbar-button compact primary"
-          disabled={!activeLesson || busy}
+          disabled={!activeLesson || busy || needsRehearsal}
+          title={needsRehearsal ? "教案设计的课时需先通过模拟测试才能开真实课堂" : undefined}
           onClick={onStartClass}
           data-testid="start-class"
         >
@@ -407,6 +431,16 @@ export function LessonPanel({
             <span>
               {activeLesson.grade || activeLesson.subject} · {activeLesson.stages.length} 个环节 · 共 {totalMinutes} 分钟
             </span>
+            <span className="lesson-meta-status" data-testid="lesson-card-meta">
+              v{lessonVersion} · 课中练习 {inClassQuestionCount} 题
+              {fromLessonDesign ? (readyForClass ? " · 可开真实课堂" : " · 待模拟测试") : ""}
+              {lastRehearsal?.completed_at
+                ? ` · 最近模拟测试 ${String(lastRehearsal.completed_at).slice(0, 10)}`
+                : ""}
+            </span>
+            {needsRehearsal ? (
+              <em className="lesson-meta-hint">本课时由教案设计生成，需先通过模拟测试才能开始真实课堂。</em>
+            ) : null}
           </div>
 
           <ol className="lesson-stage-list">

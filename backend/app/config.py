@@ -293,6 +293,7 @@ class AppConfig:
             self.uploads_dir,
             self.outputs_dir,
             self.uploads_dir / "kb_materials",
+            self.uploads_dir / "question_banks",
             self.workflows_dir,
         ):
             path.mkdir(parents=True, exist_ok=True)
