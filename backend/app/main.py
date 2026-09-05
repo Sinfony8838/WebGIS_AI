@@ -1587,11 +1587,12 @@ def _require_rehearsal_access(request: Request, rehearsal_id: str) -> Any:
 def create_lesson_rehearsal(payload: LessonRehearsalCreateRequest, request: Request) -> Dict[str, Any]:
     _require_project_access(request, payload.project_id)
     _require_lesson_access(request, payload.lesson_id)
+    context = _current_auth(request)
     try:
         return runtime.classroom.create_lesson_rehearsal(
             payload.project_id,
             payload.lesson_id,
-            owner_user_id=str(_current_auth(request)["user"]["user_id"]),
+            owner_user_id=str(context.user.get("user_id") or ""),
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
