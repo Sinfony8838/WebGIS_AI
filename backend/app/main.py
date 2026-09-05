@@ -4,7 +4,7 @@ import json
 import secrets
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -1693,10 +1693,11 @@ async def import_question_banks(
     for upload in files:
         raw = await upload.read()
         payload.append({"filename": upload.filename or "题库.docx", "raw": raw})
+    context = _current_auth(request)
     return runtime.classroom.submit_question_bank_import(
         project_id,
         payload,
-        owner_user_id=str(_current_auth(request)["user"]["user_id"]),
+        owner_user_id=str(context.user.get("user_id") or ""),
     )
 
 
