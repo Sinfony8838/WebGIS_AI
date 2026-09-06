@@ -58,6 +58,10 @@ describe("QuestionPracticeModal", () => {
     expect(screen.getByTestId("question-practice-modal")).toBeTruthy();
     expect(screen.getByTestId("qpm-material")).toBeTruthy();
     expect(screen.getByTestId("qpm-images")).toBeTruthy();
+    // 题图地址必须拼成后端 API 的可访问 URL（相对 /files/ 路径在 dev 前端源下拿不到文件）。
+    const img = document.querySelector('[data-testid="qpm-images"] img') as HTMLImageElement;
+    expect(img.src).toContain("/files/uploads/question_banks/b1/img1.png");
+    expect(img.src.startsWith("http")).toBe(true);
     expect(screen.getByTestId("qpm-stem").textContent).toContain("影响人口分布的主要自然因素");
     expect(screen.getByTestId("qpm-options").children.length).toBe(2);
     // 揭示前不出现任何答案区块：无官方答案/解析/AI 讲解。

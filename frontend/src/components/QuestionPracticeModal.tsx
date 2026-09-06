@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { buildAuthenticatedUrl } from "../api";
 import type { LessonQuestion, ObservationVerdict } from "../types";
 
 type Props = {
@@ -221,7 +222,7 @@ export function QuestionPracticeModal({
           {images.length ? (
             <div className="qpm-images" data-testid="qpm-images">
               {images.map((image, index) => (
-                <img key={`${image.url}_${index}`} src={image.url} alt={`题图 ${index + 1}`} />
+                <img key={`${image.url}_${index}`} src={buildAuthenticatedUrl(image.url)} alt={`题图 ${index + 1}`} />
               ))}
             </div>
           ) : null}
