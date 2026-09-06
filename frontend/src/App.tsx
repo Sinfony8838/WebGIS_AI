@@ -67,7 +67,7 @@ import { BasemapMenu } from "./components/BasemapMenu";
 import { BrandLogo } from "./components/BrandLogo";
 import { CopilotWidget } from "./components/CopilotWidget";
 import { LessonDesignWorkspace } from "./components/LessonDesignWorkspace";
-import { DatabaseViewer } from "./components/DatabaseViewer";
+import { DatabaseViewer, type DatabaseCategory } from "./components/DatabaseViewer";
 import { type KnowledgeQuery } from "./components/KnowledgePanel";
 import { Map3DGlobe, type CameraState, type Map3DGlobeHandle } from "./components/Map3DGlobe";
 import { MapInstructionStrip } from "./components/MapInstructionStrip";
@@ -567,6 +567,7 @@ export default function App({
   const [searchAreaGeometry, setSearchAreaGeometry] = useState<Record<string, unknown> | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [databaseViewerOpen, setDatabaseViewerOpen] = useState(false);
+  const [databaseCategory, setDatabaseCategory] = useState<DatabaseCategory>("all");
   const [busy, setBusy] = useState(false);
   const [workflowDockOpen, setWorkflowDockOpen] = useState<boolean>(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -1097,8 +1098,8 @@ export default function App({
       (item: ResourceSearchResult) => {
         if (item.kb_item) {
           setKbEditingItem(item.kb_item);
-          setDrawerOpen(true);
-          setDrawerTab("resource-search");
+          setDatabaseViewerOpen(true);
+          setDatabaseCategory("resources");
           return;
         }
         if (item.material) {
@@ -1308,8 +1309,8 @@ export default function App({
       if (!project) {
         return;
       }
-      setDrawerOpen(true);
-      setDrawerTab("resource-search");
+      setDatabaseViewerOpen(true);
+      setDatabaseCategory("resources");
       const response = await runTemplate(project.project_id, templateId);
       subscribeToJob(response.job_id);
     },
@@ -1362,8 +1363,8 @@ export default function App({
         }
       }
       await refreshProjectState(project.project_id);
-      setDrawerOpen(true);
-      setDrawerTab("images");
+      setDatabaseViewerOpen(true);
+      setDatabaseCategory("images");
       if (evidenceRecorded) {
         pushToast("success", "截图已保存", "可在图片库中预览，或加入智能助教进行识图问答。");
       }
@@ -1706,9 +1707,7 @@ export default function App({
 
   const handleDatabaseOpenKnowledgeItem = useCallback((item: KnowledgeBaseItem) => {
     setKbEditingItem(item);
-    setDrawerOpen(true);
-    setDrawerTab("resource-search");
-    setDatabaseViewerOpen(false);
+    setDatabaseCategory("resources");
   }, []);
 
   const handleDatabaseOpenMaterial = useCallback((title: string, materials: TeachingMaterial[]) => {
@@ -3521,6 +3520,16 @@ export default function App({
           onToggleTeachingMap={(mapId, visible) => void handleToggleTeachingMap(mapId, visible)}
           onLoadDataset={handleDatabaseLoadDataset}
           onUseDataset={handleDatabaseUseDataset}
+          activeCategory={databaseCategory}
+          onCategoryChange={setDatabaseCategory}
+          resourceQuery={resourceQuery}
+          resourceScope={resourceScope}
+          resourceLoading={resourceLoading}
+          resourceResults={resourceResults}
+          onResourceQueryChange={setResourceQuery}
+          onResourceScopeChange={setResourceScope}
+          onImportResource={handleImportResourceResult}
+          onOpenResource={handleOpenResourceResult}
         />
         <PptViewer
           open={pptViewerOpen}

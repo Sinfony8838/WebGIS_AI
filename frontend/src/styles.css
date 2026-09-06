@@ -5977,6 +5977,26 @@ button {
 }
 
 /* Database page */
+.database-resource-search {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #dbe4f0;
+  border-radius: 10px;
+  background: #fff;
+  margin-bottom: 12px;
+}
+
+.database-row-thumb {
+  width: 84px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  margin: 6px 0 2px;
+}
+
 .database-viewer {
   position: fixed;
   inset: 0;
