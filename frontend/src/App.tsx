@@ -3414,7 +3414,6 @@ export default function App({
               if (sent) setPendingImage((current) => (current?.artifact_id === image?.artifact_id ? null : current));
             });
           }}
-          onOpenLessonDesign={() => openLessonDesignWorkspace()}
           onConfirm={(confirmationId, decision = "approve") => {
             void confirmAssistantAction(confirmationId, decision).then((response) => subscribeToJob(response.job_id));
           }}

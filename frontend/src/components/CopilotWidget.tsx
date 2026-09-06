@@ -26,7 +26,6 @@ type Props = {
   onSubmit: () => void;
   onQuickPrompt?: (prompt: string) => void;
   /** 打开全屏教案设计工作台（教案设计快捷入口；不发送聊天消息）。 */
-  onOpenLessonDesign?: () => void;
   onConfirm: (confirmationId: string, decision?: "approve" | "reject") => void;
   onVoiceSubmit: (transcript: string) => void;
   onVoiceNotice: (tone: "info" | "success" | "error", title: string, detail?: string) => void;
@@ -46,41 +45,14 @@ type Props = {
   imageGenerationModel?: string;
 };
 
-// One-tap teaching capabilities. Each chip sends a templated prompt that the
-// backend router maps to one of the four teaching intents. "读图" only fills
-// the composer; the teacher explicitly chooses a screenshot or library image.
-// Surfacing these as chips (rather than a sidebar
-// button) makes the agent's capabilities visible inside the agent itself.
+// One-tap capability. 读图（消息带图片附件时后端自动走视觉理解）、追问、
+// 复盘、切换底图、教案设计等入口分别收敛进课堂对话流、教学复盘与主页
+// 教案设计，助教面板只保留图片生成这一独立能力。
 const CAPABILITY_CHIPS: Array<{ key: string; label: string; prompt: string }> = [
   {
-    key: "read-map",
-    label: "读图",
-    prompt: "请结合我附加的图片进行地理读图分析，说明画面中的主要要素、空间关系和可能成因。"
-  },
-  {
-    key: "follow-up",
-    label: "追问",
-    prompt: "请围绕当前教学主题设计一组递进式课堂追问，并说明每问的认知层次。"
-  },
-  {
-    key: "lesson-design",
-    label: "教案设计",
-    prompt: "教案共创"
-  },
-  {
     key: "generate-image",
-    label: "生成示意图",
+    label: "图片生成",
     prompt: "生成一张地理教学示意图"
-  },
-  {
-    key: "reflect",
-    label: "复盘",
-    prompt: "请对本节课进行小结，指出可强化的区域认知方法与下一步建议。"
-  },
-  {
-    key: "switch-basemap",
-    label: "切换底图",
-    prompt: "请切换到更适合当前教学目标的底图，并说明选择原因。"
   }
 ];
 
@@ -88,9 +60,9 @@ const CAPABILITY_CHIPS: Array<{ key: string; label: string; prompt: string }> = 
 // header chip surfaces that awareness to the teacher, and the capability
 // chips are re-ordered so the most phase-relevant action always comes first.
 const PHASE_META: Record<string, { label: string; cls: string; chipOrder: string[] }> = {
-  course_prep: { label: "课前备课", cls: "phase-prep", chipOrder: ["lesson-design", "generate-image", "follow-up", "read-map", "reflect", "switch-basemap"] },
-  in_class: { label: "课堂进行中", cls: "phase-class", chipOrder: ["read-map", "follow-up", "switch-basemap", "generate-image", "reflect", "lesson-design"] },
-  post_class: { label: "课后复盘", cls: "phase-review", chipOrder: ["reflect", "follow-up", "read-map", "switch-basemap", "generate-image", "lesson-design"] }
+  course_prep: { label: "课前备课", cls: "phase-prep", chipOrder: ["generate-image"] },
+  in_class: { label: "课堂进行中", cls: "phase-class", chipOrder: ["generate-image"] },
+  post_class: { label: "课后复盘", cls: "phase-review", chipOrder: ["generate-image"] }
 };
 
 // Map the routed intent to a short badge so the teacher can see how the agent
@@ -363,7 +335,6 @@ export function CopilotWidget({
   onInputChange,
   onSubmit,
   onQuickPrompt = () => undefined,
-  onOpenLessonDesign,
   onConfirm = () => undefined,
   onVoiceSubmit,
   onVoiceNotice,
@@ -1138,14 +1109,6 @@ export function CopilotWidget({
                 className="copilot-capability-chip"
                 data-testid={`copilot-chip-${chip.key}`}
                 onClick={() => {
-                  if (chip.key === "read-map") {
-                    onInputChange(chip.prompt);
-                    return;
-                  }
-                  if (chip.key === "lesson-design" && onOpenLessonDesign) {
-                    onOpenLessonDesign();
-                    return;
-                  }
                   if (chip.key === "generate-image") {
                     setImageGenOpen((open) => !open);
                     return;
@@ -1195,33 +1158,37 @@ export function CopilotWidget({
                   event.currentTarget.value = "";
                 }}
               />
-              <button
-                type="button"
-                className="copilot-attach-button"
-                onClick={() => imageInputRef.current?.click()}
-                disabled={busy}
-                aria-label="上传图片"
-                title="上传图片"
-              >
-                ＋ 图片
-              </button>
-              <button
-                type="button"
-                className={`copilot-voice-button ${isListening ? "listening" : ""}`}
-                aria-label={isListening ? "停止语音控制" : "开始语音控制"}
-                title={isListening ? "停止语音" : speechSupported ? "语音输入" : "当前浏览器不支持语音"}
-                onClick={handleVoiceToggle}
-                disabled={busy || (!speechSupported && !isListening)}
-              >
-                <MicrophoneIcon active={isListening} />
-                <span className="copilot-voice-label">{isListening ? "停止语音" : "麦克风"}</span>
-              </button>
-              <span className="copilot-composer-hint" aria-hidden="true">
-                ⌘ / Ctrl + Enter 发送
-              </span>
-              <button type="submit" className="copilot-send-button" disabled={busy || (!inputValue.trim() && !pendingImage)}>
-                发送给助教
-              </button>
+              <div className="copilot-composer-tools">
+                <button
+                  type="button"
+                  className="copilot-attach-button"
+                  onClick={() => imageInputRef.current?.click()}
+                  disabled={busy}
+                  aria-label="上传图片"
+                  title="上传图片"
+                >
+                  ＋ 图片
+                </button>
+                <button
+                  type="button"
+                  className={`copilot-voice-button ${isListening ? "listening" : ""}`}
+                  aria-label={isListening ? "停止语音控制" : "开始语音控制"}
+                  title={isListening ? "停止语音" : speechSupported ? "语音输入" : "当前浏览器不支持语音"}
+                  onClick={handleVoiceToggle}
+                  disabled={busy || (!speechSupported && !isListening)}
+                >
+                  <MicrophoneIcon active={isListening} />
+                  <span className="copilot-voice-label">{isListening ? "停止语音" : "麦克风"}</span>
+                </button>
+              </div>
+              <div className="copilot-composer-send">
+                <span className="copilot-composer-hint" aria-hidden="true">
+                  ⌘ / Ctrl + Enter 发送
+                </span>
+                <button type="submit" className="copilot-send-button" disabled={busy || (!inputValue.trim() && !pendingImage)}>
+                  发送给助教
+                </button>
+              </div>
             </div>
           </div>
           {voiceStatusText ? (
