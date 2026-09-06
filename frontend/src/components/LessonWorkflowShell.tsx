@@ -713,10 +713,10 @@ export function LessonWorkflowShell({
               type="button"
               className={`toolbar-button compact ${lessonMode === "teach" || lessonMode === "prep" ? "active" : ""}`}
               onClick={() =>
-                setLessonMode((value) => (value === "teach" ? "off" : activeLesson ? "teach" : "prep"))
+                setLessonMode((value) => (value === "teach" ? "off" : activeSession ? "teach" : "prep"))
               }
               data-testid="class-mode-toggle"
-              title={activeLesson ? "进入课堂面板" : "先选择课时并开始上课"}
+              title={activeSession ? "进入课堂面板" : "先选择课时并开始上课"}
             >
               课堂模式
             </button>
