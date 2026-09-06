@@ -126,6 +126,86 @@ function buildStyleFunction(style: GraduatedStyle | null) {
   };
 }
 
+/** 面板内自绘下拉：原生 select 的弹出层在部分环境会飞出窗口，改用 DOM 内列表。 */
+function DockSelect({
+  testId,
+  value,
+  onChange,
+  disabled,
+  options,
+  placeholder
+}: {
+  testId: string;
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  options: Array<{ value: string; label: string }>;
+  placeholder: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const handlePointer = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", handlePointer);
+    window.addEventListener("keydown", handleKey);
+    return () => {
+      window.removeEventListener("mousedown", handlePointer);
+      window.removeEventListener("keydown", handleKey);
+    };
+  }, [open]);
+
+  const current = options.find((option) => option.value === value);
+  return (
+    <div className="workflow-dock__selectmenu" ref={rootRef}>
+      <button
+        type="button"
+        className="workflow-dock__selectmenu-button"
+        data-testid={testId}
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((state) => !state)}
+      >
+        <span>{current ? current.label : placeholder}</span>
+        <span className="workflow-dock__selectmenu-arrow" aria-hidden="true">▾</span>
+      </button>
+      {open ? (
+        <ul className="workflow-dock__selectmenu-list" role="listbox" data-testid={`${testId}-list`}>
+          {[{ value: "", label: placeholder }, ...options].map((option) => (
+            <li key={option.value || "__default__"}>
+              <button
+                type="button"
+                role="option"
+                aria-selected={option.value === value}
+                className={option.value === value ? "active" : ""}
+                onClick={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                }}
+              >
+                {option.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 export function WorkflowDock({
   projectId,
   mapRef,
@@ -417,60 +497,42 @@ export function WorkflowDock({
       <div className="workflow-dock__form">
         <label className="workflow-dock__label">
           工作流模板
-          <select
-            className="workflow-dock__select"
-            data-testid="workflow-template-select"
+          <DockSelect
+            testId="workflow-template-select"
             value={templateId}
-            onChange={(event) => {
-              setTemplateId(event.target.value);
+            onChange={(value) => {
+              setTemplateId(value);
               setSecondaryDataset("");
             }}
             disabled={submitting}
-          >
-            <option value="">自动识别</option>
-            {templates.map((template) => (
-              <option key={template.id} value={template.id}>
-                {template.title}
-              </option>
-            ))}
-          </select>
+            placeholder="自动识别"
+            options={templates.map((template) => ({ value: template.id, label: template.title }))}
+          />
         </label>
 
         <label className="workflow-dock__label" data-testid="workflow-dock-dataset">
           数据集
-          <select
-            className="workflow-dock__select"
-            data-testid="workflow-primary-dataset-select"
+          <DockSelect
+            testId="workflow-primary-dataset-select"
             value={primaryDataset}
-            onChange={(event) => setPrimaryDataset(event.target.value)}
+            onChange={setPrimaryDataset}
             disabled={submitting}
-          >
-            <option value="">默认（按模板）</option>
-            {datasetOptions.map((option) => (
-              <option key={option.source} value={option.source}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+            placeholder="默认（按模板）"
+            options={datasetOptions.map((option) => ({ value: option.source, label: option.label }))}
+          />
         </label>
 
         {secondaryConfig ? (
           <label className="workflow-dock__label" data-testid="workflow-dock-dataset-secondary">
             {secondaryConfig.label}
-            <select
-              className="workflow-dock__select"
-              data-testid="workflow-secondary-dataset-select"
+            <DockSelect
+              testId="workflow-secondary-dataset-select"
               value={secondaryDataset}
-              onChange={(event) => setSecondaryDataset(event.target.value)}
+              onChange={setSecondaryDataset}
               disabled={submitting}
-            >
-              <option value="">默认（按模板）</option>
-              {datasetOptions.map((option) => (
-                <option key={option.source} value={option.source}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+              placeholder="默认（按模板）"
+              options={datasetOptions.map((option) => ({ value: option.source, label: option.label }))}
+            />
           </label>
         ) : null}
 
