@@ -31,6 +31,27 @@ class RuntimeStoreTest(unittest.TestCase):
             self.assertEqual(store.get_artifact(artifact.artifact_id).title, "说明")
             self.assertEqual(len(store.list_outputs(project.project_id)), 1)
 
+
+    def test_delete_layer_removes_layer_and_resets_active(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = RuntimeStore(Path(temp_dir) / "state.json")
+            project = store.create_project(name="图层删除")
+            first = LayerRecord.create(layer_id="layer_a", name="图层A", kind="vector", source="builtin", geometry_type="Point")
+            second = LayerRecord.create(layer_id="layer_b", name="图层B", kind="vector", source="builtin", geometry_type="Point")
+            store.upsert_layer(project.project_id, first)
+            store.upsert_layer(project.project_id, second)
+            store.patch_layer(project.project_id, "layer_b", {"active": True})
+            self.assertEqual(store.get_project(project.project_id).active_layer_id, "layer_b")
+
+            removed = store.delete_layer(project.project_id, "layer_b")
+            self.assertEqual(removed.layer_id, "layer_b")
+            remaining = store.get_project(project.project_id)
+            self.assertEqual([item.layer_id for item in remaining.layers], ["layer_a"])
+            self.assertNotEqual(remaining.active_layer_id, "layer_b")
+
+            with self.assertRaises(KeyError):
+                store.delete_layer(project.project_id, "layer_b")
+
     def test_corrupt_state_file_is_quarantined_and_store_recovers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             state_file = Path(temp_dir) / "state.json"

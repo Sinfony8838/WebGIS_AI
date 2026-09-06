@@ -769,6 +769,17 @@ class WebGISRuntime:
         )
         return {"status": "success", "item": layer.to_dict()}
 
+    def delete_layer(self, project_id: str, layer_id: str) -> Dict[str, Any]:
+        layer = self.store.delete_layer(project_id, layer_id)
+        self.store.add_recent_action(
+            project_id,
+            "删除图层",
+            f"已删除图层“{layer.name}”",
+            status="success",
+            metadata={"layer_id": layer.layer_id},
+        )
+        return {"status": "success", "item": layer.to_dict()}
+
     def set_basemap(self, project_id: str, basemap_id: str) -> Dict[str, Any]:
         self._require_project(project_id)
         base_map = self.config.basemap_by_id(basemap_id)

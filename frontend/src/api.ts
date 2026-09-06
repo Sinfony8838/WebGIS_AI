@@ -378,6 +378,12 @@ export async function patchLayer(projectId: string, layerId: string, patch: Reco
   });
 }
 
+export async function deleteLayer(projectId: string, layerId: string): Promise<void> {
+  await requestJson(`/layers/${encodeURIComponent(layerId)}?project_id=${encodeURIComponent(projectId)}`, {
+    method: "DELETE"
+  });
+}
+
 export async function runTemplate(projectId: string, templateId: string): Promise<{ job_id: string }> {
   return requestJson<{ job_id: string }>(`/templates/${templateId}/run`, {
     method: "POST",
