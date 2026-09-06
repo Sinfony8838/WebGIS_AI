@@ -77,7 +77,7 @@ import { MapStatusBar } from "./components/MapStatusBar";
 import { MapToolRail } from "./components/MapToolRail";
 import { LessonWorkflowShell } from "./components/LessonWorkflowShell";
 import { RegionFocusOverlay } from "./components/RegionFocusOverlay";
-import { SideDrawer, type DrawerTab } from "./components/SideDrawer";
+import { SearchResultsCard, StatsResultsCard } from "./components/HeaderResultCards";
 import { ScreenshotSelector, type ScreenshotSelection } from "./components/ScreenshotSelector";
 import { TeachingMaterialViewer } from "./components/TeachingMaterialViewer";
 import { ToastStack, type ToastItem } from "./components/ToastStack";
@@ -573,8 +573,8 @@ export default function App({
   const [layerManagerOpen, setLayerManagerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [workflowDockOpen, setWorkflowDockOpen] = useState<boolean>(false);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerTab, setDrawerTab] = useState<DrawerTab>("resource-search");
+  const [searchCardOpen, setSearchCardOpen] = useState(false);
+  const [statsCardOpen, setStatsCardOpen] = useState(false);
   const [kbQuery, setKbQuery] = useState<KnowledgeQuery>({ query: "", topic: "", region: "", tag: "" });
     const [kbItems, setKbItems] = useState<KnowledgeBaseItem[]>([]);
     const [kbAllItems, setKbAllItems] = useState<KnowledgeBaseItem[]>([]);
@@ -1499,7 +1499,6 @@ export default function App({
   }, []);
 
   const handleOpenLessonWorkflow = useCallback(() => {
-    setDrawerOpen(false);
     setLessonWorkflowOpenSignal((value) => value + 1);
   }, []);
 
@@ -1577,8 +1576,8 @@ export default function App({
       });
       setSearchSummary(response.summary);
       setSearchResults(response.items);
-      setDrawerTab("search");
-      setDrawerOpen(true);
+      setStatsCardOpen(false);
+      setSearchCardOpen(true);
       await refreshProjectState(project.project_id);
       appendChat("system", response.summary);
       pushToast("success", `${resolvedMode === "polygon" ? "区域" : "视域"}检索完成`, response.summary);
@@ -1818,9 +1817,6 @@ export default function App({
       const response = await addCatalogDatasetLayer(project.project_id, item.id);
       await refreshProjectState(project.project_id);
       setViewMode("plane");
-      setDatabaseViewerOpen(false);
-      setDrawerOpen(true);
-      setDrawerTab("layers");
       pushToast("success", "一张图数据已加载", response.layer.name || item.name || item.id);
     } catch (error) {
       pushToast("error", "一张图数据加载失败", error instanceof Error ? error.message : "请求失败");
@@ -1853,8 +1849,8 @@ export default function App({
     try {
       const response = await summarizeCatalogLayers(project.project_id, searchAreaGeometry);
       setOneMapStats(response);
-      setDrawerTab("stats");
-      setDrawerOpen(true);
+      setSearchCardOpen(false);
+      setStatsCardOpen(true);
       pushToast("success", "区域统计完成", response.summary);
     } catch (error) {
       pushToast("error", "区域统计失败", error instanceof Error ? error.message : "请求失败");
@@ -3014,14 +3010,14 @@ export default function App({
     const signature = JSON.stringify([summary, items.map((item) => item.poi_id)]);
     if (items.length && signature !== lastPoiSignatureRef.current) {
       lastPoiSignatureRef.current = signature;
-      setDrawerOpen(true);
-      setDrawerTab("search");
+      setStatsCardOpen(false);
+      setSearchCardOpen(true);
     }
   }, [layerState]);
 
   return (
     <div
-      className={`screen-shell screen-shell-classroom view-mode-${viewMode} ${drawerOpen ? "drawer-open" : "drawer-closed"}`}
+      className={`screen-shell screen-shell-classroom view-mode-${viewMode}`}
       data-interaction-mode={interactionMode}
     >
       <div
@@ -3266,49 +3262,17 @@ export default function App({
       </header>
 
       <main className="workspace-shell">
-        <SideDrawer
-          open={drawerOpen}
-          activeTab={drawerTab}
-          layerState={layerState}
-          searchResults={searchResults}
-          searchSummary={searchSummary}
-          oneMapStats={oneMapStats}
-          resourceQuery={resourceQuery}
-          resourceScope={resourceScope}
-          resourceLoading={resourceLoading}
-          resourceResults={resourceResults}
-          outputs={outputs}
-          onToggleOpen={() => setDrawerOpen((value) => !value)}
-          onChangeTab={setDrawerTab}
-          onToggleLayer={(layerId, visible) => {
-            if (!project) {
-              return;
-            }
-            void patchLayer(project.project_id, layerId, { visible }).then(() => refreshProjectState(project.project_id));
-          }}
-          onSelectLayer={(layerId) => {
-            if (!project) {
-              return;
-            }
-            void patchLayer(project.project_id, layerId, { active: true, visible: true })
-              .then(() => refreshProjectState(project.project_id))
-              .then(() => focusLayerExtent(layerId));
-          }}
+        <SearchResultsCard
+          open={searchCardOpen}
+          summary={searchSummary}
+          results={searchResults}
+          onClose={() => setSearchCardOpen(false)}
           onFocusResult={focusPoiResult}
-          onResourceQueryChange={(value) => {
-            setResourceQuery(value);
-            setDrawerTab("resource-search");
-          }}
-          onResourceScopeChange={setResourceScope}
-          onOpenResourceResult={handleOpenResourceResult}
-          onImportResourceResult={handleImportResourceResult}
-          onAttachImage={handleAttachImage}
-          onUploadImage={(file) => void handleUploadImage(file)}
-          onGenerateImage={handleGenerateImage}
-          imageGenerationLoading={imageGenerationLoading}
-          imageGenerationConfigured={Boolean(health?.image_generation?.configured)}
-          imageGenerationModel={health?.image_generation?.model || "image-01"}
-          onOpenLessonWorkflow={handleOpenLessonWorkflow}
+        />
+        <StatsResultsCard
+          open={statsCardOpen}
+          stats={oneMapStats}
+          onClose={() => setStatsCardOpen(false)}
         />
 
         <section className="map-workspace" aria-hidden="true" />
