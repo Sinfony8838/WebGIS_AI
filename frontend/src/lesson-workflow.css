@@ -2499,6 +2499,12 @@
   background: linear-gradient(180deg, #ef4444 0%, #b91c1c 100%);
 }
 
+/* 投屏 modal 内的学情速记按钮：浅底配深字（原为深色面板设计的浅色文字） */
+.qpm-shell .record-button { color: #14532d; }
+.qpm-shell .record-button.correct { color: #166534; }
+.qpm-shell .record-button.partial { color: #92400e; }
+.qpm-shell .record-button.misconception { color: #991b1b; }
+
 /* 细圆角滚动条：浅色面板统一低调样式，替代默认粗灰滚动条 */
 .ldw-left,
 .ldw-right,
