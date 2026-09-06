@@ -5368,6 +5368,81 @@ button {
   font: inherit;
 }
 
+/* 面板内自绘下拉（替代原生 select，弹层不再飞出窗口） */
+.workflow-dock__selectmenu {
+  position: relative;
+}
+
+.workflow-dock__selectmenu-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.85);
+  color: #f8fafc;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.workflow-dock__selectmenu-button:hover:not(:disabled) {
+  border-color: rgba(140, 222, 255, 0.5);
+}
+
+.workflow-dock__selectmenu-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.workflow-dock__selectmenu-arrow {
+  font-size: 10px;
+  color: rgba(148, 163, 184, 0.9);
+}
+
+.workflow-dock__selectmenu-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid rgba(140, 222, 255, 0.3);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.98);
+  box-shadow: 0 10px 28px rgba(2, 10, 24, 0.5);
+}
+
+.workflow-dock__selectmenu-list button {
+  display: block;
+  width: 100%;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 9px;
+  background: transparent;
+  color: #e2e8f0;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workflow-dock__selectmenu-list button:hover {
+  background: rgba(88, 199, 255, 0.14);
+}
+
+.workflow-dock__selectmenu-list button.active {
+  background: linear-gradient(180deg, rgba(88, 199, 255, 0.26), rgba(58, 138, 198, 0.28));
+  color: #f1faff;
+}
+
 .workflow-dock__select {
   color-scheme: dark;
 }

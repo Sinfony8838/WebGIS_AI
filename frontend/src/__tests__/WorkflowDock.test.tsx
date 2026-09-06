@@ -1,5 +1,5 @@
 import { createRef } from "react";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type Map from "ol/Map";
 
@@ -32,7 +32,7 @@ import { WorkflowDock } from "../components/WorkflowDock";
 describe("WorkflowDock", () => {
   afterEach(cleanup);
 
-  it("marks every native selector for the dark readable option palette", async () => {
+  it("opens in-panel dropdown menus instead of native selects", async () => {
     render(
       <WorkflowDock
         projectId="project_demo"
@@ -41,16 +41,27 @@ describe("WorkflowDock", () => {
       />
     );
 
-    const templateSelect = screen.getByTestId("workflow-template-select");
-    const datasetSelect = screen.getByTestId("workflow-primary-dataset-select");
-    expect(templateSelect).toHaveClass("workflow-dock__select");
-    expect(datasetSelect).toHaveClass("workflow-dock__select");
-    expect(screen.getByRole("option", { name: "自动识别" })).toBeInTheDocument();
+    // 折叠态：按钮显示占位文案
+    const templateButton = screen.getByTestId("workflow-template-select");
+    expect(templateButton.tagName).toBe("BUTTON");
+    expect(templateButton).toHaveTextContent("自动识别");
+
+    // 展开后模板选项在面板内列表中（原生 select 弹层会飞出窗口）
+    fireEvent.click(templateButton);
+    const list = screen.getByTestId("workflow-template-select-list");
+    expect(within(list).getByRole("option", { name: "自动识别" })).toBeTruthy();
 
     await waitFor(() => {
-      expect(
-        screen.getByRole("option", { name: "人口密度分级设色图" })
-      ).toBeInTheDocument();
+      expect(within(list).getByRole("option", { name: "人口密度分级设色图" })).toBeTruthy();
     });
+
+    // 选择模板：回调收起列表，按钮显示所选模板
+    fireEvent.click(within(list).getByRole("option", { name: "人口密度分级设色图" }));
+    expect(screen.queryByTestId("workflow-template-select-list")).toBeNull();
+    expect(screen.getByTestId("workflow-template-select")).toHaveTextContent("人口密度分级设色图");
+
+    // 数据集下拉同样可用
+    fireEvent.click(screen.getByTestId("workflow-primary-dataset-select"));
+    expect(screen.getByTestId("workflow-primary-dataset-select-list")).toBeTruthy();
   });
 });
