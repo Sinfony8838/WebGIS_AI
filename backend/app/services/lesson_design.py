@@ -202,9 +202,43 @@ class LessonDesignService:
             raise ValueError("请先告诉我你的教学想法或修改要求。")
         current_step = step if step in STEP_KEYS else design.current_step
         if any(token in message for token in ("返回上一步", "回到上一步")):
+            # 「返回上一步」是流程控制指令：短路处理，不进 LLM/规则需求解析，
+            # 否则会被当成课题文本（如“我理解你想做一节‘返回上一步’”）。
             current_index = STEP_KEYS.index(current_step) if current_step in STEP_KEYS else 0
-            current_step = STEP_KEYS[max(0, current_index - 1)]
-            design.current_step = current_step
+            design.revision += 1
+            if current_index <= 0:
+                reply = (
+                    "现在已在第一步「需求确认」，没有更早的步骤了。"
+                    "可以直接输入你的教学想法；想退出教案设计时点「退出设计」即可，草稿已自动保存。"
+                )
+            else:
+                current_step = STEP_KEYS[current_index - 1]
+                design.current_step = current_step
+                design.pending_next_step = ""
+                reply = (
+                    f"已回到「{STEP_LABELS.get(current_step, current_step)}」。"
+                    "这一部分可以重新讨论或修改；确认无误后点「接受本节」继续。"
+                )
+            design.turns.append({
+                "revision": design.revision, "step": current_step, "message": message,
+                "reply": reply, "section_patch": {},
+            })
+            self.store.upsert_lesson_design(design)
+            return {
+                "status": "success", "assistant_message": reply,
+                "next_step": design.current_step, "step_label": STEP_LABELS.get(design.current_step, design.current_step),
+                "draft": copy.deepcopy(design.draft), "section_status": copy.deepcopy(design.section_status),
+                "source_refs": copy.deepcopy(design.source_refs), "capability_bindings": copy.deepcopy(design.capability_bindings),
+                "revision": design.revision, "suggestions": [],
+                "retrieval": {"mode": "none", "used": False},
+                "diff_summary": copy.deepcopy(design.diff_summary),
+                "review_sections": [],
+                "rehearsal_report": None,
+                "plan_items": self._plan_items(design),
+                "retrieval_candidates": [],
+                "auto_bound_questions": [],
+                "active_design_question": self._active_design_question(design),
+            }
         result = self._ask_minimax(design, current_step, message) or self._fallback_turn(design, current_step, message)
         if current_step == "requirements":
             result = self._normalize_requirements_result(result, message, design.draft)
