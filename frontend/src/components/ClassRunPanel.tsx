@@ -294,8 +294,8 @@ export function ClassRunPanel({
         `GeoBot 头脑风暴：围绕“${currentStage.title}”开展随机地区探究。`,
         `随机抽中的地区是：${selected}。`,
         `本环节可用地图资料：${[
-          ...(currentStage.scene.templates || []),
-          ...(currentStage.scene.catalog_layers || [])
+          ...(currentStage.scene?.templates || []),
+          ...(currentStage.scene?.catalog_layers || [])
         ].join("、") || "当前人口专题地图"}。`,
         brainstorm.prompt,
         "请提出一个教师难以提前穷举、但可以用高中地理知识回答的探究问题，并直接作答。",
@@ -425,7 +425,7 @@ export function ClassRunPanel({
           </div>
         ) : null}
 
-        {currentStage?.scene.globe?.enabled && onRequestPlaneView ? (
+        {currentStage?.scene?.globe?.enabled && onRequestPlaneView ? (
           <div className="class-stage-view-handoff" data-testid="stage-view-handoff">
             <span>3D 用于宏观导入；开始读图和答题时回到二维规范专题图。</span>
             <button type="button" className="toolbar-button compact" onClick={onRequestPlaneView}>
@@ -434,7 +434,7 @@ export function ClassRunPanel({
           </div>
         ) : null}
 
-        {currentStage?.scene.catalog_layers && currentStage.scene.catalog_layers.length > 1 && onFocusEvidenceLayer ? (
+        {currentStage?.scene?.catalog_layers && currentStage.scene.catalog_layers.length > 1 && onFocusEvidenceLayer ? (
           <div className="class-evidence-layer-steps" data-testid="evidence-layer-steps">
             <div className="class-evidence-layer-heading">
               <span className="question-detail-label">证据图层步骤</span>
@@ -447,7 +447,7 @@ export function ClassRunPanel({
                   type="button"
                   className={`evidence-layer-step ${visibleCatalogLayerIds.includes(datasetId) ? "active" : ""}`}
                   disabled={busy}
-                  onClick={() => onFocusEvidenceLayer(datasetId, currentStage.scene.catalog_layers || [])}
+                  onClick={() => onFocusEvidenceLayer(datasetId, currentStage.scene?.catalog_layers || [])}
                   data-testid={`evidence-layer-${datasetId}`}
                 >
                   {EVIDENCE_LAYER_LABELS[datasetId] || datasetId}
