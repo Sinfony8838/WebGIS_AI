@@ -42,6 +42,7 @@ import {
   generateImageLibraryAsset,
   getApiBase,
   logSessionEvent,
+  deleteLayer,
   patchLayer,
   registerKbLayer,
   renderPptx,
@@ -68,6 +69,7 @@ import { BrandLogo } from "./components/BrandLogo";
 import { CopilotWidget } from "./components/CopilotWidget";
 import { LessonDesignWorkspace } from "./components/LessonDesignWorkspace";
 import { DatabaseViewer, type DatabaseCategory } from "./components/DatabaseViewer";
+import { LayerManager } from "./components/LayerManager";
 import { type KnowledgeQuery } from "./components/KnowledgePanel";
 import { Map3DGlobe, type CameraState, type Map3DGlobeHandle } from "./components/Map3DGlobe";
 import { MapInstructionStrip } from "./components/MapInstructionStrip";
@@ -568,6 +570,7 @@ export default function App({
   const [uploadOpen, setUploadOpen] = useState(false);
   const [databaseViewerOpen, setDatabaseViewerOpen] = useState(false);
   const [databaseCategory, setDatabaseCategory] = useState<DatabaseCategory>("all");
+  const [layerManagerOpen, setLayerManagerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [workflowDockOpen, setWorkflowDockOpen] = useState<boolean>(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -1742,6 +1745,58 @@ export default function App({
       pushToast("error", "图层定位失败", error instanceof Error ? error.message : "图层状态更新失败");
     }
   }, [focusLayerExtent, project, pushToast, refreshProjectState]);
+
+  const handleLayerManagerToggle = useCallback(async (layerId: string, visible: boolean) => {
+    if (!project) {
+      return;
+    }
+    try {
+      await patchLayer(project.project_id, layerId, { visible });
+      await refreshProjectState(project.project_id);
+    } catch (error) {
+      pushToast("error", "图层更新失败", error instanceof Error ? error.message : "图层状态更新失败");
+    }
+  }, [project, pushToast, refreshProjectState]);
+
+  const handleLayerManagerFocus = useCallback(async (layerId: string) => {
+    if (!project) {
+      return;
+    }
+    try {
+      await patchLayer(project.project_id, layerId, { active: true, visible: true });
+      await refreshProjectState(project.project_id);
+      focusLayerExtent(layerId);
+    } catch (error) {
+      pushToast("error", "图层定位失败", error instanceof Error ? error.message : "图层状态更新失败");
+    }
+  }, [focusLayerExtent, project, pushToast, refreshProjectState]);
+
+  const handleLayerManagerDelete = useCallback(async (layerId: string) => {
+    if (!project) {
+      return;
+    }
+    try {
+      await deleteLayer(project.project_id, layerId);
+      await refreshProjectState(project.project_id);
+      pushToast("success", "图层已删除", layerId);
+    } catch (error) {
+      pushToast("error", "图层删除失败", error instanceof Error ? error.message : "请求失败");
+    }
+  }, [project, pushToast, refreshProjectState]);
+
+  const handleLayerManagerAddDataset = useCallback(async (item: DatasetCatalogItem) => {
+    if (!project) {
+      return;
+    }
+    try {
+      const response = await addCatalogDatasetLayer(project.project_id, item.id);
+      await refreshProjectState(project.project_id);
+      setViewMode("plane");
+      pushToast("success", "一张图数据已加载", response.layer.name || item.name || item.id);
+    } catch (error) {
+      pushToast("error", "一张图数据加载失败", error instanceof Error ? error.message : "请求失败");
+    }
+  }, [project, pushToast, refreshProjectState]);
 
   const handleDatabaseOpenArtifact = useCallback((artifact: ArtifactRecord) => {
     const publicUrl = typeof artifact.metadata?.public_url === "string" ? artifact.metadata.public_url : "";
@@ -3177,8 +3232,14 @@ export default function App({
           <button type="button" className="toolbar-button" onClick={() => void handleStartScreenshot()}>
             截图
           </button>
-          <button type="button" className="toolbar-button" onClick={handleResetView}>
-            复位视图
+          <button
+            type="button"
+            className={`toolbar-button${layerManagerOpen ? " active" : ""}`}
+            onClick={() => setLayerManagerOpen((value) => !value)}
+            data-testid="layer-manager-toggle"
+            title="查看、显隐、定位、删除或添加业务图层（重置视角请使用左侧地图工具）"
+          >
+            图层管理
           </button>
           {initError ? (
             <button
@@ -3502,6 +3563,17 @@ export default function App({
           initialDatasetSource={workflowInitialDataset}
           onRequestClose={() => setWorkflowDockOpen(false)}
           onToast={(tone, message) => pushToast(tone, message)}
+        />
+        <LayerManager
+          open={layerManagerOpen}
+          onClose={() => setLayerManagerOpen(false)}
+          layers={layerState?.items || []}
+          busy={busy}
+          onToggleLayer={(layerId, visible) => void handleLayerManagerToggle(layerId, visible)}
+          onFocusLayer={(layerId) => void handleLayerManagerFocus(layerId)}
+          onDeleteLayer={(layerId) => void handleLayerManagerDelete(layerId)}
+          datasetCatalogItems={datasetCatalogItems}
+          onLoadDataset={(item) => void handleLayerManagerAddDataset(item)}
         />
         <DatabaseViewer
           open={databaseViewerOpen}
