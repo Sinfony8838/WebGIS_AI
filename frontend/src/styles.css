@@ -7364,3 +7364,78 @@ button {
     width: 224px;
   }
 }
+
+/* ===== 智能交互 Tab（CopilotWidget） ===== */
+.copilot-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 12px 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.copilot-tab {
+  flex: 1;
+  padding: 7px 10px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: rgba(226, 232, 240, 0.66);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.copilot-tab:hover {
+  color: rgba(226, 232, 240, 0.9);
+}
+
+.copilot-tab.active {
+  color: #93c5fd;
+  border-bottom-color: #60a5fa;
+}
+
+.copilot-planner-badge {
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.copilot-planner-badge.planner-rule {
+  background: rgba(16, 185, 129, 0.16);
+  color: #6ee7b7;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.copilot-planner-badge.planner-llm {
+  background: rgba(96, 165, 250, 0.16);
+  color: #93c5fd;
+  border: 1px solid rgba(96, 165, 250, 0.35);
+}
+
+.copilot-voice-button.always-on {
+  border-style: dashed;
+}
+
+.copilot-voice-button.always-on.on {
+  background: rgba(16, 185, 129, 0.18);
+  border-color: rgba(52, 211, 153, 0.6);
+  color: #6ee7b7;
+}
+
+.copilot-voice-partial {
+  margin: 4px 2px 0;
+  color: rgba(148, 163, 184, 0.9);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.copilot-ignored-count {
+  margin-left: 6px;
+  color: rgba(148, 163, 184, 0.75);
+  font-size: 11px;
+}

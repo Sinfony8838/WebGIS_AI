@@ -283,7 +283,7 @@ describe("CopilotWidget", () => {
   });
 
   it("submits the final transcript after clicking the microphone", async () => {
-    const { onVoiceSubmit } = renderWidget();
+    const { onVoiceSubmit } = renderWidget({ assistantTab: "interaction" });
 
     fireEvent.click(screen.getByLabelText("开始语音控制"));
     expect(screen.getByText("正在聆听课堂指令，请开始说话。")).toBeInTheDocument();
@@ -296,22 +296,32 @@ describe("CopilotWidget", () => {
     expect(screen.getByText("最近转写：我们把目光转向上海区域")).toBeInTheDocument();
   });
 
+  it("hides the microphone on the teaching tab and shows it on the interaction tab", () => {
+    renderWidget();
+    expect(screen.queryByLabelText("开始语音控制")).toBeNull();
+
+    cleanup();
+    window.localStorage.clear();
+    renderWidget({ assistantTab: "interaction" });
+    expect(screen.getByLabelText("开始语音控制")).toBeInTheDocument();
+  });
+
   it("shows unsupported status when the browser does not provide speech recognition", () => {
     setSpeechRecognitionSupport(false);
     cleanup();
-    renderWidget();
+    renderWidget({ assistantTab: "interaction" });
 
     expect(screen.getByText("当前浏览器不支持语音控制，请使用桌面版 Chrome 或 Edge。")).toBeInTheDocument();
     expect(screen.getByLabelText("开始语音控制")).toBeDisabled();
   });
 
   it("keeps the microphone disabled while a job is running", () => {
-    renderWidget({ busy: true });
+    renderWidget({ assistantTab: "interaction", busy: true });
     expect(screen.getByLabelText("开始语音控制")).toBeDisabled();
   });
 
   it("reports microphone permission errors through the notice callback", async () => {
-    const { onVoiceNotice, onVoiceSubmit } = renderWidget();
+    const { onVoiceNotice, onVoiceSubmit } = renderWidget({ assistantTab: "interaction" });
 
     fireEvent.click(screen.getByLabelText("开始语音控制"));
     MockSpeechRecognition.lastInstance?.emitError("not-allowed");
@@ -327,7 +337,7 @@ describe("CopilotWidget", () => {
   });
 
   it("reports empty recognition sessions", async () => {
-    const { onVoiceNotice, onVoiceSubmit } = renderWidget();
+    const { onVoiceNotice, onVoiceSubmit } = renderWidget({ assistantTab: "interaction" });
 
     fireEvent.click(screen.getByLabelText("开始语音控制"));
     MockSpeechRecognition.lastInstance?.emitEndWithoutResult();
@@ -440,11 +450,14 @@ describe("CopilotWidget", () => {
     expect(screen.getByTestId("copilot-input").closest(".copilot-widget-form")).toBeInTheDocument();
   });
 
-  it("renders the teaching agent without a mode switch or coding copy", () => {
+  it("renders the teaching agent tab by default with the interaction tab available", () => {
     renderWidget();
 
     expect(screen.getByText(/专业教学智能体/)).toBeInTheDocument();
-    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    // 智能交互改造后：面板有「教学助手 | 智能交互」两个页签，默认选中教学助手。
+    const tablist = screen.getByRole("tablist");
+    expect(within(tablist).getByRole("tab", { name: "教学助手" })).toHaveAttribute("aria-selected", "true");
+    expect(within(tablist).getByRole("tab", { name: "智能交互" })).toHaveAttribute("aria-selected", "false");
     expect(screen.queryByText("知识助手")).not.toBeInTheDocument();
     expect(screen.queryByText("Agent 助手")).not.toBeInTheDocument();
     const placeholder = screen.getByTestId("copilot-input").getAttribute("placeholder") || "";
@@ -589,5 +602,54 @@ describe("CopilotWidget", () => {
     );
     fireEvent.click(screen.getByLabelText("展开智能助教"));
     expect(screen.getByTestId("copilot-thinking")).toHaveTextContent("正在思考");
+  });
+
+  it("switches tabs through the callback and shows interaction quick chips", () => {
+    const onTabChange = vi.fn();
+    const onQuickPrompt = vi.fn();
+    renderWidget({ onTabChange, onQuickPrompt });
+
+    // 教学助手 Tab：图片生成芯片（既有行为）。
+    expect(screen.getByTestId("copilot-chip-generate-image")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("copilot-tab-interaction"));
+    expect(onTabChange).toHaveBeenCalledWith("interaction");
+
+    cleanup();
+    window.localStorage.clear();
+    renderWidget({ onTabChange, onQuickPrompt, assistantTab: "interaction" });
+
+    // 智能交互 Tab：控制快捷芯片提交文字指令。
+    expect(screen.getByTestId("copilot-chip-globe")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("copilot-chip-globe"));
+    expect(onQuickPrompt).toHaveBeenCalledWith("切换到三维地球");
+  });
+
+  it("toggles TTS from the interaction tab header", () => {
+    const onTtsToggle = vi.fn();
+    renderWidget({ assistantTab: "interaction", ttsEnabled: true, onTtsToggle });
+
+    fireEvent.click(screen.getByTestId("copilot-tts-toggle"));
+    expect(onTtsToggle).toHaveBeenCalledWith(false);
+  });
+
+  it("does not render the TTS toggle on the teaching tab", () => {
+    renderWidget();
+    expect(screen.queryByTestId("copilot-tts-toggle")).toBeNull();
+  });
+
+  it("shows the planner badge for interaction replies", () => {
+    renderWidget({
+      assistantTab: "interaction",
+      chatLog: [
+        { role: "assistant", text: "好的，切换到三维地球。", timestamp: "1", planner: "interaction_rule" },
+        { role: "assistant", text: "已提交分析。", timestamp: "2", planner: "interaction_minimax" }
+      ]
+    });
+
+    const badges = screen.getAllByTestId("copilot-planner-badge");
+    expect(badges).toHaveLength(2);
+    expect(badges[0]).toHaveTextContent("快速通道");
+    expect(badges[1]).toHaveTextContent("AI 规划");
   });
 });

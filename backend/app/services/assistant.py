@@ -7,27 +7,36 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ..config import AppConfig, WEATHER_BASEMAP_ID
 from ..models import ProjectRecord
+from .workflow_templates import INTERACTION_ALLOWED_TEMPLATES, detect_template, list_templates
 
 
 ASSISTANT_TOOL_SCHEMA = [
-    {"name": "set_view", "description": "调整课堂地图视角。", "parameters": {"center": "number[2]", "zoom": "number", "extent": "number[4]?"}},
-    {"name": "toggle_layer", "description": "显示或隐藏指定图层。", "parameters": {"layer_id": "string", "visible": "boolean"}},
-    {"name": "reorder_layer", "description": "调整图层前后顺序。", "parameters": {"layer_id": "string", "z_index": "number"}},
-    {"name": "style_layer", "description": "修改图层颜色、透明度、标注等样式。", "parameters": {"layer_id": "string", "style": "object"}},
-    {"name": "query_features", "description": "查询当前图层或关注要素的属性摘要。", "parameters": {"layer_id": "string?", "limit": "number?"}},
-    {"name": "draw_annotation", "description": "在当前课堂地图上写入标注。", "parameters": {"text": "string", "position": "number[2]?"}},
-    {"name": "measure", "description": "输出当前视域或选中对象的距离/尺度说明。", "parameters": {"mode": "string", "extent": "number[4]?"}},
-    {"name": "apply_template", "description": "加载或切换教学模板。", "parameters": {"template_id": "string"}},
-    {"name": "export_snapshot", "description": "触发课堂截图导出。", "parameters": {"title": "string?"}},
-    {"name": "explain_current_view", "description": "围绕当前地图画面给出讲解话术。", "parameters": {"focus": "string?"}},
-    {"name": "switch_basemap", "description": "切换课堂底图风格。", "parameters": {"basemap_id": "string"}},
-    {"name": "search_poi", "description": "在当前视域或手绘区域内检索 POI。", "parameters": {"keyword": "string", "mode": "string?", "extent": "number[4]?", "geometry": "object?"}},
-    {"name": "run_visual_query", "description": "运行人口等结构化指标查询并生成可高亮地图图层。", "parameters": {"dataset": "string?", "year": "number?", "geo_level": "string?", "metric": "string?", "operation": "string?", "order": "string?", "limit": "number?"}},
-    {"name": "toggle_teaching_map", "description": "叠加或隐藏教学地图（课本插图）。", "parameters": {"map_id": "string", "visible": "boolean?"}},
-    {"name": "open_material", "description": "打开课堂素材或外部教学资料。", "parameters": {"material_id": "string?", "material": "object?"}},
-    {"name": "generate_image", "description": "使用 MiniMax 生成一张 AI 教学示意图并保存到项目图片库。该操作会消耗 API 余额，执行前必须确认。", "parameters": {"prompt": "string", "model": "string?", "aspect_ratio": "string?"}},
-    {"name": "record_observation", "description": "记录课堂学情观察到正在进行的班课（verdict 取值 correct/partial/misconception），供课后报告统计。仅在进行中的班课可用。", "parameters": {"verdict": "string", "tag": "string?", "note": "string?", "question_id": "string?"}},
-    {"name": "launch_question", "description": "在教师课堂工作台呈现一道口头提问并记录为课堂证据（question_id 指教案题目，或用 text/options 现场出题）。不进入投屏。仅在进行中的班课可用。", "parameters": {"question_id": "string?", "text": "string?", "options": "string[]?", "answer_index": "number?"}},
+    {"name": "set_view", "description": "调整课堂地图视角。", "parameters": {"center": "number[2]", "zoom": "number", "extent": "number[4]?"}, "modes": ["teaching", "tool", "interaction"]},
+    {"name": "toggle_layer", "description": "显示或隐藏指定图层。", "parameters": {"layer_id": "string", "visible": "boolean"}, "modes": ["teaching", "tool", "interaction"]},
+    {"name": "reorder_layer", "description": "调整图层前后顺序。", "parameters": {"layer_id": "string", "z_index": "number"}, "modes": ["teaching", "tool", "interaction"]},
+    {"name": "style_layer", "description": "修改图层颜色、透明度、标注等样式。", "parameters": {"layer_id": "string", "style": "object"}, "modes": ["teaching", "tool", "interaction"]},
+    {"name": "query_features", "description": "查询当前图层或关注要素的属性摘要。", "parameters": {"layer_id": "string?", "limit": "number?"}, "modes": ["teaching", "tool", "interaction"]},
+    {"name": "draw_annotation", "description": "在当前课堂地图上写入标注。", "parameters": {"text": "string", "position": "number[2]?"}, "modes": ["teaching", "tool", "interaction"]},
+    {"name": "measure", "description": "输出当前视域或选中对象的距离/尺度说明。", "parameters": {"mode": "string", "extent": "number[4]?"}, "modes": ["teaching", "tool", "interaction"]},
+    {"name": "apply_template", "description": "加载或切换教学模板。", "parameters": {"template_id": "string"}, "modes": ["teaching", "tool", "interaction"]},
+    {"name": "export_snapshot", "description": "触发课堂截图导出。", "parameters": {"title": "string?"}, "modes": ["teaching", "tool", "interaction"]},
+    {"name": "explain_current_view", "description": "围绕当前地图画面给出讲解话术。", "parameters": {"focus": "string?"}, "modes": ["teaching", "tool", "interaction"]},
+    {"name": "switch_basemap", "description": "切换课堂底图风格。", "parameters": {"basemap_id": "string"}, "modes": ["teaching", "tool", "interaction"]},
+    {"name": "search_poi", "description": "在当前视域或手绘区域内检索 POI。", "parameters": {"keyword": "string", "mode": "string?", "extent": "number[4]?", "geometry": "object?"}, "modes": ["teaching", "tool", "interaction"]},
+    {"name": "run_visual_query", "description": "运行人口等结构化指标查询并生成可高亮地图图层。", "parameters": {"dataset": "string?", "year": "number?", "geo_level": "string?", "metric": "string?", "operation": "string?", "order": "string?", "limit": "number?"}, "modes": ["teaching", "tool", "interaction"]},
+    {"name": "toggle_teaching_map", "description": "叠加或隐藏教学地图（课本插图）。", "parameters": {"map_id": "string", "visible": "boolean?"}, "modes": ["teaching"]},
+    {"name": "open_material", "description": "打开课堂素材或外部教学资料。", "parameters": {"material_id": "string?", "material": "object?"}, "modes": ["teaching"]},
+    {"name": "generate_image", "description": "使用 MiniMax 生成一张 AI 教学示意图并保存到项目图片库。该操作会消耗 API 余额，执行前必须确认。", "parameters": {"prompt": "string", "model": "string?", "aspect_ratio": "string?"}, "modes": ["teaching"]},
+    {"name": "record_observation", "description": "记录课堂学情观察到正在进行的班课（verdict 取值 correct/partial/misconception），供课后报告统计。仅在进行中的班课可用。", "parameters": {"verdict": "string", "tag": "string?", "note": "string?", "question_id": "string?"}, "modes": ["teaching"]},
+    {"name": "launch_question", "description": "在教师课堂工作台呈现一道口头提问并记录为课堂证据（question_id 指教案题目，或用 text/options 现场出题）。不进入投屏。仅在进行中的班课可用。", "parameters": {"question_id": "string?", "text": "string?", "options": "string[]?", "answer_index": "number?"}, "modes": ["teaching"]},
+    {"name": "switch_view_mode", "description": "在二维平面地图与三维地球之间切换投影模式。", "parameters": {"mode": "plane|globe"}, "modes": ["interaction"]},
+    {"name": "open_panel", "description": "打开或关闭界面面板。panel 取值：layers（图层管理器）、database（数据库/资源/图片库）、workflow（分析工作流坞）。", "parameters": {"panel": "layers|database|workflow", "open": "boolean?"}, "modes": ["interaction"]},
+    {"name": "focus_layer", "description": "定位并缩放到指定图层范围（layer_id 精确或 layer_name 模糊匹配）。", "parameters": {"layer_id": "string?", "layer_name": "string?"}, "modes": ["interaction"]},
+    {"name": "set_layer_opacity", "description": "调整图层不透明度（0 全透明 - 1 不透明），适合“调到半透明”这类口语指令。", "parameters": {"layer_id": "string?", "layer_name": "string?", "opacity": "number"}, "modes": ["interaction"]},
+    {"name": "enter_lesson_stage", "description": "进入指定教学环节（stage_id 或 stage_title 精确/模糊，offset 支持 next/previous 相对移动）。", "parameters": {"stage_id": "string?", "stage_title": "string?", "offset": "next|previous"}, "modes": ["interaction"]},
+    {"name": "run_workflow", "description": "提交一个 GIS 分析工作流（限白名单模板：人口密度分级设色 population_choropleth、胡焕庸线对比 hu_line_compare、字段分级 classify_field）。", "parameters": {"template_id": "string?", "description": "string?", "parameters": "object?"}, "modes": ["interaction"]},
+    {"name": "start_class_session", "description": "开始上课：为当前教案创建进行中的班课。已有进行中的班课时会被拒绝。", "parameters": {"lesson_id": "string?", "lesson_title": "string?"}, "modes": ["interaction"]},
+    {"name": "end_class_session", "description": "结束上课：结束当前进行中的班课。高风险操作，需要教师确认后执行。", "parameters": {}, "modes": ["interaction"]},
 ]
 
 
@@ -141,6 +150,25 @@ VOICE_FILLER_TOKENS = (
 )
 VOICE_SHOW_KEYWORDS = ("显示", "打开", "叠加")
 VOICE_HIDE_KEYWORDS = ("隐藏", "关闭")
+
+# --- 智能交互（interaction 模式）确定性快速通道关键词 ---
+# 高频课堂指令在这里毫秒级命中，不经过 LLM；关键词表保持集中、便于演示前调优。
+INTERACTION_GLOBE_KEYWORDS = ("三维", "3d", "三维地球", "三维球", "地球模式", "立体地球", "卫星球")
+INTERACTION_PLANE_KEYWORDS = ("二维", "2d", "平面地图", "平面模式", "回到平面", "切换回平面")
+INTERACTION_PANEL_OPEN_KEYWORDS = ("打开", "展开", "调出", "唤出", "显示")
+INTERACTION_PANEL_CLOSE_KEYWORDS = ("关闭", "收起", "收掉", "关掉")
+INTERACTION_PANEL_RULES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("layers", ("图层管理", "图层列表", "图层面板", "图层控制")),
+    ("database", ("数据库", "资源面板", "资源检索", "图片库", "素材库面板", "资料面板")),
+    ("workflow", ("工作流", "分析坞", "分析面板", "工作流坞")),
+)
+INTERACTION_OPACITY_KEYWORDS = ("透明度", "透明", "不透明")
+INTERACTION_SESSION_START_KEYWORDS = ("开始上课", "开始班课", "开课", "现在上课", "正式上课")
+INTERACTION_SESSION_END_KEYWORDS = ("下课", "结束上课", "结束班课", "结束课堂", "这节课到此结束", "课程结束")
+INTERACTION_STAGE_NEXT_KEYWORDS = ("下一环节", "下一个环节", "下一阶段", "下一个阶段", "进入下一", "继续下一")
+INTERACTION_STAGE_PREVIOUS_KEYWORDS = ("上一环节", "上一个环节", "上一阶段", "上一个阶段", "返回上一", "回到上一")
+INTERACTION_STAGE_ENTER_KEYWORDS = ("进入", "跳到", "切到", "切换到")
+INTERACTION_WORKFLOW_TRIGGER_KEYWORDS = ("做一个", "做一个分析", "运行", "跑一个", "执行", "来一个", "做个", "做个分析", "分析一下", "开始分析")
 
 BUILTIN_REGION_ANCHORS: Tuple[Dict[str, Any], ...] = (
     {"name": "上海", "aliases": ["上海市", "沪上"], "center": [121.47, 31.23], "zoom": 8},
@@ -444,6 +472,206 @@ class AssistantService:
             "assistant_message": "我暂时没听清具体操作，请换一种说法，例如“转到上海”或“来看人口分布图”。",
             "actions": [],
         }
+
+    def plan_interaction_actions(
+        self,
+        message: str,
+        project: ProjectRecord,
+        map_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Deterministic fast path for the 智能交互 (interaction) mode.
+
+        Voice and text share this rule layer. High-frequency classroom
+        commands resolve here in milliseconds without touching the LLM;
+        anything unmatched falls through to the MiniMax planner with an
+        empty action list, and the caller (LLMPlanner) decides whether to
+        escalate or answer with the clarification below.
+        """
+        map_context = map_context or {}
+        normalized = self._normalize_voice_text(message)
+        lowered = normalized.lower()
+
+        # --- 班课控制（短语最具体，优先判定）---
+        if any(keyword in normalized for keyword in INTERACTION_SESSION_END_KEYWORDS):
+            return {
+                "assistant_message": "收到，结束本节课。该操作需要你确认后执行。",
+                "actions": [{"tool_name": "end_class_session", "tool_params": {}}],
+            }
+        if any(keyword in normalized for keyword in INTERACTION_SESSION_START_KEYWORDS):
+            return {
+                "assistant_message": "好的，我来开始这节课。",
+                "actions": [{"tool_name": "start_class_session", "tool_params": {}}],
+            }
+
+        # --- 2D/3D 投影切换 ---
+        wants_globe = any(keyword in lowered for keyword in INTERACTION_GLOBE_KEYWORDS)
+        wants_plane = any(keyword in lowered for keyword in INTERACTION_PLANE_KEYWORDS)
+        if wants_globe and not wants_plane:
+            return {
+                "assistant_message": "好的，切换到三维地球。",
+                "actions": [{"tool_name": "switch_view_mode", "tool_params": {"mode": "globe"}}],
+            }
+        if wants_plane and not wants_globe:
+            return {
+                "assistant_message": "好的，切换到二维平面地图。",
+                "actions": [{"tool_name": "switch_view_mode", "tool_params": {"mode": "plane"}}],
+            }
+
+        # --- 面板开关 ---
+        has_open_verb = any(keyword in normalized for keyword in INTERACTION_PANEL_OPEN_KEYWORDS)
+        has_close_verb = any(keyword in normalized for keyword in INTERACTION_PANEL_CLOSE_KEYWORDS)
+        if has_open_verb or has_close_verb:
+            for panel_id, panel_keywords in INTERACTION_PANEL_RULES:
+                if any(keyword in normalized for keyword in panel_keywords):
+                    return {
+                        "assistant_message": f"好的，{'关闭' if has_close_verb and not has_open_verb else '打开'}{panel_keywords[0]}。",
+                        "actions": [
+                            {
+                                "tool_name": "open_panel",
+                                "tool_params": {"panel": panel_id, "open": not (has_close_verb and not has_open_verb)},
+                            }
+                        ],
+                    }
+
+        # --- 图层透明度 ---
+        if any(keyword in normalized for keyword in INTERACTION_OPACITY_KEYWORDS):
+            opacity = self._parse_opacity_phrase(normalized)
+            if opacity is not None:
+                target_layer = self._resolve_target_layer(normalized, project, include_active_fallback=False)
+                active_layer = next((layer for layer in project.layers if layer.layer_id == project.active_layer_id), None)
+                resolved = target_layer or (active_layer.to_dict() if active_layer else None)
+                if resolved:
+                    return {
+                        "assistant_message": f"好的，我把图层“{resolved['name']}”的透明度调整为 {opacity:g}。",
+                        "actions": [
+                            {
+                                "tool_name": "set_layer_opacity",
+                                "tool_params": {"layer_id": resolved["layer_id"], "opacity": opacity},
+                            }
+                        ],
+                    }
+
+        # --- 教学环节推进 ---
+        if any(keyword in normalized for keyword in INTERACTION_STAGE_NEXT_KEYWORDS):
+            return {
+                "assistant_message": "好的，进入下一个教学环节。",
+                "actions": [{"tool_name": "enter_lesson_stage", "tool_params": {"offset": "next"}}],
+            }
+        if any(keyword in normalized for keyword in INTERACTION_STAGE_PREVIOUS_KEYWORDS):
+            return {
+                "assistant_message": "好的，回到上一个教学环节。",
+                "actions": [{"tool_name": "enter_lesson_stage", "tool_params": {"offset": "previous"}}],
+            }
+        stage_title = self._extract_stage_title(normalized)
+        if stage_title:
+            return {
+                "assistant_message": f"好的，进入“{stage_title}”环节。",
+                "actions": [{"tool_name": "enter_lesson_stage", "tool_params": {"stage_title": stage_title}}],
+            }
+
+        # --- GIS 分析工作流（白名单模板）---
+        # 窄疑问词判定：「分析」在这里是动作触发词而不是疑问词，
+        # 所以只拦 为什么/怎么/讲讲 这类真正的提问。
+        interaction_question_words = ("为什么", "为何", "怎么", "怎样", "解释", "讲解", "讲讲", "读图", "说明")
+        is_question = any(keyword in normalized for keyword in interaction_question_words)
+        if not is_question:
+            template_id = detect_template(normalized)
+            if template_id and template_id in INTERACTION_ALLOWED_TEMPLATES:
+                wants_analysis = any(keyword in normalized for keyword in INTERACTION_WORKFLOW_TRIGGER_KEYWORDS) or "分析" in normalized
+                if wants_analysis:
+                    template_title = next(
+                        (item["title"] for item in list_templates() if item["id"] == template_id), template_id
+                    )
+                    return {
+                        "assistant_message": f"好的，已提交「{template_title}」分析，完成后结果图层会自动加载。",
+                        "actions": [{"tool_name": "run_workflow", "tool_params": {"template_id": template_id}}],
+                    }
+
+        # --- 继承语音规则组：地名定位/图层显隐/底图/教学地图/素材/视觉查询/讲解 ---
+        # 只有包含明确指令动词或疑问词时才接受继承规则，避免「今天天气不错啊」
+        # 这类闲聊被底图/教学地图关键词误触发。
+        interaction_command_words = (
+            "转到", "转向", "飞到", "聚焦", "定位", "切到", "切换", "去看", "去看",
+            "显示", "隐藏", "打开", "关闭", "叠加", "来看", "取消",
+        ) + VOICE_VIEW_KEYWORDS
+        looks_like_command = any(keyword in normalized for keyword in interaction_command_words)
+        looks_like_question = any(keyword in normalized for keyword in interaction_question_words)
+        if looks_like_command or looks_like_question:
+            legacy_plan = self.plan_voice_actions(message, project, map_context=map_context)
+            if legacy_plan.get("actions"):
+                return {
+                    "assistant_message": str(legacy_plan.get("assistant_message") or ""),
+                    "actions": legacy_plan["actions"],
+                }
+
+        return {
+            "assistant_message": "这条指令我没有直接听懂。可以说：“切换到三维地球”“打开图层管理”“转到长三角”“下一环节”。",
+            "actions": [],
+        }
+
+    @staticmethod
+    def _parse_opacity_phrase(text: str) -> Optional[float]:
+        """Parse spoken opacity: 半透明/一半/不透明/全透明/50%/百分之三十/0.3."""
+        if "全透明" in text or "完全透明" in text:
+            return 0.0
+        if "不透明" in text:
+            return 1.0
+        if "半透明" in text or "一半" in text:
+            return 0.5
+        percent_match = re.search(r"(\d+(?:\.\d+)?)\s*%", text)
+        if percent_match:
+            value = float(percent_match.group(1)) / 100.0
+            return min(1.0, max(0.0, value))
+        chinese_percent = re.search(r"百分之([一二三四五六七八九十百半\d]+)", text)
+        if chinese_percent:
+            raw = chinese_percent.group(1)
+            if raw.isdigit():
+                value = int(raw)
+            else:
+                value = AssistantService._chinese_number_to_int(raw)
+            if value is not None:
+                return min(1.0, max(0.0, value / 100.0))
+        bare_ratio = re.search(r"(?<![\d.])(0(?:\.\d+)?|1(?:\.0+)?)(?![\d])", text)
+        if bare_ratio and ("透明度" in text or "透明" in text):
+            return min(1.0, max(0.0, float(bare_ratio.group(1))))
+        return None
+
+    @staticmethod
+    def _chinese_number_to_int(raw: str) -> Optional[int]:
+        """Convert simple Chinese numerals (<= 100) like 三十/五十/一百/半."""
+        if raw == "半":
+            return 50
+        digits = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+        if raw == "十":
+            return 10
+        if raw == "百" or raw == "一百":
+            return 100
+        if "十" in raw:
+            parts = raw.split("十")
+            tens = digits.get(parts[0], 1) if parts[0] else 1
+            ones = digits.get(parts[1], 0) if len(parts) > 1 and parts[1] else 0
+            if (parts[0] == "" or parts[0] in digits) and (len(parts) < 2 or parts[1] in digits or parts[1] == ""):
+                return tens * 10 + ones
+        if raw in digits:
+            return digits[raw]
+        return None
+
+    @staticmethod
+    def _extract_stage_title(text: str) -> str:
+        """Extract a lesson-stage title from phrases like 进入“河流对城市的影响”环节."""
+        for keyword in INTERACTION_STAGE_ENTER_KEYWORDS:
+            index = text.find(keyword)
+            if index < 0:
+                continue
+            rest = text[index + len(keyword):]
+            rest = rest.strip("，。,.的")
+            for suffix in ("环节", "阶段"):
+                suffix_index = rest.find(suffix)
+                if suffix_index > 0:
+                    title = rest[:suffix_index].strip("“”\"'「」")
+                    if title:
+                        return title
+        return ""
 
     def compose_explanation(
         self,

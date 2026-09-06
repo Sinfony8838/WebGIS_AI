@@ -213,6 +213,9 @@ class AppConfig:
     assistant_v2_enabled: bool = field(
         default_factory=lambda: os.getenv("WEBGIS_AI_ASSISTANT_V2_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
     )
+    voice_asr_enabled: bool = field(
+        default_factory=lambda: os.getenv("WEBGIS_AI_VOICE_ASR_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+    )
     resource_search_endpoint: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_RESOURCE_SEARCH_ENDPOINT", ""))
     llm_provider_source: str = field(init=False, default="default")
     minimax_api_key_source: str = field(init=False, default="unset")

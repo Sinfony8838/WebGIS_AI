@@ -21,17 +21,18 @@ from .services.datasets import DatasetService
 from .services.knowledge import KnowledgeService
 from .services.knowledge_base import KnowledgeBaseService
 from .services.llm_planner import LLMPlanner
-from .services.minimax_client import MiniMaxClient
+from .services.minimax_client import build_llm_client
 from .services.minimax_image_client import MiniMaxImageClient
 from .services.one_map_catalog import OneMapCatalogService
 from .services.population_sources import PopulationSourceRegistryService
 from .services.timeline_service import TimelineService
 from .services.poi import PoiService
 from .services.resource_search import ResourceSearchService
+from .services.voice_asr import VoiceAsrEngine
 from .services.session_engine import AssistantSessionEngine
 from .services.teaching_maps import TeachingMapService
 from .services.workflow_executor import WorkflowExecutor
-from .services.workflow_templates import detect_template, expand_template, list_templates
+from .services.workflow_templates import INTERACTION_ALLOWED_TEMPLATES, detect_template, expand_template, list_templates
 from .services.templates import DISABLED_TEMPLATE_IDS, TemplateService
 from .services.vision import MapVisionService
 from .store import RuntimeStore
@@ -316,7 +317,7 @@ class WebGISRuntime:
         self.resource_search_service = ResourceSearchService(self.config, self.knowledge_base_service)
         self.poi_service = PoiService(self.config, self.store)
         self.vision_service = MapVisionService(self.config)
-        self.minimax_client = MiniMaxClient(self.config)
+        self.minimax_client = build_llm_client(self.config)
         self.image_generation_service = MiniMaxImageClient(self.config)
         self.teaching_map_service = TeachingMapService(self.config, self.store)
         self.assistant_service.teaching_map_service = self.teaching_map_service
@@ -337,6 +338,7 @@ class WebGISRuntime:
             summary_callback=self._generate_workflow_summary,
         )
         self.timeline_service = TimelineService(self.minimax_client)
+        self.voice_asr = VoiceAsrEngine(self.config)
         self.classroom = ClassroomWorkflowRuntime(self)
         self.session_engine.set_session_stats_provider(self._session_statistics_for_assistant)
         self._normalize_loaded_projects()
@@ -380,6 +382,7 @@ class WebGISRuntime:
                 "weather_basemap_enabled": self.config.weather_basemap_enabled(),
             },
             "llm": self.minimax_client.status(),
+            "voice_asr": self.voice_asr.status(),
             "vision": self.vision_service.status(),
             "image_generation": self.image_generation_service.status(),
             "gis_workflow": {
@@ -896,11 +899,12 @@ class WebGISRuntime:
         # Heavy GIS work moved to /workflow/*; assistant actions are WebGIS-only.
         normalized_target = "webgis"
         normalized_input_mode = input_mode if input_mode in {"text", "voice"} else "text"
-        normalized_mode = assistant_mode if assistant_mode in {"teaching", "knowledge", "tool"} else "teaching"
+        normalized_mode = assistant_mode if assistant_mode in {"teaching", "knowledge", "tool", "interaction"} else "teaching"
         resolved_attachments = self.resolve_image_attachments(project_id, image_attachments or [])
         use_v2 = (
             self.config.assistant_v2_enabled
             or normalized_mode == "teaching"
+            or normalized_mode == "interaction"
             or assistant_mode == "knowledge"
             or bool(conversation_id)
             or bool(history)
@@ -2238,7 +2242,200 @@ class WebGISRuntime:
             summary = f"已在教师工作台呈现口头提问：{presented.get('text', '')}"
             self.store.add_recent_action(project_id, "呈现口头提问", summary, status="success")
             return {"assistant_message": summary, "presented_question": presented, "artifacts": []}
+        # --- 智能交互（interaction）工具 ---
+        if tool_name == "switch_view_mode":
+            mode = str(params.get("mode") or "").strip().lower()
+            # 2D/3D 投影是客户端状态：后端只广播 ui_action，
+            # 由前端 transitionToGlobe/transitionToPlane 执行平滑切换。
+            summary = "已切换到三维地球。" if mode == "globe" else "已切换到二维平面地图。"
+            self.store.add_recent_action(project_id, "切换视图模式", summary, status="success")
+            return {
+                "assistant_message": summary,
+                "ui_actions": [{"type": "switch_view", "mode": "globe" if mode == "globe" else "plane"}],
+                "artifacts": [],
+            }
+        if tool_name == "open_panel":
+            panel = str(params.get("panel") or "").strip().lower()
+            open_state = bool(params.get("open", True))
+            panel_names = {"layers": "图层管理器", "database": "数据库面板", "workflow": "工作流坞"}
+            name = panel_names.get(panel, panel)
+            return {
+                "assistant_message": f"已{'打开' if open_state else '关闭'}{name}。",
+                "ui_actions": [{"type": "open_panel", "panel": panel, "open": open_state}],
+                "artifacts": [],
+            }
+        if tool_name == "focus_layer":
+            project = self._require_project(project_id)
+            layer = self._resolve_interaction_layer(project, params, map_context)
+            if layer is None:
+                return {"assistant_message": "没有找到要定位的图层，请说出图层的完整名称后重试。", "artifacts": []}
+            extent = self._layer_extent(layer)
+            if not extent:
+                return {"assistant_message": f"已选中图层“{layer.name}”，但该图层缺少范围信息，无法定位。", "artifacts": []}
+            view = {
+                "center": [(extent[0] + extent[2]) / 2.0, (extent[1] + extent[3]) / 2.0],
+                "zoom": 6,
+                "extent": extent,
+            }
+            self.store.set_view(project_id, view)
+            self.store.add_recent_action(project_id, "定位图层", f"已定位到“{layer.name}”", status="success")
+            return {"assistant_message": f"已定位到图层“{layer.name}”。", "view": view, "artifacts": []}
+        if tool_name == "set_layer_opacity":
+            project = self._require_project(project_id)
+            layer = self._resolve_interaction_layer(project, params, map_context)
+            if layer is None:
+                return {"assistant_message": "没有找到要调整透明度的图层，请说出图层的完整名称后重试。", "artifacts": []}
+            opacity = max(0.0, min(1.0, float(params.get("opacity", 1.0))))
+            self.store.patch_layer(project_id, layer.layer_id, {"opacity": opacity})
+            self.store.add_recent_action(project_id, "调整透明度", f"“{layer.name}”透明度已调整为 {opacity:g}", status="success")
+            return {"assistant_message": f"图层“{layer.name}”的透明度已调整为 {opacity:g}。", "artifacts": []}
+        if tool_name == "enter_lesson_stage":
+            teaching_context = map_context.get("teaching_context") if isinstance(map_context.get("teaching_context"), dict) else {}
+            session_id = str((teaching_context or {}).get("session_id") or "").strip()
+            if not session_id:
+                raise ValueError("enter_lesson_stage requires an active class session")
+            session = self.store.get_class_session(session_id)
+            if session is None:
+                raise KeyError(f"Unknown class session: {session_id}")
+            lesson = self.classroom._lesson_for_session(session)
+            if lesson is None:
+                raise KeyError(f"Unknown lesson: {session.lesson_id}")
+            target_stage_id = self._resolve_interaction_stage_id(session, lesson, params)
+            if not target_stage_id:
+                return {"assistant_message": "没有匹配到对应的教学环节，可以说“下一环节”或说出环节名称。", "artifacts": []}
+            result = self.classroom.enter_session_stage(session_id, target_stage_id)
+            stage = result.get("stage") or {}
+            stage_title = str(stage.get("title") or target_stage_id)
+            summary = f"已进入环节“{stage_title}”，教学场景已同步切换。"
+            self.store.add_recent_action(project_id, "进入教学环节", summary, status="success", metadata={"stage_id": target_stage_id})
+            return {"assistant_message": summary, "stage": stage, "artifacts": []}
+        if tool_name == "run_workflow":
+            template_id = str(params.get("template_id") or "").strip()
+            description = str(params.get("description") or "").strip()
+            if not template_id:
+                template_id = str(detect_template(description) or "")
+            if template_id not in INTERACTION_ALLOWED_TEMPLATES:
+                allowed_titles = "、".join(
+                    item["title"] for item in list_templates() if item["id"] in INTERACTION_ALLOWED_TEMPLATES
+                )
+                return {"assistant_message": f"该分析暂不支持语音发起，目前可说：{allowed_titles}。", "artifacts": []}
+            result = self.submit_workflow(
+                project_id,
+                message=description or template_id,
+                mode="template",
+                template_id=template_id,
+                parameters=params.get("parameters") if isinstance(params.get("parameters"), dict) else None,
+            )
+            if result.get("error"):
+                return {"assistant_message": f"分析提交失败：{result['error']}", "artifacts": []}
+            template_title = next((item["title"] for item in list_templates() if item["id"] == template_id), template_id)
+            summary = f"已提交「{template_title}」分析，完成后结果图层会自动加载。"
+            self.store.add_recent_action(project_id, "语音发起分析", summary, status="success", metadata={"workflow_id": result.get("workflow_id", "")})
+            return {
+                "assistant_message": summary,
+                "workflow": {"workflow_id": result.get("workflow_id", ""), "template_id": template_id, "status": result.get("workflow_status", "")},
+                "ui_actions": [{"type": "open_panel", "panel": "workflow", "open": True}],
+                "artifacts": [],
+            }
+        if tool_name == "start_class_session":
+            teaching_context = map_context.get("teaching_context") if isinstance(map_context.get("teaching_context"), dict) else {}
+            lesson_id = str(params.get("lesson_id") or (teaching_context or {}).get("lesson_id") or "").strip()
+            lesson_title = str(params.get("lesson_title") or "").strip()
+            if not lesson_id and lesson_title:
+                matched = self.store.list_lessons() if hasattr(self.store, "list_lessons") else []
+                # store.list_lessons 不存在时经由 lesson_service 匹配
+                lessons = matched.get("items", []) if isinstance(matched, dict) else matched
+                lesson_id = next(
+                    (str(item.get("lesson_id") or "") for item in lessons if lesson_title in str(item.get("title") or "")),
+                    "",
+                )
+            if not lesson_id:
+                return {"assistant_message": "开始上课需要先绑定教案（在课前面板选择教案后再试）。", "artifacts": []}
+            result = self.classroom.create_class_session(lesson_id, project_id)
+            session = result.get("session") or {}
+            summary = f"已开始上课（班课码 {session.get('join_code', '')}）。"
+            self.store.add_recent_action(project_id, "开始上课", summary, status="success", metadata={"session_id": session.get("session_id", "")})
+            return {"assistant_message": summary, "class_session": session, "artifacts": []}
+        if tool_name == "end_class_session":
+            teaching_context = map_context.get("teaching_context") if isinstance(map_context.get("teaching_context"), dict) else {}
+            session_id = str((teaching_context or {}).get("session_id") or "").strip()
+            if not session_id:
+                raise ValueError("end_class_session requires an active class session")
+            result = self.classroom.end_class_session(session_id)
+            summary = "本节课已结束，课后报告已生成。"
+            self.store.add_recent_action(project_id, "结束上课", summary, status="success", metadata={"session_id": session_id})
+            return {"assistant_message": summary, "class_session": result.get("session") or {}, "artifacts": []}
         raise ValueError(f"Unsupported assistant tool: {tool_name}")
+
+    def _resolve_interaction_layer(
+        self,
+        project: ProjectRecord,
+        params: Dict[str, Any],
+        map_context: Dict[str, Any],
+    ) -> Optional[LayerRecord]:
+        """layer_id 精确 → layer_name 子串 → 当前激活图层。"""
+        layer_id = str(params.get("layer_id") or "").strip()
+        if layer_id:
+            return next((layer for layer in project.layers if layer.layer_id == layer_id), None)
+        layer_name = str(params.get("layer_name") or "").strip().lower()
+        if layer_name:
+            for layer in project.layers:
+                if layer_name in layer.name.lower():
+                    return layer
+            for layer in project.layers:
+                if layer.name.lower() in layer_name:
+                    return layer
+        active_id = str(map_context.get("active_layer_id") or project.active_layer_id or "").strip()
+        if active_id:
+            return next((layer for layer in project.layers if layer.layer_id == active_id), None)
+        return None
+
+    @staticmethod
+    def _iter_geojson_coordinates(node: Any):
+        if isinstance(node, dict):
+            for value in node.values():
+                yield from WebGISRuntime._iter_geojson_coordinates(value)
+        elif isinstance(node, (list, tuple)):
+            if len(node) >= 2 and all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in node[:2]):
+                yield node[0], node[1]
+            else:
+                for child in node:
+                    yield from WebGISRuntime._iter_geojson_coordinates(child)
+
+    def _layer_extent(self, layer: LayerRecord) -> Optional[List[float]]:
+        data = layer.data if isinstance(layer.data, dict) else {}
+        coordinates = list(self._iter_geojson_coordinates(data.get("features") or []))
+        if not coordinates:
+            return None
+        lons = [point[0] for point in coordinates]
+        lats = [point[1] for point in coordinates]
+        return [min(lons), min(lats), max(lons), max(lats)]
+
+    @staticmethod
+    def _resolve_interaction_stage_id(session: Any, lesson: Any, params: Dict[str, Any]) -> str:
+        stages = [stage for stage in (lesson.stages or []) if isinstance(stage, dict)]
+        stage_ids = [str(stage.get("stage_id") or "") for stage in stages]
+        stage_id = str(params.get("stage_id") or "").strip()
+        if stage_id and stage_id in stage_ids:
+            return stage_id
+        stage_title = str(params.get("stage_title") or "").strip()
+        if stage_title:
+            lowered = stage_title.lower()
+            for stage in stages:
+                title = str(stage.get("title") or "")
+                if lowered and (lowered in title.lower() or title.lower() in lowered):
+                    return str(stage.get("stage_id") or "")
+        offset = str(params.get("offset") or "").strip().lower()
+        if offset in {"next", "previous"}:
+            current = str(session.current_stage_id or "")
+            if current in stage_ids:
+                index = stage_ids.index(current)
+                shifted = index + 1 if offset == "next" else index - 1
+            else:
+                shifted = 0 if offset == "next" else len(stage_ids) - 1
+            shifted = max(0, min(len(stage_ids) - 1, shifted))
+            return stage_ids[shifted]
+        return ""
 
     def _register_artifacts(self, project_id: str, job_id: str, artifacts: List[Dict[str, Any]]) -> Dict[str, Any]:
         registered = {}

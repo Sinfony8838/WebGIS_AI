@@ -214,6 +214,77 @@ class AssistantServiceTest(unittest.TestCase):
         self.assertIn("东西约 1113 千米", equator)
         self.assertIn("东西约 557 千米", high_lat)
 
+    # ------------------------------------------------------------------
+    # 智能交互（interaction 模式）确定性快速通道
+    # ------------------------------------------------------------------
+
+    def test_tool_schema_marks_modes_and_interaction_tools(self) -> None:
+        tool_names = {tool["name"] for tool in ASSISTANT_TOOL_SCHEMA}
+        for tool in (
+            "switch_view_mode",
+            "open_panel",
+            "focus_layer",
+            "set_layer_opacity",
+            "enter_lesson_stage",
+            "run_workflow",
+            "start_class_session",
+            "end_class_session",
+        ):
+            self.assertIn(tool, tool_names)
+        by_name = {tool["name"]: tool for tool in ASSISTANT_TOOL_SCHEMA}
+        self.assertEqual(by_name["end_class_session"]["modes"], ["interaction"])
+        self.assertEqual(by_name["record_observation"]["modes"], ["teaching"])
+        self.assertIn("interaction", by_name["toggle_layer"]["modes"])
+
+    def test_interaction_rule_session_control(self) -> None:
+        service = AssistantService(AppConfig())
+        project = self.build_project()
+        end_plan = service.plan_interaction_actions("结束上课", project)
+        self.assertEqual(end_plan["actions"][0]["tool_name"], "end_class_session")
+        start_plan = service.plan_interaction_actions("开始上课", project)
+        self.assertEqual(start_plan["actions"][0]["tool_name"], "start_class_session")
+
+    def test_interaction_rule_view_and_panel(self) -> None:
+        service = AssistantService(AppConfig())
+        project = self.build_project()
+        globe = service.plan_interaction_actions("切换到三维地球", project)
+        self.assertEqual(globe["actions"][0]["tool_name"], "switch_view_mode")
+        self.assertEqual(globe["actions"][0]["tool_params"]["mode"], "globe")
+        plane = service.plan_interaction_actions("回到二维平面", project)
+        self.assertEqual(plane["actions"][0]["tool_params"]["mode"], "plane")
+        panel = service.plan_interaction_actions("打开图层管理器", project)
+        self.assertEqual(panel["actions"][0]["tool_name"], "open_panel")
+        self.assertEqual(panel["actions"][0]["tool_params"], {"panel": "layers", "open": True})
+
+    def test_interaction_rule_opacity_parsing(self) -> None:
+        service = AssistantService(AppConfig())
+        project = self.build_project()
+        plan = service.plan_interaction_actions("把人口分布图层调到半透明", project)
+        self.assertEqual(plan["actions"][0]["tool_name"], "set_layer_opacity")
+        self.assertEqual(plan["actions"][0]["tool_params"]["opacity"], 0.5)
+        percent = service.plan_interaction_actions("透明度调到30%", project)
+        self.assertEqual(percent["actions"][0]["tool_params"]["opacity"], 0.3)
+
+    def test_interaction_rule_stage_and_workflow(self) -> None:
+        service = AssistantService(AppConfig())
+        project = self.build_project()
+        nxt = service.plan_interaction_actions("进入下一个教学环节", project)
+        self.assertEqual(nxt["actions"][0]["tool_params"]["offset"], "next")
+        prev = service.plan_interaction_actions("回到上一环节", project)
+        self.assertEqual(prev["actions"][0]["tool_params"]["offset"], "previous")
+        titled = service.plan_interaction_actions("进入河流对城市的影响环节", project)
+        self.assertEqual(titled["actions"][0]["tool_params"]["stage_title"], "河流对城市的影响")
+        workflow = service.plan_interaction_actions("做一个胡焕庸线对比分析", project)
+        self.assertEqual(workflow["actions"][0]["tool_name"], "run_workflow")
+        self.assertEqual(workflow["actions"][0]["tool_params"]["template_id"], "hu_line_compare")
+
+    def test_interaction_unmatched_returns_guidance_not_error(self) -> None:
+        service = AssistantService(AppConfig())
+        project = self.build_project()
+        plan = service.plan_interaction_actions("帮我把画面整得好看一点谢谢", project)
+        self.assertEqual(plan["actions"], [])
+        self.assertTrue(plan["assistant_message"])
+
 
 if __name__ == "__main__":
     unittest.main()

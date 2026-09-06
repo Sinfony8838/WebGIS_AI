@@ -270,3 +270,17 @@ class LLMClient:
 # ---------------------------------------------------------------------------
 
 MiniMaxClient = LLMClient
+
+
+def build_llm_client(config: AppConfig) -> LLMClient:
+    """Single construction seam for the chat-completion LLM client.
+
+    The runtime builds its client exclusively through this factory so a
+    future multi-provider switch (config.llm_provider routing to a
+    different vendor's client class) is a one-function change. Today the
+    only provider is MiniMax, so the factory simply returns
+    :class:`LLMClient`.
+    """
+    provider = (getattr(config, "llm_provider", "") or "").strip().lower()
+    del provider  # single-provider era; kept for the future routing switch
+    return LLMClient(config)

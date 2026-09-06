@@ -347,6 +347,44 @@ class AssistantV2RuntimeTest(unittest.TestCase):
         self.assertNotIn("正确率", message)
         self.assertIsNone(job["result"]["teaching_contract"])
 
+    def test_interaction_mode_keeps_independent_conversation_and_intent(self) -> None:
+        # interaction 模式：intent 固定 interaction、会话线程与 teaching 互不影响。
+        runtime, project_id = self.build_runtime(enable_v2=True)
+        runtime.session_engine.knowledge.minimax_client = None
+        runtime.session_engine.tool_planner.llm_planner.minimax_client = None
+
+        first = runtime.submit_assistant_message(
+            project_id, "切换到三维地球", assistant_mode="interaction", input_mode="voice"
+        )
+        job = self.wait_for_job(runtime, first["job_id"])
+        result = job["result"]
+        self.assertEqual(result["intent"], "interaction")
+        self.assertEqual(result["planner"], "interaction_rule")
+        interaction_conversation = str(result["conversation_id"])
+        self.assertTrue(interaction_conversation)
+        self.assertEqual(
+            result["actions_executed"][0]["result"]["ui_actions"],
+            [{"type": "switch_view", "mode": "globe"}],
+        )
+
+        second = runtime.submit_assistant_message(
+            project_id, "讲解当前画面", assistant_mode="teaching", input_mode="text"
+        )
+        teaching_job = self.wait_for_job(runtime, second["job_id"])
+        teaching_conversation = str(teaching_job["result"]["conversation_id"])
+        self.assertNotEqual(teaching_conversation, interaction_conversation)
+
+        # interaction 会话复用同一线程（同模式同 id），teaching 不串扰。
+        third = runtime.submit_assistant_message(
+            project_id,
+            "打开图层管理器",
+            assistant_mode="interaction",
+            input_mode="voice",
+            conversation_id=interaction_conversation,
+        )
+        third_job = self.wait_for_job(runtime, third["job_id"])
+        self.assertEqual(str(third_job["result"]["conversation_id"]), interaction_conversation)
+
 
 if __name__ == "__main__":
     unittest.main()

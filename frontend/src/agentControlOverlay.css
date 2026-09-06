@@ -1,0 +1,144 @@
+/* 智能交互操控光晕层：模仿 Codex「正在操控电脑」的观感。
+   纯 CSS 动画、pointer-events:none，不拦截页面交互。 */
+
+.agent-control-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.45s ease;
+}
+
+.agent-control-overlay.listening,
+.agent-control-overlay.working {
+  opacity: 1;
+}
+
+.agent-control-glow {
+  position: absolute;
+  inset: 0;
+  border-radius: 18px;
+  box-shadow:
+    inset 0 0 42px rgba(59, 130, 246, 0.28),
+    inset 0 0 120px rgba(59, 130, 246, 0.12);
+  animation: agent-glow-breathe 2.2s ease-in-out infinite;
+}
+
+.agent-control-overlay.listening .agent-control-glow {
+  box-shadow:
+    inset 0 0 22px rgba(16, 185, 129, 0.2),
+    inset 0 0 80px rgba(16, 185, 129, 0.08);
+}
+
+.agent-control-overlay.pulse .agent-control-glow {
+  animation:
+    agent-glow-breathe 2.2s ease-in-out infinite,
+    agent-glow-flash 0.6s ease-out 1;
+}
+
+@keyframes agent-glow-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes agent-glow-flash {
+  0% {
+    box-shadow:
+      inset 0 0 80px rgba(96, 165, 250, 0.55),
+      inset 0 0 200px rgba(96, 165, 250, 0.25);
+  }
+  100% {
+    box-shadow:
+      inset 0 0 42px rgba(59, 130, 246, 0.28),
+      inset 0 0 120px rgba(59, 130, 246, 0.12);
+  }
+}
+
+/* 顶部居中胶囊徽标 */
+.agent-control-badge {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(640px, 86vw);
+  padding: 8px 18px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.86);
+  border: 1px solid rgba(96, 165, 250, 0.45);
+  box-shadow: 0 8px 30px rgba(2, 6, 23, 0.45);
+  backdrop-filter: blur(6px);
+  color: #e0edff;
+  font-size: 14px;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.agent-control-badge[data-state="listening"] {
+  border-color: rgba(52, 211, 153, 0.5);
+}
+
+.agent-control-dot {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 50%;
+  background: #60a5fa;
+  box-shadow: 0 0 10px rgba(96, 165, 250, 0.9);
+  animation: agent-dot-breathe 1.6s ease-in-out infinite;
+}
+
+.agent-control-badge[data-state="listening"] .agent-control-dot {
+  background: #34d399;
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.9);
+}
+
+.agent-control-badge[data-state="captured"] .agent-control-dot {
+  background: #fbbf24;
+  box-shadow: 0 0 10px rgba(251, 191, 36, 0.9);
+}
+
+@keyframes agent-dot-breathe {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+}
+
+.agent-control-badge-text {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.agent-control-detail {
+  color: rgba(224, 237, 255, 0.72);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 减少动态效果偏好：光晕退化为静态细边框，点停止呼吸 */
+@media (prefers-reduced-motion: reduce) {
+  .agent-control-glow,
+  .agent-control-dot {
+    animation: none;
+  }
+  .agent-control-overlay.pulse .agent-control-glow {
+    animation: none;
+    box-shadow: inset 0 0 42px rgba(59, 130, 246, 0.28);
+  }
+}
