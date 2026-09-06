@@ -412,7 +412,7 @@ export function ClassRunPanel({
       </nav>
 
       <div className="class-panel-current">
-        {currentStage?.script.length ? (
+        {currentStage?.script?.length ? (
           <div className="basic-knowledge-launcher" data-testid="basic-knowledge-launcher">
             <div>
               <span className="question-detail-label">基础知识讲解</span>
@@ -656,7 +656,7 @@ export function ClassRunPanel({
           </button>
         </div>
       </footer>
-      {knowledgeOpen && currentStage?.script.length ? (
+      {knowledgeOpen && currentStage?.script?.length ? (
         <BasicKnowledgeOverlay
           title={currentStage.title}
           points={currentStage.script}
