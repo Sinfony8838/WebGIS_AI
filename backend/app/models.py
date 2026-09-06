@@ -393,6 +393,50 @@ LessonDesignSession = LessonDesignRecord
 
 
 @dataclass
+class LessonRehearsalRecord:
+    """上课模拟测试会话：对课时做工作副本式试讲调整，完成后发布为新版本。"""
+
+    rehearsal_id: str
+    project_id: str
+    owner_user_id: str = ""
+    lesson_id: str = ""
+    base_version: int = 1  # 开启模拟测试时课时的版本号
+    working_copy: Dict[str, Any] = field(default_factory=dict)  # 完整教案数据副本
+    modification_events: List[Dict[str, Any]] = field(default_factory=list)
+    test_results: Dict[str, Any] = field(default_factory=dict)  # 地图/截图/助手/投屏等试讲记录
+    revision: int = 0
+    status: str = "active"  # active | completed | cancelled
+    committed_version: int = 0  # 完成后发布成的课时版本号
+    completed_at: str = ""
+    created_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
+
+    @classmethod
+    def create(
+        cls,
+        project_id: str,
+        owner_user_id: str,
+        lesson_id: str,
+        base_version: int,
+        working_copy: Optional[Dict[str, Any]] = None,
+    ) -> "LessonRehearsalRecord":
+        return cls(
+            rehearsal_id=f"rehearsal_{uuid4().hex}",
+            project_id=project_id,
+            owner_user_id=owner_user_id,
+            lesson_id=lesson_id,
+            base_version=base_version,
+            working_copy=working_copy or {},
+        )
+
+    def touch(self) -> None:
+        self.updated_at = utc_now()
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class ClassSessionRecord:
     session_id: str
     lesson_id: str

@@ -66,6 +66,7 @@ import { AnnotationDialog } from "./components/AnnotationDialog";
 import { BasemapMenu } from "./components/BasemapMenu";
 import { BrandLogo } from "./components/BrandLogo";
 import { CopilotWidget } from "./components/CopilotWidget";
+import { LessonDesignWorkspace } from "./components/LessonDesignWorkspace";
 import { DatabaseViewer } from "./components/DatabaseViewer";
 import { type KnowledgeQuery } from "./components/KnowledgePanel";
 import { Map3DGlobe, type CameraState, type Map3DGlobeHandle } from "./components/Map3DGlobe";
@@ -601,10 +602,47 @@ export default function App({
   const brushTargetHasContent = pptViewerOpen && pptPresentationReady ? pptBrushHasContent : mapBrushHasContent;
   // 单调递增信号：侧栏“上课模式”按钮触发 LessonWorkflowShell 打开课中/课前面板。
   const [lessonWorkflowOpenSignal, setLessonWorkflowOpenSignal] = useState(0);
-  const [lessonDesignOpenSignal, setLessonDesignOpenSignal] = useState(0);
+  // 全屏教案设计工作台：query 参数 ?workspace=lesson-design&design_id=... 可恢复。
+  const [lessonDesignWorkspace, setLessonDesignWorkspace] = useState<{ open: boolean; designId: string }>({ open: false, designId: "" });
+  // 教案定稿后「进入模拟测试」：把目标课时传给课堂工作流外壳（单调递增信号触发打开）。
+  const [rehearsalTarget, setRehearsalTarget] = useState<{ lessonId: string; signal: number }>({ lessonId: "", signal: 0 });
   const [initAttempt, setInitAttempt] = useState(0);
   const [initError, setInitError] = useState("");
   const connectionReady = Boolean(project && health && !initError);
+
+  // 全屏教案设计工作台：URL 同步（?workspace=lesson-design&design_id=...），刷新/回退可恢复。
+  const openLessonDesignWorkspace = useCallback((designId = "") => {
+    setLessonDesignWorkspace({ open: true, designId });
+    const params = new URLSearchParams(window.location.search);
+    params.set("workspace", "lesson-design");
+    if (designId) {
+      params.set("design_id", designId);
+    } else {
+      params.delete("design_id");
+    }
+    window.history.pushState({ workspace: "lesson-design" }, "", `${window.location.pathname}?${params.toString()}`);
+  }, []);
+  const closeLessonDesignWorkspace = useCallback(() => {
+    setLessonDesignWorkspace({ open: false, designId: "" });
+    const params = new URLSearchParams(window.location.search);
+    params.delete("workspace");
+    params.delete("design_id");
+    const query = params.toString();
+    window.history.pushState({}, "", query ? `${window.location.pathname}?${query}` : window.location.pathname);
+  }, []);
+  useEffect(() => {
+    const readWorkspace = () => {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("workspace") === "lesson-design") {
+        setLessonDesignWorkspace({ open: true, designId: params.get("design_id") || "" });
+      } else {
+        setLessonDesignWorkspace((current) => (current.open ? { open: false, designId: "" } : current));
+      }
+    };
+    readWorkspace();
+    window.addEventListener("popstate", readWorkspace);
+    return () => window.removeEventListener("popstate", readWorkspace);
+  }, []);
 
   const onlinePoiEnabled = health?.online_services.amap_poi_enabled ?? false;
   const basemapItems = health?.basemaps.items || [];
@@ -1244,7 +1282,9 @@ export default function App({
           setConversationId(response.conversation_id);
         }
         if (response.lesson_design) {
-          setLessonDesignOpenSignal((value) => value + 1);
+          // 助教识别到整节课设计请求：直接打开全屏教案设计工作台并续上该会话。
+          const designId = String((response.lesson_design as { design_id?: string }).design_id || "");
+          openLessonDesignWorkspace(designId);
         }
         subscribeToJob(response.job_id);
         return true;
@@ -1255,7 +1295,7 @@ export default function App({
         assistantSubmittingRef.current = false;
       }
     },
-    [appendChat, buildMapContext, chatLog, conversationId, health?.ui.assistant_v2_enabled, project, pushToast, subscribeToJob]
+    [appendChat, buildMapContext, chatLog, conversationId, health?.ui.assistant_v2_enabled, openLessonDesignWorkspace, project, pushToast, subscribeToJob]
   );
 
   assistantDispatchRef.current = (message, overrides, displayMessage) => {
@@ -3354,6 +3394,7 @@ export default function App({
               if (sent) setPendingImage((current) => (current?.artifact_id === image?.artifact_id ? null : current));
             });
           }}
+          onOpenLessonDesign={() => openLessonDesignWorkspace()}
           onConfirm={(confirmationId, decision = "approve") => {
             void confirmAssistantAction(confirmationId, decision).then((response) => subscribeToJob(response.job_id));
           }}
@@ -3397,7 +3438,9 @@ export default function App({
           layerState={layerState}
           busy={busy}
           openSignal={lessonWorkflowOpenSignal}
-          designOpenSignal={lessonDesignOpenSignal}
+          onOpenDesignWorkspace={() => openLessonDesignWorkspace()}
+          rehearsalSignal={rehearsalTarget.signal}
+          rehearsalLessonId={rehearsalTarget.lessonId}
           onRefresh={() => (project ? refreshProjectState(project.project_id) : undefined)}
           onTeachingContextChange={(ctx) => {
             teachingContextRef.current = ctx;
@@ -3426,6 +3469,20 @@ export default function App({
             />
           }
         />
+        {project && lessonDesignWorkspace.open ? (
+          <LessonDesignWorkspace
+            projectId={project.project_id}
+            initialDesignId={lessonDesignWorkspace.designId}
+            onClose={closeLessonDesignWorkspace}
+            onFinalized={() => {
+              if (project) void refreshProjectState(project.project_id);
+            }}
+            onEnterRehearsal={(lesson) => {
+              closeLessonDesignWorkspace();
+              setRehearsalTarget((previous) => ({ lessonId: lesson.lesson_id, signal: previous.signal + 1 }));
+            }}
+          />
+        ) : null}
         <ToastStack items={toasts} onDismiss={dismissToast} />
         <TeachingMaterialViewer
           open={materialViewerOpen}

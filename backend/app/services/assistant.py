@@ -27,7 +27,7 @@ ASSISTANT_TOOL_SCHEMA = [
     {"name": "open_material", "description": "打开课堂素材或外部教学资料。", "parameters": {"material_id": "string?", "material": "object?"}},
     {"name": "generate_image", "description": "使用 MiniMax 生成一张 AI 教学示意图并保存到项目图片库。该操作会消耗 API 余额，执行前必须确认。", "parameters": {"prompt": "string", "model": "string?", "aspect_ratio": "string?"}},
     {"name": "record_observation", "description": "记录课堂学情观察到正在进行的班课（verdict 取值 correct/partial/misconception），供课后报告统计。仅在进行中的班课可用。", "parameters": {"verdict": "string", "tag": "string?", "note": "string?", "question_id": "string?"}},
-    {"name": "launch_question", "description": "在教师课堂工作台呈现一道口头提问并记录为课堂证据（question_id 指教案题目，或用 text/options 现场出题）。不向学生端发送。仅在进行中的班课可用。", "parameters": {"question_id": "string?", "text": "string?", "options": "string[]?", "answer_index": "number?"}},
+    {"name": "launch_question", "description": "在教师课堂工作台呈现一道口头提问并记录为课堂证据（question_id 指教案题目，或用 text/options 现场出题）。不进入投屏。仅在进行中的班课可用。", "parameters": {"question_id": "string?", "text": "string?", "options": "string[]?", "answer_index": "number?"}},
 ]
 
 

@@ -1692,7 +1692,7 @@ class WebGISRuntime:
         if session is None:
             raise KeyError(f"Unknown class session: {session_id}")
         try:
-            lesson = self.classroom.lesson_service.get_lesson(session.lesson_id)
+            lesson = self.classroom._lesson_for_session(session)
         except Exception:
             lesson = None
         return self.classroom.report_service.build_statistics(session, lesson)

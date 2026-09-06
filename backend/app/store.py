@@ -17,6 +17,7 @@ from .models import (
     LayerRecord,
     LessonDesignRecord,
     LessonRecord,
+    LessonRehearsalRecord,
     MessageRecord,
     ProjectRecord,
     WorkflowRecord,
@@ -38,6 +39,7 @@ class RuntimeStore:
         self.artifacts: Dict[str, ArtifactRecord] = {}
         self.lessons: Dict[str, LessonRecord] = {}
         self.lesson_designs: Dict[str, LessonDesignRecord] = {}
+        self.lesson_rehearsals: Dict[str, LessonRehearsalRecord] = {}
         self.class_sessions: Dict[str, ClassSessionRecord] = {}
         self.conversations: Dict[str, ConversationRecord] = {}
         self.messages: Dict[str, MessageRecord] = {}
@@ -91,6 +93,10 @@ class RuntimeStore:
                 design_id: LessonDesignRecord(**data)
                 for design_id, data in payload.get("lesson_designs", {}).items()
             }
+            self.lesson_rehearsals = {
+                rehearsal_id: LessonRehearsalRecord(**data)
+                for rehearsal_id, data in payload.get("lesson_rehearsals", {}).items()
+            }
             self.class_sessions = {
                 session_id: ClassSessionRecord(**data)
                 for session_id, data in payload.get("class_sessions", {}).items()
@@ -119,6 +125,7 @@ class RuntimeStore:
             self.artifacts = {}
             self.lessons = {}
             self.lesson_designs = {}
+            self.lesson_rehearsals = {}
             self.class_sessions = {}
             self.conversations = {}
             self.messages = {}
@@ -131,6 +138,7 @@ class RuntimeStore:
             self.artifacts = {}
             self.lessons = {}
             self.lesson_designs = {}
+            self.lesson_rehearsals = {}
             self.class_sessions = {}
             self.conversations = {}
             self.messages = {}
@@ -219,6 +227,10 @@ class RuntimeStore:
             "lessons": {lesson_id: lesson.to_dict() for lesson_id, lesson in self.lessons.items()},
             "lesson_designs": {
                 design_id: design.to_dict() for design_id, design in self.lesson_designs.items()
+            },
+            "lesson_rehearsals": {
+                rehearsal_id: rehearsal.to_dict()
+                for rehearsal_id, rehearsal in self.lesson_rehearsals.items()
             },
             "class_sessions": {
                 session_id: session.to_dict()
@@ -721,6 +733,42 @@ class RuntimeStore:
                 designs = [item for item in designs if item.status == "active"]
             designs.sort(key=lambda item: item.updated_at, reverse=True)
             return designs
+
+
+    # ------------------------------------------------------------------
+    # Lesson rehearsals
+    # ------------------------------------------------------------------
+
+    def upsert_lesson_rehearsal(self, rehearsal: LessonRehearsalRecord) -> LessonRehearsalRecord:
+        with self._lock:
+            rehearsal.touch()
+            self.lesson_rehearsals[rehearsal.rehearsal_id] = rehearsal
+            self._save()
+            return rehearsal
+
+    def get_lesson_rehearsal(self, rehearsal_id: str) -> Optional[LessonRehearsalRecord]:
+        with self._lock:
+            return self.lesson_rehearsals.get(rehearsal_id)
+
+    def list_lesson_rehearsals(
+        self,
+        project_id: str = "",
+        lesson_id: str = "",
+        owner_user_id: str = "",
+        status: str = "",
+    ) -> List[LessonRehearsalRecord]:
+        with self._lock:
+            items = list(self.lesson_rehearsals.values())
+            if project_id:
+                items = [item for item in items if item.project_id == project_id]
+            if lesson_id:
+                items = [item for item in items if item.lesson_id == lesson_id]
+            if owner_user_id:
+                items = [item for item in items if item.owner_user_id == owner_user_id]
+            if status:
+                items = [item for item in items if item.status == status]
+            items.sort(key=lambda item: item.created_at, reverse=True)
+            return items
 
     # ------------------------------------------------------------------
     # Class sessions

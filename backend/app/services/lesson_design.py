@@ -18,34 +18,45 @@ from ..store import RuntimeStore
 from .lessons import LessonService
 from .minimax_client import MiniMaxClient
 from .population_lesson_prep import ALLOWED_GLOBE_THEME_IDS
+from .question_bank import QuestionBankService
 
 
-STEP_KEYS = ("requirements", "analysis", "objectives", "process", "capabilities", "rehearsal", "confirmation")
+STEP_KEYS = (
+    "requirements", "analysis", "objectives", "core_questions", "process",
+    "question_matching", "capabilities", "rehearsal", "confirmation",
+)
 STEP_LABELS = {
-    "requirements": "教学需求", "analysis": "课标与学情", "objectives": "目标与重难点",
-    "process": "教学过程", "capabilities": "GIS/AI能力", "rehearsal": "预演检查", "confirmation": "确认保存",
+    "requirements": "需求确认", "analysis": "课标与学情", "objectives": "目标与重难点",
+    "core_questions": "核心问题与问题链", "process": "教学过程", "question_matching": "题目匹配",
+    "capabilities": "GIS/AI能力", "rehearsal": "预演检查", "confirmation": "确认发布",
 }
 SECTION_KEYS = (
     "requirements", "curriculum_interpretation", "student_analysis", "textbook_analysis",
-    "objectives", "key_difficulties", "methods", "knowledge_structure", "stages",
-    "capabilities", "references", "reflection",
+    "objectives", "key_difficulties", "methods", "knowledge_structure", "core_questions",
+    "stages", "board_design", "question_citations", "homework", "capabilities",
+    "design_thinking", "references", "reflection",
 )
 STEP_SECTIONS = {
     "requirements": ("requirements",),
     "analysis": ("curriculum_interpretation", "student_analysis", "textbook_analysis"),
     "objectives": ("objectives", "key_difficulties", "methods", "knowledge_structure"),
-    "process": ("stages",),
+    "core_questions": ("core_questions",),
+    "process": ("stages", "board_design"),
+    "question_matching": ("question_citations", "homework"),
     "capabilities": ("capabilities",),
+    "confirmation": ("design_thinking", "reflection"),
 }
 REQUIRED_SECTIONS = (
     "requirements", "curriculum_interpretation", "student_analysis", "textbook_analysis",
-    "objectives", "key_difficulties", "stages", "capabilities",
+    "objectives", "key_difficulties", "core_questions", "stages", "capabilities",
 )
 SECTION_LABELS = {
     "requirements": "教学需求", "curriculum_interpretation": "课标解读", "student_analysis": "学情分析",
     "textbook_analysis": "教材分析", "objectives": "教学目标", "key_difficulties": "教学重难点",
-    "methods": "教学方法", "knowledge_structure": "知识结构", "stages": "教学过程",
-    "capabilities": "GIS/AI能力", "references": "参考资料", "reflection": "教学反思",
+    "methods": "教学方法", "knowledge_structure": "知识结构", "core_questions": "核心问题与问题链",
+    "stages": "教学过程", "board_design": "板书设计", "question_citations": "题库引用",
+    "homework": "课后作业", "capabilities": "GIS/AI能力", "design_thinking": "设计思路",
+    "references": "参考资料", "reflection": "教学反思",
 }
 
 
@@ -53,9 +64,13 @@ def default_draft() -> Dict[str, Any]:
     return {
         "title": "", "subject": "地理", "grade": "", "duration_minutes": 40, "topic": "",
         "requirements": {}, "curriculum_interpretation": "", "student_analysis": "",
-        "textbook_analysis": "", "objectives": [], "key_difficulties": {"key": [], "difficult": []},
-        "methods": [], "knowledge_structure": [], "stages": [], "capabilities": [],
-        "references": [], "reflection": "",
+        "textbook_analysis": "", "design_thinking": "",
+        "objectives": [], "key_difficulties": {"key": [], "difficult": []},
+        "methods": [], "knowledge_structure": [],
+        "core_questions": {"core": "", "sub_questions": []},
+        "stages": [], "board_design": "",
+        "question_citations": [], "homework": {"basic": [], "inquiry": []},
+        "capabilities": [], "references": [], "reflection": "",
     }
 
 
@@ -66,7 +81,7 @@ class LessonDesignService:
         self, config: Any, store: RuntimeStore, lesson_service: LessonService,
         minimax_client: Optional[MiniMaxClient] = None, template_service: Any = None,
         catalog_service: Any = None, knowledge_base_service: Any = None,
-        resource_search_service: Any = None,
+        resource_search_service: Any = None, question_bank_service: Any = None,
     ):
         self.config = config
         self.store = store
@@ -76,6 +91,25 @@ class LessonDesignService:
         self.catalog_service = catalog_service
         self.knowledge_base_service = knowledge_base_service
         self.resource_search_service = resource_search_service
+        self.question_bank_service = question_bank_service
+
+    @staticmethod
+    def _backfill_draft(draft: Dict[str, Any]) -> Dict[str, Any]:
+        """旧教案/旧设计载入时补齐新章节默认值，保证字段完整可用。"""
+        fresh = default_draft()
+        for key, value in fresh.items():
+            draft.setdefault(key, copy.deepcopy(value))
+        if not isinstance(draft.get("core_questions"), dict):
+            draft["core_questions"] = {"core": str(draft.get("core_questions") or ""), "sub_questions": []}
+        draft["core_questions"].setdefault("core", "")
+        draft["core_questions"].setdefault("sub_questions", [])
+        if not isinstance(draft.get("homework"), dict):
+            draft["homework"] = {"basic": [], "inquiry": []}
+        draft["homework"].setdefault("basic", [])
+        draft["homework"].setdefault("inquiry", [])
+        if not isinstance(draft.get("question_citations"), list):
+            draft["question_citations"] = []
+        return draft
 
     def create_or_resume(
         self, project_id: str, owner_user_id: str, base_lesson_id: str = "",
@@ -99,6 +133,7 @@ class LessonDesignService:
             draft["grade"] = draft.get("grade") or lesson.grade
             draft["objectives"] = copy.deepcopy(lesson.objectives)
             draft["stages"] = copy.deepcopy(lesson.stages)
+        self._backfill_draft(draft)
         req = {str(k): v for k, v in (requirements or {}).items()}
         if req:
             draft["requirements"] = {**draft.get("requirements", {}), **req}
@@ -171,6 +206,8 @@ class LessonDesignService:
             current_step = STEP_KEYS[max(0, current_index - 1)]
             design.current_step = current_step
         result = self._ask_minimax(design, current_step, message) or self._fallback_turn(design, current_step, message)
+        if current_step == "requirements":
+            result = self._normalize_requirements_result(result, message, design.draft)
         patch = result.get("section_patch") if isinstance(result, dict) else {}
         patch = patch if isinstance(patch, dict) else {}
         # 已确认章节默认是稳定约束；只有教师明确提出修改/返回时才重新打开。
@@ -205,6 +242,11 @@ class LessonDesignService:
         design.capability_bindings = self._validate_bindings(result.get("capability_bindings") or design.draft.get("capabilities") or [])
         design.draft["capabilities"] = copy.deepcopy(design.capability_bindings)
         design.diff_summary = self._build_diff_summary(design)
+        # 题目匹配步骤：按环节自动检索题库候选并快照可自动选用的题目。
+        retrieval_candidates: List[Dict[str, Any]] = []
+        auto_bound: List[Dict[str, Any]] = []
+        if current_step == "question_matching":
+            retrieval_candidates, auto_bound = self._auto_bind_questions(design)
         self.store.upsert_lesson_design(design)
         rehearsal_report = self.rehearse(design_id) if current_step == "rehearsal" else None
         return {
@@ -217,6 +259,10 @@ class LessonDesignService:
             "diff_summary": copy.deepcopy(design.diff_summary),
             "review_sections": [key for key in STEP_SECTIONS.get(current_step, ()) if design.section_status.get(key) == "proposed"],
             "rehearsal_report": rehearsal_report,
+            "plan_items": self._plan_items(design),
+            "retrieval_candidates": retrieval_candidates,
+            "auto_bound_questions": auto_bound,
+            "active_design_question": self._active_design_question(design),
         }
 
     def resolve(self, design_id: str, section_id: str, decision: str = "accept", teacher_note: str = "", expected_revision: Optional[int] = None, value: Any = None) -> Dict[str, Any]:
@@ -257,7 +303,7 @@ class LessonDesignService:
                 design.revision += 1
                 design.diff_summary = self._build_diff_summary(design)
                 self.store.upsert_lesson_design(design)
-                return {"status": "success", "message": "已保存当前步骤的直接编辑内容。", "design": design.to_dict()}
+                return {"status": "success", "message": "已保存当前步骤的直接编辑内容。", "design": design.to_dict(), **self.session_view(design)}
             if section_id == "duration_minutes":
                 try:
                     patch_value = max(1, int(value))
@@ -273,7 +319,7 @@ class LessonDesignService:
             design.revision += 1
             design.diff_summary = self._build_diff_summary(design)
             self.store.upsert_lesson_design(design)
-            return {"status": "success", "message": "已保存直接编辑内容。", "design": design.to_dict()}
+            return {"status": "success", "message": "已保存直接编辑内容。", "design": design.to_dict(), **self.session_view(design)}
         if normalized_decision in {"accept", "accepted", "确认", "接受"}:
             accepted = []
             for key in section_ids:
@@ -295,11 +341,300 @@ class LessonDesignService:
             message = "好的，我们保留现稿，按你的补充继续修改。"
         design.diff_summary = self._build_diff_summary(design)
         self.store.upsert_lesson_design(design)
-        return {"status": "success", "message": message, "design": design.to_dict()}
+        return {"status": "success", "message": message, "design": design.to_dict(), **self.session_view(design)}
+
+    # ------------------------------------------------------------------
+    # 题目匹配：题库快照绑定 / 手动录入 / 替换 / 移除
+    # ------------------------------------------------------------------
+
+    def bind_question(
+        self,
+        design_id: str,
+        stage_id: str,
+        question_id: str = "",
+        manual: Optional[Dict[str, Any]] = None,
+        action: str = "add",
+        position: Optional[int] = None,
+        expected_revision: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """把题库题目快照或教师手动题目写入教案环节（快照不可变）。
+
+        - ``action=add`` + ``question_id``：题库题目快照入库；
+        - ``action=add`` + ``manual``：教师手动录题（source=teacher_manual），
+          若要用于真实课堂/课后练习，必须带答案与解析；
+        - ``action=remove``：按 question_id 移除环节中的题目与引用。
+        """
+        design = self.get(design_id)
+        if expected_revision is not None and expected_revision != design.revision:
+            raise ValueError("教案草稿已更新，请刷新后再操作。")
+        stages = design.draft.get("stages") or []
+        stage = next((item for item in stages if str(item.get("stage_id")) == stage_id), None)
+        if stage is None:
+            raise KeyError(f"Unknown stage: {stage_id}")
+        questions = stage.setdefault("questions", [])
+        citations = design.draft.setdefault("question_citations", [])
+
+        if action == "remove":
+            target = str(question_id)
+            if not target:
+                raise ValueError("移除题目需要 question_id。")
+            before = len(questions)
+            questions[:] = [item for item in questions if str(item.get("question_id")) != target]
+            citations[:] = [
+                item for item in citations
+                if not (str(item.get("question_id")) == target and str(item.get("stage_id")) == stage_id)
+            ]
+            if len(questions) == before:
+                raise KeyError(f"环节 {stage_id} 中没有题目 {target}")
+        elif question_id:
+            if any(str(item.get("question_id")) == str(question_id) for item in questions):
+                raise ValueError("这道题已经在本环节中。")
+            snapshot = self._snapshot_bank_question(question_id, design.project_id)
+            if position is not None and isinstance(position, int) and 0 <= position <= len(questions):
+                questions.insert(position, snapshot)
+            else:
+                questions.append(snapshot)
+            citations.append({
+                "question_id": snapshot["question_id"], "bank_id": snapshot.get("bank_id", ""),
+                "group_key": snapshot.get("group_key", ""), "stage_id": stage_id,
+                "source": "question_bank", "number": snapshot.get("number", ""),
+                "year": snapshot.get("year", ""), "region": snapshot.get("region", ""),
+                "source_paper": snapshot.get("source_paper", ""),
+                "bound_at_revision": design.revision + 1,
+                "selection_reason": "教师手动选用",
+            })
+        elif manual is not None:
+            snapshot = self._normalize_manual_question(manual, stage_id, len(questions) + 1)
+            if position is not None and isinstance(position, int) and 0 <= position <= len(questions):
+                questions.insert(position, snapshot)
+            else:
+                questions.append(snapshot)
+            citations.append({
+                "question_id": snapshot["question_id"], "bank_id": "", "group_key": "",
+                "stage_id": stage_id, "source": "teacher_manual", "number": "",
+                "bound_at_revision": design.revision + 1,
+                "selection_reason": "教师手动录入",
+            })
+        else:
+            raise ValueError("绑定题目需要 question_id 或 manual 内容。")
+
+        for key in ("question_citations", "homework"):
+            if design.section_status.get(key) == "confirmed":
+                design.section_status[key] = "proposed"
+        design.revision += 1
+        design.diff_summary = self._build_diff_summary(design)
+        self.store.upsert_lesson_design(design)
+        return {
+            "status": "success",
+            "message": "题目已更新。" if action == "add" else "题目已移除。",
+            "design": design.to_dict(),
+            "stage": copy.deepcopy(stage),
+        }
+
+    def _snapshot_bank_question(self, question_id: str, project_id: str) -> Dict[str, Any]:
+        """从题库取题并做成不可变快照（含材料/题图/答案/解析）。"""
+        if self.question_bank_service is None:
+            raise ValueError("题库服务不可用。")
+        return self.question_bank_service.snapshot_question(question_id, project_id=project_id)
+
+    def _normalize_snapshot_question(self, question: Dict[str, Any]) -> Dict[str, Any]:
+        """压平为题目快照；逻辑收敛在题库服务，教案设计与模拟测试共用。"""
+        return QuestionBankService.normalize_snapshot_question(question)
+
+    def _normalize_manual_question(self, manual: Dict[str, Any], stage_id: str, index: int) -> Dict[str, Any]:
+        """手动题目规范化；逻辑收敛在题库服务，教案设计与模拟测试共用。"""
+        return QuestionBankService.build_manual_question(manual, stage_id, index)
+
+    def session_view(self, design: LessonDesignRecord) -> Dict[str, Any]:
+        """会话响应的扩展字段（Plan 卡片与当前推进问题），create/get/turn 共用。"""
+        return {
+            "plan_items": self._plan_items(design),
+            "retrieval_candidates": [],
+            "auto_bound_questions": [],
+            "active_design_question": self._active_design_question(design),
+        }
+
+    def _auto_bind_questions(self, design: LessonDesignRecord) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """题目匹配步骤：按环节检索题库，快照答案完备且相关度达标的题目。
+
+        返回 (候选列表, 本轮自动绑定列表)。已绑定过的题目自动排除；没有
+        题库或检索不到达标题目时返回空列表，由教师手动挑选。
+        """
+        if self.question_bank_service is None:
+            return [], []
+        draft = design.draft
+        stages = draft.get("stages") or []
+        if not stages:
+            return [], []
+        citations = draft.setdefault("question_citations", [])
+        bound_ids = {str(item.get("question_id")) for item in citations}
+        candidates: List[Dict[str, Any]] = []
+        auto_bound: List[Dict[str, Any]] = []
+        for stage in stages:
+            query_parts = [
+                str(draft.get("topic") or draft.get("title") or ""),
+                str(stage.get("knowledge_point") or ""),
+                str(stage.get("knowledge_unit") or ""),
+            ]
+            query = " ".join(part for part in query_parts if part)
+            if not query:
+                continue
+            try:
+                result = self.question_bank_service.search(
+                    project_id=design.project_id,
+                    topic=str(draft.get("topic") or ""),
+                    knowledge=query,
+                    objectives=[str(item) for item in draft.get("objectives") or []],
+                    exclude_ids=sorted(bound_ids),
+                    limit=5,
+                )
+            except Exception:
+                continue
+            for item in result.get("items") or []:
+                entry = {
+                    "stage_id": str(stage.get("stage_id") or ""),
+                    "stage_title": str(stage.get("title") or ""),
+                    "question_id": str(item.get("question_id") or ""),
+                    "bank_id": str(item.get("bank_id") or ""),
+                    "group_key": str(item.get("group_key") or ""),
+                    "number": str(item.get("number") or ""),
+                    "type": str(item.get("type") or "open"),
+                    "stem": str(item.get("stem") or "")[:120],
+                    "material": str(item.get("material") or "")[:120],
+                    "year": str(item.get("year") or ""),
+                    "region": str(item.get("region") or ""),
+                    "source_paper": str(item.get("source_paper") or ""),
+                    "answer_complete": bool(item.get("answer_complete")),
+                    "relevance": float(item.get("relevance") or 0.0),
+                    "auto_selectable": bool(item.get("auto_selectable")),
+                    "selection_reason": str(item.get("selection_reason") or ""),
+                    "image_count": len(item.get("images") or []),
+                }
+                if entry not in candidates:
+                    candidates.append(entry)
+            stage_bank_questions = [
+                item for item in (stage.get("questions") or [])
+                if str(item.get("source")) == "question_bank"
+            ]
+            if stage_bank_questions:
+                continue
+            for item in result.get("items") or []:
+                if not item.get("auto_selectable"):
+                    continue
+                snapshot = self._normalize_snapshot_question(item)
+                stage.setdefault("questions", []).append(snapshot)
+                citations.append({
+                    "question_id": snapshot["question_id"], "bank_id": snapshot.get("bank_id", ""),
+                    "group_key": snapshot.get("group_key", ""),
+                    "stage_id": str(stage.get("stage_id") or ""),
+                    "source": "question_bank", "number": snapshot.get("number", ""),
+                    "year": snapshot.get("year", ""), "region": snapshot.get("region", ""),
+                    "source_paper": snapshot.get("source_paper", ""),
+                    "bound_at_revision": design.revision + 1,
+                    "relevance": float(item.get("relevance") or 0.0),
+                    "selection_reason": str(item.get("selection_reason") or "相关度达标自动选用"),
+                })
+                bound_ids.add(snapshot["question_id"])
+                auto_bound.append({
+                    "stage_id": str(stage.get("stage_id") or ""),
+                    "question_id": snapshot["question_id"],
+                    "number": snapshot.get("number", ""),
+                    "stem": snapshot["text"][:80],
+                    "relevance": float(item.get("relevance") or 0.0),
+                    "selection_reason": str(item.get("selection_reason") or "相关度达标自动选用"),
+                })
+                break
+        return candidates, auto_bound
+
+    def _plan_items(self, design: LessonDesignRecord) -> List[Dict[str, Any]]:
+        """当前步骤的可编辑内容卡片（Plan 式三栏布局的数据源）。"""
+        step = design.current_step
+        items: List[Dict[str, Any]] = []
+        for key in STEP_SECTIONS.get(step, ()):
+            value = design.draft.get(key)
+            if key == "stages":
+                value = [
+                    {
+                        "stage_id": stage.get("stage_id", ""),
+                        "title": stage.get("title", ""),
+                        "minutes": stage.get("minutes", 0),
+                        "knowledge_point": stage.get("knowledge_point", ""),
+                        "question_count": len(stage.get("questions") or []),
+                    }
+                    for stage in (value or [])
+                ]
+            items.append({
+                "section_key": key,
+                "label": SECTION_LABELS.get(key, key),
+                "value": copy.deepcopy(value),
+                "status": design.section_status.get(key, "pending"),
+            })
+        return items
+
+    def _active_design_question(self, design: LessonDesignRecord) -> str:
+        """当前步骤的下一个推进问题——每轮只提一个。"""
+        draft = design.draft
+        step = design.current_step
+        if step == "requirements":
+            if not str(draft.get("grade") or "").strip():
+                return "这节课面向哪个年级？"
+            if not str(draft.get("title") or draft.get("topic") or "").strip():
+                return "课题名称定为什么？"
+            duration = int(draft.get("duration_minutes") or 0)
+            if duration != 40:
+                return "正式课堂固定为 40 分钟，按 40 分钟设计可以吗？"
+        elif step == "analysis":
+            if not str(draft.get("curriculum_interpretation") or "").strip():
+                return "这节课对应的课标条目原文是什么？"
+            if not str(draft.get("student_analysis") or "").strip():
+                return "学生目前对这部分内容的已有基础和常见误区是什么？"
+        elif step == "objectives":
+            objectives = draft.get("objectives") or []
+            if not objectives:
+                return "这节课最希望学生带走的 3 个可观察目标是什么？"
+            if len(objectives) < 3:
+                return "目标现在只有 {} 个，能再补充到 3 个吗？".format(len(objectives))
+            if not (draft.get("key_difficulties") or {}).get("difficult"):
+                return "这节课最难突破的一个点是什么？"
+        elif step == "core_questions":
+            core = draft.get("core_questions") or {}
+            if not str(core.get("core") or "").strip():
+                return "贯穿这节课的核心问题用一句话怎么说？"
+            subs = core.get("sub_questions") or []
+            if len(subs) < 2:
+                return "核心问题可以拆成哪 2-4 个递进的子问题？"
+        elif step == "process":
+            stages = draft.get("stages") or []
+            if not stages:
+                return "教学过程从哪个情境或现象切入？"
+            for stage in stages:
+                if not (stage.get("student_activities") or stage.get("activities")):
+                    return f"环节“{stage.get('title', '')}”里学生具体做什么？"
+                if not str(stage.get("knowledge_conclusion") or "").strip():
+                    return f"环节“{stage.get('title', '')}”要落下的知识结论是什么？"
+        elif step == "question_matching":
+            citations = draft.get("question_citations") or []
+            if not citations:
+                return "还没有从题库选题，先看自动检索的候选还是你指定一组真题？"
+        elif step == "capabilities":
+            if not (draft.get("capabilities") or []):
+                return "这节课哪些环节需要地图、数据或 AI 能力？"
+        elif step == "rehearsal":
+            return "预演检查发现的问题要现在调整，还是回到对应环节修改？"
+        elif step == "confirmation":
+            if not str(draft.get("design_thinking") or "").strip():
+                return "确认发布前，先用 100-150 字概括这节课的设计思路好吗？"
+        return self._natural_prompt(step)
 
     def rehearse(self, design_id: str) -> Dict[str, Any]:
         design = self.get(design_id)
-        draft, errors, warnings = design.draft, [], []
+        return self.validate_plan(design.draft, design.source_refs)
+
+    def validate_plan(
+        self, draft: Dict[str, Any], source_refs: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """预演校验（教案设计与模拟测试共用）：draft 为完整教案数据。"""
+        errors, warnings = [], []
         if not str(draft.get("title") or draft.get("topic") or "").strip():
             errors.append("还缺少课题名称。")
         if not str(draft.get("grade") or "").strip():
@@ -307,6 +642,37 @@ class LessonDesignService:
         objectives = draft.get("objectives") or []
         if not isinstance(objectives, list) or not objectives:
             errors.append("至少需要一个可观察的教学目标。")
+        elif len(objectives) > 4:
+            warnings.append(f"教学目标有 {len(objectives)} 个，建议精简到 3-4 个可观察目标。")
+        # 核心问题与递进问题链
+        core = draft.get("core_questions") or {}
+        if not isinstance(core, dict):
+            core = {}
+        if not str(core.get("core") or "").strip():
+            errors.append("还缺少一个贯穿课堂的核心问题。")
+        chain = [str(item).strip() for item in (core.get("sub_questions") or []) if str(item).strip()]
+        if len(chain) < 2:
+            errors.append("核心问题需要拆成至少 2 个递进子问题。")
+        elif len(chain) > 4:
+            errors.append(f"递进子问题有 {len(chain)} 个，请精简到 2-4 个。")
+        # 设计思路 100-150 字
+        thinking = str(draft.get("design_thinking") or "").strip()
+        if not thinking:
+            errors.append("还缺少设计思路（100-150 字）。")
+        elif not (100 <= len(thinking) <= 150):
+            warnings.append(f"设计思路现在 {len(thinking)} 字，建议控制在 100-150 字。")
+        # 板书设计 / 作业 / 预设反思
+        if not str(draft.get("board_design") or "").strip():
+            warnings.append("还没有板书设计，确认发布前建议补充。")
+        homework = draft.get("homework") or {}
+        if not isinstance(homework, dict):
+            homework = {}
+        if not [item for item in homework.get("basic") or [] if str(item).strip()]:
+            errors.append("还缺少基础作业。")
+        if not [item for item in homework.get("inquiry") or [] if str(item).strip()]:
+            warnings.append("还没有探究作业，建议补充一道开放探究任务。")
+        if not str(draft.get("reflection") or "").strip():
+            warnings.append("还没有预设教学反思，确认发布前建议补充。")
         stages = draft.get("stages") or []
         if not isinstance(stages, list) or not stages:
             errors.append("还没有教学过程环节。")
@@ -314,6 +680,7 @@ class LessonDesignService:
         capability_items = self.capability_catalog()
         valid_ids = {item["id"] for item in capability_items if item.get("available", True)}
         dataset_ids = {item["id"] for item in capability_items if item.get("kind") == "dataset" and item.get("available", True)}
+        objective_refs_seen: set = set()
         for index, stage in enumerate(stages, 1):
             if not isinstance(stage, dict):
                 errors.append(f"第{index}个环节格式不完整。")
@@ -323,30 +690,78 @@ class LessonDesignService:
             except (TypeError, ValueError):
                 minutes = 0
             total += max(0, minutes)
+            stage_label = stage.get('title') or f'环节{index}'
             if not str(stage.get("title") or "").strip():
                 errors.append(f"第{index}个环节缺少名称。")
             if not str(stage.get("design_intent") or stage.get("content") or "").strip():
-                warnings.append(f"“{stage.get('title') or f'环节{index}'}”还可以补充设计意图。")
+                warnings.append(f"“{stage_label}”还可以补充设计意图。")
+            if not str(stage.get("knowledge_conclusion") or "").strip():
+                errors.append(f"环节“{stage_label}”还没有知识结论。")
+            student_activities = stage.get("student_activities") or stage.get("activities") or []
+            if not student_activities:
+                errors.append(f"环节“{stage_label}”还没有学生活动。")
+            if not (str(stage.get("material") or "").strip() or (stage.get("question_chain") or [])):
+                warnings.append(f"环节“{stage_label}”还没有材料或问题链，建议补充其一。")
+            point = str(stage.get("knowledge_point") or "").strip()
+            if point and not student_activities:
+                errors.append(f"核心知识点“{point}”还没有学生活动。")
+            for ref in stage.get("objective_refs") or []:
+                try:
+                    objective_refs_seen.add(int(ref))
+                except (TypeError, ValueError):
+                    continue
             questions = stage.get("questions") or []
             if not isinstance(questions, list) or not any(isinstance(item, dict) and str(item.get("text") or "").strip() for item in questions):
-                errors.append(f"环节“{stage.get('title') or index}”至少需要一个明确问题。")
+                errors.append(f"环节“{stage_label}”至少需要一个明确问题。")
+            for question in questions:
+                if not isinstance(question, dict):
+                    continue
+                source = str(question.get("source") or "")
+                label = str(question.get("number") or "") or str(question.get("text") or "")[:16]
+                if source == "question_bank":
+                    if not question.get("answer_complete"):
+                        errors.append(f"环节“{stage_label}”的题库题目（{label}）答案不完备，不能进入真实课堂。")
+                    for image in question.get("images") or []:
+                        if isinstance(image, dict) and not str(image.get("url") or "").strip():
+                            errors.append(f"环节“{stage_label}”的题目（{label}）存在缺失题图，发布前需要补全。")
+                elif source == "teacher_manual":
+                    if not str(question.get("answer") or "").strip() and question.get("answer_index") is None and not any(str(sub.get("answer") or "").strip() for sub in question.get("sub_questions") or []):
+                        errors.append(f"环节“{stage_label}”的手动题目（{label}）还没有答案；用于真实课堂或课后练习必须补齐。")
+                    if not str(question.get("explanation") or "").strip():
+                        errors.append(f"环节“{stage_label}”的手动题目（{label}）还没有解析；用于真实课堂或课后练习必须补齐。")
             for template_id in (stage.get("scene") or {}).get("templates") or []:
                 if template_id not in valid_ids:
-                    errors.append(f"环节“{stage.get('title') or index}”引用了不可用能力 {template_id}。")
+                    errors.append(f"环节“{stage_label}”引用了不可用能力 {template_id}。")
             for dataset_id in (stage.get("scene") or {}).get("catalog_layers") or []:
                 if dataset_id not in dataset_ids:
-                    errors.append(f"环节“{stage.get('title') or index}”引用了不可用数据 {dataset_id}。")
+                    errors.append(f"环节“{stage_label}”引用了不可用数据 {dataset_id}。")
             globe = (stage.get("scene") or {}).get("globe") or {}
             if isinstance(globe, dict) and globe.get("enabled"):
                 unknown_themes = [theme for theme in globe.get("themes") or [] if str(theme) not in ALLOWED_GLOBE_THEME_IDS]
                 if unknown_themes:
-                    errors.append(f"环节“{stage.get('title') or index}”引用了不可用三维主题：{'、'.join(map(str, unknown_themes))}。")
+                    errors.append(f"环节“{stage_label}”引用了不可用三维主题：{'、'.join(map(str, unknown_themes))}。")
+        # 每个教学目标都有活动支撑
+        if isinstance(objectives, list) and objectives:
+            refs = {ref - 1 for ref in objective_refs_seen}
+            if objective_refs_seen:
+                uncovered = [
+                    str(objectives[position])[:24]
+                    for position in range(len(objectives))
+                    if position not in refs
+                ]
+                if uncovered:
+                    errors.append("以下教学目标还没有对应环节活动：" + "；".join(uncovered))
+            else:
+                warnings.append("各环节尚未标注 objective_refs，无法核对目标-活动对应关系。")
         duration = int(draft.get("duration_minutes") or 0)
-        if duration and total and abs(total - duration) > 5:
-            warnings.append(f"各环节合计 {total} 分钟，与预设 {duration} 分钟有差异。")
-        if not design.source_refs:
+        if duration > 0 and total != duration:
+            errors.append(
+                f"各环节合计 {total} 分钟，与课堂时长 {duration} 分钟不一致；"
+                "请先调整环节时长，再定稿。"
+            )
+        if not source_refs:
             warnings.append("目前没有引用资料；如需课标或年份核验，请在下一轮明确提出。")
-        for source in design.source_refs:
+        for source in source_refs:
             if isinstance(source, dict) and source.get("dataset_id") and not str(source.get("year") or source.get("source_year") or "").strip():
                 warnings.append(f"资料“{source.get('title') or source.get('dataset_id')}”尚未标明年份。")
         return {"ready": not errors, "errors": errors, "warnings": warnings, "total_minutes": total, "duration_minutes": duration, "capabilities": self.capability_catalog()}
@@ -371,13 +786,30 @@ class LessonDesignService:
             "title": draft.get("title") or draft.get("topic") or "人口地理教案",
             "subject": draft.get("subject") or "地理", "grade": draft.get("grade") or "",
             "objectives": draft.get("objectives") or [], "stages": draft.get("stages") or [],
-            "metadata": {"design_id": design.design_id, "project_id": design.project_id, "duration_minutes": draft.get("duration_minutes", 40)},
+            "metadata": {
+                "design_id": design.design_id, "project_id": design.project_id,
+                "duration_minutes": draft.get("duration_minutes", 40),
+                "lesson_version": 1, "ready_for_class": False,
+                "created_from": "lesson_design",
+                "question_citation_count": len(draft.get("question_citations") or []),
+            },
             "plan": draft,
         }, source="assistant_draft", owner_user_id=design.owner_user_id)
         design.status, design.final_lesson_id, design.current_step = "finalized", lesson.lesson_id, "confirmation"
         design.revision += 1
         self.store.upsert_lesson_design(design)
-        return {"status": "success", "lesson": lesson.to_dict(), "design": design.to_dict(), "capability_report": report}
+        # 草稿完成即产出第一版 Word；模拟测试通过后重新生成新版本。
+        export_result: Dict[str, Any] = {}
+        try:
+            export_result = self.export_docx(lesson.lesson_id, design.project_id, design.design_id)
+        except Exception:
+            export_result = {"status": "skipped", "message": "第一版 Word 导出失败，可稍后在课时详情重新导出。"}
+        return {
+            "status": "success", "lesson": lesson.to_dict(), "design": {**design.to_dict(), **self.session_view(design)},
+            "capability_report": report, "export": export_result,
+            "ready_for_class": False,
+            "next_hint": "教案草稿已生成。进入「模拟测试」试讲一遍，通过后即可发布为正式课堂。",
+        }
 
     def export_docx(self, lesson_id: str, project_id: str, design_id: str = "") -> Dict[str, Any]:
         lesson = self.store.get_lesson(lesson_id)
@@ -427,10 +859,16 @@ class LessonDesignService:
         if self.minimax_client is None:
             return None
         system = (
-            "你是高中地理教案共创助手。默认简体中文，每轮只推进一个步骤，先复述教师意图，再给可修改建议。"
+            "你是高中地理教案共创助手。默认简体中文，每轮只推进一个步骤，先复述教师意图，再给可修改建议，"
+            "回复末尾只提一个推进问题。"
             "只输出 JSON，字段为 reply、section_patch、next_step、source_refs、capability_bindings、suggestions。"
             "不要输出内部轨迹。当前步骤：" + STEP_LABELS.get(step, step) +
-            "。草稿：" + json.dumps(design.draft, ensure_ascii=False)[:12000] +
+            "。九个步骤依次是：需求确认→课标与学情→目标与重难点→核心问题与问题链→教学过程→题目匹配→GIS/AI能力→预演检查→确认发布。"
+            "核心章节要求：设计思路100-150字；3-4个可观察教学目标；1个核心问题+2-4个递进子问题；"
+            "每环节包含 material/question_chain/teacher_activities/student_activities/knowledge_conclusion/"
+            "design_intent/minutes/system_steps/objective_refs（1-based目标序号）；板书设计；基础作业+探究作业；预设教学反思。"
+            "题目匹配只能引用题库检索给出的题目，不得编造题目内容。"
+            "草稿：" + json.dumps(design.draft, ensure_ascii=False)[:12000] +
             "。真实能力目录：" + json.dumps(self.capability_catalog(), ensure_ascii=False)[:8000]
         )
         try:
@@ -459,8 +897,7 @@ class LessonDesignService:
         if step == "requirements":
             duration_match = re.search(r"(\d+)\s*分钟", clean)
             grade_match = re.search(r"(高[一二三]|初[一二三]|七年级|八年级|九年级)", clean)
-            topic = re.sub(r"(高[一二三]|初[一二三]|七年级|八年级|九年级|\d+\s*分钟)", "", clean).strip(" ，,。、")
-            topic = topic.replace("我想上", "").replace("请设计", "").replace("共创", "").strip(" ，,。")
+            topic = self._extract_topic(clean) or str(draft.get("topic") or draft.get("title") or "人口地理专题课")
             patch = {"title": topic or draft.get("title") or "人口地理专题课", "topic": topic or draft.get("topic") or "人口地理", "grade": grade_match.group(1) if grade_match else draft.get("grade") or "", "duration_minutes": int(duration_match.group(1)) if duration_match else int(draft.get("duration_minutes") or 40), "requirements": {"raw": clean}}
             reply = f"我理解你想做一节“{patch['title']}”。目前先按 {patch['duration_minutes']} 分钟、{patch['grade'] or '年级待定'}来搭框架。接下来我们先确认学生最需要带走的核心认识，可以吗？"
             next_step = "analysis"
@@ -475,10 +912,40 @@ class LessonDesignService:
                 "methods": ["地图观察", "案例探究", "问题链"],
                 "knowledge_structure": ["地图观察", "空间格局描述", "区域差异解释", "规律迁移"],
             }
-            reply, next_step = "我把你的想法整理成了可观察的学习目标，并标出一个重点和一个难点。下一步会让每个目标都对应到地图操作或学生表达。", "process"
+            reply, next_step = "我把你的想法整理成了可观察的学习目标，并标出一个重点和一个难点。下一步我们把它们收束成一个核心问题。", "core_questions"
+        elif step == "core_questions":
+            topic = str(draft.get("topic") or draft.get("title") or "人口分布")
+            patch = {
+                "core_questions": {
+                    "core": f"{topic}的空间格局是怎样形成的，为什么在不同区域存在差异？",
+                    "sub_questions": [
+                        f"从地图上观察，{topic}呈现出怎样的空间格局？",
+                        "哪些自然因素塑造了这种格局？",
+                        "人文因素又如何改变或强化了它？",
+                    ],
+                }
+            }
+            reply, next_step = "我先把核心问题与三条递进子问题搭出来了（观察描述→自然归因→人文归因）。你可以直接改写核心问题的表述。", "process"
         elif step == "process":
-            patch, next_step = {"stages": self._make_stages(draft.get("topic") or "人口分布", draft.get("duration_minutes") or 40)}, "capabilities"
-            reply = "我先给出一版可执行的五列教学过程：每个环节都写清知识单元、知识点、活动、设计意图和系统操作。你可以指出要改哪一个环节。"
+            patch, next_step = {"stages": self._make_stages(draft.get("topic") or "人口分布", draft.get("duration_minutes") or 40), "board_design": self._make_board_design(draft.get("topic") or "人口分布")}, "question_matching"
+            reply = "我先给出一版可执行的教学过程：每个环节都写清材料、问题链、教师活动、学生活动、知识结论、设计意图、时间和系统操作。你可以指出要改哪一个环节。"
+        elif step == "question_matching":
+            report = self.rehearse(design.design_id)
+            citations = draft.get("question_citations") or []
+            patch: Dict[str, Any] = {}
+            homework = draft.get("homework") if isinstance(draft.get("homework"), dict) else {}
+            if not [item for item in homework.get("basic") or [] if str(item).strip()]:
+                title = str(draft.get("title") or draft.get("topic") or "本课")
+                homework["basic"] = [f"完成《{title}》配套基础练习，巩固本课基础知识与读图方法。"]
+                if not [item for item in homework.get("inquiry") or [] if str(item).strip()]:
+                    homework["inquiry"] = ["选择一个你感兴趣的区域或案例，查阅资料分析其特点，用本课方法说明结论与依据。"]
+                patch["homework"] = homework
+            if citations:
+                summary = "、".join(f"{item.get('number') or item.get('question_id', '')[:12]}" for item in citations[:6])
+                reply = f"当前已引用 {len(citations)} 道题（{summary}）。你可以让我替换某道题，或直接补充手动题目。"
+            else:
+                reply = "我先按环节检索题库候选，答案完备且相关度达标的会自动选用；同时补了一版课后作业草稿。"
+            return {"reply": reply, "section_patch": patch, "next_step": "capabilities", "suggestions": report["warnings"][:3]}
         elif step == "capabilities":
             bindings = [{"id": "map_2d", "reason": "展示人口分布空间格局"}, {"id": "knowledge_base", "reason": "必要时核对项目资料"}]
             if any(word in clean for word in ("三维", "3D", "地球")):
@@ -490,18 +957,146 @@ class LessonDesignService:
             reply = "预演检查已完成。" + (f"目前有：{'；'.join(report['errors'])}" if report["errors"] else "主要结构已经齐全。") + " 你可以先接受这一版，或者告诉我希望调整的环节。"
             return {"reply": reply, "section_patch": {}, "next_step": "confirmation", "suggestions": report["warnings"]}
         else:
-            patch, next_step, reply = {}, "confirmation", "如果内容已经符合你的课堂设想，可以确认保存；若要调整，直接告诉我具体章节或环节。"
+            patch: Dict[str, Any] = {}
+            if not str(draft.get("design_thinking") or "").strip():
+                patch["design_thinking"] = self._make_design_thinking(draft)
+            if not str(draft.get("reflection") or "").strip():
+                patch["reflection"] = "预设反思：关注学生对空间格局的描述是否规范、成因解释是否出现单因素归因；课后依据课堂记录补充。"
+            next_step, reply = "confirmation", "我把设计思路与预设反思补了一版草稿，你可以直接改写。确认无误后即可发布为课时草稿（模拟测试通过后进入正式课堂）。"
         return {"reply": reply, "section_patch": patch, "next_step": next_step, "source_refs": [], "capability_bindings": patch.get("capabilities", []), "suggestions": []}
 
     @staticmethod
+    def _extract_topic(message: str) -> str:
+        """Extract a short lesson topic from a natural multi-part requirement."""
+        clean = str(message or "").strip()
+        book_title = re.search(r"《\s*([^》\r\n]{1,80}?)\s*》", clean)
+        if book_title:
+            return book_title.group(1).strip()
+        explicit = re.search(
+            r"(?:课题|标题)\s*(?:改为|调整为|改成|为|是)?\s*[:：]?\s*[\"“]?([^，,。；;\n”\"]{1,80})",
+            clean,
+        )
+        if explicit:
+            return explicit.group(1).strip()
+        simplified = re.sub(r"(高[一二三]|初[一二三]|七年级|八年级|九年级|\d+\s*分钟|单课时)", "", clean)
+        simplified = simplified.replace("我想上", "").replace("请设计", "").replace("共创", "")
+        parts = [item.strip(" ：:，,。、") for item in re.split(r"[，,。；;\n、]", simplified)]
+        parts = [item for item in parts if item and len(item) <= 40]
+        return parts[0] if parts else simplified.strip(" ：:，,。、")[:80]
+
+    @classmethod
+    def _normalize_requirements_result(
+        cls, result: Dict[str, Any], message: str, draft: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Keep model output usable when one sentence contains topic plus constraints."""
+        normalized = copy.deepcopy(result) if isinstance(result, dict) else {}
+        patch = normalized.get("section_patch")
+        patch = patch if isinstance(patch, dict) else {}
+        topic = cls._extract_topic(message)
+        duration_match = re.search(r"(\d+)\s*分钟", message)
+        grade_match = re.search(r"(高[一二三]|初[一二三]|七年级|八年级|九年级)", message)
+        original_title = str(patch.get("title") or patch.get("topic") or "").strip()
+        if topic:
+            patch["title"] = topic
+            patch["topic"] = topic
+        if duration_match:
+            patch["duration_minutes"] = int(duration_match.group(1))
+        if grade_match:
+            patch["grade"] = grade_match.group(1)
+        requirements = patch.get("requirements")
+        if not isinstance(requirements, dict):
+            requirements = {}
+        requirements["raw"] = str(message or "").strip()
+        patch["requirements"] = requirements
+        normalized["section_patch"] = patch
+        if topic and (len(original_title) > 60 or topic not in original_title):
+            grade = str(patch.get("grade") or draft.get("grade") or "年级待定")
+            duration = int(patch.get("duration_minutes") or draft.get("duration_minutes") or 40)
+            normalized["reply"] = (
+                f"我已记录：{grade}《{topic}》，{duration} 分钟；其余内容作为学情、证据主线和课堂任务要求保存。"
+                "下一步我们确认课标与学情分析，可以吗？"
+            )
+        return normalized
+
+    @staticmethod
     def _make_stages(topic: str, duration: int) -> List[Dict[str, Any]]:
+        """按教研培训模板生成教学过程：材料/问题链/教师活动/学生活动/知识结论/设计意图/时间/系统操作。"""
         first, middle = max(5, min(10, duration // 5)), max(10, min(18, duration // 2))
         last = max(5, duration - first - middle)
         return [
-            {"stage_id": "s1", "title": "情境导入与地图观察", "minutes": first, "knowledge_unit": topic, "knowledge_point": "空间分布格局", "content": f"展示{topic}专题地图，学生先说出最直观的空间差异。", "activities": ["学生观察地图并圈出集中区与稀疏区", "教师追问差异是否具有稳定方向"], "design_intent": "从可观察的空间证据进入问题。", "system_steps": ["打开2D地图", "叠加已注册的人口专题图层"], "scene": {"templates": ["population_distribution"], "catalog_layers": []}, "script": [], "questions": [{"question_id": "s1q1", "type": "open", "text": f"{topic}在空间上呈现怎样的差异？", "options": [], "answer_index": None, "expected_points": [], "misconceptions": []}], "assistant_prompts": []},
-            {"stage_id": "s2", "title": "案例探究与成因解释", "minutes": middle, "knowledge_unit": topic, "knowledge_point": "空间差异的形成机制", "content": "以区域案例对比，引导学生把地图观察转化为地理解释。", "activities": ["小组比较两个区域", "学生用因果链说明自然与社会因素"], "design_intent": "让学生完成由描述到解释的认知跃迁。", "system_steps": ["使用地图标注", "调用已注册的案例或知识库资料"], "scene": {"templates": [], "catalog_layers": []}, "script": [], "questions": [{"question_id": "s2q1", "type": "open", "text": "哪些自然和社会条件共同造成了这种区域差异？", "options": [], "answer_index": None, "expected_points": ["自然条件", "社会经济条件", "因果联系"], "misconceptions": []}], "assistant_prompts": []},
-            {"stage_id": "s3", "title": "归纳迁移与课堂小结", "minutes": last, "knowledge_unit": topic, "knowledge_point": "规律归纳与迁移", "content": "学生用一句话概括规律，再将方法迁移到新的区域。", "activities": ["个人完成结论卡片", "教师根据回答收束"], "design_intent": "检查目标达成并形成可迁移的方法。", "system_steps": ["课堂记录学生回答", "生成课后复习提示"], "scene": {"templates": [], "catalog_layers": []}, "script": [], "questions": [{"question_id": "s3q1", "type": "open", "text": "换到另一个区域时，你会按什么顺序完成读图与解释？", "options": [], "answer_index": None, "expected_points": ["读图例", "描述格局", "解释原因"], "misconceptions": []}], "assistant_prompts": []},
+            {
+                "stage_id": "s1", "title": "情境导入与地图观察", "minutes": first,
+                "knowledge_unit": topic, "knowledge_point": f"{topic}格局",
+                "material": f"{topic}专题地图（叠加人口分布图层）",
+                "question_chain": [f"{topic}在空间上呈现怎样的差异？", "这种差异是否具有稳定方向？"],
+                "teacher_activities": ["展示专题地图并引导读图", "追问差异的方向性"],
+                "student_activities": ["学生观察地图并圈出集中区与稀疏区", "用自己的语言描述空间格局"],
+                "knowledge_conclusion": f"{topic}分布不均衡，呈现明显的空间集中与稀疏格局。",
+                "design_intent": "从可观察的空间证据进入问题。", "objective_refs": [1],
+                "system_steps": ["打开2D地图", "叠加已注册的人口专题图层"],
+                "scene": {"templates": ["population_distribution"], "catalog_layers": []},
+                "script": [],
+                "questions": [{"question_id": "s1q1", "type": "open", "text": f"{topic}在空间上呈现怎样的差异？", "options": [], "answer_index": None, "expected_points": [], "misconceptions": []}],
+                "assistant_prompts": [],
+            },
+            {
+                "stage_id": "s2", "title": "案例探究与成因解释", "minutes": middle,
+                "knowledge_unit": topic, "knowledge_point": f"{topic}的影响因素",
+                "material": "两个典型区域的对比案例（图文材料）",
+                "question_chain": ["两个区域的条件有何不同？", "哪些因素导致了人口集聚/稀疏？"],
+                "teacher_activities": ["组织小组对比", "提供证据材料并追问因果"],
+                "student_activities": ["小组比较两个区域", "用因果链说明自然与社会因素"],
+                "knowledge_conclusion": "自然条件提供基础，社会经济因素强化或改变人口分布格局。",
+                "design_intent": "让学生完成由描述到解释的认知跃迁。", "objective_refs": [2],
+                "system_steps": ["使用地图标注", "调用已注册的案例或知识库资料"],
+                "scene": {"templates": [], "catalog_layers": []},
+                "script": [],
+                "questions": [{"question_id": "s2q1", "type": "open", "text": "哪些自然和社会条件共同造成了这种区域差异？", "options": [], "answer_index": None, "expected_points": ["自然条件", "社会经济条件", "因果联系"], "misconceptions": []}],
+                "assistant_prompts": [],
+            },
+            {
+                "stage_id": "s3", "title": "归纳迁移与课堂小结", "minutes": last,
+                "knowledge_unit": topic, "knowledge_point": f"{topic}规律与迁移",
+                "material": "本节课生成的地图标注与板书要点",
+                "question_chain": ["用一句话概括本课规律？", "换一个区域你会如何分析？"],
+                "teacher_activities": ["根据回答收束规律", "布置迁移任务"],
+                "student_activities": ["个人完成结论卡片", "口头迁移到新区域"],
+                "knowledge_conclusion": "读图描述格局 → 归因自然与人文因素 → 迁移到新区域的分析方法。",
+                "design_intent": "检查目标达成并形成可迁移的方法。", "objective_refs": [3],
+                "system_steps": ["课堂记录学生回答", "生成课后复习提示"],
+                "scene": {"templates": [], "catalog_layers": []},
+                "script": [],
+                "questions": [{"question_id": "s3q1", "type": "open", "text": "换到另一个区域时，你会按什么顺序完成读图与解释？", "options": [], "answer_index": None, "expected_points": ["读图例", "描述格局", "解释原因"], "misconceptions": []}],
+                "assistant_prompts": [],
+            },
         ]
+
+    @staticmethod
+    def _make_board_design(topic: str) -> str:
+        return (
+            f"【{topic}】\n"
+            "左：空间格局（学生圈画）｜中：成因链（自然←→人文）｜右：方法（读图→归因→迁移）"
+        )
+
+    @staticmethod
+    def _make_design_thinking(draft: Dict[str, Any]) -> str:
+        topic = str(draft.get("topic") or draft.get("title") or "人口地理")
+        objectives = [str(item)[:20] for item in (draft.get("objectives") or []) if str(item).strip()]
+        methods = [str(item) for item in (draft.get("methods") or []) if str(item).strip()] or ["地图观察", "问题链"]
+        difficult = [str(item)[:20] for item in ((draft.get("key_difficulties") or {}).get("difficult") or [])[:2]]
+        core = str((draft.get("core_questions") or {}).get("core") or f"{topic}的空间格局及其成因")[:40]
+        objective_text = "、".join(objectives[:3]) if objectives else "空间格局观察与成因解释"
+        parts = [
+            f"本课围绕核心问题“{core}”展开。",
+            f"以{objective_text}为目标，",
+            f"通过{'、'.join(methods[:3])}组织学习，",
+            f"重点突破{'、'.join(difficult) if difficult else '成因解释'}，"
+            "让学生在地图证据与真实真题情境中完成由描述到解释再到迁移的思维进阶。",
+        ]
+        text = "".join(parts)
+        if len(text) > 150:
+            text = text[:147] + "……"
+        return text
 
     @staticmethod
     def _section_has_content(value: Any) -> bool:
@@ -577,10 +1172,12 @@ class LessonDesignService:
             "requirements": "先告诉我年级、课题和大致课时，我会帮你搭起第一版框架。",
             "analysis": "接下来一起确认课标重点、学生基础和教材位置。",
             "objectives": "这节课最希望学生学会什么？可以先说一两点。",
+            "core_questions": "现在把目标收束成一个核心问题，再拆成 2-4 个递进子问题。",
             "process": "我们把目标落到具体环节，每轮只设计一个关键环节。",
+            "question_matching": "接下来从题库里匹配真题；答案不完备的题目我不会自动选用。",
             "capabilities": "最后核对哪些地图、数据和课堂记录能力真的可用。",
-            "rehearsal": "现在可以做一次时长、问题和能力检查。",
-            "confirmation": "如果这版符合你的设想，就可以确认保存并导出 Word。",
+            "rehearsal": "现在可以做一次时长、问题链、题目和能力检查。",
+            "confirmation": "补上设计思路与预设反思后，就可以确认发布并导出 Word。",
         }.get(step, "我们从课题、年级和课时开始吧。")
 
     def _validate_bindings(self, bindings: Any) -> List[Dict[str, Any]]:

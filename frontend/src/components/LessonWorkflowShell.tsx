@@ -4,6 +4,7 @@ import {
   activatePopulationSourceVersion,
   applyLessonScene,
   captureLessonScene,
+  closeSessionQuestion,
   createClassSession,
   endClassSession,
   enterSessionStage,
@@ -17,13 +18,16 @@ import {
   launchSessionQuestion,
   populationLessonPrepResult,
   preparePopulationLesson,
+  revealSessionQuestion,
   resolvePopulationLessonPrep,
-  updateLesson
+  updateLesson,
+  updateSessionQuestionTimer
 } from "../api";
 import type {
   ClassSessionRecord,
   LayersResponse,
   LessonRecord,
+  LessonQuestion,
   LessonGlobeScene,
   LessonStage,
   ObservationVerdict,
@@ -38,10 +42,12 @@ import type {
 import { ClassRunPanel } from "./ClassRunPanel";
 import { LessonPanel } from "./LessonPanel";
 import { LessonDesignPanel } from "./LessonDesignPanel";
+import { QuestionPracticeModal } from "./QuestionPracticeModal";
+import { RehearsalPanel } from "./RehearsalPanel";
 import { ReportPanel } from "./ReportPanel";
 import { VisualQueryPopup, type VisualizationItem } from "./VisualQueryPopup";
 
-type LessonMode = "off" | "prep" | "design" | "teach" | "review";
+type LessonMode = "off" | "prep" | "design" | "rehearsal" | "teach" | "review";
 
 type Props = {
   project: (ProjectRecord & { status?: string }) | null;
@@ -54,6 +60,11 @@ type Props = {
   openSignal?: number;
   /** 助教识别到整节课设计请求时自动打开共创面板。 */
   designOpenSignal?: number;
+  /** 打开全屏教案设计工作台（教案设计入口；未提供时退回右侧共创面板）。 */
+  onOpenDesignWorkspace?: () => void;
+  /** 打开指定课时的模拟测试（教案设计工作台「进入模拟测试」入口）。 */
+  rehearsalSignal?: number;
+  rehearsalLessonId?: string;
   /** 课堂工作流状态（lesson/session/stage/phase）变化时上报给 App，随助教请求发往后端。 */
   onTeachingContextChange?: (ctx: TeachingContext | null) => void;
   /** 课中一键把预设追问派发给教学智能体。 */
@@ -87,6 +98,14 @@ function currentLayerSnapshot(
     templates: layerState?.enabled_templates || [],
     globe
   };
+}
+
+function lessonSnapshotFromSession(session: ClassSessionRecord): LessonRecord | null {
+  const snapshot = session.metadata?.lesson_snapshot;
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return null;
+  const candidate = snapshot as Partial<LessonRecord>;
+  if (candidate.lesson_id !== session.lesson_id || !Array.isArray(candidate.stages)) return null;
+  return candidate as LessonRecord;
 }
 
 async function waitForLessonImport(jobId: string): Promise<LessonRecord | null> {
@@ -154,6 +173,9 @@ export function LessonWorkflowShell({
   statusBar,
   openSignal = 0,
   designOpenSignal = 0,
+  onOpenDesignWorkspace,
+  rehearsalSignal = 0,
+  rehearsalLessonId = "",
   onTeachingContextChange,
   onAssistantPrompt,
   onApplyGlobeScene,
@@ -198,8 +220,49 @@ export function LessonWorkflowShell({
   useEffect(() => {
     if (!designOpenSignal) return;
     setPanelCollapsed(false);
+    if (onOpenDesignWorkspace) {
+      onOpenDesignWorkspace();
+      return;
+    }
     setLessonMode("design");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [designOpenSignal]);
+
+  const openDesign = () => {
+    if (onOpenDesignWorkspace) {
+      onOpenDesignWorkspace();
+      return;
+    }
+    setLessonMode((value) => (value === "design" ? "prep" : "design"));
+  };
+
+  // 教案设计工作台「进入模拟测试」入口：打开指定课时的模拟测试面板。
+  useEffect(() => {
+    if (!rehearsalSignal || !rehearsalLessonId) return;
+    let cancelled = false;
+    void fetchLesson(rehearsalLessonId)
+      .then((lesson) => {
+        if (cancelled) return;
+        setActiveLesson(lesson);
+        setLessons((previous) => previous.some((item) => item.lesson_id === lesson.lesson_id)
+          ? previous.map((item) => (item.lesson_id === lesson.lesson_id ? lesson : item))
+          : [lesson, ...previous]);
+        setLessonMode("rehearsal");
+      })
+      .catch((exc) => {
+        if (!cancelled) setError(exc instanceof Error ? exc.message : String(exc));
+      });
+    return () => {
+      cancelled = true;
+    };
+    // rehearsalSignal 单调递增触发，rehearsalLessonId 仅作为打开瞬间的目标。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rehearsalSignal]);
+
+  const startRehearsal = useCallback((lesson: LessonRecord) => {
+    setActiveLesson(lesson);
+    setLessonMode("rehearsal");
+  }, []);
 
   // 把课堂工作流状态上报给 App：备课=course_prep、上课中=in_class、复盘=post_class。
   // session_id 在课堂结束后仍保留（课后复盘需要用它读取真实课堂记录）。
@@ -216,7 +279,7 @@ export function LessonWorkflowShell({
     // 班课已结束则进入 post_class；否则跟随面板模式。
     const phase: TeachingContext["phase"] = running
       ? "in_class"
-      : lessonMode === "prep" || lessonMode === "design"
+      : lessonMode === "prep" || lessonMode === "design" || lessonMode === "rehearsal"
         ? "course_prep"
         : activeSession || lessonMode === "review"
           ? "post_class"
@@ -279,7 +342,7 @@ export function LessonWorkflowShell({
           .filter((item) => item.status === "running")
           .sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)))[0];
         if (!running) return;
-        const lesson = await fetchLesson(running.lesson_id);
+        const lesson = lessonSnapshotFromSession(running) || await fetchLesson(running.lesson_id);
         if (cancelled) return;
         setActiveSession(running);
         setActiveLesson(lesson);
@@ -518,6 +581,74 @@ export function LessonWorkflowShell({
     [activeSession, runWithBusy]
   );
 
+  // ------------------------------------------------------------------
+  // 正式课堂题目投屏与计时（服务端计时状态，刷新/断线自动恢复）
+  // ------------------------------------------------------------------
+
+  const projectQuestion = useCallback(
+    async (questionId: string, stageId: string) => {
+      if (!activeSession) return;
+      await runWithBusy(async () => {
+        const response = await launchSessionQuestion(activeSession.session_id, {
+          question_id: questionId,
+          stage_id: stageId,
+          delivery: "student"
+        });
+        setActiveSession((previous) =>
+          previous ? { ...previous, active_question: response.active_question } : previous
+        );
+      });
+    },
+    [activeSession, runWithBusy]
+  );
+
+  const projectionTimerAction = useCallback(
+    async (action: "start" | "pause" | "resume" | "reset") => {
+      if (!activeSession) return;
+      await runWithBusy(async () => {
+        const response = await updateSessionQuestionTimer(activeSession.session_id, action);
+        setActiveSession((previous) =>
+          previous
+            ? { ...previous, active_question: { ...previous.active_question, timer: response.timer } }
+            : previous
+        );
+      });
+    },
+    [activeSession, runWithBusy]
+  );
+
+  const projectionReveal = useCallback(async () => {
+    if (!activeSession) return;
+    await runWithBusy(async () => {
+      const response = await revealSessionQuestion(activeSession.session_id);
+      setActiveSession((previous) =>
+        previous
+          ? { ...previous, active_question: { ...previous.active_question, timer: response.timer } }
+          : previous
+      );
+    });
+  }, [activeSession, runWithBusy]);
+
+  const closeProjection = useCallback(async () => {
+    if (!activeSession) return;
+    await runWithBusy(async () => {
+      await closeSessionQuestion(activeSession.session_id);
+      setActiveSession((previous) =>
+        previous ? { ...previous, active_question: {} } : previous
+      );
+    });
+  }, [activeSession, runWithBusy]);
+
+  // 投屏题直接取自班课 active_question：它是开课时刻的完整题目快照（含答案与计时状态），
+  // 服务端保证计时字段为实时计算值；无计时的活跃题（历史学生作答题）不进入投屏弹窗。
+  const projectionQuestion = useMemo(() => {
+    const active = activeSession?.active_question as Partial<LessonQuestion> | undefined;
+    if (activeSession?.status !== "running" || !active?.question_id || !active?.timer) {
+      return null;
+    }
+    return active as unknown as LessonQuestion;
+  }, [activeSession]);
+
   const recordObservation = useCallback(
     (verdict: ObservationVerdict, tag: string, note: string, questionId: string) => {
       if (!activeSession) return;
@@ -552,6 +683,7 @@ export function LessonWorkflowShell({
           onToggleCollapsed={() => setPanelCollapsed((value) => !value)}
           onEnterStage={(stageId) => void applyScene(stageId, true)}
           onLaunchQuestion={(questionId, stageId) => void launchQuestion(questionId, stageId)}
+          onProjectQuestion={(questionId, stageId) => void projectQuestion(questionId, stageId)}
           onLaunchAdhocQuestion={(text, options) => void launchAdhocQuestion(text, options)}
           onObservation={recordObservation}
           onSnapshot={() => onCaptureEvidence?.(activeSession.session_id, activeSession.current_stage_id)}
@@ -562,6 +694,17 @@ export function LessonWorkflowShell({
           onFocusEvidenceLayer={onFocusEvidenceLayer}
           onRequestPlaneView={onRequestPlaneView}
           onAssistantPrompt={onAssistantPrompt}
+        />
+      ) : null}
+      {teachPanelVisible && projectionQuestion ? (
+        <QuestionPracticeModal
+          question={projectionQuestion}
+          busy={workflowBusy}
+          onTimerAction={(action) => void projectionTimerAction(action)}
+          onReveal={() => void projectionReveal()}
+          onClose={() => void closeProjection()}
+          onObservation={(verdict, tag, note) =>
+            recordObservation(verdict, tag, note, String(projectionQuestion.question_id || ""))}
         />
       ) : null}
       <div className="bottom-stack">
@@ -585,11 +728,11 @@ export function LessonWorkflowShell({
             </button>
             <button
               type="button"
-              className={"toolbar-button compact " + (lessonMode === "design" ? "active" : "")}
-              onClick={() => setLessonMode((value) => (value === "design" ? "off" : "design"))}
+              className={"toolbar-button compact " + (onOpenDesignWorkspace ? "" : lessonMode === "design" ? "active" : "")}
+              onClick={openDesign}
               data-testid="lesson-design-launcher"
             >
-              共创教案
+              教案设计
             </button>
             <button
               type="button"
@@ -623,8 +766,25 @@ export function LessonWorkflowShell({
           onChangePopulationSourceVersion={(version) => void changePopulationSourceVersion(version)}
           onResolvePrepChangeSet={(decision, stageIds) => void resolvePrepChangeSet(decision, stageIds)}
           onStartClass={() => void startClass()}
-          onStartDesign={() => setLessonMode("design")}
+          onStartDesign={openDesign}
+          onStartRehearsal={startRehearsal}
           onClose={() => setLessonMode("off")}
+        />
+      ) : null}
+
+      {project && lessonMode === "rehearsal" && activeLesson ? (
+        <RehearsalPanel
+          key={activeLesson.lesson_id}
+          projectId={project.project_id}
+          lesson={activeLesson}
+          getSceneSnapshot={() => currentLayerSnapshot(layerState, getGlobeSceneSnapshot?.())}
+          onApplyGlobeScene={(globe) => onApplyGlobeScene?.(globe)}
+          onRefresh={onRefresh}
+          onLessonCommitted={(lesson) => {
+            setActiveLesson(lesson);
+            setLessons((previous) => previous.map((item) => (item.lesson_id === lesson.lesson_id ? lesson : item)));
+          }}
+          onClose={() => setLessonMode("prep")}
         />
       ) : null}
 

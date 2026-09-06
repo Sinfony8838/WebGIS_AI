@@ -14,8 +14,8 @@
   "metadata": {
     "duration_minutes": 40,
     "reference": "人教版高中地理必修二《人口分布》",
-    "design_note": "v6：学生可见课堂展示版；基础知识结合真实地图，教师答案与内部提示不投屏，每节末尾提供一次短链 GeoBot 头脑风暴；三维只作宏观导入，定量判读回到二维规范专题图。",
-    "builtin_version": "6"
+    "design_note": "v7：课前共创形成40分钟正式课时；课堂最后5分钟完成当堂复盘与即时巩固；课后报告另行推荐练习，不计入课堂时间。基础知识结合真实地图，教师答案与内部提示不投屏；三维只作宏观导入，定量判读回到二维规范专题图。",
+    "builtin_version": "7"
   },
   "stages": [
     {
@@ -446,7 +446,7 @@
     },
     {
       "stage_id": "s7",
-      "title": "课堂总结：证据链定格",
+      "title": "当堂复盘：证据链定格",
       "minutes": 3,
       "scene": {
         "basemap_id": "amap_light",
@@ -486,7 +486,7 @@
     },
     {
       "stage_id": "s8",
-      "title": "即时评价：四步法检测",
+      "title": "当堂巩固：四步法检测",
       "minutes": 2,
       "scene": {
         "basemap_id": "amap_light",

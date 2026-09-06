@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { buildAuthenticatedUrl, fetchClassSessions, fetchJob, generateSessionReport } from "../api";
-import type { ClassSessionRecord, SessionReportResult, SessionReportStatistics } from "../types";
+import { buildAuthenticatedUrl, exportSessionPractice, fetchClassSessions, fetchJob, generateSessionReport } from "../api";
+import type { ClassSessionRecord, SessionPracticeExportResult, SessionReportResult, SessionReportStatistics } from "../types";
 
 type Props = {
   projectId: string;
@@ -29,6 +29,8 @@ export function ReportPanel({ projectId, onClose }: Props) {
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [report, setReport] = useState<SessionReportResult | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [practiceExport, setPracticeExport] = useState<SessionPracticeExportResult | null>(null);
+  const [exportingPractice, setExportingPractice] = useState(false);
   const [error, setError] = useState("");
 
   const loadSessions = useCallback(async () => {
@@ -63,6 +65,7 @@ export function ReportPanel({ projectId, onClose }: Props) {
           setReport({
             statistics: result.statistics,
             diagnosis: result.diagnosis,
+            practice_recommendations: result.practice_recommendations || [],
             report_url: result.report_url || ""
           });
           setGenerating(false);
@@ -81,6 +84,24 @@ export function ReportPanel({ projectId, onClose }: Props) {
   }
 
   const statistics: SessionReportStatistics | null = report?.statistics || null;
+  const practiceRecommendations = report?.practice_recommendations || [];
+
+  async function exportPractice() {
+    if (!selectedSessionId) {
+      return;
+    }
+    setExportingPractice(true);
+    setError("");
+    setPracticeExport(null);
+    try {
+      const result = await exportSessionPractice(selectedSessionId);
+      setPracticeExport(result);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setExportingPractice(false);
+    }
+  }
 
   return (
     <section className="report-panel glass-panel" data-testid="report-panel">
@@ -115,6 +136,15 @@ export function ReportPanel({ projectId, onClose }: Props) {
         >
           {generating ? "生成中…" : "生成课堂报告"}
         </button>
+        <button
+          type="button"
+          className="toolbar-button compact"
+          disabled={!selectedSessionId || exportingPractice}
+          onClick={() => void exportPractice()}
+          data-testid="export-practice"
+        >
+          {exportingPractice ? "导出中…" : "导出练习卷"}
+        </button>
         {report?.report_url ? (
           <a
             className="toolbar-button compact"
@@ -126,6 +156,43 @@ export function ReportPanel({ projectId, onClose }: Props) {
           </a>
         ) : null}
       </div>
+
+      {practiceExport ? (
+        <div className="report-practice-export" data-testid="practice-export-result">
+          <p className="report-note">
+            选题来源：
+            {practiceExport.selection_summary
+              .filter((entry) => entry.count > 0)
+              .map((entry) => `${entry.label} ×${entry.count}`)
+              .join(" · ") || "无可选题内容"}
+          </p>
+          {practiceExport.notes.map((note, noteIndex) => (
+            <p key={noteIndex} className="report-note">
+              {note}
+            </p>
+          ))}
+          <div className="report-practice-links">
+            <a
+              className="toolbar-button compact primary"
+              href={buildAuthenticatedUrl(practiceExport.student_artifact.metadata?.public_url || "")}
+              target="_blank"
+              rel="noreferrer"
+              data-testid="practice-student-link"
+            >
+              下载学生卷（无答案）
+            </a>
+            <a
+              className="toolbar-button compact"
+              href={buildAuthenticatedUrl(practiceExport.teacher_artifact.metadata?.public_url || "")}
+              target="_blank"
+              rel="noreferrer"
+              data-testid="practice-teacher-link"
+            >
+              下载教师卷（含答案与课堂实测）
+            </a>
+          </div>
+        </div>
+      ) : null}
 
       {error ? <p className="report-error">{error}</p> : null}
       {!sessions.length ? <p className="lesson-empty">该项目还没有课堂会话记录。先在「上课」模式完成一次课堂吧。</p> : null}
@@ -139,7 +206,7 @@ export function ReportPanel({ projectId, onClose }: Props) {
             </div>
             <div className="report-stat">
               <strong>{statistics.response_data_collected ? statistics.participant_count : "未采集"}</strong>
-              <span>学生端作答</span>
+              <span>课堂作答</span>
             </div>
             <div className="report-stat">
               <strong>{statistics.questions.length}</strong>
@@ -244,7 +311,7 @@ export function ReportPanel({ projectId, onClose }: Props) {
           <h3>
             学情诊断与建议
             <em className="diagnosis-source">
-              {report?.diagnosis.generator === "minimax" ? "（AI 生成）" : "（规则生成 · 离线兜底）"}
+              {report?.diagnosis.generator === "minimax" ? "（AI 生成）" : "（规则生成 · 证据保护）"}
             </em>
           </h3>
           <div className="report-diagnosis" data-testid="report-diagnosis">
@@ -255,6 +322,26 @@ export function ReportPanel({ projectId, onClose }: Props) {
                 <p key={lineIndex}>{line}</p>
               ) : null
             )}
+          </div>
+
+          <h3>
+            课后推荐练习巩固
+            <em className="diagnosis-source">（课堂结束后 · 不计入40分钟课时）</em>
+          </h3>
+          <div className="report-practice-list" data-testid="report-practice-list">
+            {practiceRecommendations.map((item) => (
+              <article key={item.practice_id} className="report-question">
+                <p className="report-question-text">
+                  [{item.level}] {item.title} · 建议 {item.suggested_minutes} 分钟
+                </p>
+                <p>{item.prompt}</p>
+                <p className="report-note">答案要点：{item.answer_points.join("；")}</p>
+                <p className="report-note">推荐依据：{item.evidence_basis}</p>
+              </article>
+            ))}
+            {!practiceRecommendations.length ? (
+              <p className="lesson-empty">当前课堂记录尚未生成推荐练习。</p>
+            ) : null}
           </div>
         </div>
       ) : null}

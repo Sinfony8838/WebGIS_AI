@@ -25,6 +25,8 @@ type Props = {
   onInputChange: (value: string) => void;
   onSubmit: () => void;
   onQuickPrompt?: (prompt: string) => void;
+  /** 打开全屏教案设计工作台（教案设计快捷入口；不发送聊天消息）。 */
+  onOpenLessonDesign?: () => void;
   onConfirm: (confirmationId: string, decision?: "approve" | "reject") => void;
   onVoiceSubmit: (transcript: string) => void;
   onVoiceNotice: (tone: "info" | "success" | "error", title: string, detail?: string) => void;
@@ -57,7 +59,7 @@ const CAPABILITY_CHIPS: Array<{ key: string; label: string; prompt: string }> = 
   },
   {
     key: "lesson-design",
-    label: "共创教案",
+    label: "教案设计",
     prompt: "教案共创"
   },
   {
@@ -351,6 +353,7 @@ export function CopilotWidget({
   onInputChange,
   onSubmit,
   onQuickPrompt = () => undefined,
+  onOpenLessonDesign,
   onConfirm = () => undefined,
   onVoiceSubmit,
   onVoiceNotice,
@@ -996,6 +999,10 @@ export function CopilotWidget({
                 onClick={() => {
                   if (chip.key === "read-map") {
                     onInputChange(chip.prompt);
+                    return;
+                  }
+                  if (chip.key === "lesson-design" && onOpenLessonDesign) {
+                    onOpenLessonDesign();
                     return;
                   }
                   onQuickPrompt(chip.prompt);

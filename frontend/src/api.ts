@@ -29,6 +29,9 @@ import type {
   LessonDesignTurnResult,
   LessonRecord,
   LessonStage,
+  LessonRehearsalRecord,
+  LessonRehearsalReport,
+  LessonRehearsalCompleteResult,
   MaterialWriteResponse,
   KnowledgeSearchResponse,
   KnowledgeTopicsResponse,
@@ -43,11 +46,18 @@ import type {
   PptRenderResponse,
   ProjectRecord,
   QgisStatusResponse,
+  QuestionBankGroup,
+  QuestionBankQuestion,
+  QuestionBankSummary,
+  QuestionRetrievalCandidate,
+  QuestionRevealResult,
+  QuestionTimerState,
   RegionBinding,
   ResourceSearchResponse,
   ScreenSnapshot,
   SceneSnapshot,
   SessionLiveState,
+  SessionPracticeExportResult,
   TeachingContext,
   TimelineData,
   TimelineGenerateResponse,
@@ -585,6 +595,212 @@ export async function exportLessonDocx(
   });
 }
 
+// ------------------------------------------------------------------
+// 题库（question bank）
+// ------------------------------------------------------------------
+
+export async function importQuestionBanks(
+  projectId: string,
+  files: File[]
+): Promise<{ job_id: string }> {
+  const formData = new FormData();
+  formData.set("project_id", projectId);
+  for (const file of files) {
+    formData.append("files", file);
+  }
+  return requestJson<{ job_id: string }>("/question-banks/import", {
+    method: "POST",
+    body: formData
+  });
+}
+
+export async function fetchQuestionBanks(projectId: string): Promise<{ status: string; items: QuestionBankSummary[] }> {
+  return requestJson(`/question-banks?project_id=${encodeURIComponent(projectId)}`);
+}
+
+export async function deleteQuestionBank(bankId: string): Promise<{ status: string }> {
+  return requestJson(`/question-banks/${encodeURIComponent(bankId)}`, { method: "DELETE" });
+}
+
+export async function fetchQuestionBankQuestions(
+  bankId: string,
+  options: {
+    section?: string;
+    type?: string;
+    answerComplete?: boolean;
+    search?: string;
+    page?: number;
+    pageSize?: number;
+  } = {}
+): Promise<{ status: string; items: QuestionBankQuestion[]; total: number; page: number; page_size: number }> {
+  const params = new URLSearchParams();
+  if (options.section) params.set("section", options.section);
+  if (options.type) params.set("type", options.type);
+  if (options.answerComplete !== undefined) params.set("answer_complete", String(options.answerComplete));
+  if (options.search) params.set("search", options.search);
+  if (options.page) params.set("page", String(options.page));
+  if (options.pageSize) params.set("page_size", String(options.pageSize));
+  const query = params.toString();
+  return requestJson(`/question-banks/${encodeURIComponent(bankId)}/questions${query ? `?${query}` : ""}`);
+}
+
+export async function fetchQuestionBankGroup(
+  bankId: string,
+  groupKey: string
+): Promise<{ status: string; group: QuestionBankGroup }> {
+  return requestJson(`/question-banks/${encodeURIComponent(bankId)}/groups/${encodeURIComponent(groupKey)}`);
+}
+
+export async function searchQuestionBanks(payload: {
+  project_id: string;
+  bank_ids?: string[];
+  topic?: string;
+  knowledge?: string;
+  objectives?: string[];
+  type?: string;
+  exclude_ids?: string[];
+  limit?: number;
+}): Promise<{
+  status: string;
+  items: QuestionBankQuestion[];
+  candidates_count: number;
+  generator: string;
+  query: Record<string, unknown>;
+}> {
+  return requestJson("/question-banks/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project_id: payload.project_id,
+      bank_ids: payload.bank_ids || [],
+      topic: payload.topic || "",
+      knowledge: payload.knowledge || "",
+      objectives: payload.objectives || [],
+      type: payload.type || "",
+      exclude_ids: payload.exclude_ids || [],
+      limit: payload.limit ?? 5
+    })
+  });
+}
+
+export async function bindLessonDesignQuestion(
+  designId: string,
+  payload: {
+    stage_id: string;
+    question_id?: string;
+    manual?: Record<string, unknown>;
+    action?: "add" | "remove";
+    position?: number | null;
+    expected_revision?: number;
+  }
+): Promise<{ status: string; message: string; design: LessonDesignSession; stage: LessonStage }> {
+  return requestJson(`/lesson-design/sessions/${encodeURIComponent(designId)}/questions/bind`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      stage_id: payload.stage_id,
+      question_id: payload.question_id || "",
+      manual: payload.manual || null,
+      action: payload.action || "add",
+      position: payload.position ?? null,
+      expected_revision: payload.expected_revision
+    })
+  });
+}
+
+// ------------------------------------------------------------------
+// 上课模拟测试（lesson rehearsal）
+// ------------------------------------------------------------------
+
+export async function createLessonRehearsal(
+  projectId: string,
+  lessonId: string
+): Promise<{ status: string; rehearsal: LessonRehearsalRecord; resumed: boolean }> {
+  return requestJson("/lesson-rehearsals", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: projectId, lesson_id: lessonId })
+  });
+}
+
+export async function fetchLessonRehearsal(rehearsalId: string): Promise<{ status: string; rehearsal: LessonRehearsalRecord }> {
+  return requestJson(`/lesson-rehearsals/${encodeURIComponent(rehearsalId)}`);
+}
+
+export async function listLessonRehearsals(
+  projectId: string,
+  lessonId = ""
+): Promise<{ status: string; items: LessonRehearsalRecord[] }> {
+  const params = new URLSearchParams({ project_id: projectId });
+  if (lessonId) params.set("lesson_id", lessonId);
+  return requestJson(`/lesson-rehearsals?${params.toString()}`);
+}
+
+export async function updateLessonRehearsal(
+  rehearsalId: string,
+  payload: {
+    patch?: Record<string, unknown>;
+    question_bind?: {
+      stage_id: string;
+      question_id?: string;
+      manual?: Record<string, unknown>;
+      position?: number | null;
+    };
+    question_remove?: { stage_id: string; question_id: string };
+    image_bind?: {
+      stage_id: string;
+      question_id: string;
+      image: { url: string; width?: number; height?: number; order?: number };
+    };
+    scene_capture?: { stage_id: string; snapshot: SceneSnapshot };
+    test_result?: { key: string; passed: boolean; note?: string };
+    expected_revision?: number;
+  }
+): Promise<{ status: string; rehearsal: LessonRehearsalRecord }> {
+  return requestJson(`/lesson-rehearsals/${encodeURIComponent(rehearsalId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function applyRehearsalStageScene(
+  rehearsalId: string,
+  stageId: string
+): Promise<{ status: string; visualization?: unknown; globe?: import("./types").LessonGlobeScene }> {
+  return requestJson(`/lesson-rehearsals/${encodeURIComponent(rehearsalId)}/apply-scene`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stage_id: stageId })
+  });
+}
+
+export async function fetchLessonRehearsalReport(
+  rehearsalId: string
+): Promise<{ status: string; rehearsal_id: string; revision: number; report: LessonRehearsalReport }> {
+  return requestJson(`/lesson-rehearsals/${encodeURIComponent(rehearsalId)}/report`);
+}
+
+export async function completeLessonRehearsal(
+  rehearsalId: string,
+  expectedRevision?: number
+): Promise<LessonRehearsalCompleteResult> {
+  return requestJson(`/lesson-rehearsals/${encodeURIComponent(rehearsalId)}/complete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ expected_revision: expectedRevision })
+  });
+}
+
+export async function cancelLessonRehearsal(
+  rehearsalId: string
+): Promise<{ status: string; rehearsal: LessonRehearsalRecord }> {
+  return requestJson(`/lesson-rehearsals/${encodeURIComponent(rehearsalId)}/cancel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" }
+  });
+}
+
 export async function updateLesson(
   lessonId: string,
   payload: Partial<Pick<LessonRecord, "title" | "subject" | "grade" | "objectives" | "stages" | "metadata" | "plan">>
@@ -757,6 +973,27 @@ export async function closeSessionQuestion(sessionId: string): Promise<{ status:
   });
 }
 
+export async function updateSessionQuestionTimer(
+  sessionId: string,
+  action: "start" | "pause" | "resume" | "reset"
+): Promise<{ status: string; timer: QuestionTimerState; server_now: string }> {
+  return requestJson<{ status: string; timer: QuestionTimerState; server_now: string }>(
+    `/class-sessions/${encodeURIComponent(sessionId)}/questions/timer`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action })
+    }
+  );
+}
+
+export async function revealSessionQuestion(sessionId: string): Promise<QuestionRevealResult> {
+  return requestJson<QuestionRevealResult>(
+    `/class-sessions/${encodeURIComponent(sessionId)}/questions/reveal`,
+    { method: "POST" }
+  );
+}
+
 export async function addSessionObservation(
   sessionId: string,
   payload: { stage_id?: string; question_id?: string; verdict: string; tag?: string; note?: string }
@@ -787,6 +1024,13 @@ export async function generateSessionReport(sessionId: string): Promise<{ status
   return requestJson<{ status: string; job_id: string }>(`/class-sessions/${encodeURIComponent(sessionId)}/report`, {
     method: "POST"
   });
+}
+
+export async function exportSessionPractice(sessionId: string): Promise<SessionPracticeExportResult> {
+  return requestJson<SessionPracticeExportResult>(
+    `/class-sessions/${encodeURIComponent(sessionId)}/practice-export`,
+    { method: "POST" }
+  );
 }
 
 export async function fetchKbManifest(): Promise<KnowledgeManifestResponse> {

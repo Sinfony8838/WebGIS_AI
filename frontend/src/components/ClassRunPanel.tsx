@@ -14,6 +14,8 @@ type Props = {
   onToggleCollapsed: () => void;
   onEnterStage: (stageId: string) => void;
   onLaunchQuestion: (questionId: string, stageId: string) => void;
+  /** 全屏投屏本题：服务端计时 + 课堂大屏同步（题目投影模式）。 */
+  onProjectQuestion?: (questionId: string, stageId: string) => void;
   onLaunchAdhocQuestion: (text: string, options: string[]) => void;
   onObservation: (verdict: ObservationVerdict, tag: string, note: string, questionId: string) => void;
   onSnapshot: () => void;
@@ -162,6 +164,7 @@ export function ClassRunPanel({
   onToggleCollapsed,
   onEnterStage,
   onLaunchQuestion,
+  onProjectQuestion,
   onLaunchAdhocQuestion,
   onObservation,
   onSnapshot,
@@ -291,8 +294,8 @@ export function ClassRunPanel({
         `GeoBot 头脑风暴：围绕“${currentStage.title}”开展随机地区探究。`,
         `随机抽中的地区是：${selected}。`,
         `本环节可用地图资料：${[
-          ...(currentStage.scene.templates || []),
-          ...(currentStage.scene.catalog_layers || [])
+          ...(currentStage.scene?.templates || []),
+          ...(currentStage.scene?.catalog_layers || [])
         ].join("、") || "当前人口专题地图"}。`,
         brainstorm.prompt,
         "请提出一个教师难以提前穷举、但可以用高中地理知识回答的探究问题，并直接作答。",
@@ -409,7 +412,7 @@ export function ClassRunPanel({
       </nav>
 
       <div className="class-panel-current">
-        {currentStage?.script.length ? (
+        {currentStage?.script?.length ? (
           <div className="basic-knowledge-launcher" data-testid="basic-knowledge-launcher">
             <div>
               <span className="question-detail-label">基础知识讲解</span>
@@ -422,7 +425,7 @@ export function ClassRunPanel({
           </div>
         ) : null}
 
-        {currentStage?.scene.globe?.enabled && onRequestPlaneView ? (
+        {currentStage?.scene?.globe?.enabled && onRequestPlaneView ? (
           <div className="class-stage-view-handoff" data-testid="stage-view-handoff">
             <span>3D 用于宏观导入；开始读图和答题时回到二维规范专题图。</span>
             <button type="button" className="toolbar-button compact" onClick={onRequestPlaneView}>
@@ -431,7 +434,7 @@ export function ClassRunPanel({
           </div>
         ) : null}
 
-        {currentStage?.scene.catalog_layers && currentStage.scene.catalog_layers.length > 1 && onFocusEvidenceLayer ? (
+        {currentStage?.scene?.catalog_layers && currentStage.scene.catalog_layers.length > 1 && onFocusEvidenceLayer ? (
           <div className="class-evidence-layer-steps" data-testid="evidence-layer-steps">
             <div className="class-evidence-layer-heading">
               <span className="question-detail-label">证据图层步骤</span>
@@ -444,7 +447,7 @@ export function ClassRunPanel({
                   type="button"
                   className={`evidence-layer-step ${visibleCatalogLayerIds.includes(datasetId) ? "active" : ""}`}
                   disabled={busy}
-                  onClick={() => onFocusEvidenceLayer(datasetId, currentStage.scene.catalog_layers || [])}
+                  onClick={() => onFocusEvidenceLayer(datasetId, currentStage.scene?.catalog_layers || [])}
                   data-testid={`evidence-layer-${datasetId}`}
                 >
                   {EVIDENCE_LAYER_LABELS[datasetId] || datasetId}
@@ -516,6 +519,18 @@ export function ClassRunPanel({
                   ) : null}
 
                   <div className="class-question-actions">
+                    {onProjectQuestion ? (
+                      <button
+                        type="button"
+                        className="toolbar-button compact"
+                        disabled={busy}
+                        onClick={() => onProjectQuestion(question.question_id, currentStage?.stage_id || "")}
+                        data-testid={`project-toggle-${question.question_id}`}
+                        title="全屏投屏本题：服务端计时，课堂大屏同步，可暂停/重置/提前揭示"
+                      >
+                        投屏答题
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       className={`toolbar-button compact primary ${oralQuestionId === question.question_id ? "active" : ""}`}
@@ -641,7 +656,7 @@ export function ClassRunPanel({
           </button>
         </div>
       </footer>
-      {knowledgeOpen && currentStage?.script.length ? (
+      {knowledgeOpen && currentStage?.script?.length ? (
         <BasicKnowledgeOverlay
           title={currentStage.title}
           points={currentStage.script}
