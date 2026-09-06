@@ -30,7 +30,6 @@ type Props = {
   onChangePopulationSourceVersion?: (version: string) => void;
   onResolvePrepChangeSet?: (decision: "apply" | "reject", acceptedStageIds: string[]) => void;
   onStartClass: () => void;
-  onStartDesign?: () => void;
   /** 进入该课时的模拟测试（试讲 → 通过后发布为新版本）。 */
   onStartRehearsal?: (lesson: LessonRecord) => void;
   onClose: () => void;
@@ -83,7 +82,6 @@ export function LessonPanel({
   onChangePopulationSourceVersion,
   onResolvePrepChangeSet,
   onStartClass,
-  onStartDesign,
   onStartRehearsal,
   onClose
 }: Props) {
@@ -182,11 +180,6 @@ export function LessonPanel({
         <button type="button" className="toolbar-button compact" onClick={() => setImportOpen((value) => !value)}>
           AI 导入教案
         </button>
-        {onStartDesign ? (
-          <button type="button" className="toolbar-button compact primary" onClick={onStartDesign} disabled={busy} data-testid="lesson-design-toggle">
-            教案设计
-          </button>
-        ) : null}
         {onPrepareLesson ? (
           <button
             type="button"

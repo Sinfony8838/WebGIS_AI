@@ -1498,10 +1498,6 @@ export default function App({
     });
   }, []);
 
-  const handleOpenLessonWorkflow = useCallback(() => {
-    setLessonWorkflowOpenSignal((value) => value + 1);
-  }, []);
-
   const handleUploadDataset = useCallback(
     async (formData: FormData) => {
       if (!project) {
