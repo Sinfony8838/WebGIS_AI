@@ -990,92 +990,62 @@ export function CopilotWidget({
 
           >
 
-            <strong>生成示意图</strong>
-
-            <textarea
-
-              value={imageGenPrompt}
-
-              onChange={(event) => setImageGenPrompt(event.target.value)}
-
-              placeholder="描述想要的地理教学示意图内容…"
-
-              maxLength={1500}
-
-              rows={3}
-
-            />
-
-            <div className="copilot-image-gen-row">
-
-              <select
-
-                value={imageGenModel}
-
-                onChange={(event) => {
-
-                  setImageGenModel(event.target.value);
-
-                  if (event.target.value === "image-01-live" && imageGenRatio === "21:9") {
-
-                    setImageGenRatio("16:9");
-
-                  }
-
-                }}
-
-              >
-
-                <option value="image-01">image-01</option>
-
-                <option value="image-01-live">image-01-live</option>
-
-              </select>
-
-              <select value={imageGenRatio} onChange={(event) => setImageGenRatio(event.target.value)}>
-
-                {(imageGenModel === "image-01-live"
-
-                  ? ["16:9", "4:3", "1:1", "3:2", "2:3", "3:4", "9:16"]
-
-                  : ["16:9", "4:3", "1:1", "3:2", "2:3", "3:4", "9:16", "21:9"]
-
-                ).map((ratio) => (
-
-                  <option key={ratio} value={ratio}>
-
-                    {ratio}
-
-                  </option>
-
+                        <div className="copilot-image-gen-head">
+              <strong>图片生成</strong>
+              <div className="copilot-image-gen-models" role="group" aria-label="生成模型">
+                {["image-01", "image-01-live"].map((model) => (
+                  <button
+                    key={model}
+                    type="button"
+                    className={imageGenModel === model ? "active" : ""}
+                    onClick={() => {
+                      setImageGenModel(model);
+                      if (model === "image-01-live" && imageGenRatio === "21:9") {
+                        setImageGenRatio("16:9");
+                      }
+                    }}
+                    aria-pressed={imageGenModel === model}
+                  >
+                    {model}
+                  </button>
                 ))}
-
-              </select>
-
-              <button
-
-                type="submit"
-
-                disabled={!imageGenPrompt.trim() || imageGenerationLoading || !onGenerateImage}
-
-                data-testid="copilot-image-generate-submit"
-
-              >
-
-                {imageGenerationLoading ? "生成中…" : "生成并存入数据库"}
-
-              </button>
-
+              </div>
             </div>
-
+            <textarea
+              value={imageGenPrompt}
+              onChange={(event) => setImageGenPrompt(event.target.value)}
+              placeholder="描述想要的地理教学示意图内容…"
+              maxLength={1500}
+              rows={3}
+            />
+            <div className="copilot-image-gen-ratios" role="group" aria-label="画面比例">
+              {(imageGenModel === "image-01-live"
+                ? ["16:9", "4:3", "1:1", "3:2", "2:3", "3:4", "9:16"]
+                : ["16:9", "4:3", "1:1", "3:2", "2:3", "3:4", "9:16", "21:9"]
+              ).map((ratio) => (
+                <button
+                  key={ratio}
+                  type="button"
+                  className={imageGenRatio === ratio ? "active" : ""}
+                  onClick={() => setImageGenRatio(ratio)}
+                  aria-pressed={imageGenRatio === ratio}
+                >
+                  {ratio}
+                </button>
+              ))}
+            </div>
+            <button
+              type="submit"
+              className="copilot-image-gen-submit"
+              disabled={!imageGenPrompt.trim() || imageGenerationLoading || !onGenerateImage}
+              data-testid="copilot-image-generate-submit"
+            >
+              {imageGenerationLoading ? "生成中…" : "生成并存入数据库"}
+            </button>
             <small>
-
               {imageGenerationConfigured
-
                 ? "付费能力：按 MiniMax 用量计费；生成结果自动存入数据库「图片」分类。"
-
                 : "未配置 MiniMax 图片服务，生成前请先在服务端配置。"}
-
             </small>
 
           </form>

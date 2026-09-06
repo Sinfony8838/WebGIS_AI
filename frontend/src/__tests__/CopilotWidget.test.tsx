@@ -208,7 +208,8 @@ describe("CopilotWidget", () => {
       screen.getByPlaceholderText(/描述想要的地理教学示意图内容/),
       { target: { value: "世界人口密度分层示意图" } }
     );
-    fireEvent.change(screen.getAllByRole("combobox")[1], { target: { value: "1:1" } });
+    // 比例改为按钮组（原生 select 弹层会飞出小面板）
+    fireEvent.click(within(screen.getByTestId("copilot-image-generation")).getByRole("button", { name: "1:1" }));
     fireEvent.click(screen.getByTestId("copilot-image-generate-submit"));
 
     await waitFor(() =>
