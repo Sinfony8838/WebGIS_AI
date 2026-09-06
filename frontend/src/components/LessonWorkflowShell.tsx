@@ -41,13 +41,12 @@ import type {
 } from "../types";
 import { ClassRunPanel } from "./ClassRunPanel";
 import { LessonPanel } from "./LessonPanel";
-import { LessonDesignPanel } from "./LessonDesignPanel";
 import { QuestionPracticeModal } from "./QuestionPracticeModal";
 import { RehearsalPanel } from "./RehearsalPanel";
 import { ReportPanel } from "./ReportPanel";
 import { VisualQueryPopup, type VisualizationItem } from "./VisualQueryPopup";
 
-type LessonMode = "off" | "prep" | "design" | "rehearsal" | "teach" | "review";
+type LessonMode = "off" | "prep" | "rehearsal" | "teach" | "review";
 
 type Props = {
   project: (ProjectRecord & { status?: string }) | null;
@@ -220,20 +219,12 @@ export function LessonWorkflowShell({
   useEffect(() => {
     if (!designOpenSignal) return;
     setPanelCollapsed(false);
-    if (onOpenDesignWorkspace) {
-      onOpenDesignWorkspace();
-      return;
-    }
-    setLessonMode("design");
+    onOpenDesignWorkspace?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [designOpenSignal]);
 
   const openDesign = () => {
-    if (onOpenDesignWorkspace) {
-      onOpenDesignWorkspace();
-      return;
-    }
-    setLessonMode((value) => (value === "design" ? "prep" : "design"));
+    onOpenDesignWorkspace?.();
   };
 
   // 教案设计工作台「进入模拟测试」入口：打开指定课时的模拟测试面板。
@@ -279,7 +270,7 @@ export function LessonWorkflowShell({
     // 班课已结束则进入 post_class；否则跟随面板模式。
     const phase: TeachingContext["phase"] = running
       ? "in_class"
-      : lessonMode === "prep" || lessonMode === "design" || lessonMode === "rehearsal"
+      : lessonMode === "prep" || lessonMode === "rehearsal"
         ? "course_prep"
         : activeSession || lessonMode === "review"
           ? "post_class"
@@ -667,7 +658,6 @@ export function LessonWorkflowShell({
 
   const workflowBusy = busy || localBusy;
   const teachPanelVisible = lessonMode === "teach" && Boolean(activeSession) && Boolean(activeLesson);
-  const designPanelVisible = lessonMode === "design" && Boolean(project);
 
   return (
     <>
@@ -713,22 +703,7 @@ export function LessonWorkflowShell({
           <div className="lesson-workflow-launcher" data-testid="lesson-workflow-launcher">
             <button
               type="button"
-              className={`toolbar-button compact ${lessonMode === "prep" ? "active" : ""}`}
-              onClick={() => setLessonMode((value) => (value === "prep" ? "off" : "prep"))}
-            >
-              课前
-            </button>
-            <button
-              type="button"
-              className={`toolbar-button compact ${lessonMode === "teach" ? "active" : ""}`}
-              disabled={!activeLesson}
-              onClick={() => setLessonMode((value) => (value === "teach" ? "off" : "teach"))}
-            >
-              课中
-            </button>
-            <button
-              type="button"
-              className={"toolbar-button compact " + (onOpenDesignWorkspace ? "" : lessonMode === "design" ? "active" : "")}
+              className="toolbar-button compact"
               onClick={openDesign}
               data-testid="lesson-design-launcher"
             >
@@ -736,10 +711,21 @@ export function LessonWorkflowShell({
             </button>
             <button
               type="button"
+              className={`toolbar-button compact ${lessonMode === "teach" || lessonMode === "prep" ? "active" : ""}`}
+              onClick={() =>
+                setLessonMode((value) => (value === "teach" ? "off" : activeSession ? "teach" : "prep"))
+              }
+              data-testid="class-mode-toggle"
+              title={activeSession ? "进入课堂面板" : "先选择课时并开始上课"}
+            >
+              课堂模式
+            </button>
+            <button
+              type="button"
               className={`toolbar-button compact ${lessonMode === "review" ? "active" : ""}`}
               onClick={() => setLessonMode((value) => (value === "review" ? "off" : "review"))}
             >
-              课后
+              教学复盘
             </button>
           </div>
         </div>
@@ -766,7 +752,6 @@ export function LessonWorkflowShell({
           onChangePopulationSourceVersion={(version) => void changePopulationSourceVersion(version)}
           onResolvePrepChangeSet={(decision, stageIds) => void resolvePrepChangeSet(decision, stageIds)}
           onStartClass={() => void startClass()}
-          onStartDesign={openDesign}
           onStartRehearsal={startRehearsal}
           onClose={() => setLessonMode("off")}
         />
@@ -783,20 +768,6 @@ export function LessonWorkflowShell({
           onLessonCommitted={(lesson) => {
             setActiveLesson(lesson);
             setLessons((previous) => previous.map((item) => (item.lesson_id === lesson.lesson_id ? lesson : item)));
-          }}
-          onClose={() => setLessonMode("prep")}
-        />
-      ) : null}
-
-      {designPanelVisible && project ? (
-        <LessonDesignPanel
-          projectId={project.project_id}
-          activeLesson={activeLesson}
-          onFinalized={(lesson) => {
-            setActiveLesson(lesson);
-            setLessons((previous) => [...previous.filter((item) => item.lesson_id !== lesson.lesson_id), lesson]);
-            setLessonMode("prep");
-            void onRefresh();
           }}
           onClose={() => setLessonMode("prep")}
         />

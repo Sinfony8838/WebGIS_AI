@@ -2156,72 +2156,13 @@
   white-space: nowrap;
 }
 
-/* Guided lesson-plan co-creation */
-.lesson-design-panel {
-  position: fixed;
-  top: 76px;
-  right: 24px;
-  z-index: 72;
-  width: min(720px, calc(100vw - 48px));
-  max-height: calc(100vh - 108px);
-  overflow: auto;
-  padding: 20px;
-}
-.lesson-design-header { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; }
-.lesson-design-header h2 { margin:4px 0; }
-.lesson-design-header p:last-child { color:var(--muted-text,#64748b); margin:0; font-size:12px; }
-.lesson-design-steps { display:grid; grid-template-columns:repeat(7,1fr); gap:5px; margin:16px 0; }
-.lesson-design-step { display:flex; flex-direction:column; align-items:center; gap:4px; color:#94a3b8; font-size:10px; text-align:center; }
-.lesson-design-step span { width:24px; height:24px; display:grid; place-items:center; border:1px solid #cbd5e1; border-radius:50%; background:#fff; }
-.lesson-design-step.current, .lesson-design-step.confirmed { color:#2563eb; }
-.lesson-design-step.current span { border-color:#2563eb; box-shadow:0 0 0 3px #dbeafe; }
-.lesson-design-step.confirmed span { background:#2563eb; color:#fff; border-color:#2563eb; }
-.lesson-design-draft { border:1px solid #dbe4f0; border-radius:12px; padding:12px; display:grid; grid-template-columns:1fr 140px; gap:10px; background:#f8fbff; }
-.lesson-design-draft-title, .lesson-design-draft > div { grid-column:1/-1; }
-.lesson-design-draft label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:#64748b; }
-.lesson-design-draft input { border:1px solid #dbe4f0; border-radius:6px; padding:6px 8px; background:#fff; color:#0f172a; }
-.lesson-design-draft p { margin:4px 0 0; color:#334155; line-height:1.55; }
-.lesson-design-chat { display:flex; flex-direction:column; gap:8px; margin:14px 0; max-height:240px; overflow:auto; }
+/* 旧 LessonDesignPanel 已删除；以下类仍被 LessonDesignWorkspace 复用 */
 .lesson-design-message { display:grid; grid-template-columns:38px 1fr; gap:8px; align-items:start; }
 .lesson-design-message span { color:#64748b; font-size:11px; padding-top:4px; }
 .lesson-design-message p { margin:0; border-radius:12px; padding:9px 11px; line-height:1.55; white-space:pre-wrap; background:#fff; border:1px solid #e2e8f0; color:#0f172a; box-shadow:0 1px 2px rgba(15,23,42,.05); }
 .lesson-design-message.teacher p { background:#dbeafe; border-color:#bfdbfe; color:#1e3a8a; }
-.lesson-design-report { display:flex; gap:10px; flex-wrap:wrap; border:1px solid #bfdbfe; background:#eff6ff; border-radius:8px; padding:8px 10px; font-size:12px; color:#1e40af; }
-.lesson-design-report small { width:100%; color:#92400e; }
 .lesson-design-error { color:#b91c1c; font-size:12px; }
-.lesson-design-composer textarea { width:100%; min-height:76px; resize:vertical; }
-.lesson-design-actions { display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; margin-top:8px; }
-@media (max-width: 720px) {
-  .lesson-design-panel { top:56px; right:10px; width:calc(100vw - 20px); padding:14px; }
-  .lesson-design-steps { gap:2px; }
-  .lesson-design-step em { font-size:9px; }
-}
-.lesson-design-inline-edit { display:flex; gap:6px; align-items:center; }
-.lesson-design-inline-edit input { flex:1; min-width:0; }
-.lesson-design-section-editor {
-  grid-column: 1 / -1;
-  display: grid !important;
-  grid-template-columns: 1fr auto;
-  align-items: end;
-  gap: 8px !important;
-}
-.lesson-design-section-editor textarea {
-  grid-column: 1 / -1;
-  width: 100%;
-  min-height: 124px;
-  resize: vertical;
-  border: 1px solid #dbe4f0;
-  border-radius: 8px;
-  padding: 9px 10px;
-  background: #fff;
-  color: #0f172a;
-  line-height: 1.5;
-  font: inherit;
-}
 
-/* ------------------------------------------------------------------
- * LessonDesignWorkspace 全屏教案设计工作台（三栏）
- * ------------------------------------------------------------------ */
 .ldw-backdrop {
   position: fixed;
   inset: 0;
@@ -2436,7 +2377,6 @@
   line-height: 1.5;
 }
 .ldw-composer textarea:focus,
-.lesson-design-composer textarea:focus,
 .lesson-design-section-editor textarea:focus {
   outline: none;
   border-color: #93c5fd;
@@ -2451,14 +2391,12 @@
  * ------------------------------------------------------------------ */
 .ldw-shell,
 .ldw-shell :is(.ldw-left, .ldw-right, .ldw-mid),
-.lesson-design-panel,
 .qpm-shell {
   color: #0f172a;
 }
 
 /* 深色玻璃风格的 .toolbar-button 落在浅色面板上时重绘为浅色按钮 */
 .ldw-shell .toolbar-button,
-.lesson-design-panel .toolbar-button,
 .qpm-shell .toolbar-button {
   color: #0f172a;
   background: #fff;
@@ -2466,7 +2404,6 @@
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
 }
 .ldw-shell .toolbar-button:hover:not(:disabled),
-.lesson-design-panel .toolbar-button:hover:not(:disabled),
 .qpm-shell .toolbar-button:hover:not(:disabled) {
   color: #0f172a;
   background: #f1f5f9;
@@ -2474,26 +2411,22 @@
   box-shadow: 0 2px 6px rgba(15, 23, 42, 0.1);
 }
 .ldw-shell .toolbar-button:disabled,
-.lesson-design-panel .toolbar-button:disabled,
 .qpm-shell .toolbar-button:disabled {
   opacity: 0.5;
 }
 .ldw-shell .toolbar-button.primary,
-.lesson-design-panel .toolbar-button.primary,
 .qpm-shell .toolbar-button.primary {
   color: #fff;
   border-color: #2563eb;
   background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
 }
 .ldw-shell .toolbar-button.primary:hover:not(:disabled),
-.lesson-design-panel .toolbar-button.primary:hover:not(:disabled),
 .qpm-shell .toolbar-button.primary:hover:not(:disabled) {
   color: #fff;
   border-color: #1d4ed8;
   background: linear-gradient(180deg, #2f74ea 0%, #1d4fd7 100%);
 }
 .ldw-shell .toolbar-button.danger,
-.lesson-design-panel .toolbar-button.danger,
 .qpm-shell .toolbar-button.danger {
   color: #fff;
   border-color: #b91c1c;
@@ -2511,25 +2444,20 @@
 .ldw-right,
 .ldw-mid,
 .ldw-chat,
-.lesson-design-chat,
-.lesson-design-panel,
 .qpm-shell {
   scrollbar-width: thin;
   scrollbar-color: #cbd5e1 transparent;
 }
 .ldw-shell ::-webkit-scrollbar,
-.lesson-design-panel ::-webkit-scrollbar,
 .qpm-shell ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 .ldw-shell ::-webkit-scrollbar-track,
-.lesson-design-panel ::-webkit-scrollbar-track,
 .qpm-shell ::-webkit-scrollbar-track {
   background: transparent;
 }
 .ldw-shell ::-webkit-scrollbar-thumb,
-.lesson-design-panel ::-webkit-scrollbar-thumb,
 .qpm-shell ::-webkit-scrollbar-thumb {
   background-color: #cbd5e1;
   border-radius: 999px;
@@ -2537,7 +2465,6 @@
   background-clip: content-box;
 }
 .ldw-shell ::-webkit-scrollbar-thumb:hover,
-.lesson-design-panel ::-webkit-scrollbar-thumb:hover,
 .qpm-shell ::-webkit-scrollbar-thumb:hover {
   background-color: #94a3b8;
 }
