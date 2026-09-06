@@ -150,6 +150,41 @@ class LessonDesignServiceTest(unittest.TestCase):
         self.assertEqual(result["draft"]["requirements"]["raw"], "高一、45分钟、人口迁移")
         self.assertEqual(result["section_status"]["requirements"], "confirmed")
 
+    def test_turn_back_instruction_short_circuits_flow_control(self) -> None:
+        """回归（用户验收反馈）：「返回上一步」是控制指令，不当需求文本解析。
+
+        曾在第一步点「返回上一步」被规则回退当成课题（“我理解你想做一节
+        ‘返回上一步’”）并生成 section_patch。现在短路：不进 LLM/规则解析。
+        """
+        design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
+        design_id = design["design_id"]
+
+        # 第一步点「返回上一步」：不回退、不产生需求 patch
+        result = self.runtime.classroom.turn_lesson_design(design_id, "返回上一步，重新讨论上一部分")
+        self.assertIn("已在第一步", result["assistant_message"])
+        self.assertNotIn("返回上一步", str(result["draft"].get("title") or ""))
+        self.assertNotIn("返回上一步", str(result["draft"].get("topic") or ""))
+        self.assertEqual(result["review_sections"], [])
+        self.assertEqual(result["next_step"], "requirements")
+
+        # 发一条真实需求并确认，推进到第二步，再点「返回上一步」
+        advanced = self.runtime.classroom.turn_lesson_design(
+            design_id, "高一、40分钟、人口分布", result["revision"]
+        )
+        accepted = self.runtime.classroom.resolve_lesson_design(
+            design_id, "requirements", "accept", "", advanced["revision"]
+        )["design"]
+        self.assertEqual(accepted["current_step"], "analysis")
+        back = self.runtime.classroom.turn_lesson_design(
+            design_id, "返回上一步", accepted["revision"]
+        )
+        self.assertIn("已回到「需求确认」", back["assistant_message"])
+        self.assertEqual(back["next_step"], "requirements")
+        stored = self.store.get_lesson_design(design_id)
+        self.assertEqual(stored.current_step, "requirements")
+        # 回退不污染草稿：课题保持真实需求解析结果，而不是控制指令文本
+        self.assertNotIn("返回上一步", str(stored.draft.get("title") or ""))
+
     def test_direct_edit_stages_stores_array_and_plan_items_stay_renderable(self) -> None:
         """回归（E2E 验收发现）：直接编辑教学过程必须把数组写入 draft.stages。
 

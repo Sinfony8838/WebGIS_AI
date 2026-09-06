@@ -100,6 +100,15 @@ describe("LessonDesignWorkspace", () => {
     expect(screen.getByTestId("ldw-active-question").textContent).toContain("课标重点");
   });
 
+  it("exits the design workspace via the sidebar exit button", async () => {
+    const onClose = vi.fn();
+    render(<LessonDesignWorkspace projectId="p1" onClose={onClose} />);
+    await screen.findByTestId("ldw-exit");
+
+    fireEvent.click(screen.getByTestId("ldw-exit"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("accepts the current step via resolve", async () => {
     resolveMock.mockResolvedValue({ status: "success", design: session({ current_step: "analysis", revision: 1 }) });
     render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);

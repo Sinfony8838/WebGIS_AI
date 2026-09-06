@@ -2401,6 +2401,7 @@
 .ldw-final-result p { margin: 0 0 8px; font-size: 13px; color: #1e3a8a; }
 .ldw-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .ldw-right-head { display: flex; flex-direction: column; gap: 6px; }
+.ldw-right-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .ldw-right-head strong { font-size: 13px; color: #0f172a; }
 .ldw-active-question {
   margin: 0;

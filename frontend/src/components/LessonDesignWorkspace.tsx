@@ -564,7 +564,18 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
 
         <aside className="ldw-right">
           <header className="ldw-right-head">
-            <strong>AI 共创</strong>
+            <div className="ldw-right-title">
+              <strong>AI 共创</strong>
+              <button
+                type="button"
+                className="toolbar-button compact"
+                onClick={onClose}
+                data-testid="ldw-exit"
+                title="退出教案设计，草稿已自动保存，可随时回来继续"
+              >
+                退出设计
+              </button>
+            </div>
             {activeQuestion ? <p className="ldw-active-question" data-testid="ldw-active-question">{activeQuestion}</p> : null}
           </header>
           <div className="ldw-chat" aria-live="polite" data-testid="ldw-chat">
