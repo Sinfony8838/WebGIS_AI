@@ -1897,6 +1897,7 @@ button {
 
 .right-rail {
   position: relative;
+  grid-column: 3;
   display: flex;
   flex-direction: column;
   gap: 12px;
