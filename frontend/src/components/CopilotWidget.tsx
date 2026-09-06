@@ -39,6 +39,11 @@ type Props = {
   onUploadImage?: (file: File) => void;
   onRemoveImage?: () => void;
   openSignal?: number;
+  /** 课堂控制台图片生成能力的迁移入口：MiniMax 文生图（结果自动入库）。 */
+  onGenerateImage?: (payload: { prompt: string; model: string; aspectRatio: string }) => Promise<void>;
+  imageGenerationLoading?: boolean;
+  imageGenerationConfigured?: boolean;
+  imageGenerationModel?: string;
 };
 
 // One-tap teaching capabilities. Each chip sends a templated prompt that the
@@ -63,6 +68,11 @@ const CAPABILITY_CHIPS: Array<{ key: string; label: string; prompt: string }> = 
     prompt: "教案共创"
   },
   {
+    key: "generate-image",
+    label: "生成示意图",
+    prompt: "生成一张地理教学示意图"
+  },
+  {
     key: "reflect",
     label: "复盘",
     prompt: "请对本节课进行小结，指出可强化的区域认知方法与下一步建议。"
@@ -78,9 +88,9 @@ const CAPABILITY_CHIPS: Array<{ key: string; label: string; prompt: string }> = 
 // header chip surfaces that awareness to the teacher, and the capability
 // chips are re-ordered so the most phase-relevant action always comes first.
 const PHASE_META: Record<string, { label: string; cls: string; chipOrder: string[] }> = {
-  course_prep: { label: "课前备课", cls: "phase-prep", chipOrder: ["lesson-design", "follow-up", "read-map", "reflect", "switch-basemap"] },
-  in_class: { label: "课堂进行中", cls: "phase-class", chipOrder: ["read-map", "follow-up", "switch-basemap", "reflect", "lesson-design"] },
-  post_class: { label: "课后复盘", cls: "phase-review", chipOrder: ["reflect", "follow-up", "read-map", "switch-basemap", "lesson-design"] }
+  course_prep: { label: "课前备课", cls: "phase-prep", chipOrder: ["lesson-design", "generate-image", "follow-up", "read-map", "reflect", "switch-basemap"] },
+  in_class: { label: "课堂进行中", cls: "phase-class", chipOrder: ["read-map", "follow-up", "switch-basemap", "generate-image", "reflect", "lesson-design"] },
+  post_class: { label: "课后复盘", cls: "phase-review", chipOrder: ["reflect", "follow-up", "read-map", "switch-basemap", "generate-image", "lesson-design"] }
 };
 
 // Map the routed intent to a short badge so the teacher can see how the agent
@@ -363,8 +373,16 @@ export function CopilotWidget({
   onAttachImage = () => undefined,
   onUploadImage = () => undefined,
   onRemoveImage = () => undefined,
-  openSignal = 0
+  openSignal = 0,
+  onGenerateImage,
+  imageGenerationLoading = false,
+  imageGenerationConfigured = false,
+  imageGenerationModel = "image-01"
 }: Props) {
+  const [imageGenOpen, setImageGenOpen] = useState(false);
+  const [imageGenPrompt, setImageGenPrompt] = useState("");
+  const [imageGenModel, setImageGenModel] = useState(imageGenerationModel);
+  const [imageGenRatio, setImageGenRatio] = useState("16:9");
   const speechSupported = useMemo(() => Boolean(getSpeechRecognitionConstructor()), []);
   const phaseMeta = teachingPhase ? PHASE_META[teachingPhase] || null : null;
   const orderedChips = useMemo(() => {
@@ -971,6 +989,129 @@ export function CopilotWidget({
           </div>
         </div>
 
+        {imageGenOpen ? (
+
+          <form
+
+            className="copilot-image-gen"
+
+            data-testid="copilot-image-generation"
+
+            onSubmit={(event) => {
+
+              event.preventDefault();
+
+              const trimmed = imageGenPrompt.trim();
+
+              if (!trimmed || !onGenerateImage || imageGenerationLoading) {
+
+                return;
+
+              }
+
+              onGenerateImage({ prompt: trimmed, model: imageGenModel, aspectRatio: imageGenRatio })
+
+                .then(() => setImageGenPrompt(""))
+
+                .catch(() => undefined);
+
+            }}
+
+          >
+
+            <strong>生成示意图</strong>
+
+            <textarea
+
+              value={imageGenPrompt}
+
+              onChange={(event) => setImageGenPrompt(event.target.value)}
+
+              placeholder="描述想要的地理教学示意图内容…"
+
+              maxLength={1500}
+
+              rows={3}
+
+            />
+
+            <div className="copilot-image-gen-row">
+
+              <select
+
+                value={imageGenModel}
+
+                onChange={(event) => {
+
+                  setImageGenModel(event.target.value);
+
+                  if (event.target.value === "image-01-live" && imageGenRatio === "21:9") {
+
+                    setImageGenRatio("16:9");
+
+                  }
+
+                }}
+
+              >
+
+                <option value="image-01">image-01</option>
+
+                <option value="image-01-live">image-01-live</option>
+
+              </select>
+
+              <select value={imageGenRatio} onChange={(event) => setImageGenRatio(event.target.value)}>
+
+                {(imageGenModel === "image-01-live"
+
+                  ? ["16:9", "4:3", "1:1", "3:2", "2:3", "3:4", "9:16"]
+
+                  : ["16:9", "4:3", "1:1", "3:2", "2:3", "3:4", "9:16", "21:9"]
+
+                ).map((ratio) => (
+
+                  <option key={ratio} value={ratio}>
+
+                    {ratio}
+
+                  </option>
+
+                ))}
+
+              </select>
+
+              <button
+
+                type="submit"
+
+                disabled={!imageGenPrompt.trim() || imageGenerationLoading || !onGenerateImage}
+
+                data-testid="copilot-image-generate-submit"
+
+              >
+
+                {imageGenerationLoading ? "生成中…" : "生成并存入数据库"}
+
+              </button>
+
+            </div>
+
+            <small>
+
+              {imageGenerationConfigured
+
+                ? "付费能力：按 MiniMax 用量计费；生成结果自动存入数据库「图片」分类。"
+
+                : "未配置 MiniMax 图片服务，生成前请先在服务端配置。"}
+
+            </small>
+
+          </form>
+
+        ) : null}
+
+
         <form
           className={`copilot-widget-form${imageDragActive ? " image-drag-active" : ""}`}
           onDragEnter={(event) => {
@@ -1003,6 +1144,10 @@ export function CopilotWidget({
                   }
                   if (chip.key === "lesson-design" && onOpenLessonDesign) {
                     onOpenLessonDesign();
+                    return;
+                  }
+                  if (chip.key === "generate-image") {
+                    setImageGenOpen((open) => !open);
                     return;
                   }
                   onQuickPrompt(chip.prompt);

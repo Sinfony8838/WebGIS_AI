@@ -715,6 +715,56 @@ button {
 
 .header-search-row input,
 .dialog-field input,
+.copilot-image-gen {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(132, 178, 220, 0.3);
+  border-radius: 10px;
+  background: rgba(10, 22, 38, 0.72);
+}
+
+.copilot-image-gen strong {
+  font-size: 12px;
+  color: #cfe3f8;
+}
+
+.copilot-image-gen textarea {
+  width: 100%;
+  min-height: 56px;
+  resize: vertical;
+  border: 1px solid rgba(132, 178, 220, 0.35);
+  border-radius: 8px;
+  padding: 8px;
+  background: rgba(6, 16, 30, 0.85);
+  color: #eef4fb;
+  font: inherit;
+  line-height: 1.5;
+}
+
+.copilot-image-gen-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.copilot-image-gen-row select {
+  min-height: 30px;
+  border-radius: 8px;
+  border: 1px solid rgba(132, 178, 220, 0.35);
+  background: rgba(6, 16, 30, 0.85);
+  color: #eef4fb;
+  font-size: 12px;
+}
+
+.copilot-image-gen small {
+  color: var(--text-dim, #7d93a8);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .copilot-widget-form textarea {
   width: 100%;
   min-height: 34px;

@@ -3417,6 +3417,10 @@ export default function App({
           onAttachImage={handleAttachImage}
           onUploadImage={(file) => void handleUploadImage(file)}
           onRemoveImage={() => setPendingImage(null)}
+          onGenerateImage={handleGenerateImage}
+          imageGenerationLoading={imageGenerationLoading}
+          imageGenerationConfigured={Boolean(health?.image_generation?.configured)}
+          imageGenerationModel={health?.image_generation?.model || "image-01"}
         />
       ) : null}
 
