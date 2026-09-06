@@ -484,6 +484,19 @@ class RuntimeStore:
                 return layer
             raise KeyError(f"Unknown layer: {layer_id}")
 
+    def delete_layer(self, project_id: str, layer_id: str) -> LayerRecord:
+        with self._lock:
+            project = self.projects[project_id]
+            for index, layer in enumerate(project.layers):
+                if layer.layer_id == layer_id:
+                    removed = project.layers.pop(index)
+                    if project.active_layer_id == layer_id:
+                        project.active_layer_id = project.layers[-1].layer_id if project.layers else ""
+                    project.updated_at = utc_now()
+                    self._save()
+                    return removed
+            raise KeyError(f"Unknown layer: {layer_id}")
+
     def remove_layer(self, project_id: str, layer_id: str) -> bool:
         with self._lock:
             project = self.projects[project_id]

@@ -1,15 +1,26 @@
 import { useMemo, useState } from "react";
-import type { TeachingMapItem } from "../api";
+import { buildAuthenticatedUrl, type TeachingMapItem } from "../api";
 import type {
   ArtifactRecord,
   DatasetCatalogItem,
   KnowledgeBaseItem,
   LayerRecord,
   LessonResourceSet,
+  ResourceSearchResult,
   TeachingMaterial
 } from "../types";
 
-type DatabaseCategory = "all" | "knowledge" | "materials" | "layers" | "outputs" | "lesson" | "teaching-maps" | "one-map";
+export type DatabaseCategory =
+  | "all"
+  | "knowledge"
+  | "materials"
+  | "resources"
+  | "layers"
+  | "images"
+  | "outputs"
+  | "lesson"
+  | "teaching-maps"
+  | "one-map";
 
 type DatabaseEntry =
   | {
@@ -59,7 +70,20 @@ type DatabaseEntry =
       tags: string[];
       updatedAt: string;
       raw: ArtifactRecord;
+      thumbnailUrl?: string;
       kind: "output";
+    }
+  | {
+      id: string;
+      category: Exclude<DatabaseCategory, "all">;
+      title: string;
+      subtitle: string;
+      description: string;
+      status: string;
+      tags: string[];
+      updatedAt: string;
+      raw: ResourceSearchResult;
+      kind: "resource";
     }
   | {
       id: string;
@@ -119,18 +143,38 @@ type Props = {
   onLoadDataset?: (item: DatasetCatalogItem) => void;
   onUseDataset?: (item: DatasetCatalogItem) => void;
   onUpload?: () => void;
+  activeCategory: DatabaseCategory;
+  onCategoryChange: (category: DatabaseCategory) => void;
+  resourceQuery: string;
+  resourceScope: "all" | "kb" | "web";
+  resourceLoading: boolean;
+  resourceResults: ResourceSearchResult[];
+  onResourceQueryChange: (value: string) => void;
+  onResourceScopeChange: (value: "all" | "kb" | "web") => void;
+  onImportResource: (item: ResourceSearchResult) => void;
+  onOpenResource: (item: ResourceSearchResult) => void;
 };
 
 const CATEGORIES: Array<{ key: DatabaseCategory; label: string }> = [
   { key: "all", label: "全部" },
   { key: "knowledge", label: "知识库" },
   { key: "materials", label: "素材" },
+  { key: "resources", label: "资源检索" },
   { key: "layers", label: "图层" },
+  { key: "images", label: "图片" },
   { key: "outputs", label: "产物" },
   { key: "lesson", label: "课时资源" },
   { key: "teaching-maps", label: "课本地图" },
   { key: "one-map", label: "一张图数据" },
 ];
+
+const IMAGE_ARTIFACT_TYPES = new Set(["uploaded_image", "generated_image", "map_snapshot"]);
+
+function resourceSourceLabel(item: ResourceSearchResult): string {
+  if (item.source === "knowledge_base") return "知识库";
+  if (item.source === "authoritative_web" || item.source === "web") return "权威联网";
+  return item.source || item.type || "资源";
+}
 
 function formatDate(value: string): string {
   if (!value) return "未记录";
@@ -177,9 +221,20 @@ export function DatabaseViewer({
   onLoadDataset,
   onUseDataset,
   onUpload,
+  activeCategory,
+  onCategoryChange,
+  resourceQuery,
+  resourceScope,
+  resourceLoading,
+  resourceResults,
+  onResourceQueryChange,
+  onResourceScopeChange,
+  onImportResource,
+  onOpenResource,
 }: Props) {
   const [query, setQuery] = useState("");
-  const [category, setCategory] = useState<DatabaseCategory>("all");
+  const category = activeCategory;
+  const trimmedResourceQuery = resourceQuery.trim();
 
   const entries = useMemo<DatabaseEntry[]>(() => {
     const knowledgeEntries: DatabaseEntry[] = knowledgeItems.map((item) => ({
@@ -224,17 +279,53 @@ export function DatabaseViewer({
       kind: "layer",
     }));
 
-    const outputEntries: DatabaseEntry[] = outputs.map((output) => ({
-      id: `output:${output.artifact_id}`,
-      category: "outputs",
-      title: output.title || output.artifact_id,
-      subtitle: output.artifact_type || "产物",
-      description: String(output.metadata?.summary || output.path || ""),
-      status: output.artifact_type || "产物",
-      tags: compactTags([output.artifact_type, output.job_id]),
-      updatedAt: output.created_at,
-      raw: output,
-      kind: "output",
+    const imageEntries: DatabaseEntry[] = outputs
+      .filter((output) => IMAGE_ARTIFACT_TYPES.has(output.artifact_type))
+      .map((output) => ({
+        id: `image:${output.artifact_id}`,
+        category: "images" as const,
+        title: output.title || output.artifact_id,
+        subtitle:
+          output.artifact_type === "generated_image"
+            ? "AI 生成示意图"
+            : output.artifact_type === "map_snapshot"
+              ? "地图截图"
+              : "本地上传图片",
+        description: String(output.metadata?.summary || output.path || ""),
+        status: "已入库",
+        tags: compactTags([output.artifact_type, output.job_id]),
+        updatedAt: output.created_at,
+        raw: output,
+        thumbnailUrl: String(output.metadata?.public_url || ""),
+        kind: "output" as const,
+      }));
+
+    const outputEntries: DatabaseEntry[] = outputs
+      .filter((output) => !IMAGE_ARTIFACT_TYPES.has(output.artifact_type))
+      .map((output) => ({
+        id: `output:${output.artifact_id}`,
+        category: "outputs" as const,
+        title: output.title || output.artifact_id,
+        subtitle: output.artifact_type || "产物",
+        description: String(output.metadata?.summary || output.path || ""),
+        status: output.artifact_type || "产物",
+        tags: compactTags([output.artifact_type, output.job_id]),
+        updatedAt: output.created_at,
+        raw: output,
+        kind: "output" as const,
+      }));
+
+    const resourceEntries: DatabaseEntry[] = resourceResults.map((item) => ({
+      id: `resource:${item.id}`,
+      category: "resources" as const,
+      title: item.title || "未命名资料",
+      subtitle: resourceSourceLabel(item),
+      description: item.summary || "暂无摘要",
+      status: item.type || "资源",
+      tags: compactTags([item.source, item.type]),
+      updatedAt: "",
+      raw: item,
+      kind: "resource" as const,
     }));
 
     const lessonEntries: DatabaseEntry[] = lessonResourceSets.map((set) => ({
@@ -282,8 +373,18 @@ export function DatabaseViewer({
       kind: "one-map",
     }));
 
-    return [...oneMapEntries, ...knowledgeEntries, ...materialEntries, ...layerEntries, ...outputEntries, ...lessonEntries, ...teachingMapEntries];
-  }, [activeLessonResourceSetId, activeTeachingMapIds, datasetCatalogItems, knowledgeItems, layers, lessonResourceSets, outputs, teachingMaps]);
+    return [...oneMapEntries, ...knowledgeEntries, ...materialEntries, ...resourceEntries, ...layerEntries, ...imageEntries, ...outputEntries, ...lessonEntries, ...teachingMapEntries];
+  }, [
+    activeLessonResourceSetId,
+    activeTeachingMapIds,
+    datasetCatalogItems,
+    knowledgeItems,
+    layers,
+    lessonResourceSets,
+    outputs,
+    resourceResults,
+    teachingMaps,
+  ]);
 
   const counts = useMemo(() => {
     const next = new Map<DatabaseCategory, number>();
@@ -318,7 +419,7 @@ export function DatabaseViewer({
         <div className="database-viewer-heading">
           <span>DATA ASSETS</span>
           <h2>数据库</h2>
-          <p>集中管理知识库、素材、图层、产物和课时资源，快速检索并执行课堂数据操作。</p>
+          <p>集中管理知识库、素材、资源检索、图层、图片、产物和课时数据，课内外资源统一在此存储与检索。</p>
         </div>
         <div className="database-viewer-actions">
           <label className="database-viewer-search">
@@ -346,7 +447,7 @@ export function DatabaseViewer({
             key={item.key}
             type="button"
             className={category === item.key ? "active" : ""}
-            onClick={() => setCategory(item.key)}
+            onClick={() => onCategoryChange(item.key)}
           >
             <span>{item.label}</span>
             <em>{counts.get(item.key) || 0}</em>
@@ -361,12 +462,63 @@ export function DatabaseViewer({
           <small>总记录 {entries.length}</small>
           <small>知识库 {counts.get("knowledge") || 0}</small>
           <small>素材 {counts.get("materials") || 0}</small>
+          <small>资源 {counts.get("resources") || 0}</small>
           <small>图层 {counts.get("layers") || 0}</small>
+          <small>图片 {counts.get("images") || 0}</small>
           <small>产物 {counts.get("outputs") || 0}</small>
           <small>一张图 {counts.get("one-map") || 0}</small>
         </aside>
 
         <div className="database-viewer-list">
+          {category === "resources" ? (
+            <div className="database-resource-search" data-testid="database-resource-search">
+              <div className="live-resource-searchbar">
+                <span className="live-resource-search-icon" aria-hidden="true">⌕</span>
+                <input
+                  value={resourceQuery}
+                  placeholder="搜索地理概念、区域或权威资料"
+                  onChange={(event) => onResourceQueryChange(event.target.value)}
+                  aria-label="资源检索"
+                />
+                {trimmedResourceQuery ? (
+                  <button
+                    type="button"
+                    className="live-resource-search-clear"
+                    onClick={() => onResourceQueryChange("")}
+                    aria-label="清除资源检索"
+                  >
+                    ×
+                  </button>
+                ) : null}
+              </div>
+              <div className="live-resource-toolbar">
+                <div className="live-resource-scopes" role="tablist" aria-label="资源检索范围">
+                  {([["all", "全部"], ["kb", "知识库"], ["web", "联网"]] as const).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      role="tab"
+                      aria-selected={resourceScope === value}
+                      className={resourceScope === value ? "active" : ""}
+                      onClick={() => onResourceScopeChange(value)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <span className="live-resource-status">
+                  {resourceLoading ? (
+                    <>
+                      <span className="live-resource-spinner" aria-hidden="true" />
+                      搜索中
+                    </>
+                  ) : (
+                    `${resourceResults.length} 条结果`
+                  )}
+                </span>
+              </div>
+            </div>
+          ) : null}
           {filteredEntries.length ? (
             filteredEntries.map((entry) => (
               <article key={entry.id} className="database-row">
@@ -375,6 +527,14 @@ export function DatabaseViewer({
                     <span>{CATEGORIES.find((item) => item.key === entry.category)?.label || entry.category}</span>
                     <strong>{entry.title}</strong>
                   </div>
+                  {entry.kind === "output" && entry.thumbnailUrl ? (
+                    <img
+                      className="database-row-thumb"
+                      src={buildAuthenticatedUrl(entry.thumbnailUrl)}
+                      alt={entry.title}
+                      loading="lazy"
+                    />
+                  ) : null}
                   <p>{entry.description || entry.subtitle}</p>
                   <div className="database-row-meta">
                     <span>{entry.subtitle}</span>
@@ -397,8 +557,18 @@ export function DatabaseViewer({
                   ) : null}
                   {entry.kind === "material" ? (
                     <button type="button" onClick={() => onOpenMaterial(entry.title, [entry.raw])}>
-                      打开
+                      {entry.raw.type === "video" ? "播放" : "打开"}
                     </button>
+                  ) : null}
+                  {entry.kind === "resource" ? (
+                    <>
+                      <button type="button" onClick={() => onOpenResource(entry.raw)}>
+                        打开
+                      </button>
+                      <button type="button" onClick={() => onImportResource(entry.raw)}>
+                        导入本课时
+                      </button>
+                    </>
                   ) : null}
                   {entry.kind === "layer" ? (
                     <>
@@ -450,7 +620,11 @@ export function DatabaseViewer({
               </article>
             ))
           ) : (
-            <div className="database-viewer-empty">没有匹配的数据</div>
+            <div className="database-viewer-empty">
+              {category === "resources" && !trimmedResourceQuery
+                ? "输入关键词后会实时搜索知识库与权威联网入口"
+                : "没有匹配的数据"}
+            </div>
           )}
         </div>
       </div>

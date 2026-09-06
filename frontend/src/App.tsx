@@ -42,6 +42,7 @@ import {
   generateImageLibraryAsset,
   getApiBase,
   logSessionEvent,
+  deleteLayer,
   patchLayer,
   registerKbLayer,
   renderPptx,
@@ -67,7 +68,8 @@ import { BasemapMenu } from "./components/BasemapMenu";
 import { BrandLogo } from "./components/BrandLogo";
 import { CopilotWidget } from "./components/CopilotWidget";
 import { LessonDesignWorkspace } from "./components/LessonDesignWorkspace";
-import { DatabaseViewer } from "./components/DatabaseViewer";
+import { DatabaseViewer, type DatabaseCategory } from "./components/DatabaseViewer";
+import { LayerManager } from "./components/LayerManager";
 import { type KnowledgeQuery } from "./components/KnowledgePanel";
 import { Map3DGlobe, type CameraState, type Map3DGlobeHandle } from "./components/Map3DGlobe";
 import { MapInstructionStrip } from "./components/MapInstructionStrip";
@@ -75,7 +77,7 @@ import { MapStatusBar } from "./components/MapStatusBar";
 import { MapToolRail } from "./components/MapToolRail";
 import { LessonWorkflowShell } from "./components/LessonWorkflowShell";
 import { RegionFocusOverlay } from "./components/RegionFocusOverlay";
-import { SideDrawer, type DrawerTab } from "./components/SideDrawer";
+import { SearchResultsCard, StatsResultsCard } from "./components/HeaderResultCards";
 import { ScreenshotSelector, type ScreenshotSelection } from "./components/ScreenshotSelector";
 import { TeachingMaterialViewer } from "./components/TeachingMaterialViewer";
 import { ToastStack, type ToastItem } from "./components/ToastStack";
@@ -567,10 +569,12 @@ export default function App({
   const [searchAreaGeometry, setSearchAreaGeometry] = useState<Record<string, unknown> | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [databaseViewerOpen, setDatabaseViewerOpen] = useState(false);
+  const [databaseCategory, setDatabaseCategory] = useState<DatabaseCategory>("all");
+  const [layerManagerOpen, setLayerManagerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [workflowDockOpen, setWorkflowDockOpen] = useState<boolean>(false);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerTab, setDrawerTab] = useState<DrawerTab>("resource-search");
+  const [searchCardOpen, setSearchCardOpen] = useState(false);
+  const [statsCardOpen, setStatsCardOpen] = useState(false);
   const [kbQuery, setKbQuery] = useState<KnowledgeQuery>({ query: "", topic: "", region: "", tag: "" });
     const [kbItems, setKbItems] = useState<KnowledgeBaseItem[]>([]);
     const [kbAllItems, setKbAllItems] = useState<KnowledgeBaseItem[]>([]);
@@ -1097,8 +1101,8 @@ export default function App({
       (item: ResourceSearchResult) => {
         if (item.kb_item) {
           setKbEditingItem(item.kb_item);
-          setDrawerOpen(true);
-          setDrawerTab("resource-search");
+          setDatabaseViewerOpen(true);
+          setDatabaseCategory("resources");
           return;
         }
         if (item.material) {
@@ -1308,8 +1312,8 @@ export default function App({
       if (!project) {
         return;
       }
-      setDrawerOpen(true);
-      setDrawerTab("resource-search");
+      setDatabaseViewerOpen(true);
+      setDatabaseCategory("resources");
       const response = await runTemplate(project.project_id, templateId);
       subscribeToJob(response.job_id);
     },
@@ -1362,8 +1366,8 @@ export default function App({
         }
       }
       await refreshProjectState(project.project_id);
-      setDrawerOpen(true);
-      setDrawerTab("images");
+      setDatabaseViewerOpen(true);
+      setDatabaseCategory("images");
       if (evidenceRecorded) {
         pushToast("success", "截图已保存", "可在图片库中预览，或加入智能助教进行识图问答。");
       }
@@ -1495,7 +1499,6 @@ export default function App({
   }, []);
 
   const handleOpenLessonWorkflow = useCallback(() => {
-    setDrawerOpen(false);
     setLessonWorkflowOpenSignal((value) => value + 1);
   }, []);
 
@@ -1573,8 +1576,8 @@ export default function App({
       });
       setSearchSummary(response.summary);
       setSearchResults(response.items);
-      setDrawerTab("search");
-      setDrawerOpen(true);
+      setStatsCardOpen(false);
+      setSearchCardOpen(true);
       await refreshProjectState(project.project_id);
       appendChat("system", response.summary);
       pushToast("success", `${resolvedMode === "polygon" ? "区域" : "视域"}检索完成`, response.summary);
@@ -1706,9 +1709,7 @@ export default function App({
 
   const handleDatabaseOpenKnowledgeItem = useCallback((item: KnowledgeBaseItem) => {
     setKbEditingItem(item);
-    setDrawerOpen(true);
-    setDrawerTab("resource-search");
-    setDatabaseViewerOpen(false);
+    setDatabaseCategory("resources");
   }, []);
 
   const handleDatabaseOpenMaterial = useCallback((title: string, materials: TeachingMaterial[]) => {
@@ -1744,6 +1745,58 @@ export default function App({
     }
   }, [focusLayerExtent, project, pushToast, refreshProjectState]);
 
+  const handleLayerManagerToggle = useCallback(async (layerId: string, visible: boolean) => {
+    if (!project) {
+      return;
+    }
+    try {
+      await patchLayer(project.project_id, layerId, { visible });
+      await refreshProjectState(project.project_id);
+    } catch (error) {
+      pushToast("error", "图层更新失败", error instanceof Error ? error.message : "图层状态更新失败");
+    }
+  }, [project, pushToast, refreshProjectState]);
+
+  const handleLayerManagerFocus = useCallback(async (layerId: string) => {
+    if (!project) {
+      return;
+    }
+    try {
+      await patchLayer(project.project_id, layerId, { active: true, visible: true });
+      await refreshProjectState(project.project_id);
+      focusLayerExtent(layerId);
+    } catch (error) {
+      pushToast("error", "图层定位失败", error instanceof Error ? error.message : "图层状态更新失败");
+    }
+  }, [focusLayerExtent, project, pushToast, refreshProjectState]);
+
+  const handleLayerManagerDelete = useCallback(async (layerId: string) => {
+    if (!project) {
+      return;
+    }
+    try {
+      await deleteLayer(project.project_id, layerId);
+      await refreshProjectState(project.project_id);
+      pushToast("success", "图层已删除", layerId);
+    } catch (error) {
+      pushToast("error", "图层删除失败", error instanceof Error ? error.message : "请求失败");
+    }
+  }, [project, pushToast, refreshProjectState]);
+
+  const handleLayerManagerAddDataset = useCallback(async (item: DatasetCatalogItem) => {
+    if (!project) {
+      return;
+    }
+    try {
+      const response = await addCatalogDatasetLayer(project.project_id, item.id);
+      await refreshProjectState(project.project_id);
+      setViewMode("plane");
+      pushToast("success", "一张图数据已加载", response.layer.name || item.name || item.id);
+    } catch (error) {
+      pushToast("error", "一张图数据加载失败", error instanceof Error ? error.message : "请求失败");
+    }
+  }, [project, pushToast, refreshProjectState]);
+
   const handleDatabaseOpenArtifact = useCallback((artifact: ArtifactRecord) => {
     const publicUrl = typeof artifact.metadata?.public_url === "string" ? artifact.metadata.public_url : "";
     if (!publicUrl) {
@@ -1764,9 +1817,6 @@ export default function App({
       const response = await addCatalogDatasetLayer(project.project_id, item.id);
       await refreshProjectState(project.project_id);
       setViewMode("plane");
-      setDatabaseViewerOpen(false);
-      setDrawerOpen(true);
-      setDrawerTab("layers");
       pushToast("success", "一张图数据已加载", response.layer.name || item.name || item.id);
     } catch (error) {
       pushToast("error", "一张图数据加载失败", error instanceof Error ? error.message : "请求失败");
@@ -1799,8 +1849,8 @@ export default function App({
     try {
       const response = await summarizeCatalogLayers(project.project_id, searchAreaGeometry);
       setOneMapStats(response);
-      setDrawerTab("stats");
-      setDrawerOpen(true);
+      setSearchCardOpen(false);
+      setStatsCardOpen(true);
       pushToast("success", "区域统计完成", response.summary);
     } catch (error) {
       pushToast("error", "区域统计失败", error instanceof Error ? error.message : "请求失败");
@@ -2960,14 +3010,14 @@ export default function App({
     const signature = JSON.stringify([summary, items.map((item) => item.poi_id)]);
     if (items.length && signature !== lastPoiSignatureRef.current) {
       lastPoiSignatureRef.current = signature;
-      setDrawerOpen(true);
-      setDrawerTab("search");
+      setStatsCardOpen(false);
+      setSearchCardOpen(true);
     }
   }, [layerState]);
 
   return (
     <div
-      className={`screen-shell screen-shell-classroom view-mode-${viewMode} ${drawerOpen ? "drawer-open" : "drawer-closed"}`}
+      className={`screen-shell screen-shell-classroom view-mode-${viewMode}`}
       data-interaction-mode={interactionMode}
     >
       <div
@@ -3178,8 +3228,14 @@ export default function App({
           <button type="button" className="toolbar-button" onClick={() => void handleStartScreenshot()}>
             截图
           </button>
-          <button type="button" className="toolbar-button" onClick={handleResetView}>
-            复位视图
+          <button
+            type="button"
+            className={`toolbar-button${layerManagerOpen ? " active" : ""}`}
+            onClick={() => setLayerManagerOpen((value) => !value)}
+            data-testid="layer-manager-toggle"
+            title="查看、显隐、定位、删除或添加业务图层（重置视角请使用左侧地图工具）"
+          >
+            图层管理
           </button>
           {initError ? (
             <button
@@ -3206,49 +3262,17 @@ export default function App({
       </header>
 
       <main className="workspace-shell">
-        <SideDrawer
-          open={drawerOpen}
-          activeTab={drawerTab}
-          layerState={layerState}
-          searchResults={searchResults}
-          searchSummary={searchSummary}
-          oneMapStats={oneMapStats}
-          resourceQuery={resourceQuery}
-          resourceScope={resourceScope}
-          resourceLoading={resourceLoading}
-          resourceResults={resourceResults}
-          outputs={outputs}
-          onToggleOpen={() => setDrawerOpen((value) => !value)}
-          onChangeTab={setDrawerTab}
-          onToggleLayer={(layerId, visible) => {
-            if (!project) {
-              return;
-            }
-            void patchLayer(project.project_id, layerId, { visible }).then(() => refreshProjectState(project.project_id));
-          }}
-          onSelectLayer={(layerId) => {
-            if (!project) {
-              return;
-            }
-            void patchLayer(project.project_id, layerId, { active: true, visible: true })
-              .then(() => refreshProjectState(project.project_id))
-              .then(() => focusLayerExtent(layerId));
-          }}
+        <SearchResultsCard
+          open={searchCardOpen}
+          summary={searchSummary}
+          results={searchResults}
+          onClose={() => setSearchCardOpen(false)}
           onFocusResult={focusPoiResult}
-          onResourceQueryChange={(value) => {
-            setResourceQuery(value);
-            setDrawerTab("resource-search");
-          }}
-          onResourceScopeChange={setResourceScope}
-          onOpenResourceResult={handleOpenResourceResult}
-          onImportResourceResult={handleImportResourceResult}
-          onAttachImage={handleAttachImage}
-          onUploadImage={(file) => void handleUploadImage(file)}
-          onGenerateImage={handleGenerateImage}
-          imageGenerationLoading={imageGenerationLoading}
-          imageGenerationConfigured={Boolean(health?.image_generation?.configured)}
-          imageGenerationModel={health?.image_generation?.model || "image-01"}
-          onOpenLessonWorkflow={handleOpenLessonWorkflow}
+        />
+        <StatsResultsCard
+          open={statsCardOpen}
+          stats={oneMapStats}
+          onClose={() => setStatsCardOpen(false)}
         />
 
         <section className="map-workspace" aria-hidden="true" />
@@ -3418,6 +3442,10 @@ export default function App({
           onAttachImage={handleAttachImage}
           onUploadImage={(file) => void handleUploadImage(file)}
           onRemoveImage={() => setPendingImage(null)}
+          onGenerateImage={handleGenerateImage}
+          imageGenerationLoading={imageGenerationLoading}
+          imageGenerationConfigured={Boolean(health?.image_generation?.configured)}
+          imageGenerationModel={health?.image_generation?.model || "image-01"}
         />
       ) : null}
 
@@ -3500,6 +3528,17 @@ export default function App({
           onRequestClose={() => setWorkflowDockOpen(false)}
           onToast={(tone, message) => pushToast(tone, message)}
         />
+        <LayerManager
+          open={layerManagerOpen}
+          onClose={() => setLayerManagerOpen(false)}
+          layers={layerState?.items || []}
+          busy={busy}
+          onToggleLayer={(layerId, visible) => void handleLayerManagerToggle(layerId, visible)}
+          onFocusLayer={(layerId) => void handleLayerManagerFocus(layerId)}
+          onDeleteLayer={(layerId) => void handleLayerManagerDelete(layerId)}
+          datasetCatalogItems={datasetCatalogItems}
+          onLoadDataset={(item) => void handleLayerManagerAddDataset(item)}
+        />
         <DatabaseViewer
           open={databaseViewerOpen}
           onClose={() => setDatabaseViewerOpen(false)}
@@ -3521,6 +3560,16 @@ export default function App({
           onToggleTeachingMap={(mapId, visible) => void handleToggleTeachingMap(mapId, visible)}
           onLoadDataset={handleDatabaseLoadDataset}
           onUseDataset={handleDatabaseUseDataset}
+          activeCategory={databaseCategory}
+          onCategoryChange={setDatabaseCategory}
+          resourceQuery={resourceQuery}
+          resourceScope={resourceScope}
+          resourceLoading={resourceLoading}
+          resourceResults={resourceResults}
+          onResourceQueryChange={setResourceQuery}
+          onResourceScopeChange={setResourceScope}
+          onImportResource={handleImportResourceResult}
+          onOpenResource={handleOpenResourceResult}
         />
         <PptViewer
           open={pptViewerOpen}

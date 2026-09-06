@@ -189,6 +189,33 @@ describe("CopilotWidget", () => {
     expect(screen.queryByTestId("copilot-phase-chip")).toBeNull();
   });
 
+  it("opens the image generation form and submits via onGenerateImage", async () => {
+    const onGenerateImage = vi.fn().mockResolvedValue(undefined);
+    renderWidget({
+      onGenerateImage,
+      imageGenerationConfigured: true,
+      imageGenerationModel: "image-01"
+    });
+
+    fireEvent.click(screen.getByTestId("copilot-chip-generate-image"));
+    expect(screen.getByTestId("copilot-image-generation")).toBeTruthy();
+
+    fireEvent.change(
+      screen.getByPlaceholderText(/描述想要的地理教学示意图内容/),
+      { target: { value: "世界人口密度分层示意图" } }
+    );
+    fireEvent.change(screen.getAllByRole("combobox")[1], { target: { value: "1:1" } });
+    fireEvent.click(screen.getByTestId("copilot-image-generate-submit"));
+
+    await waitFor(() =>
+      expect(onGenerateImage).toHaveBeenCalledWith({
+        prompt: "世界人口密度分层示意图",
+        model: "image-01",
+        aspectRatio: "1:1"
+      })
+    );
+  });
+
   it("reorders capability chips by phase so the most relevant action comes first", () => {
     renderWidget({ teachingPhase: "post_class" });
     const chips = within(screen.getByTestId("copilot-capability-chips")).getAllByRole("button");

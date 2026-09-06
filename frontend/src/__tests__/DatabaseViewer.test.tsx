@@ -13,6 +13,16 @@ function createProps(overrides: Partial<DatabaseViewerProps> = {}): DatabaseView
   return {
     open: true,
     onClose: vi.fn(),
+    activeCategory: "all",
+    onCategoryChange: vi.fn(),
+    resourceQuery: "",
+    resourceScope: "all",
+    resourceLoading: false,
+    resourceResults: [],
+    onResourceQueryChange: vi.fn(),
+    onResourceScopeChange: vi.fn(),
+    onImportResource: vi.fn(),
+    onOpenResource: vi.fn(),
     knowledgeItems: [
       {
         id: "kb_population",
@@ -88,7 +98,7 @@ describe("DatabaseViewer", () => {
     render(<DatabaseViewer {...createProps()} />);
 
     expect(screen.getByRole("heading", { name: "数据库" })).toBeInTheDocument();
-    expect(screen.getByText("集中管理知识库、素材、图层、产物和课时资源，快速检索并执行课堂数据操作。")).toBeInTheDocument();
+    expect(screen.getByText("集中管理知识库、素材、资源检索、图层、图片、产物和课时数据，课内外资源统一在此存储与检索。")).toBeInTheDocument();
     expect(screen.getByText("人口分布知识")).toBeInTheDocument();
     expect(screen.getByText("人口图层")).toBeInTheDocument();
 

@@ -1215,6 +1215,15 @@ def patch_layer(payload: LayerPatchRequest, request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.delete("/layers/{layer_id}")
+def delete_layer(layer_id: str, request: Request, project_id: str = Query(...)) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
+    try:
+        return runtime.delete_layer(project_id, layer_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.post("/assistant/messages")
 def submit_assistant_message(
     payload: AssistantMessageRequest,
