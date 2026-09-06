@@ -127,15 +127,19 @@ describe("CopilotWidget", () => {
     expect(screen.getByText(/东部人口密集与自然条件/)).toBeInTheDocument();
   });
 
-  it("fills the composer instead of auto-sending when the 读图 chip is clicked", () => {
+  it("keeps only the image generation chip after capability cleanup", () => {
     const { onInputChange, onQuickPrompt } = renderWidget();
 
     expect(screen.getByTestId("copilot-capability-chips")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("copilot-chip-read-map"));
-
+    expect(screen.getByTestId("copilot-chip-generate-image")).toBeTruthy();
+    // 读图（附件自动识图）、追问、切换底图、复盘、教案设计入口已分别收敛
+    expect(screen.queryByTestId("copilot-chip-read-map")).toBeNull();
+    expect(screen.queryByTestId("copilot-chip-follow-up")).toBeNull();
+    expect(screen.queryByTestId("copilot-chip-switch-basemap")).toBeNull();
+    expect(screen.queryByTestId("copilot-chip-reflect")).toBeNull();
+    expect(screen.queryByTestId("copilot-chip-lesson-design")).toBeNull();
+    expect(onInputChange).not.toHaveBeenCalled();
     expect(onQuickPrompt).not.toHaveBeenCalled();
-    expect(onInputChange).toHaveBeenCalledTimes(1);
-    expect(String(onInputChange.mock.calls[0][0])).toContain("附加的图片");
   });
 
   it("previews, removes, uploads, and sends an image without text", () => {
@@ -216,17 +220,19 @@ describe("CopilotWidget", () => {
     );
   });
 
-  it("reorders capability chips by phase so the most relevant action comes first", () => {
+  it("shows the renamed image generation chip across teaching phases", () => {
     renderWidget({ teachingPhase: "post_class" });
-    const chips = within(screen.getByTestId("copilot-capability-chips")).getAllByRole("button");
-    expect(chips[0]).toHaveTextContent("复盘");
+    let chips = within(screen.getByTestId("copilot-capability-chips")).getAllByRole("button");
+    expect(chips).toHaveLength(1);
+    expect(chips[0]).toHaveTextContent("图片生成");
 
     cleanup();
     window.localStorage.clear();
     setSpeechRecognitionSupport(true);
     renderWidget({ teachingPhase: "in_class" });
-    const inClassChips = within(screen.getByTestId("copilot-capability-chips")).getAllByRole("button");
-    expect(inClassChips[0]).toHaveTextContent("读图");
+    chips = within(screen.getByTestId("copilot-capability-chips")).getAllByRole("button");
+    expect(chips).toHaveLength(1);
+    expect(chips[0]).toHaveTextContent("图片生成");
   });
 
   it("shows an intent badge derived from the routed intent on assistant messages", () => {

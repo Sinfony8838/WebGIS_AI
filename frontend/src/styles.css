@@ -3688,8 +3688,17 @@ button {
 .copilot-composer-actions {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
   padding: 8px 10px 10px;
+}
+
+.copilot-composer-tools,
+.copilot-composer-send {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .copilot-composer-hint {
