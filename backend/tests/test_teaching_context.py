@@ -261,7 +261,7 @@ class TeachingContextIntegrationTest(unittest.TestCase):
         self.assertIn('"response_data_collected": false', user_content)
 
         public_answer = job["result"]["assistant_message"]
-        self.assertIn("未采集学生端作答数据", public_answer)
+        self.assertIn("未采集课堂作答数据", public_answer)
         self.assertIn("误区 1", public_answer)
         self.assertNotIn("整体表现稳定", public_answer)
 

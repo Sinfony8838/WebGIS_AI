@@ -122,7 +122,7 @@ describe("ReportPanel", () => {
     fireEvent.click(screen.getByTestId("generate-report"));
 
     await waitFor(() => expect(screen.getByText("未采集")).toBeTruthy());
-    expect(screen.getByText("学生端作答")).toBeTruthy();
+    expect(screen.getByText("课堂作答")).toBeTruthy();
     expect(screen.getByText(/教师口头呈现 · 表现见教师观察/)).toBeTruthy();
     expect(screen.getByText(/规则生成 · 证据保护/)).toBeTruthy();
     expect(screen.getByText("课后推荐练习巩固")).toBeTruthy();

@@ -125,7 +125,7 @@ class ClassQuestionPracticeTest(unittest.TestCase):
         self.assertEqual(restored.active_question["timer"]["status"], "idle")
         self.assertEqual(restored.active_question["timer"]["question_source"], "question_bank")
 
-        # 口头提问不建计时（不进学生端）。
+        # 口头提问不建计时、不进投屏。
         oral = self.runtime.classroom.launch_session_question(
             self.session_id, stage_id="s1", question_id="qb_pop_1", delivery="teacher_oral"
         )
@@ -224,13 +224,6 @@ class ClassQuestionPracticeTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             cw.update_question_timer(self.session_id, "start")
 
-        # 学生端永远看不到答案与计时状态。
-        join_code = self.store.get_class_session(self.session_id).join_code
-        student = cw.student_state(join_code, nickname="小李")
-        self.assertEqual(student["active_question"]["question_id"], "qb_pop_1")
-        self.assertNotIn("answer", student["active_question"])
-        self.assertNotIn("timer", student["active_question"])
-
         # 揭示后收题：事件记录 revealed=True 与揭示时的用时。
         closed = cw.close_session_question(self.session_id)
         self.assertEqual(closed["status"], "success")
@@ -261,7 +254,7 @@ class ClassQuestionPracticeTest(unittest.TestCase):
         self.assertEqual(payload["overtime_seconds"], 0)
         self.assertEqual(payload["source"], "question_bank")
 
-        # 收题后活跃题清空，学生端回到等待态，计时操作不再可用。
+        # 收题后活跃题清空，计时操作不再可用。
         self.assertEqual(self.store.get_class_session(self.session_id).active_question, {})
         with self.assertRaises(ValueError):
             cw.update_question_timer(self.session_id, "start")

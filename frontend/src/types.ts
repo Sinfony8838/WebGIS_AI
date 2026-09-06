@@ -1049,7 +1049,6 @@ export type ClassSessionRecord = {
 export type ClassSessionResponse = {
   status: string;
   session: ClassSessionRecord;
-  student_join_url?: string;
 };
 
 export type QuestionTally = {
@@ -1068,7 +1067,6 @@ export type SessionLiveState = {
   current_stage_id: string;
   active_question: Record<string, unknown>;
   tally: QuestionTally | null;
-  joined_count: number;
   recent_events: SessionEvent[];
 };
 

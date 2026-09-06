@@ -14,7 +14,7 @@ type Props = {
   onToggleCollapsed: () => void;
   onEnterStage: (stageId: string) => void;
   onLaunchQuestion: (questionId: string, stageId: string) => void;
-  /** 全屏投屏本题：服务端计时 + 学生端同步作答（题目投影模式）。 */
+  /** 全屏投屏本题：服务端计时 + 课堂大屏同步（题目投影模式）。 */
   onProjectQuestion?: (questionId: string, stageId: string) => void;
   onLaunchAdhocQuestion: (text: string, options: string[]) => void;
   onObservation: (verdict: ObservationVerdict, tag: string, note: string, questionId: string) => void;
@@ -526,7 +526,7 @@ export function ClassRunPanel({
                         disabled={busy}
                         onClick={() => onProjectQuestion(question.question_id, currentStage?.stage_id || "")}
                         data-testid={`project-toggle-${question.question_id}`}
-                        title="全屏投屏本题：服务端计时，学生端同步作答，可暂停/重置/提前揭示"
+                        title="全屏投屏本题：服务端计时，课堂大屏同步，可暂停/重置/提前揭示"
                       >
                         投屏答题
                       </button>

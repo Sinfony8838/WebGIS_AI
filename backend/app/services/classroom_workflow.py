@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import json
-import os
 import secrets
-import socket
 import threading
-import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -77,7 +74,6 @@ class ClassroomWorkflowRuntime:
             self.store,
             question_bank_service=self.question_bank,
         )
-        self._student_presence: Dict[str, Dict[str, float]] = {}
 
     # ------------------------------------------------------------------
     # Lessons
@@ -459,7 +455,7 @@ class ClassroomWorkflowRuntime:
                 status="success",
                 metadata={"session_id": session.session_id},
             )
-        return {"status": "success", "session": session.to_dict(), "student_join_url": self._student_join_url(join_code)}
+        return {"status": "success", "session": session.to_dict()}
 
     def _record_question_closed(self, session: ClassSessionRecord, active: Dict[str, Any]) -> None:
         """按事实记录 question_closed 事件；是否清理活跃题由调用方决定。"""
@@ -492,7 +488,7 @@ class ClassroomWorkflowRuntime:
 
     def get_class_session(self, session_id: str) -> Dict[str, Any]:
         session = self._require_session(session_id)
-        return {"status": "success", "session": self._session_public_view(session), "student_join_url": self._student_join_url(session.join_code)}
+        return {"status": "success", "session": self._session_public_view(session)}
 
     def list_class_sessions(self, lesson_id: Optional[str] = None, project_id: Optional[str] = None) -> Dict[str, Any]:
         sessions = self.store.list_class_sessions(lesson_id=lesson_id, project_id=project_id)
@@ -509,7 +505,6 @@ class ClassroomWorkflowRuntime:
                 self.store.append_session_event(session_id, "session_end")
                 session = self.store.end_class_session(session_id)
                 self.store.add_recent_action(session.project_id, "End class", "Class session ended.", status="success")
-        self._student_presence.pop(session_id, None)
         return {"status": "success", "session": session.to_dict()}
 
     def enter_session_stage(self, session_id: str, stage_id: str) -> Dict[str, Any]:
@@ -595,8 +590,8 @@ class ClassroomWorkflowRuntime:
             "delivery": delivery_mode,
         }
         if delivery_mode == "student":
-            # 投屏模式：服务端维护作答计时状态，刷新/断线后可恢复；
-            # 答案仍只留在教师可读的 active_question，学生端始终白名单脱敏。
+            # 投屏模式：服务端维护计时状态，刷新/断线后可恢复；
+            # 答案只保留在教师可读的 active_question，投屏视图不携带答案。
             active["timer"] = self._init_question_timer(question)
         if delivery_mode == "teacher_oral":
             event = self.store.append_session_event(
@@ -966,68 +961,8 @@ class ClassroomWorkflowRuntime:
             "current_stage_id": session.current_stage_id,
             "active_question": active,
             "tally": tally,
-            "joined_count": self._presence_count(session_id),
             "recent_events": session.events[-12:],
         }
-
-    # ------------------------------------------------------------------
-    # Student side
-    # ------------------------------------------------------------------
-
-    def student_state(self, join_code: str, nickname: str = "") -> Dict[str, Any]:
-        session = self.store.find_session_by_join_code(join_code)
-        if session is None:
-            raise KeyError("Unknown or ended join code")
-        if nickname.strip():
-            self._touch_presence(session.session_id, nickname.strip())
-        lesson = self._lesson_for_session(session)
-        stage_title = ""
-        if lesson is not None and session.current_stage_id:
-            stage = lesson.find_stage(session.current_stage_id)
-            if stage:
-                stage_title = str(stage.get("title") or "")
-        active = dict(session.active_question or {})
-        public_question = {}
-        if active.get("question_id"):
-            public_question = {
-                "question_id": active.get("question_id"),
-                "type": active.get("type"),
-                "text": active.get("text"),
-                "options": active.get("options", []),
-            }
-        return {"status": "success", "session_status": session.status, "stage_title": stage_title, "active_question": public_question}
-
-    def student_answer(self, join_code: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        session = self.store.find_session_by_join_code(join_code)
-        if session is None:
-            raise KeyError("Unknown or ended join code")
-        active = dict(session.active_question or {})
-        question_id = str(payload.get("question_id") or "")
-        if not active.get("question_id") or question_id != str(active["question_id"]):
-            raise ValueError("Question is not open for answers")
-        nickname = str(payload.get("nickname") or "").strip()[:16] or "anonymous"
-        response: Dict[str, Any] = {"nickname": nickname}
-        if active.get("type") == "choice":
-            choice_index = payload.get("choice_index")
-            options = active.get("options") or []
-            if not isinstance(choice_index, int) or not (0 <= choice_index < len(options)):
-                raise ValueError("Invalid choice index")
-            response["choice_index"] = choice_index
-        else:
-            text = str(payload.get("text") or "").strip()[:120]
-            if not text:
-                raise ValueError("Answer text is required")
-            response["text"] = text
-        with self.store.batch():
-            entry = self.store.add_student_response(session.session_id, question_id, response)
-            self.store.append_session_event(
-                session.session_id,
-                "student_response",
-                stage_id=str(active.get("stage_id") or ""),
-                payload={"question_id": question_id, **response},
-            )
-        self._touch_presence(session.session_id, nickname)
-        return {"status": "success", "recorded": entry}
 
     # ------------------------------------------------------------------
     # After-class report
@@ -1148,38 +1083,12 @@ class ClassroomWorkflowRuntime:
             "texts": texts[-30:],
         }
 
-    def _touch_presence(self, session_id: str, nickname: str) -> None:
-        self._student_presence.setdefault(session_id, {})[nickname] = time.time()
-
-    def _presence_count(self, session_id: str, window_seconds: float = 90.0) -> int:
-        bucket = self._student_presence.get(session_id, {})
-        threshold = time.time() - window_seconds
-        return sum(1 for last_seen in bucket.values() if last_seen >= threshold)
-
     def _generate_join_code(self) -> str:
         for _ in range(20):
             code = f"{secrets.randbelow(1000000):06d}"
             if self.store.find_session_by_join_code(code) is None:
                 return code
         return f"{secrets.randbelow(100000000):08d}"
-
-    def _student_join_url(self, join_code: str) -> str:
-        base = os.getenv("WEBGIS_AI_PUBLIC_BASE_URL", "").strip().rstrip("/")
-        if not base:
-            base = f"http://{self._detect_lan_ip()}:{self.config.port}"
-        return f"{base}/student/{join_code}"
-
-    @staticmethod
-    def _detect_lan_ip() -> str:
-        try:
-            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            try:
-                probe.connect(("8.8.8.8", 80))
-                return str(probe.getsockname()[0])
-            finally:
-                probe.close()
-        except OSError:
-            return "127.0.0.1"
 
     @staticmethod
     def _utc_now() -> str:

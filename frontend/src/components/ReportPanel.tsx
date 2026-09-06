@@ -206,7 +206,7 @@ export function ReportPanel({ projectId, onClose }: Props) {
             </div>
             <div className="report-stat">
               <strong>{statistics.response_data_collected ? statistics.participant_count : "未采集"}</strong>
-              <span>学生端作答</span>
+              <span>课堂作答</span>
             </div>
             <div className="report-stat">
               <strong>{statistics.questions.length}</strong>

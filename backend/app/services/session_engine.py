@@ -1000,7 +1000,7 @@ class KnowledgeEngine:
         stages = [item for item in list(digest.get("stages") or []) if isinstance(item, dict)]
         total = int(observations.get("total") or 0)
         parts = [
-            "本次未采集学生端作答数据，因此不能据此判断正确率、最易错题或全班掌握程度。",
+            "本次未采集课堂作答数据，因此不能据此判断正确率、最易错题或全班掌握程度。",
             (
                 f"系统现有证据为：教师口头呈现 {len(questions)} 个问题，记录教师观察 {total} 条"
                 f"（答对 {int(verdicts.get('correct') or 0)}、部分 {int(verdicts.get('partial') or 0)}、"
@@ -1026,7 +1026,7 @@ class KnowledgeEngine:
         if overtime:
             parts.append("按系统计时，超出计划的环节有：" + "、".join(overtime[:2]) + "；请结合是否存在暂停或演示等待再判断是否调整教案。")
         else:
-            parts.append("下一步建议依据教师观察设计一题同类复测；如需判断班级掌握度，应在下次课采集学生端作答或补充有内容的观察备注。")
+            parts.append("下一步建议依据教师观察设计一题同类复测；如需判断班级掌握度，应在下次课采集课堂作答或补充有内容的观察备注。")
         return "\n\n".join(parts)
 
     @staticmethod
@@ -1935,11 +1935,11 @@ class AssistantSessionEngine:
             if launch_action is not None:
                 launch_params = launch_action.get("tool_params") or {}
                 question_text = str(launch_params.get("text") or launch_params.get("question_id") or "").strip()
-                confirm_title = "向学生端发布提问"
+                confirm_title = "课堂投屏提问"
                 confirm_reason = (
-                    f"即将向学生端发布提问：{question_text}。发送后全班学生立即可见，请确认。"
+                    f"即将把题目投屏到课堂大屏：{question_text}。发送后开始计时，请确认。"
                     if question_text
-                    else "即将向学生端发布提问，发送后全班学生立即可见，请确认。"
+                    else "即将把题目投屏到课堂大屏，发送后开始计时，请确认。"
                 )
             image_action = next((item for item in actions if str(item.get("tool_name") or "") == "generate_image"), None)
             if image_action is not None:

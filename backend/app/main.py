@@ -14,7 +14,6 @@ from pydantic import BaseModel, Field
 from .config import AppConfig
 from .runtime import WebGISRuntime
 from .services.minimax_image_client import MiniMaxImageError
-from .services.student_page import render_student_page
 from .services.ppt_renderer import PptRenderError, render_pptx_to_images
 from .services.auth import AuthContext, AuthError, AuthService
 
@@ -2158,29 +2157,6 @@ def session_live(session_id: str, request: Request) -> Dict[str, Any]:
         return runtime.classroom.session_live(session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@app.get("/student/{join_code}", response_class=HTMLResponse)
-def student_page(join_code: str) -> HTMLResponse:
-    return HTMLResponse(render_student_page(join_code))
-
-
-@app.get("/api/student/{join_code}/state")
-def student_state(join_code: str, nickname: str = "") -> Dict[str, Any]:
-    try:
-        return runtime.classroom.student_state(join_code, nickname=nickname)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@app.post("/api/student/{join_code}/answers")
-def student_answer(join_code: str, request: StudentAnswerRequest) -> Dict[str, Any]:
-    try:
-        return runtime.classroom.student_answer(join_code, request.model_dump())
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/jobs/{job_id}")

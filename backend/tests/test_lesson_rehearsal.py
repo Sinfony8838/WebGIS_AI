@@ -303,7 +303,7 @@ class LessonRehearsalServiceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             cw.create_lesson_rehearsal(self.project, lesson.lesson_id, "local_admin")
 
-        # 课时之后再演进并替换全部环节，也不影响已开班课的环节、题目和学生端标题。
+        # 课时之后再演进并替换全部环节，也不影响已开班课的环节与题目标题。
         store_lesson = self.store.get_lesson(lesson.lesson_id)
         store_lesson.metadata["lesson_version"] = 99
         store_lesson.title = "后续版本标题"
@@ -325,8 +325,6 @@ class LessonRehearsalServiceTest(unittest.TestCase):
             session["session_id"], stage_id="s1", question_id="q_s1_1"
         )
         self.assertEqual(launched["active_question"]["text"], "指出世界人口分布的稠密区域并说明共同自然条件。")
-        student = cw.student_state(session["join_code"])
-        self.assertEqual(student["stage_title"], "情境导入与分布描述")
         snapshot_lesson = cw._lesson_for_session(again)
         statistics = cw.report_service.build_statistics(again, snapshot_lesson)
         self.assertEqual(statistics["lesson_title"], "人口分布")

@@ -363,7 +363,7 @@ export function QuestionPracticeModal({
         </div>
 
         <footer className="qpm-footer">
-          <span className="qpm-footer-hint">学生端已同步本题，可在其设备作答；答案揭示前学生端不可见。</span>
+          <span className="qpm-footer-hint">本题已投屏至课堂大屏；揭示答案前仅展示题目。</span>
           <button
             type="button"
             className="toolbar-button compact"

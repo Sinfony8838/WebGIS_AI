@@ -255,18 +255,18 @@ class ReportService:
         if statistics.get("response_data_collected") and rated:
             weakest = min(rated, key=lambda item: float(item.get("correct_rate") or 0))
             evidence_basis = (
-                f"学生端已采集作答；最低正确率题为“{weakest.get('text', '')}”"
+                f"课堂已采集作答；最低正确率题为“{weakest.get('text', '')}”"
                 f"（{float(weakest.get('correct_rate') or 0):.0%}），优先安排同类变式。"
             )
         elif tags:
             evidence_basis = f"教师明确记录的首要误区为“{tags[0][0]}”（{tags[0][1]}次），练习优先针对该误区。"
         elif int(verdicts.get("partial") or 0) > 0:
             evidence_basis = (
-                f"学生端作答未采集；教师记录到部分正确 {int(verdicts.get('partial') or 0)} 次，"
+                f"课堂作答未采集；教师记录到部分正确 {int(verdicts.get('partial') or 0)} 次，"
                 "但没有足够证据判定全班共性误区，因此安排核心目标复测。"
             )
         else:
-            evidence_basis = "未取得足够学生作答或明确误区证据，以下为依据本课核心目标生成的通用巩固题，不代表学情诊断。"
+            evidence_basis = "未取得足够课堂作答或明确误区证据，以下为依据本课核心目标生成的通用巩固题，不代表学情诊断。"
 
         if "人口" in title:
             return [
@@ -348,7 +348,7 @@ class ReportService:
             "输出 Markdown（不要代码块包裹），分三个小节：\n"
             "### 学情诊断\n### 共性误区分析\n### 下节课教学建议\n"
             "要求：紧扣真实数据说话。只有 response_data_collected=true 时才能引用作答人数和正确率；"
-            "否则必须明确写“学生端数据未采集”，只引用教师观察、误区标签、环节用时、截图和课堂事件，"
+            "否则必须明确写“课堂作答数据未采集”，只引用教师观察、误区标签、环节用时、截图和课堂事件，"
             "语言面向授课教师本人，每节 2-4 句，总长不超过 350 字，不要空话套话。"
         )
         return self.minimax_client.chat_completion(
@@ -373,7 +373,7 @@ class ReportService:
             if weakest["correct_rate"] < 0.6:
                 lines.append(f"「{weakest['text']}」正确率仅 {weakest['correct_rate']:.0%}，需要针对性巩固。")
         else:
-            lines.append("本节课未采集学生端作答数据，诊断仅依据教师观察、环节用时和课堂证据事件。")
+            lines.append("本节课未采集课堂作答数据，诊断仅依据教师观察、环节用时和课堂证据。")
 
         observations = statistics.get("observations") or {}
         verdicts = observations.get("verdict_counts") or {}
@@ -423,7 +423,7 @@ class ReportService:
             "",
             f"- 上课时间：{statistics.get('started_at', '')} ~ {statistics.get('ended_at', '') or '进行中'}",
             f"- 实际时长：{statistics.get('duration_minutes', '—')} 分钟",
-            f"- 学生端作答数据：{'已采集' if statistics.get('response_data_collected') else '未采集'}",
+            f"- 课堂作答数据：{'已采集' if statistics.get('response_data_collected') else '未采集'}",
             f"- 课堂事件：{statistics.get('event_count', 0)} 条"
             f"（截图 {statistics.get('snapshot_count', 0)} 张，助教问答 {statistics.get('assistant_exchange_count', 0)} 次）",
             "",

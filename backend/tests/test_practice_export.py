@@ -146,9 +146,9 @@ class PracticeExportDualPaperTest(PracticeExportTestBase):
         cw = self.runtime.classroom
         # q1：投屏、计时 150 秒、揭示、2 人作答（1 对 1 错）
         cw.launch_session_question(self.session_id, stage_id="s1", question_id="q1")
-        join_code = self.store.get_class_session(self.session_id).join_code
-        cw.student_answer(join_code, {"nickname": "小李", "question_id": "q1", "choice_index": 1})
-        cw.student_answer(join_code, {"nickname": "小王", "question_id": "q1", "choice_index": 0})
+        with self.store.batch():
+            self.store.add_student_response(self.session_id, "q1", {"nickname": "小李", "choice_index": 1})
+            self.store.add_student_response(self.session_id, "q1", {"nickname": "小王", "choice_index": 0})
         cw.update_question_timer(self.session_id, "start")
         self.backdate_running_since(self.session_id, 150)
         cw.reveal_session_question(self.session_id)
@@ -159,9 +159,9 @@ class PracticeExportDualPaperTest(PracticeExportTestBase):
         cw.close_session_question(self.session_id)
         # q4：投屏、2 人全对，教师未做观察（按选题规则不进练习卷）
         cw.launch_session_question(self.session_id, stage_id="s1", question_id="q4")
-        join_code = self.store.get_class_session(self.session_id).join_code
-        cw.student_answer(join_code, {"nickname": "小李", "question_id": "q4", "choice_index": 0})
-        cw.student_answer(join_code, {"nickname": "小王", "question_id": "q4", "choice_index": 0})
+        with self.store.batch():
+            self.store.add_student_response(self.session_id, "q4", {"nickname": "小李", "choice_index": 0})
+            self.store.add_student_response(self.session_id, "q4", {"nickname": "小王", "choice_index": 0})
         cw.close_session_question(self.session_id)
         # 课堂速记：q1 误区、q2 部分掌握、q3 误区
         cw.add_session_observation(
@@ -357,11 +357,8 @@ class PracticeExportRealBankTest(PracticeExportTestBase):
         )
         session_id = cw.create_class_session(lesson.lesson_id, project_id)["session"]["session_id"]
         cw.launch_session_question(session_id, stage_id="s1", question_id=snapshot["question_id"])
-        join_code = store.get_class_session(session_id).join_code
-        cw.student_answer(
-            join_code,
-            {"nickname": "小李", "question_id": snapshot["question_id"], "choice_index": 0},
-        )
+        with store.batch():
+            store.add_student_response(session_id, snapshot["question_id"], {"nickname": "小李", "choice_index": 0})
         cw.add_session_observation(
             session_id,
             {
