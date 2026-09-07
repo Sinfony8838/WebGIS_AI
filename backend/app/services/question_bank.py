@@ -562,6 +562,46 @@ class QuestionBankService:
             clauses.append("answer_complete = 1")
         elif answer_complete is False:
             clauses.append("answer_complete = 0")
+        # 关键词过滤必须在 LIMIT/OFFSET 之前作用于全量候选——否则只在
+        # 当前页内过滤，跨页检索会漏掉大部分匹配题。
+        if search.strip():
+            grams = _char_bigrams(search)
+            with self._lock, self._connect() as connection:
+                candidates = connection.execute(
+                    f"SELECT * FROM questions WHERE {' AND '.join(clauses)} ORDER BY group_index, question_index",
+                    params,
+                ).fetchall()
+            matched_rows = [
+                row
+                for row in candidates
+                if grams
+                & _char_bigrams(
+                    " ".join(
+                        [
+                            str(row["material"] or ""),
+                            str(row["stem"] or ""),
+                            str(row["task_text"] or ""),
+                            str(row["section_title"] or ""),
+                            " ".join(str(option) for option in json.loads(str(row["options"]) or "[]")),
+                        ]
+                    )
+                )
+            ]
+            total = len(matched_rows)
+            page_rows = matched_rows[(page - 1) * page_size : (page - 1) * page_size + page_size]
+            with self._lock, self._connect() as connection:
+                images_by_question = self._images_for_questions(
+                    connection, [str(row["question_id"]) for row in page_rows]
+                )
+            items = [self._question_payload(row, images_by_question) for row in page_rows]
+            return {
+                "status": "success",
+                "bank_id": bank_id,
+                "items": items,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+            }
         where = " AND ".join(clauses)
         with self._lock, self._connect() as connection:
             total = int(
@@ -573,23 +613,6 @@ class QuestionBankService:
             ).fetchall()
             images_by_question = self._images_for_questions(connection, [str(row["question_id"]) for row in rows])
         items = [self._question_payload(row, images_by_question) for row in rows]
-        if search.strip():
-            grams = _char_bigrams(search)
-            items = [
-                item
-                for item in items
-                if grams & _char_bigrams(
-                    " ".join(
-                        [
-                            item["material"],
-                            item["stem"],
-                            item["task_text"],
-                            item["section_title"],
-                            " ".join(item["options"]),
-                        ]
-                    )
-                )
-            ]
         return {
             "status": "success",
             "bank_id": bank_id,

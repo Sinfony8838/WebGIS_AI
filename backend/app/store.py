@@ -667,8 +667,10 @@ class RuntimeStore:
                 metadata=metadata,
             )
             self.artifacts[artifact.artifact_id] = artifact
-            self.jobs[job_id].artifact_ids.append(artifact.artifact_id)
-            self.jobs[job_id].updated_at = utc_now()
+            job = self.jobs.get(job_id)
+            if job is not None:
+                job.artifact_ids.append(artifact.artifact_id)
+                job.updated_at = utc_now()
             project = self.projects[project_id]
             project.artifact_ids.append(artifact.artifact_id)
             project.updated_at = utc_now()
@@ -678,6 +680,23 @@ class RuntimeStore:
     def get_artifact(self, artifact_id: str) -> Optional[ArtifactRecord]:
         with self._lock:
             return self.artifacts.get(artifact_id)
+
+    def delete_artifact(self, artifact_id: str) -> Optional[ArtifactRecord]:
+        """Remove an artifact record; the backing file is left untouched."""
+        with self._lock:
+            artifact = self.artifacts.pop(artifact_id, None)
+            if artifact is None:
+                return None
+            project = self.projects.get(artifact.project_id)
+            if project is not None and artifact.artifact_id in project.artifact_ids:
+                project.artifact_ids.remove(artifact.artifact_id)
+                project.updated_at = utc_now()
+            job = self.jobs.get(artifact.job_id)
+            if job is not None and artifact.artifact_id in job.artifact_ids:
+                job.artifact_ids.remove(artifact.artifact_id)
+                job.updated_at = utc_now()
+            self._save()
+            return artifact
 
     def list_outputs(self, project_id: Optional[str] = None) -> List[Dict[str, Any]]:
         with self._lock:

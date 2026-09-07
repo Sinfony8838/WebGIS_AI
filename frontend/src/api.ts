@@ -59,6 +59,7 @@ import type {
   SessionLiveState,
   SessionPracticeExportResult,
   TeachingContext,
+  TeachingMaterial,
   TimelineData,
   TimelineGenerateResponse,
   TimelineSaveResponse,
@@ -1107,6 +1108,35 @@ export async function searchResources(params: {
   query.set("scope", params.scope || "all");
   query.set("limit", String(params.limit ?? 12));
   return requestJson<ResourceSearchResponse>(`/resources/search?${query.toString()}`);
+}
+
+/** 数据库面板：把 geojson 产物（数据导入/工作流结果）加载为项目图层。 */
+export async function loadOutputAsLayer(artifactId: string, projectId: string): Promise<{ status: string; item: unknown }> {
+  return requestJson<{ status: string; item: unknown }>(`/outputs/${encodeURIComponent(artifactId)}/load-layer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: projectId })
+  });
+}
+
+/** 数据库面板：删除产物记录（文件保留在磁盘）。 */
+export async function deleteOutput(artifactId: string, projectId: string): Promise<{ status: string; item: unknown }> {
+  return requestJson<{ status: string; item: unknown }>(
+    `/outputs/${encodeURIComponent(artifactId)}?project_id=${encodeURIComponent(projectId)}`,
+    { method: "DELETE" }
+  );
+}
+
+/** 数据库面板：把资源检索结果保存为知识库素材（检索收藏）。 */
+export async function saveResourceResult(
+  projectId: string,
+  payload: { title: string; url: string; summary?: string; source?: string; type?: string; thumbnail_url?: string }
+): Promise<{ status: string; kb_item_id: string; material: TeachingMaterial }> {
+  return requestJson<{ status: string; kb_item_id: string; material: TeachingMaterial }>(`/resources/save`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: projectId, ...payload })
+  });
 }
 
 export async function uploadKbMaterial(

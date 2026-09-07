@@ -1250,9 +1250,140 @@ class WebGISRuntime:
         return {"status": "success", **artifact.to_dict()}
 
     def list_outputs(self, project_id: Optional[str] = None) -> Dict[str, Any]:
-        teacher_facing = {"map_snapshot", "uploaded_image", "generated_image", "annotation_export", "dataset_import", "assistant_note", "query_summary"}
+        teacher_facing = {
+            "map_snapshot",
+            "uploaded_image",
+            "generated_image",
+            "annotation_export",
+            "dataset_import",
+            "assistant_note",
+            "query_summary",
+            # 分析结果与课堂文档：数据库面板「分析产物」分类
+            "workflow_output",
+            "class_report",
+            "class_report_data",
+            "practice_paper_student",
+            "practice_paper_teacher",
+            "lesson_plan_docx",
+        }
         items = [item for item in self.store.list_outputs(project_id=project_id) if item.get("artifact_type") in teacher_facing]
         return {"status": "success", "items": items}
+
+    def load_output_as_layer(self, project_id: str, artifact_id: str) -> Dict[str, Any]:
+        """把一个 geojson 产物（数据导入/工作流结果）加载为项目图层。
+
+        仿 materialize_catalog_layer 的建层模式；供数据库面板「上图」动作
+        调用，让分析结果一键回到地图。
+        """
+        import json as _json
+
+        artifact = self.store.get_artifact(artifact_id)
+        if artifact is None or artifact.project_id != project_id:
+            raise KeyError(f"Unknown artifact: {artifact_id}")
+        artifact_type = str(artifact.artifact_type or "")
+        metadata_kind = str((artifact.metadata or {}).get("kind") or "")
+        is_geojson = artifact_type == "dataset_import" or metadata_kind == "geojson"
+        if not is_geojson:
+            raise ValueError("只有矢量结果（geojson）产物可以加载为图层")
+        path = Path(artifact.path)
+        if not path.is_file():
+            raise ValueError("产物文件不存在或已被清理")
+        try:
+            data = _json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"产物文件不是有效的 GeoJSON：{exc}") from exc
+        if not isinstance(data, dict) or data.get("type") != "FeatureCollection":
+            raise ValueError("产物文件不是有效的 GeoJSON FeatureCollection")
+        layer_name = str(artifact.title or "分析结果")
+        existing = [layer for layer in self._require_project(project_id).layers if layer.name == layer_name]
+        layer = LayerRecord.create(
+            name=f"{layer_name}（{len(existing) + 1}）" if existing else layer_name,
+            kind="vector",
+            source="output_artifact",
+            geometry_type="Polygon",
+            data=data,
+            style={"fillColor": "#60a5fa", "strokeColor": "#1d4ed8"},
+            metadata={
+                "artifact_id": artifact_id,
+                "workflow_id": str((artifact.metadata or {}).get("workflow_id") or ""),
+                "origin": "database_panel",
+            },
+        )
+        self.store.upsert_layer(project_id, layer)
+        self.store.set_active_layer(project_id, layer.layer_id)
+        self.store.add_recent_action(project_id, "产物上图", f"已把“{layer.name}”加载为图层", status="success")
+        return {"status": "success", "item": layer.to_dict()}
+
+    def delete_output(self, project_id: str, artifact_id: str) -> Dict[str, Any]:
+        artifact = self.store.get_artifact(artifact_id)
+        if artifact is None or artifact.project_id != project_id:
+            raise KeyError(f"Unknown artifact: {artifact_id}")
+        # 只删记录，文件保留在磁盘（可按需物理清理，避免误删不可再生内容）。
+        self.store.delete_artifact(artifact_id)
+        self.store.add_recent_action(project_id, "删除产物", f"已从数据库移除“{artifact.title}”", status="success")
+        return {"status": "success", "item": artifact.to_dict()}
+
+    def save_resource_result(
+        self,
+        project_id: str,
+        payload: Dict[str, Any],
+        owner_user_id: str = "",
+    ) -> Dict[str, Any]:
+        """把资源检索结果保存为知识库素材（供课时导入/助教打开）。
+
+        封装「建/复用 KB 收藏条目 + link material」两步；联网检索结果从此
+        不再是易逝品。
+        """
+        title = str(payload.get("title") or "").strip() or "检索收藏"
+        url = str(payload.get("url") or "").strip()
+        if not url:
+            raise ValueError("检索结果缺少 url，无法保存")
+        summary = str(payload.get("summary") or "").strip()
+        source_label = str(payload.get("source") or "").strip()
+        material_type = "link"
+        kind_guess = str(payload.get("type") or "").strip().lower()
+        if kind_guess in {"image", "video", "animation", "document", "link"}:
+            material_type = kind_guess
+        collection_title = "检索收藏"
+        existing_items = self.knowledge_base_service.get_manifest(include_all=True).get("items") or []
+        target = next((item for item in existing_items if str(item.get("title") or "") == collection_title), None)
+        if target is not None:
+            # 同一 URL 已保存过则直接复用，避免重复素材。
+            seen_urls = {
+                str(material.get("url") or "")
+                for material in (target.get("materials") or [])
+            }
+            if url in seen_urls:
+                existing_material = next(
+                    material for material in (target.get("materials") or []) if str(material.get("url") or "") == url
+                )
+                return {"status": "success", "kb_item_id": str(target.get("id") or ""), "material": existing_material}
+        if target is None:
+            saved_item = self.knowledge_base_service.upsert_item(
+                {
+                    "title": collection_title,
+                    "topic": "resource_collection",
+                    "summary": "从资源检索保存的外部资料合集。",
+                    "owner_user_id": owner_user_id,
+                },
+                owner_user_id=owner_user_id,
+                include_all=True,
+            )
+            kb_item_id = str(saved_item.get("id") or "")
+        else:
+            kb_item_id = str(target.get("id") or "")
+        linked = self.kb_link_material(
+            kb_item_id=kb_item_id,
+            url=url,
+            title=title,
+            description=summary or f"来源：{source_label}" if source_label else "",
+            material_type=material_type,
+            thumbnail_url=str(payload.get("thumbnail_url") or ""),
+            region_binding=None,
+            owner_user_id=owner_user_id,
+            include_all=True,
+        )
+        return {"status": "success", "kb_item_id": kb_item_id, "material": linked.get("material") or linked}
 
     def list_dataset_catalog(self) -> Dict[str, Any]:
         return self.one_map_catalog_service.list_catalog()
