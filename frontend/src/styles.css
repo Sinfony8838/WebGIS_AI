@@ -3239,9 +3239,8 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 14px;
-  background: radial-gradient(120% 120% at 50% 20%, rgba(88, 199, 255, 0.14), rgba(20, 40, 66, 0.28));
-  border: 1px solid rgba(132, 178, 220, 0.18);
+  background: transparent;
+  border: 0;
 }
 
 .copilot-avatar.busy {

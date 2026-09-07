@@ -1,7 +1,10 @@
 .geobot-brand-logo {
   display: block;
   object-fit: cover;
-  border-radius: 50%;
-  background: #fff;
+  /* The source has a white margin outside the globe. Clip to the actual
+     circular mark and scale it back to the allocated icon size. */
+  clip-path: circle(35.8% at 50% 48.4%);
+  transform: scale(1.4);
+  background: transparent;
   user-select: none;
 }

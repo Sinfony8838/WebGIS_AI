@@ -11,6 +11,7 @@ import {
 import type { AuthUser } from "../types";
 import "../auth.css";
 import { BrandLogo } from "./BrandLogo";
+import { ThemeToggle } from "../theme";
 
 type AuthGateProps = {
   children: (user: AuthUser, signOut: () => void, updateUser: (user: AuthUser) => void) => React.ReactNode;
@@ -147,6 +148,7 @@ function LoginCard({
 
   return (
     <div className="auth-screen">
+      <ThemeToggle className="auth-theme-toggle" />
       <div className="auth-map-grid" aria-hidden="true" />
       <div className="auth-population-points" aria-hidden="true" />
       <main className="auth-card" aria-labelledby="auth-title">
