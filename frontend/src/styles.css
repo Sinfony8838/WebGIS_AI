@@ -5608,6 +5608,41 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
+  transition: opacity 0.35s ease;
+}
+
+.legend-panel__item--pending {
+  opacity: 0.18;
+}
+
+/* 制图回放状态条：分级填色进度 + 跳过 / 重放入口 */
+.replay-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid rgba(148, 163, 184, 0.25);
+  padding-top: 10px;
+  font-size: 12px;
+}
+
+.replay-bar__label {
+  color: #fbbf24;
+  font-weight: 600;
+}
+
+.replay-bar__button {
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.replay-bar__button:hover {
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .legend-panel__swatch {
