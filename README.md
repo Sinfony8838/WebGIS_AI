@@ -324,7 +324,8 @@ GIS 工作流：
 后端：
 
 ```powershell
-python -m unittest discover backend/tests
+# Windows 本机约定的 Python 3.12 路径；其他环境请替换为已安装项目依赖的解释器。
+& "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe" -m pytest backend/tests -q
 ```
 
 前端：
@@ -334,6 +335,14 @@ cd frontend
 npm run test
 npm run build
 ```
+
+语音流和工作流状态的定向回归（在 `frontend` 目录执行）：
+
+```powershell
+npm test -- src/__tests__/voiceStream.test.ts src/__tests__/CopilotWidget.test.tsx src/__tests__/useWorkflowStream.test.ts
+```
+
+这些回归使用模拟的麦克风、WebSocket、SSE 和识别器验证异常时序，不代表真实麦克风、ASR 模型或 PyQGIS 已完成端到端验收。真实语音验证还需检查授权期间断线、手动停止返回尾句，以及停止后麦克风是否释放。
 
 ## 当前边界
 

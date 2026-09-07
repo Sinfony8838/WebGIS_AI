@@ -2,6 +2,7 @@ import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { CopilotWidget, exceedsDragThreshold, normalizePanelRect } from "../components/CopilotWidget";
+import * as voiceStream from "../voiceStream";
 
 class MockSpeechRecognition {
   static lastInstance: MockSpeechRecognition | null = null;
@@ -94,6 +95,22 @@ describe("CopilotWidget", () => {
     cleanup();
     setSpeechRecognitionSupport(false);
     vi.clearAllMocks();
+    vi.restoreAllMocks();
+  });
+
+  it("flushes the local transcript before closing on manual stop", async () => {
+    const abort = vi.fn();
+    const stop = vi.fn(async () => abort.mock.calls.length ? null : "切换到三维地球");
+    vi.spyOn(voiceStream, "audioWorkletSupported").mockReturnValue(true);
+    vi.spyOn(voiceStream, "createVoiceStream").mockResolvedValue({ abort, stop, state: () => "open" });
+    const { onVoiceSubmit } = renderWidget({ voiceStreamAvailable: true, assistantTab: "interaction" });
+    fireEvent.click(screen.getByRole("button", { name: "开始语音控制" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "停止语音控制" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "停止语音控制" }));
+    await waitFor(() => expect(onVoiceSubmit).toHaveBeenCalledWith("切换到三维地球"));
+    expect(stop).toHaveBeenCalledOnce();
+    expect(abort).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "开始语音控制" })).toBeInTheDocument();
   });
 
   it("renders messages, submits input, and can minimize", () => {

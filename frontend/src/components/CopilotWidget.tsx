@@ -812,7 +812,10 @@ export function CopilotWidget({
     if (pushToTalkStream) {
       setVoiceStatusText("语音输入已停止。");
       const stream = voiceStreamRef.current;
-      abortLocalStream();
+      voiceStreamRef.current = null;
+      setPushToTalkStream(false);
+      setVoiceStatus("idle");
+      setPartialPreview("");
       void stream?.stop().then((pending) => {
         if (pending) {
           submitVoiceTranscript(pending, false);

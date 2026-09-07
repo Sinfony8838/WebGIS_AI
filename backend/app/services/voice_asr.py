@@ -157,6 +157,8 @@ class VoiceAsrSession:
             self.stream.input_finished()
         except Exception:
             pass
+        while self._recognizer.is_ready(self.stream):
+            self._recognizer.decode_stream(self.stream)
         text = (self._recognizer.get_result(self.stream) or "").strip()
         return {"type": "final", "text": text} if text else None
 
