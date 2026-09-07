@@ -311,6 +311,9 @@ class AssistantV2RuntimeTest(unittest.TestCase):
 
         self.assertEqual(job["result"]["intent"], "teaching_action")
         self.assertTrue(job["result"]["requires_confirmation"])
+        waiting_harness = job["result"]["harness"]
+        self.assertEqual(waiting_harness["status"], "waiting_for_approval")
+        self.assertEqual(waiting_harness["stop_reason"], "approval_required")
         confirmation_id = job["result"]["confirmation_id"]
         self.assertTrue(confirmation_id)
         self.assertEqual(job["result"]["actions_executed"], [])
@@ -319,6 +322,9 @@ class AssistantV2RuntimeTest(unittest.TestCase):
         confirm_job = self.wait_for_job(runtime, confirm_response["job_id"])
 
         self.assertTrue(confirm_job["result"]["actions_executed"])
+        confirmed_harness = confirm_job["result"]["harness"]
+        self.assertEqual(confirmed_harness["parent_run_id"], waiting_harness["run_id"])
+        self.assertTrue(confirmed_harness["verification"]["valid"])
         message = confirm_job["result"]["assistant_message"]
         self.assertNotIn("教学处理", message)
         self.assertNotIn("证据或观察点", message)

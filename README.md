@@ -88,6 +88,7 @@
 - 课堂追问与课后复盘：支持带上下文的连续追问，以及课后要点收束与下一步建议。
 - 文本输入和浏览器语音识别输入。
 - 对话记忆、阶段状态展示和引用来源展示；高风险操作需教师确认后才执行。
+- 统一 Agent Harness：所有 assistant 模式共用可终止运行循环、结构化工具契约、执行前策略闸门、确认后重校验、停止前结果验证和隐私化追踪；详见 [AGENT_HARNESS.md](AGENT_HARNESS.md)。
 - 项目图片库：地图框选截图、本地图片和 AI 生成示意图都按项目保存，可加入助教进行连续识图问答。
 - MiniMax 图片生成：图片库可直接调用 `image-01` 或 `image-01-live`；生成结果使用 Base64 立即持久化，不依赖 24 小时临时 URL。
 
@@ -254,6 +255,14 @@ LLM / Vision：
 - `WEBGIS_AI_VISION_PROVIDER`
 - `WEBGIS_AI_VISION_MODEL`
 - `WEBGIS_AI_MINIMAX_TOKEN_PLAN_KEY`
+
+Agent Harness：
+
+- `WEBGIS_AI_AGENT_MAX_ACTIONS`：默认 8，限制单次计划和工具调用数
+- `WEBGIS_AI_AGENT_MAX_IDENTICAL_ACTIONS`：默认 2，阻止重复调用循环
+- `WEBGIS_AI_AGENT_MAX_TOOL_FAILURES`：默认 1，限制单次运行的工具失败数
+- `WEBGIS_AI_AGENT_MAX_SECONDS`：默认 180，阶段/工具边界的墙钟时间上限
+- `WEBGIS_AI_AGENT_MAX_TRACE_EVENTS`：默认 64，限制 job 内嵌追踪事件数
 
 GIS 工作流：
 

@@ -11,7 +11,14 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 from ..config import AppConfig
 from ..models import ConversationRecord, ProjectRecord
 from ..store import RuntimeStore
-from .assistant import ASSISTANT_TOOL_SCHEMA, AssistantService
+from .agent_harness import (
+    AgentRun,
+    HarnessExecutionError,
+    HarnessPolicy,
+    infer_stop_reason,
+    validate_json_contract,
+)
+from .assistant import ASSISTANT_TOOL_INPUT_SCHEMAS, ASSISTANT_TOOL_SCHEMA, AssistantService
 from .knowledge_base import KnowledgeBaseService
 from .llm_planner import LLMPlanner
 
@@ -1585,8 +1592,31 @@ class ToolExecutor:
         assistant_mode: str = "tool",
         project_state: Optional[Dict[str, Any]] = None,
         map_context: Optional[Dict[str, Any]] = None,
+        run_context: Optional[AgentRun] = None,
     ) -> Dict[str, Any]:
         permission_context = ToolPermissionContext.from_pinned_state(pinned_state)
+        if run_context is not None:
+            plan_error = run_context.inspect_plan(actions)
+            if plan_error:
+                return {
+                    "actions_planned": [
+                        {
+                            "name": "agent_harness",
+                            "target": target,
+                            "category": "runtime_policy",
+                            "risk_level": "blocked",
+                            "reversible": True,
+                            "requires_confirmation": False,
+                            "requires_map_context": False,
+                            "tool_params": {},
+                            "validation_error": plan_error,
+                            "permission_decision": "deny",
+                        }
+                    ],
+                    "risk_level": "blocked",
+                    "requires_confirmation": False,
+                    "permission_context": permission_context.to_dict(),
+                }
         descriptors = []
         highest = "low"
         requires_confirmation = False
@@ -1596,6 +1626,11 @@ class ToolExecutor:
             descriptors.append(descriptor)
             if descriptor["permission_decision"] == "deny" or descriptor["risk_level"] == "blocked":
                 highest = "blocked"
+                if run_context is not None:
+                    run_context.record_guardrail(
+                        "tool_input_contract" if descriptor.get("validation_error") else "tool_permission",
+                        {"tool_name": descriptor["name"]},
+                    )
             elif descriptor["risk_level"] == "high":
                 highest = "high"
                 requires_confirmation = True
@@ -1618,6 +1653,7 @@ class ToolExecutor:
         pinned_state: Optional[Dict[str, Any]] = None,
         assistant_mode: str = "tool",
         project_state: Optional[Dict[str, Any]] = None,
+        run_context: Optional[AgentRun] = None,
     ) -> List[Dict[str, Any]]:
         permission_context = ToolPermissionContext.from_pinned_state(pinned_state)
         executed = []
@@ -1630,7 +1666,15 @@ class ToolExecutor:
                 raise ValueError(f"Blocked action: {action['tool_name']}")
             if decision == "ask" and not allow_high_risk:
                 raise PermissionError(f"Confirmation required: {action['tool_name']}")
-            result = self.execute_webgis(project_id, action, map_context)
+            event_id = run_context.before_tool(action) if run_context is not None else ""
+            try:
+                result = self.execute_webgis(project_id, action, map_context)
+                if run_context is not None:
+                    run_context.after_tool(event_id, descriptor["name"], result)
+            except Exception as exc:
+                if run_context is not None:
+                    run_context.fail_tool(event_id, descriptor["name"], exc)
+                raise
             executed.append({"action": action, "result": result, "risk_level": descriptor["risk_level"]})
         return executed
 
@@ -1652,8 +1696,8 @@ class ToolExecutor:
             "open_material": {"target": "webgis", "category": "material", "risk_level": "low", "reversible": True, "requires_confirmation": False},
             "generate_image": {"target": "webgis", "category": "paid_generation", "risk_level": "high", "reversible": False, "requires_confirmation": True, "validator": self._require_image_generation_prompt},
             "run_visual_query": {"target": "webgis", "category": "analysis", "risk_level": "medium", "reversible": True, "requires_confirmation": False},
-            "record_observation": {"target": "webgis", "category": "classroom", "risk_level": "medium", "reversible": False, "requires_confirmation": False, "validator": self._require_active_session},
-            "launch_question": {"target": "webgis", "category": "classroom", "risk_level": "medium", "reversible": False, "requires_confirmation": False, "validator": self._require_active_session},
+            "record_observation": {"target": "webgis", "category": "classroom", "risk_level": "medium", "reversible": False, "requires_confirmation": False, "validator": self._require_active_session, "visible_in_mode": ["teaching_action"]},
+            "launch_question": {"target": "webgis", "category": "classroom", "risk_level": "medium", "reversible": False, "requires_confirmation": False, "validator": self._require_active_session, "visible_in_mode": ["teaching_action"]},
         }
         return registry
 
@@ -1665,7 +1709,20 @@ class ToolExecutor:
         project_state: Dict[str, Any],
         map_context: Dict[str, Any],
     ) -> Dict[str, Any]:
+        if not isinstance(action, dict):
+            return {
+                "name": "unknown",
+                "target": target,
+                "category": "unknown",
+                "risk_level": "blocked",
+                "reversible": False,
+                "requires_confirmation": True,
+                "requires_map_context": False,
+                "tool_params": {},
+                "validation_error": "工具动作必须是对象",
+            }
         tool_name = str(action.get("tool_name") or "")
+        tool_params = action.get("tool_params")
         metadata = dict(self.tool_registry.get(tool_name) or {})
         if not metadata:
             metadata = {
@@ -1677,14 +1734,28 @@ class ToolExecutor:
             }
         validation_error = ""
         requires_map_context = bool(metadata.get("requires_map_context"))
-        if metadata.get("target") not in {target, "auto"}:
-            validation_error = f"Tool target mismatch for {tool_name}: expected {metadata.get('target')}, got {target}"
-        elif assistant_mode not in metadata.get("visible_in_mode", ["tool", "hybrid", "knowledge", "teaching", "teaching_action"]):
-            validation_error = f"Tool {tool_name} is not visible in {assistant_mode} mode"
-        elif requires_map_context and not map_context:
-            validation_error = f"Tool {tool_name} requires current map context"
-        elif callable(metadata.get("validator")):
-            validation_error = str(metadata["validator"](action.get("tool_params", {}), project_state, map_context) or "")
+        input_schema = ASSISTANT_TOOL_INPUT_SCHEMAS.get(tool_name)
+        if input_schema is None:
+            validation_error = f"未知工具：{tool_name or '未提供名称'}"
+        elif not isinstance(tool_params, dict):
+            validation_error = f"工具 {tool_name} 的 tool_params 必须是对象"
+        else:
+            validation_error = validate_json_contract(tool_params, input_schema)
+        if not validation_error:
+            if metadata.get("target") not in {target, "auto"}:
+                validation_error = f"Tool target mismatch for {tool_name}: expected {metadata.get('target')}, got {target}"
+            elif assistant_mode not in metadata.get(
+                "visible_in_mode", ["tool", "hybrid", "knowledge", "teaching", "teaching_action"]
+            ):
+                validation_error = (
+                    "课堂工具（发布提问/记录学情）只在专业教学智能体模式下可用"
+                    if metadata.get("category") == "classroom"
+                    else f"Tool {tool_name} is not visible in {assistant_mode} mode"
+                )
+            elif requires_map_context and not map_context:
+                validation_error = f"Tool {tool_name} requires current map context"
+            elif callable(metadata.get("validator")):
+                validation_error = str(metadata["validator"](tool_params, project_state, map_context) or "")
         return {
             "name": tool_name,
             "target": metadata["target"],
@@ -1693,7 +1764,7 @@ class ToolExecutor:
             "reversible": metadata["reversible"],
             "requires_confirmation": metadata["requires_confirmation"],
             "requires_map_context": requires_map_context,
-            "tool_params": action.get("tool_params", {}),
+            "tool_params": tool_params if isinstance(tool_params, dict) else {},
             "validation_error": validation_error,
         }
 
@@ -1777,6 +1848,73 @@ class AssistantSessionEngine:
         input_mode: str,
         stage_callback: Callable[[str, str, str, str], None],
     ) -> Dict[str, Any]:
+        run_context = AgentRun(
+            policy=HarnessPolicy.from_config(self.config),
+            job_id=job_id,
+            input_payload={
+                "project_id": project.project_id,
+                "message": message,
+                "assistant_mode": assistant_mode,
+                "conversation_id": conversation_id,
+                "target": target,
+                "input_mode": input_mode,
+                "has_map_context": bool(map_context),
+                "history_length": len(history or []),
+            },
+        )
+
+        def traced_stage(stage_name: str, status: str, summary: str = "", detail: str = "") -> None:
+            # The UI keeps its human-readable stage summaries.  The persisted
+            # harness trace records only names/status/durations so prompts,
+            # classroom text, paths, and credentials cannot leak through it.
+            run_context.record_stage(stage_name, status)
+            stage_callback(stage_name, status, summary, detail)
+
+        try:
+            result = self._handle_once(
+                job_id=job_id,
+                project=project,
+                message=message,
+                assistant_mode=assistant_mode,
+                conversation_id=conversation_id,
+                history=history,
+                map_context=map_context,
+                target=target,
+                input_mode=input_mode,
+                stage_callback=traced_stage,
+                run_context=run_context,
+            )
+            verification = run_context.verify_result(result)
+            result["harness"] = run_context.finish(
+                status="waiting_for_approval" if result.get("requires_confirmation") else "completed",
+                stop_reason=infer_stop_reason(result),
+                conversation_id=str(result.get("conversation_id") or conversation_id),
+                verification=verification,
+            )
+            return result
+        except Exception as exc:
+            report = run_context.finish(
+                status="failed",
+                stop_reason="error",
+                conversation_id=conversation_id,
+                error=exc,
+            )
+            raise HarnessExecutionError(exc, report) from exc
+
+    def _handle_once(
+        self,
+        job_id: str,
+        project: ProjectRecord,
+        message: str,
+        assistant_mode: str,
+        conversation_id: str,
+        history: Optional[List[Dict[str, Any]]],
+        map_context: Optional[Dict[str, Any]],
+        target: str,
+        input_mode: str,
+        stage_callback: Callable[[str, str, str, str], None],
+        run_context: AgentRun,
+    ) -> Dict[str, Any]:
         normalized_mode = assistant_mode if assistant_mode in {"teaching", "knowledge", "tool"} else "teaching"
         # Heavy GIS work moved to /workflow/*; the in-classroom assistant is WebGIS-only.
         normalized_target = "webgis"
@@ -1841,6 +1979,7 @@ class AssistantSessionEngine:
             assistant_mode=intent,
             project_state={"project_id": project.project_id},
             map_context=map_context,
+            run_context=run_context,
         )
         prompt_parts = self.prompt_registry.build(intent, map_context, retrieval=None, conversation_context=context)
 
@@ -1911,6 +2050,12 @@ class AssistantSessionEngine:
             }
 
         if assessment["requires_confirmation"]:
+            run_context.event(
+                "approval",
+                "human_confirmation",
+                "required",
+                {"action_count": len(actions)},
+            )
             previous_confirmation = str((context.get("pinned_state") or {}).get("last_pending_confirmation", {}).get("confirmation_id") or "")
             if previous_confirmation:
                 previous = self.store.get_confirmation(previous_confirmation)
@@ -1925,6 +2070,7 @@ class AssistantSessionEngine:
                 "map_context": map_context,
                 "planner": plan.get("planner", "unknown"),
                 "prompt_fingerprint": prompt_parts["context_fingerprint"],
+                "harness_run_id": run_context.run_id,
             }
             plan_fingerprint = _fingerprint(frozen_plan)
             expires_at = _utc_timestamp(minutes_from_now=15)
@@ -2029,6 +2175,7 @@ class AssistantSessionEngine:
             stage_callback,
             pinned_state=context.get("pinned_state"),
             assistant_mode=intent,
+            run_context=run_context,
         )
         knowledge = None
         citations: List[Dict[str, Any]] = []
@@ -2092,6 +2239,57 @@ class AssistantSessionEngine:
         self,
         confirmation_id: str,
         stage_callback: Callable[[str, str, str, str], None],
+        job_id: str = "",
+    ) -> Dict[str, Any]:
+        confirmation = self.store.get_confirmation(confirmation_id)
+        if confirmation is None:
+            raise KeyError(f"Unknown confirmation: {confirmation_id}")
+        payload = confirmation.payload or {}
+        frozen_plan = payload.get("frozen_plan") or {}
+        run_context = AgentRun(
+            policy=HarnessPolicy.from_config(self.config),
+            job_id=job_id or confirmation.job_id,
+            parent_run_id=str(frozen_plan.get("harness_run_id") or ""),
+            input_payload={
+                "confirmation_id": confirmation_id,
+                "project_id": confirmation.project_id,
+                "conversation_id": confirmation.conversation_id,
+                "plan_fingerprint": confirmation.plan_fingerprint,
+            },
+        )
+
+        def traced_stage(stage_name: str, status: str, summary: str = "", detail: str = "") -> None:
+            run_context.record_stage(stage_name, status)
+            stage_callback(stage_name, status, summary, detail)
+
+        try:
+            result = self._execute_confirmation_once(
+                confirmation_id,
+                traced_stage,
+                run_context=run_context,
+            )
+            verification = run_context.verify_result(result)
+            result["harness"] = run_context.finish(
+                status="completed",
+                stop_reason="completed",
+                conversation_id=confirmation.conversation_id,
+                verification=verification,
+            )
+            return result
+        except Exception as exc:
+            report = run_context.finish(
+                status="failed",
+                stop_reason="error",
+                conversation_id=confirmation.conversation_id,
+                error=exc,
+            )
+            raise HarnessExecutionError(exc, report) from exc
+
+    def _execute_confirmation_once(
+        self,
+        confirmation_id: str,
+        stage_callback: Callable[[str, str, str, str], None],
+        run_context: AgentRun,
     ) -> Dict[str, Any]:
         confirmation = self.store.get_confirmation(confirmation_id)
         if confirmation is None:
@@ -2135,6 +2333,7 @@ class AssistantSessionEngine:
             assistant_mode=confirmed_plan_intent,
             project_state={"project_id": confirmation.project_id},
             map_context=map_context,
+            run_context=run_context,
         )
         if revalidation["risk_level"] == "blocked":
             self.store.resolve_confirmation(confirmation_id, "invalidated")
@@ -2148,6 +2347,7 @@ class AssistantSessionEngine:
             blocked = next((item for item in revalidation["actions_planned"] if item.get("risk_level") == "blocked"), {})
             raise ValueError(str(blocked.get("validation_error") or "计划已失效，无法执行"))
         self.store.resolve_confirmation(confirmation_id, "approved")
+        run_context.event("approval", "human_decision", "approved")
         stage_callback("execution", "running", "Executing confirmed action", "")
         executed = self.tool_executor.execute(
             confirmation.project_id,
@@ -2158,6 +2358,7 @@ class AssistantSessionEngine:
             pinned_state=conversation.pinned_state if conversation else {},
             assistant_mode=str((frozen_plan or payload).get("intent") or payload.get("intent") or "tool"),
             project_state={"project_id": confirmation.project_id},
+            run_context=run_context,
         )
         stage_callback("execution", "success", "Confirmed action executed", "")
 
@@ -2227,6 +2428,47 @@ class AssistantSessionEngine:
         }
 
     def reject_confirmation(
+        self,
+        confirmation_id: str,
+        job_id: str = "",
+    ) -> Dict[str, Any]:
+        confirmation = self.store.get_confirmation(confirmation_id)
+        if confirmation is None:
+            raise KeyError(f"Unknown confirmation: {confirmation_id}")
+        payload = confirmation.payload or {}
+        frozen_plan = payload.get("frozen_plan") or {}
+        run_context = AgentRun(
+            policy=HarnessPolicy.from_config(self.config),
+            job_id=job_id or confirmation.job_id,
+            parent_run_id=str(frozen_plan.get("harness_run_id") or ""),
+            input_payload={
+                "confirmation_id": confirmation_id,
+                "project_id": confirmation.project_id,
+                "conversation_id": confirmation.conversation_id,
+                "decision": "reject",
+            },
+        )
+        try:
+            result = self._reject_confirmation_once(confirmation_id)
+            run_context.event("approval", "human_decision", "rejected")
+            verification = run_context.verify_result(result)
+            result["harness"] = run_context.finish(
+                status="completed",
+                stop_reason="rejected",
+                conversation_id=confirmation.conversation_id,
+                verification=verification,
+            )
+            return result
+        except Exception as exc:
+            report = run_context.finish(
+                status="failed",
+                stop_reason="error",
+                conversation_id=confirmation.conversation_id,
+                error=exc,
+            )
+            raise HarnessExecutionError(exc, report) from exc
+
+    def _reject_confirmation_once(
         self,
         confirmation_id: str,
     ) -> Dict[str, Any]:
@@ -2567,6 +2809,7 @@ class AssistantSessionEngine:
         stage_callback: Callable[[str, str, str, str], None],
         pinned_state: Optional[Dict[str, Any]] = None,
         assistant_mode: str = "tool",
+        run_context: Optional[AgentRun] = None,
     ) -> List[Dict[str, Any]]:
         stage_callback("execution", "running", "Executing planned actions", "")
         executed = self.tool_executor.execute(
@@ -2577,6 +2820,7 @@ class AssistantSessionEngine:
             pinned_state=pinned_state,
             assistant_mode=assistant_mode,
             project_state={"project_id": project_id},
+            run_context=run_context,
         )
         stage_callback("execution", "success", f"Executed {len(executed)} action(s)", "")
         return executed

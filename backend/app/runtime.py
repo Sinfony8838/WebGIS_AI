@@ -16,6 +16,7 @@ from uuid import uuid4
 from .config import AppConfig
 from .models import LayerRecord, ProjectRecord, WorkflowRecord, build_assistant_v2_stages, build_workflow_stages, utc_now
 from .services.assistant import ASSISTANT_TOOL_SCHEMA, AssistantService
+from .services.agent_harness import HARNESS_ID, HARNESS_VERSION, HarnessExecutionError
 from .services.classroom_workflow import ClassroomWorkflowRuntime
 from .services.datasets import DatasetService
 from .services.knowledge import KnowledgeService
@@ -373,7 +374,8 @@ class WebGISRuntime:
             "ui": {
                 "mode": "single_teacher_live_demo",
                 "assistant_tools": ASSISTANT_TOOL_SCHEMA,
-                "assistant_v2_enabled": self.config.assistant_v2_enabled,
+                "assistant_v2_enabled": True,
+                "agent_harness": {"id": HARNESS_ID, "version": HARNESS_VERSION},
             },
             "online_services": {
                 "amap_poi_enabled": self.config.online_services_enabled(),
@@ -898,14 +900,9 @@ class WebGISRuntime:
         normalized_input_mode = input_mode if input_mode in {"text", "voice"} else "text"
         normalized_mode = assistant_mode if assistant_mode in {"teaching", "knowledge", "tool"} else "teaching"
         resolved_attachments = self.resolve_image_attachments(project_id, image_attachments or [])
-        use_v2 = (
-            self.config.assistant_v2_enabled
-            or normalized_mode == "teaching"
-            or assistant_mode == "knowledge"
-            or bool(conversation_id)
-            or bool(history)
-            or bool(resolved_attachments)
-        )
+        # One assistant entry point, one safety boundary.  The v2 feature flag
+        # remains readable for deployment compatibility, but no request may
+        # bypass the session harness through the former legacy worker.
         job = self.store.create_job(
             project_id=project_id,
             job_type="assistant",
@@ -923,33 +920,26 @@ class WebGISRuntime:
                 "teaching_context": teaching_context or {},
                 "image_attachments": image_attachments or [],
             },
-            stages=build_assistant_v2_stages() if use_v2 else build_workflow_stages(),
+            stages=build_assistant_v2_stages(),
         )
-        if use_v2:
-            threading.Thread(
-                target=self._run_assistant_v2_job,
-                args=(
-                    job.job_id,
-                    project_id,
-                    message,
-                    map_context or {},
-                    normalized_mode,
-                    conversation_id,
-                    history or [],
-                    normalized_target,
-                    normalized_input_mode,
-                    screen_snapshot or {},
-                    teaching_context or {},
-                    resolved_attachments,
-                ),
-                daemon=True,
-            ).start()
-        else:
-            threading.Thread(
-                target=self._run_assistant_job,
-                args=(job.job_id, project_id, message, map_context or {}, normalized_target, normalized_input_mode, screen_snapshot or {}),
-                daemon=True,
-            ).start()
+        threading.Thread(
+            target=self._run_assistant_v2_job,
+            args=(
+                job.job_id,
+                project_id,
+                message,
+                map_context or {},
+                normalized_mode,
+                conversation_id,
+                history or [],
+                normalized_target,
+                normalized_input_mode,
+                screen_snapshot or {},
+                teaching_context or {},
+                resolved_attachments,
+            ),
+            daemon=True,
+        ).start()
         return {
             "status": "accepted",
             "job_id": job.job_id,
@@ -1825,10 +1815,13 @@ class WebGISRuntime:
                     "conversation_id": result.get("conversation_id", ""),
                     "prompt_parts": result.get("prompt_parts", {}),
                     "permission_context": result.get("permission_context", {}),
+                    "harness": result.get("harness", {}),
                     "artifacts": registered_artifacts,
                     "stages": self.store.get_job(job_id).stages,
                 },
             )
+        except HarnessExecutionError as exc:
+            self._fail_job(job_id, "assistant_message_v2", str(exc), {"harness": exc.report})
         except Exception as exc:  # pragma: no cover - defensive runtime branch
             self._fail_job(job_id, "assistant_message_v2", str(exc))
 
@@ -1922,9 +1915,13 @@ class WebGISRuntime:
             confirmation = self.store.get_confirmation(confirmation_id)
             confirmation_payload = dict(confirmation.payload or {}) if confirmation is not None else {}
             if decision == "reject":
-                result = self.session_engine.reject_confirmation(confirmation_id)
+                result = self.session_engine.reject_confirmation(confirmation_id, job_id=job_id)
             else:
-                result = self.session_engine.execute_confirmation(confirmation_id, stage_callback=update_stage)
+                result = self.session_engine.execute_confirmation(
+                    confirmation_id,
+                    stage_callback=update_stage,
+                    job_id=job_id,
+                )
                 self._log_assistant_exchange(
                     job_id,
                     dict(confirmation_payload.get("map_context") or {}),
@@ -1959,10 +1956,13 @@ class WebGISRuntime:
                     "retrieval_trace": result.get("retrieval_trace", []),
                     "conversation_id": result.get("conversation_id", ""),
                     "permission_context": result.get("permission_context", {}),
+                    "harness": result.get("harness", {}),
                     "artifacts": registered_artifacts,
                     "stages": self.store.get_job(job_id).stages,
                 },
             )
+        except HarnessExecutionError as exc:
+            self._fail_job(job_id, "assistant_confirmation", str(exc), {"harness": exc.report})
         except Exception as exc:  # pragma: no cover - defensive runtime branch
             self._fail_job(job_id, "assistant_confirmation", str(exc))
 
@@ -2323,12 +2323,26 @@ class WebGISRuntime:
             if normalized != project.base_map:
                 self.store.set_basemap(project.project_id, normalized)
 
-    def _fail_job(self, job_id: str, workflow_type: str, message: str) -> None:
+    def _fail_job(
+        self,
+        job_id: str,
+        workflow_type: str,
+        message: str,
+        result_extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
         self.store.update_job_stage(job_id, "artifacts", "error", message)
+        result = {
+            "status": "error",
+            "workflow_type": workflow_type,
+            "summary": message,
+            "assistant_message": message,
+            "stages": self.store.get_job(job_id).stages,
+        }
+        result.update(result_extra or {})
         self.store.set_job_status(
             job_id,
             "failed",
-            result={"status": "error", "workflow_type": workflow_type, "summary": message, "assistant_message": message, "stages": self.store.get_job(job_id).stages},
+            result=result,
             error=message,
         )
 
