@@ -344,7 +344,10 @@ export function WorkflowDock({
     const summaryArtifact = pickArtifact(stream.artifacts, "summary");
 
     if (styleArtifact) {
-      fetch(buildWorkflowFileUrl(styleArtifact.public_url))
+      // credentials: the artifact endpoints require the session cookie, and
+      // API_BASE is cross-origin in the standard dev setup (vite 5173 ->
+      // backend 18999), so cookies are NOT sent without this option.
+      fetch(buildWorkflowFileUrl(styleArtifact.public_url), { credentials: "include" })
         .then((res) => (res.ok ? res.json() : null))
         .then((payload) => {
           if (!cancelled && payload && typeof payload === "object" && payload.type === "graduated") {
@@ -357,7 +360,7 @@ export function WorkflowDock({
     }
 
     if (statsArtifact) {
-      fetch(buildWorkflowFileUrl(statsArtifact.public_url))
+      fetch(buildWorkflowFileUrl(statsArtifact.public_url), { credentials: "include" })
         .then((res) => (res.ok ? res.json() : null))
         .then((payload) => {
           if (!cancelled && payload && typeof payload === "object") {
@@ -370,7 +373,7 @@ export function WorkflowDock({
     }
 
     if (summaryArtifact) {
-      fetch(buildWorkflowFileUrl(summaryArtifact.public_url))
+      fetch(buildWorkflowFileUrl(summaryArtifact.public_url), { credentials: "include" })
         .then((res) => (res.ok ? res.text() : ""))
         .then((text) => {
           if (!cancelled) {
@@ -413,7 +416,7 @@ export function WorkflowDock({
     setReplayDone(false);
 
     let cancelled = false;
-    fetch(url)
+    fetch(url, { credentials: "include" })
       .then((res) => (res.ok ? res.json() : null))
       .then((payload) => {
         if (cancelled || !payload) {
