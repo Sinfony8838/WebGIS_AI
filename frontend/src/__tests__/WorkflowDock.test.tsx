@@ -16,7 +16,7 @@ vi.mock("../api", () => ({
 }));
 
 vi.mock("../hooks/useWorkflowStream", () => ({
-  useWorkflowStream: () => ({
+  useWorkflowStream: vi.fn(() => ({
     workflowId: "",
     status: "idle",
     intent: "",
@@ -24,13 +24,23 @@ vi.mock("../hooks/useWorkflowStream", () => ({
     artifacts: [],
     error: null,
     lastEvent: null
-  })
+  }))
 }));
 
 import { WorkflowDock } from "../components/WorkflowDock";
+import { useWorkflowStream } from "../hooks/useWorkflowStream";
 
 describe("WorkflowDock", () => {
   afterEach(cleanup);
+
+  it("subscribes to an assistant-submitted workflow without submitting again", async () => {
+    const { rerender } = render(<WorkflowDock projectId="project_demo" mapRef={createRef<Map>()} />);
+    rerender(<WorkflowDock projectId="project_demo" mapRef={createRef<Map>()} assistantJob={{
+      job_id: "assistant_job", project_id: "project_demo", status: "completed",
+      result: { actions_executed: [{ action: { tool_name: "run_workflow", tool_params: {} }, result: { workflow: { workflow_id: "wf_assistant" } } }] }
+    } as never} />);
+    await waitFor(() => expect(useWorkflowStream).toHaveBeenLastCalledWith("wf_assistant"));
+  });
 
   it("opens in-panel dropdown menus instead of native selects", async () => {
     render(

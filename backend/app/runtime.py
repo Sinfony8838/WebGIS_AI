@@ -2088,6 +2088,8 @@ class WebGISRuntime:
                 "artifacts": [{"artifact_type": "assistant_note", "title": "课堂讲解稿", "path": str(note), "metadata": {"public_url": self.config.public_url_for_path(note)}}],
             }
         if tool_name == "switch_basemap":
+            if params.get("basemap_id") not in {item["id"] for item in self.config.basemap_catalog()["items"]}:
+                return {"assistant_message": "未找到指定底图，当前底图保持不变。", "artifacts": []}
             basemap = self.set_basemap(project_id, params["basemap_id"])["base_map"]
             return {"assistant_message": f"底图已切换到“{basemap.get('title', params['basemap_id'])}”。", "artifacts": []}
         if tool_name == "search_poi":
@@ -2385,6 +2387,7 @@ class WebGISRuntime:
             for layer in project.layers:
                 if layer.name.lower() in layer_name:
                     return layer
+            return None
         active_id = str(map_context.get("active_layer_id") or project.active_layer_id or "").strip()
         if active_id:
             return next((layer for layer in project.layers if layer.layer_id == active_id), None)
