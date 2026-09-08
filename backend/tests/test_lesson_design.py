@@ -119,6 +119,42 @@ class LessonDesignServiceTest(unittest.TestCase):
         self.assertIsNone(service._ask_minimax(design, "process", "设计课堂过程"))
         self.assertEqual(client.chat_completion.call_count, 1)
 
+    def test_reading_design_validates_same_snapshot_without_model_or_store_changes(self) -> None:
+        design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
+        before = self.store.state_file.read_bytes()
+        with patch.object(self.runtime.classroom.lesson_design, "_ask_minimax") as ask:
+            first = self.runtime.classroom.get_lesson_design(design["design_id"])
+            second = self.runtime.classroom.get_lesson_design(design["design_id"])
+        ask.assert_not_called()
+        self.assertEqual(first["revision"], design["revision"])
+        self.assertEqual(first["turns"], design["turns"])
+        self.assertFalse(first["rehearsal_report"]["ready"])
+        self.assertEqual(first["rehearsal_report"], second["rehearsal_report"])
+        self.assertEqual(self.store.state_file.read_bytes(), before)
+
+    def test_model_and_rules_cannot_rewrite_or_drop_protected_question_snapshots(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        original = {"question_id": "q1", "text": "哪些因素共同影响人口分布？", "source": "teacher_manual", "answer": "自然与人文因素", "explanation": "需基于地图解释"}
+        record = self.store.get_lesson_design(design.design_id)
+        record.draft["stages"] = [{"stage_id": "s1", "questions": [original]}]
+        self.store.upsert_lesson_design(record)
+        for candidate in ([], [{**original, "text": "改写题目"}], [original, original], [{**original, "answer": "错误答案"}]):
+            with self.subTest(candidate=candidate), patch.object(service, "_ask_minimax", return_value={"section_patch": {"stages": [{"questions": candidate}]}}):
+                with self.assertRaisesRegex(ValueError, "需保留的题目"):
+                    service.turn(design.design_id, "修改教学活动", 0, "process")
+                self.assertEqual(service.get(design.design_id).revision, 0)
+                self.assertEqual(service.get(design.design_id).draft["stages"][0]["questions"], [original])
+        with patch.object(service, "_ask_minimax", return_value=None):
+            with self.assertRaisesRegex(ValueError, "需保留的题目"):
+                service.turn(design.design_id, "修改教学活动", 0, "process")
+        relocated = [{"stage_id": "s2", "questions": [original]}]
+        with patch.object(service, "_ask_minimax", return_value={"section_patch": {"stages": relocated}}):
+            result = service.turn(design.design_id, "调整活动顺序", 0, "process")
+        self.assertEqual(result["draft"]["stages"], relocated)
+        open_question = {"question_id": "q2", "text": "原开放题"}
+        self.assertEqual(service._questions_to_preserve({"stages": [{"questions": [open_question]}]}, "保留现有三道开放题及原文"), [open_question])
+
     def test_rules_are_disclosed_in_response_and_history(self) -> None:
         service = self.runtime.classroom.lesson_design
         design = service.create_or_resume(self.project, "local_admin")

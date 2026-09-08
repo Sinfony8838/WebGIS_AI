@@ -290,6 +290,9 @@ class LessonDesignService:
             result = self._normalize_requirements_result(result, message, design.draft)
         patch = result.get("section_patch") if isinstance(result, dict) else {}
         patch = patch if isinstance(patch, dict) else {}
+        protected_questions = self._questions_to_preserve(design.draft, message)
+        if "stages" in patch and not self._preserves_questions(patch["stages"], protected_questions):
+            raise ValueError("本次生成改动或遗漏了需保留的题目，原草稿已保留。请重试；题库题和教师录入题请通过题目编辑入口修改。")
         # 已确认章节默认是稳定约束；只有教师明确提出修改/返回时才重新打开。
         reopen = any(token in message for token in ("修改", "调整", "返回", "重做", "换一种"))
         for key in list(patch):
@@ -1004,6 +1007,9 @@ class LessonDesignService:
             schedule = self._requested_schedule(message) if step == "process" else []
             if result is not None and schedule and not self._matches_schedule(result["section_patch"].get("stages"), schedule):
                 result, reason = None, "schedule_mismatch"
+            protected_questions = self._questions_to_preserve(design.draft, message)
+            if result is not None and "stages" in result["section_patch"] and not self._preserves_questions(result["section_patch"]["stages"], protected_questions):
+                result, reason = None, "protected_question_changed"
             if result is not None:
                 return result
             logger.warning("Lesson generation rejected: step=%s reason=%s attempt=%s", step, reason, attempt + 1)
@@ -1012,8 +1018,34 @@ class LessonDesignService:
                 correction = "上次输出未通过系统校验。请重新生成完整 JSON 对象：section_patch 是章节字典，不是数组；不改动的字段省略，不填 null。"
                 if schedule:
                     correction += "必须保留这些环节名称、顺序与分钟数：" + json.dumps(schedule, ensure_ascii=False)
+                if protected_questions:
+                    correction += "这些原题对象必须完整保留且各出现一次，可按教学意图移动到不同环节，不得改写或删减：" + json.dumps(protected_questions, ensure_ascii=False)
                 messages.append({"role": "user", "content": correction + "只返回简洁的完整结果，不要解释格式错误。"})
         return None
+
+    @staticmethod
+    def _questions_to_preserve(draft: Dict[str, Any], message: str) -> List[Dict[str, Any]]:
+        preserve_open = bool(re.search(r"保留.{0,40}(?:题|原文)", message))
+        return [copy.deepcopy(question)
+                for stage in draft.get("stages") or [] if isinstance(stage, dict)
+                for question in stage.get("questions") or [] if isinstance(question, dict)
+                if preserve_open or question.get("source") in {"question_bank", "teacher_manual"}]
+
+    @staticmethod
+    def _preserves_questions(stages: Any, required: List[Dict[str, Any]]) -> bool:
+        if not required:
+            return True
+        if not isinstance(stages, list):
+            return False
+        questions = [question for stage in stages if isinstance(stage, dict)
+                     for question in stage.get("questions") or [] if isinstance(question, dict)]
+        for original in required:
+            identifier = original.get("question_id")
+            matches = [question for question in questions
+                       if question.get("question_id") == identifier] if identifier else [question for question in questions if question == original]
+            if len(matches) != 1 or matches[0] != original:
+                return False
+        return True
 
     @staticmethod
     def _requested_schedule(message: str) -> List[Dict[str, Any]]:

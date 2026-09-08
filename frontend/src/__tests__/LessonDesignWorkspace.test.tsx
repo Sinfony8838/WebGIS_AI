@@ -81,6 +81,44 @@ describe("LessonDesignWorkspace", () => {
 
   afterEach(cleanup);
 
+  it("shows the same read-only report from both buttons and clears it after a draft edit", async () => {
+    createMock.mockResolvedValue(session({ current_step: "rehearsal", revision: 3 }));
+    fetchDesignMock.mockResolvedValue({ ...session({ current_step: "rehearsal", revision: 3 }), rehearsal_report: {
+      ready: false, errors: ["上海环节缺少活动"], warnings: [], total_minutes: 32, duration_minutes: 40
+    }});
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByTestId("ldw-run-rehearsal"));
+    await screen.findByText(/必须处理：上海环节缺少活动/);
+    expect(screen.getByTestId("ldw-rehearsal").textContent).toContain("32 分钟 / 计划 40 分钟");
+    fireEvent.click(screen.getByRole("button", { name: "重新检查" }));
+    await waitFor(() => expect(fetchDesignMock).toHaveBeenCalledTimes(2));
+    await screen.findByText(/必须处理：上海环节缺少活动/);
+    expect(turnMock).not.toHaveBeenCalled();
+    turnMock.mockResolvedValue(turnResult({ revision: 4, next_step: "rehearsal" }));
+    fireEvent.change(screen.getByLabelText("教案设计对话输入"), { target: { value: "修改上海活动" } });
+    fireEvent.click(screen.getByTestId("ldw-send"));
+    await waitFor(() => expect(turnMock).toHaveBeenCalledWith("design_1", "修改上海活动", 3, "rehearsal"));
+    await screen.findByText("尚未检查当前草稿，请运行预演。");
+    expect(screen.queryByText(/必须处理：上海环节缺少活动/)).toBeNull();
+    turnMock.mockResolvedValue(turnResult({ revision: 5, next_step: "rehearsal", rehearsal_report: { ready: true, errors: [], warnings: [] } }));
+    fireEvent.change(screen.getByLabelText("教案设计对话输入"), { target: { value: "请检查修改后的草稿" } });
+    fireEvent.click(screen.getByTestId("ldw-send"));
+    await screen.findByText("结构检查通过，仍需教师核对内容并确认章节");
+  });
+
+  it("surfaces a check failure without retaining a stale successful report", async () => {
+    createMock.mockResolvedValue(session({ current_step: "rehearsal" }));
+    fetchDesignMock.mockResolvedValueOnce({ ...session({ current_step: "rehearsal" }), rehearsal_report: { ready: true, errors: [], warnings: [] } });
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByTestId("ldw-run-rehearsal"));
+    await screen.findByText("结构检查通过，仍需教师核对内容并确认章节");
+    fetchDesignMock.mockRejectedValueOnce(new Error("检查服务暂时不可用"));
+    fireEvent.click(screen.getByRole("button", { name: "重新检查" }));
+    await screen.findByText("检查服务暂时不可用");
+    expect(screen.queryByText("结构检查通过，仍需教师核对内容并确认章节")).toBeNull();
+    expect(turnMock).not.toHaveBeenCalled();
+  });
+
   it("renders the nine steps, asks the active question and sends a turn", async () => {
     turnMock.mockResolvedValue(turnResult());
     render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);

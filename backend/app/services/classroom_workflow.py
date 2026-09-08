@@ -149,7 +149,10 @@ class ClassroomWorkflowRuntime:
 
     def get_lesson_design(self, design_id: str) -> Dict[str, Any]:
         design = self.lesson_design.get(design_id)
-        return {"status": "success", **design.to_dict(), **self.lesson_design.session_view(design), "capabilities": self.lesson_design.capability_catalog()}
+        # Validate exactly this read snapshot. Checking does not create a turn or revision.
+        report = self.lesson_design.validate_plan(design.draft, design.source_refs)
+        return {"status": "success", **design.to_dict(), **self.lesson_design.session_view(design),
+                "capabilities": self.lesson_design.capability_catalog(), "rehearsal_report": report}
 
     def turn_lesson_design(self, design_id: str, message: str, expected_revision: Optional[int] = None, step: str = "") -> Dict[str, Any]:
         return self.lesson_design.turn(design_id, message, expected_revision, step)
