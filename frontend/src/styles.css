@@ -7663,3 +7663,7 @@ button {
   border-radius:10px; font-size:12px; line-height:1.5;
 }
 .map-basemap-notice button { flex-shrink:0; cursor:pointer; color:var(--accent); background:transparent; border:0; font:inherit; }
+
+.qpm-thinking-dot { display:inline-block; width:7px; height:7px; margin-right:8px; border-radius:50%; background:var(--accent); animation:qpm-thinking 1.2s ease-in-out infinite; }
+@keyframes qpm-thinking { 50% { opacity:.3; } }
+@media(prefers-reduced-motion:reduce) { .qpm-thinking-dot { animation:none; } }

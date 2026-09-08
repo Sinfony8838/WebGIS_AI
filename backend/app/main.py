@@ -2179,6 +2179,15 @@ def reveal_session_question(session_id: str, request: Request) -> Dict[str, Any]
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/class-sessions/{session_id}/questions/explanation")
+def get_question_explanation(session_id: str, request: Request) -> Dict[str, Any]:
+    _require_session_access(request, session_id)
+    try:
+        return runtime.classroom.get_question_explanation(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.post("/class-sessions/{session_id}/observations")
 def add_session_observation(session_id: str, payload: ObservationRequest, request: Request) -> Dict[str, Any]:
     _require_session_access(request, session_id)

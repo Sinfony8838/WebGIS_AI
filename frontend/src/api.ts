@@ -1360,3 +1360,7 @@ export async function updateTimeline(
     }
   );
 }
+
+export async function fetchQuestionExplanation(sessionId: string): Promise<{ question_id: string; timer: import("./types").QuestionTimerState | null }> {
+  return requestJson(`/class-sessions/${encodeURIComponent(sessionId)}/questions/explanation`);
+}

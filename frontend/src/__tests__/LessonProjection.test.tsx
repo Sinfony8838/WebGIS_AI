@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { LessonWorkflowShell } from "../components/LessonWorkflowShell";
 import type { ClassSessionRecord, LessonRecord, ProjectRecord } from "../types";
 
@@ -9,6 +9,7 @@ const fetchLessonMock = vi.fn();
 const launchSessionQuestionMock = vi.fn();
 const updateTimerMock = vi.fn();
 const revealMock = vi.fn();
+const explanationMock = vi.fn();
 const closeQuestionMock = vi.fn();
 const addObservationMock = vi.fn();
 
@@ -22,6 +23,7 @@ vi.mock("../api", async () => {
     launchSessionQuestion: (...args: unknown[]) => launchSessionQuestionMock(...args),
     updateSessionQuestionTimer: (...args: unknown[]) => updateTimerMock(...args),
     revealSessionQuestion: (...args: unknown[]) => revealMock(...args),
+    fetchQuestionExplanation: (...args: unknown[]) => explanationMock(...args),
     closeSessionQuestion: (...args: unknown[]) => closeQuestionMock(...args),
     addSessionObservation: (...args: unknown[]) => addObservationMock(...args)
   };
@@ -217,4 +219,30 @@ describe("LessonWorkflowShell question projection", () => {
     // 投屏启动时题目事件只带题面字段（投屏弹窗中的答案区块在揭示前不渲染）。
     expect(screen.queryByTestId("qpm-answer")).toBeNull();
   });
+});
+
+it("adopts completed commentary after reveal without blocking classroom controls", async () => {
+  const q=projectedQuestion();
+  const pending={...(q.timer as object),status:"revealed",revealed:true,ai_explanation_status:"pending",ai_request_id:"request-a"};
+  explanationMock.mockResolvedValue({question_id:"qb_1",timer:{...pending,ai_explanation_status:"ready",ai_explanation:{text:"上海人口材料补充讲解",generator:"minimax"}}});
+  renderShell(makeSession({...q,timer:pending}));
+  await waitFor(()=>expect(screen.getByTestId("qpm-answer")).toBeTruthy());
+  expect(screen.getByTestId("qpm-close")).not.toBeDisabled();
+  await waitFor(()=>expect(screen.getByText("上海人口材料补充讲解")).toBeTruthy(),{timeout:2000});
+  expect(explanationMock).toHaveBeenCalledWith("session_1");
+});
+
+it("ignores a commentary response arriving after the teacher closes the question", async () => {
+  const q=projectedQuestion();
+  const pending={...(q.timer as object),status:"revealed",revealed:true,ai_explanation_status:"pending",ai_request_id:"request-b"};
+  let resolve!: (value: unknown) => void;
+  explanationMock.mockReturnValue(new Promise(done=>{resolve=done;}));
+  closeQuestionMock.mockResolvedValue({status:"success"});
+  renderShell(makeSession({...q,timer:pending}));
+  await waitFor(()=>expect(explanationMock).toHaveBeenCalled(),{timeout:2000});
+  fireEvent.click(screen.getByTestId("qpm-close"));
+  await waitFor(()=>expect(screen.queryByTestId("question-practice-modal")).toBeNull());
+  await act(async()=>resolve({question_id:"qb_1",timer:{...pending,ai_explanation_status:"ready",ai_explanation:{text:"迟到结果",generator:"minimax"}}}));
+  expect(screen.queryByText("迟到结果")).toBeNull();
+  expect(screen.queryByTestId("question-practice-modal")).toBeNull();
 });

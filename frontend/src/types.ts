@@ -739,6 +739,9 @@ export type QuestionTimerState = {
   overtime_seconds: number;
   reset_count: number;
   ai_explanation: { text: string; generator: string } | null;
+  ai_explanation_status?: "pending" | "ready" | "interrupted";
+  ai_request_id?: string;
+  ai_explanation_note?: string;
 };
 
 export type QuestionRevealResult = {

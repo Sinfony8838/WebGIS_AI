@@ -292,10 +292,17 @@ export function QuestionPracticeModal({
                   ))}
                 </div>
               ) : null}
+              {timer?.ai_explanation_status === "pending" ? (
+                <div className="qpm-ai" role="status" aria-live="polite"><span className="qpm-thinking-dot" />正在整理讲解…参考答案已可使用，可继续收题或记录观察。</div>
+              ) : null}
+              {timer?.ai_explanation_status === "interrupted" ? (
+                <div className="qpm-ai" role="status">讲解任务已中断，参考答案不受影响。<button type="button" disabled={busy} onClick={onReveal}>重试讲解</button></div>
+              ) : null}
+              {timer?.ai_explanation_note && timer.ai_explanation_status === "ready" ? <p className="qpm-section-label">{timer.ai_explanation_note}</p> : null}
               {timer?.ai_explanation ? (
                 <div className="qpm-ai" data-testid="qpm-ai">
                   <span className="qpm-section-label">
-                    AI 讲解{timer.ai_explanation.generator === "minimax" ? "" : "（规则生成）"}
+                    {timer.ai_explanation.generator === "minimax" ? "AI 补充讲解" : "材料要点（规则整理）"}
                   </span>
                   <p>{timer.ai_explanation.text}</p>
                 </div>

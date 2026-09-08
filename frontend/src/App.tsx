@@ -2417,12 +2417,11 @@ export default function App({
         lessonGlobePinnedRef.current = false;
         lessonGlobeRestoreRef.current = null;
         setGlobeThemeIds([]);
-        transitionToPlane({
-          lon: globeCamera?.lon ?? 104,
-          lat: globeCamera?.lat ?? 35,
-          zoom: globeCamera ? altitudeToZoom(globeCamera.altitudeMeters) : 4,
-          reason: "manual"
-        });
+        // The scene refresh supplies its own center/zoom. A delayed camera
+        // transition would overwrite Shanghai with the previous globe center.
+        mapRef.current?.getView().cancelAnimations();
+        lastAppliedViewRef.current = "";
+        setViewMode("plane");
         return;
       }
 

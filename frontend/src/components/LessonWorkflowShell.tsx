@@ -19,6 +19,7 @@ import {
   populationLessonPrepResult,
   preparePopulationLesson,
   revealSessionQuestion,
+  fetchQuestionExplanation,
   resolvePopulationLessonPrep,
   updateLesson,
   updateSessionQuestionTimer
@@ -661,12 +662,35 @@ export function LessonWorkflowShell({
     await runWithBusy(async () => {
       const response = await revealSessionQuestion(activeSession.session_id);
       setActiveSession((previous) =>
-        previous
+        previous?.session_id === activeSession.session_id && previous.active_question?.question_id === activeSession.active_question?.question_id
           ? { ...previous, active_question: { ...previous.active_question, timer: response.timer } }
           : previous
       );
     });
   }, [activeSession, runWithBusy]);
+
+  const explanationTimer = (activeSession?.active_question as Partial<LessonQuestion> | undefined)?.timer;
+  const explanationRequestId = explanationTimer?.ai_request_id;
+  const explanationStatus = explanationTimer?.ai_explanation_status;
+  useEffect(() => {
+    if (!activeSession || activeSession.status !== "running" || explanationStatus !== "pending") return;
+    let cancelled = false, timeout = 0;
+    const sessionId = activeSession.session_id;
+    const questionId = activeSession.active_question.question_id;
+    const poll = async () => {
+      try {
+        const response = await fetchQuestionExplanation(sessionId);
+        if (cancelled) return;
+        if (!response.timer || response.question_id !== questionId || response.timer.ai_request_id !== explanationRequestId) return;
+        setActiveSession(previous => previous?.session_id === sessionId && previous.active_question?.question_id === questionId && (previous.active_question as Partial<LessonQuestion>).timer?.ai_request_id === explanationRequestId
+          ? { ...previous, active_question: { ...previous.active_question, timer: response.timer! } } : previous);
+        if (response.timer.ai_explanation_status !== "pending") return;
+      } catch { /* A temporary disconnect must not close the question or lose its answer. */ }
+      if (!cancelled) timeout = window.setTimeout(poll, 1500);
+    };
+    timeout = window.setTimeout(poll, 700);
+    return () => { cancelled = true; window.clearTimeout(timeout); };
+  }, [activeSession?.session_id, activeSession?.active_question?.question_id, activeSession?.status, explanationRequestId, explanationStatus]);
 
   const closeProjection = useCallback(async () => {
     if (!activeSession) return;

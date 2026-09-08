@@ -26,6 +26,8 @@ class ClassroomWorkflowRuntime:
     """
 
     def __init__(self, runtime: Any):
+        self._explanation_slots = threading.BoundedSemaphore(2)
+        self._explanation_requests: set[str] = set()
         self.runtime = runtime
         self.config = runtime.config
         self.store = runtime.store
@@ -776,42 +778,106 @@ class ClassroomWorkflowRuntime:
         return {"status": "success", "timer": view, "server_now": now}
 
     def reveal_session_question(self, session_id: str) -> Dict[str, Any]:
-        """揭示投屏题目答案：停止计时并记录实际用时/超时/来源，答案只回给教师端。"""
-        session = self._require_session(session_id)
-        if session.status != "running":
-            raise ValueError("Class session has already ended")
-        active = dict(session.active_question or {})
-        if not active.get("question_id"):
-            raise ValueError("No active question to reveal")
-        timer = self._normalize_timer(active.get("timer")) or self._init_question_timer(active)
-        now = self._utc_now()
-        if timer.get("revealed"):
-            # 幂等：刷新后重复请求不再生成新事件，也不重复生成讲解。
-            return self._reveal_payload(active, timer, now)
-
-        actual = self._timer_elapsed(timer)
-        timer["status"] = "revealed"
-        timer["revealed"] = True
-        timer["revealed_at"] = now
-        timer["actual_seconds"] = actual
-        timer["overtime_seconds"] = max(0, actual - int(timer["suggested_seconds"]))
-        timer["ai_explanation"] = self._compose_ai_explanation(active)
-        active["timer"] = timer
+        """Persist the reveal immediately; model commentary runs independently."""
         with self.store.batch():
+            session = self._require_session(session_id)
+            if session.status != "running":
+                raise ValueError("Class session has already ended")
+            active = dict(session.active_question or {})
+            if not active.get("question_id"):
+                raise ValueError("No active question to reveal")
+            timer = self._normalize_timer(active.get("timer")) or self._init_question_timer(active)
+            now = self._utc_now()
+            if timer.get("revealed"):
+                # Repeated reveal is idempotent; only an interrupted worker can retry.
+                if timer.get("ai_explanation_status") == "pending" and timer.get("ai_request_id") not in self._explanation_requests:
+                    timer["ai_explanation_status"] = "interrupted"
+                if timer.get("ai_explanation_status") == "interrupted":
+                    self._prepare_question_explanation(session_id, active, timer)
+                return self._reveal_payload(active, timer, now)
+
+            actual = self._timer_elapsed(timer)
+            timer.update(status="revealed", revealed=True, revealed_at=now,
+                         actual_seconds=actual, overtime_seconds=max(0, actual - int(timer["suggested_seconds"])))
+            active["timer"] = timer
             self.store.set_active_question(session_id, active)
             self.store.append_session_event(
-                session_id,
-                "question_revealed",
-                stage_id=str(active.get("stage_id") or ""),
-                payload={
-                    "question_id": str(active["question_id"]),
-                    "suggested_seconds": int(timer["suggested_seconds"]),
-                    "actual_seconds": actual,
-                    "overtime_seconds": int(timer["overtime_seconds"]),
-                    "source": str(timer.get("question_source") or ""),
-                },
+                session_id, "question_revealed", stage_id=str(active.get("stage_id") or ""),
+                payload={"question_id": str(active["question_id"]), "suggested_seconds": int(timer["suggested_seconds"]),
+                         "actual_seconds": actual, "overtime_seconds": int(timer["overtime_seconds"]),
+                         "source": str(timer.get("question_source") or "")},
             )
-        return self._reveal_payload(active, timer, now)
+            self._prepare_question_explanation(session_id, active, timer)
+            return self._reveal_payload(active, timer, now)
+
+    def _prepare_question_explanation(self, session_id: str, active: Dict[str, Any], timer: Dict[str, Any]) -> None:
+        # Caller holds store.batch: reservation, persistence and request identity
+        # are atomic with reveal/close/relaunch. No model call runs under this lock.
+        use_model = self.config.minimax_enabled() and self.runtime.minimax_client is not None
+        if not use_model or not self._explanation_slots.acquire(blocking=False):
+            answer = str(active.get("answer") or "")
+            index, options = active.get("answer_index"), active.get("options") or []
+            if not answer and isinstance(index, int) and 0 <= index < len(options):
+                answer = f"正确选项：{chr(65 + index)}. {options[index]}"
+            timer["ai_explanation"] = self._rule_explanation(
+                active, answer, [str(v) for v in active.get("knowledge_points") or []])
+            timer["ai_explanation_status"] = "ready"
+            timer["ai_explanation_note"] = "AI讲解繁忙，先显示现有材料整理的要点。" if use_model else ""
+            active["timer"] = timer
+            self.store.set_active_question(session_id, active)
+            return
+        request_id = secrets.token_hex(12)
+        timer.update(ai_explanation=None, ai_explanation_status="pending", ai_request_id=request_id,
+                     ai_explanation_note="正在整理讲解，参考答案已可使用。")
+        active["timer"] = timer
+        self.store.set_active_question(session_id, active)
+        self._explanation_requests.add(request_id)
+        thread = threading.Thread(target=self._complete_question_explanation,
+                                  args=(session_id, dict(active), request_id), daemon=True,
+                                  name="classroom-explanation")
+        try:
+            thread.start()
+        except RuntimeError:
+            self._explanation_requests.discard(request_id)
+            self._explanation_slots.release()
+            timer["ai_explanation_status"] = "interrupted"
+            self.store.set_active_question(session_id, active)
+
+    def _complete_question_explanation(self, session_id: str, question: Dict[str, Any], request_id: str) -> None:
+        try:
+            result = self._compose_ai_explanation(question)
+            with self.store.batch():
+                session = self.store.get_class_session(session_id)
+                current = dict(session.active_question or {}) if session else {}
+                timer = self._normalize_timer(current.get("timer"))
+                if (not session or session.status != "running"
+                        or current.get("question_id") != question.get("question_id")
+                        or timer.get("ai_request_id") != request_id or not timer.get("revealed")):
+                    return
+                timer.update(ai_explanation=result, ai_explanation_status="ready",
+                             ai_explanation_note="" if result.get("generator") == "minimax" else "AI暂未可用，显示现有材料整理的要点。")
+                current["timer"] = timer
+                self.store.set_active_question(session_id, current)
+        except Exception:
+            # The status endpoint turns an orphaned pending request into an
+            # explicit retry state; never propagate a worker failure to reveal.
+            pass
+        finally:
+            with self.store.batch():
+                self._explanation_requests.discard(request_id)
+            self._explanation_slots.release()
+
+    def get_question_explanation(self, session_id: str) -> Dict[str, Any]:
+        with self.store.batch():
+            session = self._require_session(session_id)
+            active = dict(session.active_question or {})
+            timer = self._normalize_timer(active.get("timer"))
+            if timer.get("ai_explanation_status") == "pending" and timer.get("ai_request_id") not in self._explanation_requests:
+                timer.update(ai_explanation_status="interrupted", ai_explanation_note="讲解任务已中断，可重试；参考答案不受影响。")
+                active["timer"] = timer
+                self.store.set_active_question(session_id, active)
+            return {"status": "success", "question_id": active.get("question_id", ""),
+                    "timer": self._timer_view(timer) if timer else None, "server_now": self._utc_now()}
 
     def _reveal_payload(
         self, active: Dict[str, Any], timer: Dict[str, Any], now: str
@@ -867,8 +933,9 @@ class ClassroomWorkflowRuntime:
         if client is None:
             raise RuntimeError("LLM client unavailable")
         parts = [
-            "你是高中地理教师，正在课堂上讲评一道题。请基于给出的官方答案、官方解析与考点，用 120—200 字给学生讲清解题思路。",
-            "只能使用下方信息，不得补充教材之外的新事实；信息不足时明确说明。",
+            "你是高中地理教师，正在课堂上讲评一道题。请基于给出的参考答案、参考解析与考点，用 120—200 字给学生讲清解题思路。",
+            "只能使用下方材料、参考答案与解析中的信息，不得自行补充事实；信息不足时明确说明。",
+            "题目要求数值支持时，必须引用参考答案已有的计算结果及单位；不能只说高低。人口与面积的资料来源分别说明，同一年份不等于同一来源。",
             "",
             f"题干：{str(question.get('text') or '')}",
         ]
@@ -883,8 +950,8 @@ class ClassroomWorkflowRuntime:
                 parts.append(f"小题 {sub.get('index')}：{sub.get('text')} → {sub.get('answer')}")
         parts.extend(
             [
-                f"官方答案：{official_answer or '（无）'}",
-                f"官方解析：{str(question.get('explanation') or '').strip() or '（无）'}",
+                f"参考答案：{official_answer or '（无）'}",
+                f"参考解析：{str(question.get('explanation') or '').strip() or '（无）'}",
                 f"考点：{'、'.join(knowledge) if knowledge else '（无）'}",
                 "",
                 "输出分三段，段首分别为「思路」「关键点」「一句话总结」。",
@@ -902,7 +969,7 @@ class ClassroomWorkflowRuntime:
     ) -> Dict[str, Any]:
         lines = ["【讲解要点】"]
         if official_answer:
-            lines.append(f"官方答案：{official_answer}")
+            lines.append(f"参考答案：{official_answer}")
         explanation = str(question.get("explanation") or "").strip()
         if explanation:
             lines.append(f"官方解析：{explanation}")
