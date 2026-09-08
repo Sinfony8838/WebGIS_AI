@@ -119,7 +119,7 @@ button:disabled { cursor: not-allowed; }
   .layer-manager-panel, .dialog-panel,
   .ppt-viewer-header, .ppt-viewer-nav, .ppt-viewer-dock, .admin-panel,
   .auth-card, .user-menu-trigger, .user-menu-popover, .search-dropdown-menu,
-  .basemap-menu, .basemap-dropdown, .map-instruction-strip, .agent-control-badge) {
+  .basemap-menu-panel, .map-instruction-strip, .agent-control-badge) {
   background: var(--glass-bg);
   color: var(--text-main);
   border-color: var(--panel-border);

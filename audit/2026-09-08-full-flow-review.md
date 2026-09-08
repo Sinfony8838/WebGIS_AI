@@ -183,3 +183,11 @@ frontend/src/styles.css
 另观察：检索“人口密度”时，航空产业基地选址题也显示“相关度 100%”。该分数不能当作客观匹配准确率，排序及百分比展示需进一步复核。
 
 检查：教案定向 13 测试通过（1.97 秒）；完整后端 468 测试、9 子测试通过（44.91 秒）；隔离 19008 服务重启后 /health 返回 success，原用户课堂后端未重启；git diff --check 通过。未修改前端，沿用上一提交的前端测试及构建验证范围。
+
+
+## 浅色底图按钮白角修复
+
+- 原因：浅色主题的面板选择器误包含定位容器 `.basemap-menu`，导致圆角按钮外露出矩形底色。改为真实下拉面板 `.basemap-menu-panel`；按钮外层恢复透明，不使用裁切影响菜单。
+- 修改范围：`frontend/src/theme.css` 与本复盘记录；未修改其他工作区。
+- 网页验收：浅色模式按钮四角背景正常，底图菜单与基础底图列表可展开且未裁切；截图 `32-basemap-corners-fixed.png` 保存在本地证据目录。
+- 检查：`npm test -- --run src/__tests__/BasemapMenu.test.tsx`，1 test passed；`npm run build` 通过，315 modules，Vite 4.80 秒；`git diff --check` 通过。
