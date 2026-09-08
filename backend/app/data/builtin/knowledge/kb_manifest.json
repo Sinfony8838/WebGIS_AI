@@ -356,6 +356,156 @@
       ],
       "related_templates": [],
       "updated_at": "2026-04-28T12:00:00+08:00"
+    },
+    {
+      "id": "shanghai_qingpu_population_statistics",
+      "title": "青浦区街镇常住人口变化（2010—2020）",
+      "topic": "population_census",
+      "region": "上海市青浦区",
+      "time": "2010, 2020",
+      "status": "knowledge_only",
+      "source": "青浦区统计局：第七次全国人口普查主要数据公报（第二号）",
+      "license": "官方公开统计；沿用来源使用要求",
+      "grade_level": "高一必修二",
+      "keywords": [
+        "上海",
+        "青浦",
+        "街道",
+        "街镇",
+        "常住人口",
+        "人口总量"
+      ],
+      "tags": [
+        "人口",
+        "统计资料",
+        "人口变化"
+      ],
+      "summary": "对照2010、2020年11个街镇的常住人口；支持上海区内人口变化探究。",
+      "canonical_answer": "青浦区公报列出2010年1081022人、2020年1271424人。赵巷镇由74409人增至143350人；金泽镇由67735人降至44517人。可提出人口变化原因假设，但不能仅凭增减判断净迁移或密度。",
+      "teaching_points": [
+        "2020年普查时点：11月1日零时；公报为初步汇总数据。",
+        "2010年数据沿用同一公报的对照表；未独立核验两期边界变化。",
+        "人口增减不能直接视为净迁移；缺少同期面积和边界，不计算街镇密度。",
+        "先读图提出假设，再结合产业、交通等独立资料验证，不能只凭人口图证明因果。"
+      ],
+      "citations": [
+        {
+          "title": "青浦区统计局：第七次全国人口普查主要数据公报（第二号）",
+          "url": "https://www.shqp.gov.cn/stat/tjtzgg/20210816/885923.html"
+        }
+      ],
+      "dataset_refs": [],
+      "materials": [
+        {
+          "id": "shanghai_qingpu_image",
+          "title": "青浦区街镇常住人口变化 · 统计图",
+          "type": "image",
+          "source": "青浦区统计局：第七次全国人口普查主要数据公报（第二号）",
+          "url": "/teaching-resources/shanghai_qingpu_population.svg",
+          "description": "根据官方表格绘制。对照2010、2020年11个街镇的常住人口；支持上海区内人口变化探究。",
+          "region_binding": {
+            "name": "上海市青浦区"
+          },
+          "created_at": "2026-09-09T00:00:00+08:00"
+        },
+        {
+          "id": "shanghai_qingpu_document",
+          "title": "青浦区街镇常住人口变化 · 数据表（CSV）",
+          "type": "document",
+          "source": "青浦区统计局：第七次全国人口普查主要数据公报（第二号）",
+          "url": "/teaching-resources/shanghai_qingpu_population.csv",
+          "description": "保留官方数值、单位、年份和来源，可下载后继续分析。",
+          "region_binding": {
+            "name": "上海市青浦区"
+          },
+          "created_at": "2026-09-09T00:00:00+08:00"
+        },
+        {
+          "id": "shanghai_qingpu_source",
+          "title": "青浦区统计局原文",
+          "type": "link",
+          "source": "青浦区统计局：第七次全国人口普查主要数据公报（第二号）",
+          "url": "https://www.shqp.gov.cn/stat/tjtzgg/20210816/885923.html",
+          "description": "官方来源；注意普查年份与网页发布日期不同。",
+          "created_at": "2026-09-09T00:00:00+08:00"
+        }
+      ],
+      "updated_at": "2026-09-09T00:00:00+08:00"
+    },
+    {
+      "id": "shanghai_yangpu_population_statistics",
+      "title": "杨浦区各街道常住人口（2020）",
+      "topic": "population_census",
+      "region": "上海市杨浦区",
+      "time": "2020",
+      "status": "knowledge_only",
+      "source": "杨浦区统计局：第7次人口普查杨浦区各街道数据",
+      "license": "官方公开统计；沿用来源使用要求",
+      "grade_level": "高一必修二",
+      "keywords": [
+        "上海",
+        "杨浦",
+        "街道",
+        "街镇",
+        "常住人口",
+        "人口总量"
+      ],
+      "tags": [
+        "人口",
+        "统计资料",
+        "人口比较"
+      ],
+      "summary": "比较2020年12个街道的常住人口总量；单位为万人，保留原表精度。",
+      "canonical_answer": "杨浦区2020年普查常住人口合计124.25万人。原表中殷行街道18.25万人、平凉路街道5.78万人。各街道数据按万人保留两位小数，不表示街道人口密度。",
+      "teaching_points": [
+        "数据为2020年人口普查常住人口，网页答复日期为2023年4月20日。",
+        "原表以万人保留两位小数；街道加总124.26万人，公布总计124.25万人，保留两者。",
+        "比较的是人口总量；没有同期面积，不能据此判断人口密度。",
+        "先读图提出假设，再结合产业、交通等独立资料验证，不能只凭人口图证明因果。"
+      ],
+      "citations": [
+        {
+          "title": "杨浦区统计局：第7次人口普查杨浦区各街道数据",
+          "url": "https://www.shyp.gov.cn/shypq/zmhd-zxzx/20230420/426507.html"
+        }
+      ],
+      "dataset_refs": [],
+      "materials": [
+        {
+          "id": "shanghai_yangpu_image",
+          "title": "杨浦区各街道常住人口 · 统计图",
+          "type": "image",
+          "source": "杨浦区统计局：第7次人口普查杨浦区各街道数据",
+          "url": "/teaching-resources/shanghai_yangpu_population.svg",
+          "description": "根据官方表格绘制。比较2020年12个街道的常住人口总量；单位为万人，保留原表精度。",
+          "region_binding": {
+            "name": "上海市杨浦区"
+          },
+          "created_at": "2026-09-09T00:00:00+08:00"
+        },
+        {
+          "id": "shanghai_yangpu_document",
+          "title": "杨浦区各街道常住人口 · 数据表（CSV）",
+          "type": "document",
+          "source": "杨浦区统计局：第7次人口普查杨浦区各街道数据",
+          "url": "/teaching-resources/shanghai_yangpu_population.csv",
+          "description": "保留官方数值、单位、年份和来源，可下载后继续分析。",
+          "region_binding": {
+            "name": "上海市杨浦区"
+          },
+          "created_at": "2026-09-09T00:00:00+08:00"
+        },
+        {
+          "id": "shanghai_yangpu_source",
+          "title": "杨浦区统计局原文",
+          "type": "link",
+          "source": "杨浦区统计局：第7次人口普查杨浦区各街道数据",
+          "url": "https://www.shyp.gov.cn/shypq/zmhd-zxzx/20230420/426507.html",
+          "description": "官方来源；注意普查年份与网页发布日期不同。",
+          "created_at": "2026-09-09T00:00:00+08:00"
+        }
+      ],
+      "updated_at": "2026-09-09T00:00:00+08:00"
     }
   ]
 }
