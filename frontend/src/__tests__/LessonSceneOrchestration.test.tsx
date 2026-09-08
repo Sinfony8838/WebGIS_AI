@@ -145,3 +145,25 @@ describe("LessonWorkflowShell globe scene orchestration", () => {
     expect(onCaptureEvidence).toHaveBeenCalledWith("session_running", "s4");
   });
 });
+
+it("adopts assistant classroom results without starting a second class", async () => {
+  const item = lesson();
+  apiMocks.fetchLessons.mockResolvedValue({ status: "success", items: [item] });
+  apiMocks.fetchClassSessions.mockResolvedValue({ status: "success", items: [] });
+  const onTeachingContextChange = vi.fn();
+  const onApplyGlobeScene = vi.fn();
+  const props = { project: { project_id: "project_1" } as never, layerState: null, onRefresh: vi.fn(), onTeachingContextChange, onApplyGlobeScene };
+  const { rerender } = render(<LessonWorkflowShell {...props} />);
+  await waitFor(() => expect(apiMocks.fetchLessons).toHaveBeenCalled());
+  const session = { session_id: "assistant_session", project_id: "project_1", lesson_id: item.lesson_id, status: "running", current_stage_id: "", started_at: "2026-09-08T00:00:00Z", metadata: { lesson_snapshot: item }, events: [], responses: {}, active_question: {} };
+  const job = (id: string, tool: string, result: object) => ({ job_id: id, project_id: "project_1", status: "completed", result: { actions_executed: [{ action: { tool_name: tool, tool_params: {} }, result }] } } as never);
+  rerender(<LessonWorkflowShell {...props} assistantJob={job("start", "start_class_session", { class_session: session })} />);
+  await waitFor(() => expect(onTeachingContextChange).toHaveBeenLastCalledWith(expect.objectContaining({ session_id: "assistant_session", phase: "in_class" })));
+  expect(screen.getByText("结束上课")).toBeInTheDocument();
+  rerender(<LessonWorkflowShell {...props} assistantJob={job("stage", "enter_lesson_stage", { stage: item.stages[0] })} />);
+  await waitFor(() => expect(onTeachingContextChange).toHaveBeenLastCalledWith(expect.objectContaining({ stage_id: "s4" })));
+  expect(onApplyGlobeScene).toHaveBeenCalledWith(item.stages[0].scene.globe);
+  rerender(<LessonWorkflowShell {...props} assistantJob={job("end", "end_class_session", { class_session: { ...session, status: "ended" } })} />);
+  await waitFor(() => expect(onTeachingContextChange).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "post_class" })));
+  expect(screen.getByLabelText("关闭复盘面板")).toBeInTheDocument();
+});

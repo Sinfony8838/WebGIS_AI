@@ -1691,6 +1691,14 @@ class ToolExecutor:
             "start_class_session": {"target": "webgis", "category": "classroom", "risk_level": "medium", "reversible": False, "requires_confirmation": False, "visible_in_mode": ["interaction"], "validator": self._require_no_active_session},
             "end_class_session": {"target": "webgis", "category": "classroom", "risk_level": "high", "reversible": False, "requires_confirmation": True, "visible_in_mode": ["interaction"], "validator": self._require_active_session},
         }
+        # Keep interaction visibility aligned with the tool table given to the
+        # planner, while preserving the existing permissions in other modes.
+        for tool in ASSISTANT_TOOL_SCHEMA:
+            if "interaction" in tool.get("modes", []) and tool["name"] in registry:
+                metadata = registry[tool["name"]]
+                modes = metadata.setdefault("visible_in_mode", ["tool", "hybrid", "knowledge", "teaching", "teaching_action"])
+                if "interaction" not in modes:
+                    modes.append("interaction")
         return registry
 
     def _describe_tool(
@@ -1945,8 +1953,10 @@ class AssistantSessionEngine:
             planner_label = str(plan.get("planner") or "unknown")
             if planner_label == "interaction_rule":
                 stage_callback("planning", "success", "快速通道命中，无需等待", plan.get("assistant_message", ""))
-            else:
+            elif planner_label == "interaction_minimax":
                 stage_callback("planning", "success", "AI 已完成操作规划", plan.get("assistant_message", ""))
+            else:
+                stage_callback("planning", "error", "AI 规划未完成，未执行操作", plan.get("assistant_message", ""))
         else:
             stage_callback("planning", "success", f"Planner: {plan.get('planner', 'unknown')}", plan.get("assistant_message", ""))
 
@@ -2154,6 +2164,11 @@ class AssistantSessionEngine:
         knowledge = None
         citations: List[Dict[str, Any]] = []
         assistant_message = str(plan.get("assistant_message") or "").strip()
+        if intent == "interaction":
+            # The executor may reject a missing target or only submit an
+            # asynchronous job. Report its actual outcome instead of the plan.
+            outcomes = [str(item.get("result", {}).get("assistant_message") or "").strip() for item in executed]
+            assistant_message = "\n".join(dict.fromkeys(text for text in outcomes if text)) or assistant_message
         teaching_contract: Optional[Dict[str, str]] = None
 
         if intent == "hybrid" or normalized_mode == "teaching":
@@ -2287,6 +2302,9 @@ class AssistantSessionEngine:
         assistant_message = "Confirmed action executed successfully."
         teaching_contract: Optional[Dict[str, str]] = None
         confirmed_intent = str((frozen_plan or payload).get("intent") or payload.get("intent") or "tool")
+        if confirmed_intent == "interaction":
+            outcomes = [str(item.get("result", {}).get("assistant_message") or "").strip() for item in executed]
+            assistant_message = "\n".join(dict.fromkeys(text for text in outcomes if text)) or "已执行确认的操作。"
         if confirmed_intent == "hybrid" or confirmed_intent.startswith("teaching"):
             stage_callback("grounding", "running", "Explaining confirmed result", "")
             confirmed_message = str((frozen_plan or payload).get("message") or "")
@@ -2330,14 +2348,9 @@ class AssistantSessionEngine:
             "conversation_id": confirmation.conversation_id,
             "assistant_message": assistant_message,
             "actions_executed": executed,
-            "actions_planned": self.tool_executor.assess(
-                target,
-                actions,
-                pinned_state=conversation.pinned_state if conversation else {},
-                assistant_mode=confirmed_intent,
-                project_state={"project_id": confirmation.project_id},
-                map_context=map_context,
-            )["actions_planned"],
+            # Preserve the assessment that authorized this execution. Rechecking
+            # after ending a class would falsely label the completed action blocked.
+            "actions_planned": revalidation["actions_planned"],
             "requires_confirmation": False,
             "intent": confirmed_intent,
             "citations": citations,

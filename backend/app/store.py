@@ -4,6 +4,7 @@ import json
 import threading
 import time
 from contextlib import contextmanager
+from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 from uuid import uuid4
@@ -34,6 +35,7 @@ class RuntimeStore:
     def __init__(self, state_file: Path):
         self.state_file = state_file
         self._lock = threading.RLock()
+        self._job_changed = threading.Condition(self._lock)
         self.projects: Dict[str, ProjectRecord] = {}
         self.jobs: Dict[str, JobRecord] = {}
         self.artifacts: Dict[str, ArtifactRecord] = {}
@@ -238,10 +240,14 @@ class RuntimeStore:
         inline_limit = 256 * 1024
         layer_data_dir = self.state_file.parent / "layer_data"
         for project_id, project_payload in payload.get("projects", {}).items():
-            for layer in project_payload.get("layers", []):
+            layers = [self._encode_record(layer) for layer in project_payload.get("layers", [])]
+            project_payload["layers"] = layers
+            for layer in layers:
                 data = layer.get("data")
                 if not isinstance(data, dict):
                     continue
+                data = dict(data)
+                layer["data"] = data
                 features = data.get("features")
                 if not isinstance(features, list) or not features:
                     continue
@@ -284,40 +290,27 @@ class RuntimeStore:
         completed classroom action still reaches disk exactly once.
         """
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        # Mutations hold _lock while this synchronous encoder runs. Encoding
+        # records directly avoids recursively deep-copying every GeoJSON on
+        # each job-stage update; the persisted JSON structure stays identical.
         payload = {
-            "projects": {project_id: project.to_dict() for project_id, project in self.projects.items()},
-            "jobs": {job_id: job.to_dict() for job_id, job in self.jobs.items()},
-            "artifacts": {artifact_id: artifact.to_dict() for artifact_id, artifact in self.artifacts.items()},
-            "lessons": {lesson_id: lesson.to_dict() for lesson_id, lesson in self.lessons.items()},
-            "lesson_designs": {
-                design_id: design.to_dict() for design_id, design in self.lesson_designs.items()
-            },
-            "lesson_rehearsals": {
-                rehearsal_id: rehearsal.to_dict()
-                for rehearsal_id, rehearsal in self.lesson_rehearsals.items()
-            },
-            "class_sessions": {
-                session_id: session.to_dict()
-                for session_id, session in self.class_sessions.items()
-            },
-            "conversations": {
-                conversation_id: conversation.to_dict() for conversation_id, conversation in self.conversations.items()
-            },
-            "messages": {message_id: message.to_dict() for message_id, message in self.messages.items()},
-            "confirmations": {
-                confirmation_id: confirmation.to_dict()
-                for confirmation_id, confirmation in self.confirmations.items()
-            },
-            "workflows": {
-                workflow_id: workflow.to_dict()
-                for workflow_id, workflow in self.workflows.items()
-            },
+            "projects": {key: self._encode_record(project) for key, project in self.projects.items()},
+            "jobs": self.jobs,
+            "artifacts": self.artifacts,
+            "lessons": self.lessons,
+            "lesson_designs": self.lesson_designs,
+            "lesson_rehearsals": self.lesson_rehearsals,
+            "class_sessions": self.class_sessions,
+            "conversations": self.conversations,
+            "messages": self.messages,
+            "confirmations": self.confirmations,
+            "workflows": self.workflows,
         }
         # Runtime state can include large GeoJSON coordinate arrays.  Pretty
         # printing multiplies that hot-path payload and every mutation rewrites
         # the complete file, so retain readable Unicode but use compact JSON.
         self._offload_large_layer_data(payload)
-        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=self._encode_record)
         temp_path = self.state_file.with_suffix(f"{self.state_file.suffix}.{uuid4().hex}.tmp")
         try:
             temp_path.write_text(serialized, encoding="utf-8")
@@ -338,6 +331,12 @@ class RuntimeStore:
                     temp_path.unlink()
                 except OSError:
                     pass
+
+    @staticmethod
+    def _encode_record(value: Any) -> Dict[str, Any]:
+        if is_dataclass(value) and not isinstance(value, type):
+            return {item.name: getattr(value, item.name) for item in fields(value)}
+        raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
     def _quarantine_corrupt_state(self, reason: str) -> None:
         if not self.state_file.exists():
@@ -660,6 +659,14 @@ class RuntimeStore:
         with self._lock:
             return self.jobs.get(job_id)
 
+    def wait_for_job_update(self, job_id: str, version: str, timeout: float = 1.0) -> None:
+        """Wake an SSE subscriber on change, including changes before waiting."""
+        with self._job_changed:
+            self._job_changed.wait_for(
+                lambda: job_id not in self.jobs or self.jobs[job_id].updated_at != version,
+                timeout=timeout,
+            )
+
     def set_job_status(
         self,
         job_id: str,
@@ -676,6 +683,7 @@ class RuntimeStore:
             if error:
                 job.error = error
             self._save()
+            self._job_changed.notify_all()
             return job
 
     def append_job_step(self, job_id: str, title: str, detail: str, status: str = "info") -> JobRecord:
@@ -691,6 +699,7 @@ class RuntimeStore:
             )
             job.updated_at = utc_now()
             self._save()
+            self._job_changed.notify_all()
             return job
 
     def update_job_stage(
@@ -711,6 +720,7 @@ class RuntimeStore:
                 job.stages[stage_name]["detail"] = detail
             job.updated_at = utc_now()
             self._save()
+            self._job_changed.notify_all()
             return job
 
     def register_artifact(

@@ -35,6 +35,7 @@ import {
 import type {
   GraduatedStyle,
   WorkflowLayerStyle,
+  JobRecord,
   DatasetCatalogItem,
   LayersResponse,
   StatsPayload,
@@ -80,6 +81,7 @@ const SECONDARY_PARAM_BY_TEMPLATE: Record<string, { paramName: string; label: st
 
 export type WorkflowDockProps = {
   projectId: string;
+  assistantJob?: JobRecord | null;
   mapRef: React.MutableRefObject<Map | null>;
   /** Whether the dock is visible; collapsing the dock keeps state. */
   open?: boolean;
@@ -247,6 +249,7 @@ function DockSelect({
 
 export function WorkflowDock({
   projectId,
+  assistantJob,
   mapRef,
   open = true,
   layerState,
@@ -262,6 +265,16 @@ export function WorkflowDock({
   const [secondaryDataset, setSecondaryDataset] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [activeWorkflowId, setActiveWorkflowId] = useState<string>("");
+
+  useEffect(() => {
+    if (assistantJob?.status !== "completed" || assistantJob.project_id !== projectId) return;
+    for (const entry of assistantJob.result?.actions_executed || []) {
+      const workflow = entry.result?.workflow as { workflow_id?: string } | undefined;
+      if (entry.action.tool_name === "run_workflow" && workflow?.workflow_id) {
+        setActiveWorkflowId(workflow.workflow_id);
+      }
+    }
+  }, [assistantJob, projectId]);
 
   /**
    * Build the dataset dropdown options. Uploaded layers come first (most

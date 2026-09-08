@@ -2262,7 +2262,7 @@ def stream_job(job_id: str, request: Request):
                 last_version = version
             if payload.get("status") in {"completed", "failed"}:
                 return
-            time.sleep(1)
+            runtime.store.wait_for_job_update(job_id, str(version), timeout=1.0)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 

@@ -409,6 +409,8 @@ class AssistantService:
         message: str,
         project: ProjectRecord,
         map_context: Optional[Dict[str, Any]] = None,
+        *,
+        allow_llm_geocoding: bool = True,
     ) -> Dict[str, Any]:
         map_context = map_context or {}
         normalized_message = self._normalize_voice_text(message)
@@ -435,7 +437,7 @@ class AssistantService:
                 actions.append({"tool_name": "toggle_layer", "tool_params": {"layer_id": target_layer["layer_id"], "visible": True}})
                 narrative_parts.append(f"已按语音指令显示图层“{target_layer['name']}”。")
 
-        place_target = self._resolve_voice_place(normalized_message, project)
+        place_target = self._resolve_voice_place(normalized_message, project, allow_llm=allow_llm_geocoding) if self._is_voice_view_command(lowered) else None
         if place_target and self._is_voice_view_command(lowered):
             tool_params: Dict[str, Any] = {
                 "center": list(place_target["center"]),
@@ -491,6 +493,24 @@ class AssistantService:
         normalized = self._normalize_voice_text(message)
         lowered = normalized.lower()
 
+        # A keyword match cannot resolve negation, conditions or multiple
+        # instructions. Let the existing planner see the complete request.
+        complex_request = bool(re.search(r"然后|接着|同时|并且|并|再|如果|否则|而是|只|(?:和|及|、).*(?:底图|图层|地图|面板)", normalized))
+        negation = r"不要|(?<!分)别|不用|无需|不必|不能|不许|禁止"
+        negated = bool(re.search(negation, normalized))
+        if negated:
+            clauses = re.split(r"[，,；;。]|然后|接着|同时|并且|而是|只|再", message)
+            has_positive_action = any(
+                not re.search(negation, clause)
+                and re.search(r"打开|关闭|切换|显示|隐藏|开始|结束|进入|调到|调成|设置|定位|转到", clause)
+                for clause in clauses
+            )
+            if not has_positive_action:
+                return {"assistant_message": "好的，保持当前状态，不执行该操作。", "actions": [], "stop_planning": True}
+            complex_request = True
+        if complex_request:
+            return {"assistant_message": "这条指令需要完整规划，暂未执行任何操作。", "actions": []}
+
         # --- 班课控制（短语最具体，优先判定）---
         if any(keyword in normalized for keyword in INTERACTION_SESSION_END_KEYWORDS):
             return {
@@ -538,6 +558,9 @@ class AssistantService:
             opacity = self._parse_opacity_phrase(normalized)
             if opacity is not None:
                 target_layer = self._resolve_target_layer(normalized, project, include_active_fallback=False)
+                named_target = re.match(r"(?:请)?(?:帮我)?(?:把|将)?(.*?)图层", normalized)
+                if not target_layer and named_target and named_target.group(1) not in ("", "当前", "选中", "这个", "该", "活动"):
+                    return {"assistant_message": "未匹配到指定图层，需要进一步确认目标。", "actions": []}
                 active_layer = next((layer for layer in project.layers if layer.layer_id == project.active_layer_id), None)
                 resolved = target_layer or (active_layer.to_dict() if active_layer else None)
                 if resolved:
@@ -597,7 +620,10 @@ class AssistantService:
         looks_like_command = any(keyword in normalized for keyword in interaction_command_words)
         looks_like_question = any(keyword in normalized for keyword in interaction_question_words)
         if looks_like_command or looks_like_question:
-            legacy_plan = self.plan_voice_actions(message, project, map_context=map_context)
+            legacy_plan = self.plan_voice_actions(message, project, map_context=map_context, allow_llm_geocoding=False)
+            allowed = {item["name"] for item in ASSISTANT_TOOL_SCHEMA if "interaction" in item.get("modes", [])}
+            if any(action["tool_name"] not in allowed for action in legacy_plan.get("actions", [])):
+                return {"assistant_message": "该指令需要进一步规划，暂未执行任何操作。", "actions": []}
             if legacy_plan.get("actions"):
                 return {
                     "assistant_message": str(legacy_plan.get("assistant_message") or ""),
@@ -1005,7 +1031,7 @@ class AssistantService:
             return True
         return lowered.endswith("?") or lowered.endswith("？")
 
-    def _resolve_voice_place(self, message: str, project: ProjectRecord) -> Optional[Dict[str, Any]]:
+    def _resolve_voice_place(self, message: str, project: ProjectRecord, *, allow_llm: bool = True) -> Optional[Dict[str, Any]]:
         normalized_message = self._normalize_voice_text(message)
         normalized_place = self._normalize_voice_place_text(message)
 
@@ -1038,7 +1064,7 @@ class AssistantService:
             return candidate
 
         # --- Pass 3: LLM geocoding fallback (any place the LLM knows) ---
-        return self._llm_geocode(message)
+        return self._llm_geocode(message) if allow_llm else None
 
     def _llm_geocode(self, message: str) -> Optional[Dict[str, Any]]:
         """Ask the LLM to extract a place name and return approximate coordinates."""

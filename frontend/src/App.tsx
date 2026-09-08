@@ -1346,7 +1346,16 @@ export default function App({
           if (!closeJobStream(source)) {
             return;
           }
-          await refreshProjectState(payload.project_id);
+          const uiOnly = Boolean(payload.result?.actions_executed?.length) && payload.result!.actions_executed!.every(
+            (entry) => ["switch_view_mode", "open_panel"].includes(entry.action.tool_name)
+          );
+          if (!uiOnly) {
+            try {
+              await refreshProjectState(payload.project_id);
+            } catch (error) {
+              pushToast("error", "地图状态刷新失败", error instanceof Error ? error.message : "请重试刷新地图。");
+            }
+          }
           handleAssistantUiActions(payload);
           const message = payload.result?.assistant_message || payload.result?.summary || payload.error || "";
           const nextConversationId = String(payload.result?.conversation_id || "");
@@ -3815,6 +3824,7 @@ export default function App({
 
         <LessonWorkflowShell
           project={project}
+          assistantJob={currentJob}
           layerState={layerState}
           busy={busy}
           openSignal={lessonWorkflowOpenSignal}
@@ -3873,6 +3883,7 @@ export default function App({
         <UploadDialog open={uploadOpen} busy={busy} onClose={() => setUploadOpen(false)} onSubmit={handleUploadDataset} />
         <WorkflowDock
           projectId={project?.project_id || ""}
+          assistantJob={currentJob}
           mapRef={mapRef}
           open={workflowDockOpen}
           layerState={layerState}
