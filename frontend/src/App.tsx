@@ -586,6 +586,10 @@ export default function App({
   } | null>(null);
   const globeRef = useRef<Map3DGlobeHandle | null>(null);
   const planeAutoArmedRef = useRef(true);
+  // Timestamp until which plane→globe auto transitions are suppressed. Set
+  // before programmatic view changes (layer-load fit, teaching-map fly) so a
+  // world-extent layer cannot yank the class into 3D right after loading.
+  const programmaticViewGuardUntilRef = useRef(0);
   const lessonGlobePinnedRef = useRef(false);
   const lessonGlobeRestoreRef = useRef<{
     viewMode: ViewMode;
@@ -627,6 +631,7 @@ export default function App({
     const [materialViewerItems, setMaterialViewerItems] = useState<TeachingMaterial[]>([]);
     const [teachingMaps, setTeachingMaps] = useState<TeachingMapItem[]>([]);
     const [datasetCatalogItems, setDatasetCatalogItems] = useState<DatasetCatalogItem[]>([]);
+    const [datasetCatalogError, setDatasetCatalogError] = useState(false);
     const [workflowInitialDataset, setWorkflowInitialDataset] = useState("");
     const [activeTeachingMapIds, setActiveTeachingMapIds] = useState<Set<string>>(new Set());
     const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -1787,6 +1792,12 @@ export default function App({
     if (!project) {
       return;
     }
+    // Missing-image maps would otherwise create a blank overlay.
+    const mapInfo = teachingMaps.find((item) => item.id === mapId);
+    if (visible && mapInfo?.available === false) {
+      pushToast("error", "教学地图缺图", `“${mapInfo.name || mapId}”的图片文件未部署，无法叠加显示。`);
+      return;
+    }
     try {
       const result = await toggleTeachingMap(project.project_id, mapId, visible);
       setActiveTeachingMapIds((prev) => {
@@ -1804,6 +1815,7 @@ export default function App({
       if (visible && result.view?.center && result.view?.zoom) {
         const map = mapRef.current;
         if (map) {
+          programmaticViewGuardUntilRef.current = Date.now() + 2500;
           map.getView().animate({
             center: fromLonLat(result.view.center),
             zoom: result.view.zoom,
@@ -1814,7 +1826,7 @@ export default function App({
     } catch (error: unknown) {
       pushToast("error", "教学地图切换失败", String(error));
     }
-  }, [project, pushToast, refreshProjectState]);
+  }, [project, pushToast, refreshProjectState, teachingMaps]);
 
   const handleToggleTextbookMap = useCallback(
     async (datasetId: string, visible: boolean) => {
@@ -2429,6 +2441,9 @@ export default function App({
       if (!planeAutoArmedRef.current) {
         return;
       }
+      if (Date.now() < programmaticViewGuardUntilRef.current) {
+        return;
+      }
       const zoom = view.getZoom();
       if (typeof zoom === "number" && zoom < PLANE_TO_GLOBE_ZOOM_THRESHOLD) {
         planeAutoArmedRef.current = false;
@@ -2795,10 +2810,12 @@ export default function App({
         const catalog = await fetchDatasetCatalog();
         if (!cancelled) {
           setDatasetCatalogItems(catalog.items || []);
+          setDatasetCatalogError(false);
         }
       } catch {
         if (!cancelled) {
           setDatasetCatalogItems([]);
+          setDatasetCatalogError(true);
         }
       }
       // Load teaching maps catalog
@@ -3007,6 +3024,9 @@ export default function App({
     if (serverViewSignature !== lastAppliedViewRef.current) {
       const targetCenter = fromLonLat(layerState.view.center || [104, 35]);
       const targetZoom = layerState.view.zoom || 4;
+      // Server-driven fit (e.g. a just-loaded world-extent layer may land at
+      // zoom < 3) must not trigger the plane→globe auto switch.
+      programmaticViewGuardUntilRef.current = Date.now() + 3000;
       map.getView().animate(
         { center: targetCenter, zoom: targetZoom, duration: 1200, easing: easeOut },
       );
@@ -3643,6 +3663,19 @@ export default function App({
             textbookItems={textbookMapItems}
             textbookActiveIds={textbookActiveIds}
             busy={busy}
+            catalogError={datasetCatalogError}
+            onRetryCatalog={() => {
+              setDatasetCatalogError(false);
+              fetchDatasetCatalog()
+                .then((res) => {
+                  setDatasetCatalogItems(res.items || []);
+                  setDatasetCatalogError(false);
+                })
+                .catch(() => {
+                  setDatasetCatalogItems([]);
+                  setDatasetCatalogError(true);
+                });
+            }}
             onToggleTextbook={(id, visible) => {
               // 只有"显示"一个 2D 图层才需要切到平面模式；在地球模式下
               // 取消勾选不再把用户踹回平面（修复既有反直觉行为）。

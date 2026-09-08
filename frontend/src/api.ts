@@ -1208,6 +1208,8 @@ export interface TeachingMapItem {
   opacity: number;
   keywords: string[];
   asset_url: string;
+  /** False when the image file is missing on the server (private assets). */
+  available?: boolean;
 }
 
 export interface TeachingMapsResponse {

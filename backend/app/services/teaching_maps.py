@@ -67,9 +67,13 @@ class TeachingMapService:
     def list_maps(self) -> Dict[str, Any]:
         """Return all registered teaching map overlays, grouped by category."""
         items = []
+        target_dir = self.config.uploads_dir / "teaching_maps"
         for item in self._registry:
             filename = item.get("filename", "")
             asset_url = f"/files/uploads/teaching_maps/{filename}" if filename else ""
+            # Surface availability so the UI can grey out entries whose image
+            # file is missing (private assets are not shipped with the repo).
+            available = bool(filename) and (target_dir / filename).exists()
             items.append({
                 "id": item["id"],
                 "name": item["name"],
@@ -80,6 +84,7 @@ class TeachingMapService:
                 "opacity": item.get("opacity", 0.82),
                 "keywords": item.get("keywords", []),
                 "asset_url": asset_url,
+                "available": available,
             })
 
         items.sort(key=lambda x: (x["category_order"], x["name"]))
@@ -90,9 +95,11 @@ class TeachingMapService:
         for item in self._registry:
             if item.get("id") == map_id:
                 filename = item.get("filename", "")
+                available = bool(filename) and (self.config.uploads_dir / "teaching_maps" / filename).exists()
                 return {
                     **item,
                     "asset_url": f"/files/uploads/teaching_maps/{filename}" if filename else "",
+                    "available": available,
                 }
         return None
 
@@ -110,6 +117,9 @@ class TeachingMapService:
         map_info = self.get_map(map_id)
         if map_info is None:
             raise KeyError(f"Unknown teaching map: {map_id}")
+        if visible and not map_info.get("available", True):
+            # Missing image file: refuse instead of creating a blank overlay.
+            raise ValueError(f"教学地图“{map_info['name']}”的图片文件缺失，无法叠加显示。")
 
         layer_id = f"{TEACHING_MAP_LAYER_PREFIX}{map_id}"
         project = self.store.get_project(project_id)

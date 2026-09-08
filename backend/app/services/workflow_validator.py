@@ -605,6 +605,7 @@ class WorkflowValidator:
                 "method",
                 "classes_applied",
                 "breaks",
+                "style",
                 "path",
             },
             "zonal_stats": {

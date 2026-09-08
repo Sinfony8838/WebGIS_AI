@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import GeoJSON from "ol/format/GeoJSON";
 import VectorLayer from "ol/layer/Vector";
 import VectorSource from "ol/source/Vector";
-import { Fill, Stroke, Style } from "ol/style";
+import { Circle, Fill, Stroke, Style } from "ol/style";
 import type { FeatureLike } from "ol/Feature";
 import type Map from "ol/Map";
 
@@ -27,8 +27,14 @@ import {
   submitWorkflow
 } from "../api";
 import { useWorkflowStream } from "../hooks/useWorkflowStream";
+import {
+  startChoroplethReplay,
+  type ChoroplethReplay,
+  type ReplayPhase
+} from "../lib/choroplethReplay";
 import type {
   GraduatedStyle,
+  WorkflowLayerStyle,
   DatasetCatalogItem,
   LayersResponse,
   StatsPayload,
@@ -107,20 +113,53 @@ function styleClassFor(style: GraduatedStyle | null, value: number): string {
   return style.default?.color || DEFAULT_FILL;
 }
 
-function buildStyleFunction(style: GraduatedStyle | null) {
+/**
+ * Point geometries render nothing under a Fill/Stroke-only OL style, so any
+ * point result (clip / spatial join / classify of point layers) needs a Circle
+ * image. `strokeColor` keeps the polygon outline consistent for area styles.
+ */
+function pointStyle(color: string, strokeColor = "#ffffff", radius = 5.5): Style {
+  return new Style({
+    image: new Circle({
+      radius,
+      fill: new Fill({ color }),
+      stroke: new Stroke({ color: strokeColor, width: 1.4 })
+    })
+  });
+}
+
+function buildStyleFunction(style: WorkflowLayerStyle | null) {
   return (feature: FeatureLike) => {
-    const raw = style ? feature.get(style.field) : undefined;
+    if (style && style.type === "simple") {
+      const geomType = feature.getGeometry?.()?.getType();
+      if (geomType === "Point" || geomType === "MultiPoint") {
+        const pt = style.point || {};
+        return pointStyle(pt.color || style.color || DEFAULT_FILL, pt.stroke || "#ffffff", pt.radius ?? 5.5);
+      }
+      return new Style({
+        fill: style.color ? new Fill({ color: style.color }) : undefined,
+        stroke: style.stroke
+          ? new Stroke({ color: style.stroke.color || DEFAULT_STROKE, width: style.stroke.width ?? 1.6 })
+          : undefined
+      });
+    }
+    const graduated = style && style.type === "graduated" ? style : null;
+    const raw = graduated ? feature.get(graduated.field) : undefined;
     let color = DEFAULT_FILL;
-    if (style && typeof raw === "number" && Number.isFinite(raw)) {
-      color = styleClassFor(style, raw);
-    } else if (style && typeof raw === "string" && !Number.isNaN(Number(raw))) {
-      color = styleClassFor(style, Number(raw));
+    if (graduated && typeof raw === "number" && Number.isFinite(raw)) {
+      color = styleClassFor(graduated, raw);
+    } else if (graduated && typeof raw === "string" && !Number.isNaN(Number(raw))) {
+      color = styleClassFor(graduated, Number(raw));
+    }
+    const geomType = feature.getGeometry?.()?.getType();
+    if (geomType === "Point" || geomType === "MultiPoint") {
+      return pointStyle(color, graduated?.stroke?.color || "#ffffff");
     }
     return new Style({
       fill: new Fill({ color }),
       stroke: new Stroke({
-        color: style?.stroke?.color || DEFAULT_STROKE,
-        width: style?.stroke?.width ?? 0.6
+        color: graduated?.stroke?.color || DEFAULT_STROKE,
+        width: graduated?.stroke?.width ?? 0.6
       })
     });
   };
@@ -258,11 +297,70 @@ export function WorkflowDock({
 
   const stream = useWorkflowStream(activeWorkflowId);
 
-  const [styleObj, setStyleObj] = useState<GraduatedStyle | null>(null);
+  const [styleObj, setStyleObj] = useState<WorkflowLayerStyle | null>(null);
   const [statsObj, setStatsObj] = useState<StatsPayload | null>(null);
   const [summaryText, setSummaryText] = useState<string>("");
 
   const layerRef = useRef<VectorLayer<any> | null>(null);
+
+  // ── Choropleth replay state ─────────────────────────────────────────
+  // Mirrors styleObj/features for the replay callbacks without re-creating
+  // them; replayRef owns the running animation (see lib/choroplethReplay).
+  const styleRef = useRef<WorkflowLayerStyle | null>(null);
+  const featuresRef = useRef<FeatureLike[] | null>(null);
+  const replayRef = useRef<ChoroplethReplay | null>(null);
+  const replayedForRef = useRef<string>("");
+  const loadedArtifactRef = useRef<string>("");
+  const [replayRunning, setReplayRunning] = useState<boolean>(false);
+  const [replayPhase, setReplayPhase] = useState<ReplayPhase | null>(null);
+  const [replayDone, setReplayDone] = useState<boolean>(false);
+
+  const cancelReplay = useCallback(() => {
+    replayRef.current?.cancel();
+    replayRef.current = null;
+    setReplayRunning(false);
+    setReplayPhase(null);
+  }, []);
+
+  const startReplay = useCallback(
+    (workflowId: string) => {
+      const layer = layerRef.current;
+      const features = featuresRef.current;
+      const style = styleRef.current;
+      // Replay is a graduated-style feature; simple analysis styles skip it.
+      if (
+        !mapRef.current ||
+        !layer ||
+        !features ||
+        !style ||
+        style.type !== "graduated" ||
+        !style.classes?.length
+      ) {
+        return;
+      }
+      if (replayRef.current || replayedForRef.current === workflowId) {
+        return;
+      }
+      replayedForRef.current = workflowId;
+      setReplayRunning(true);
+      setReplayDone(false);
+      setReplayPhase(null);
+      replayRef.current = startChoroplethReplay({
+        layer,
+        style,
+        features,
+        restoreStyle: (feature) => buildStyleFunction(styleRef.current)(feature),
+        onPhase: setReplayPhase,
+        onComplete: () => {
+          replayRef.current = null;
+          setReplayRunning(false);
+          setReplayPhase(null);
+          setReplayDone(true);
+        }
+      });
+    },
+    [mapRef]
+  );
 
   // Load template metadata once.
   useEffect(() => {
@@ -288,10 +386,13 @@ export function WorkflowDock({
     const summaryArtifact = pickArtifact(stream.artifacts, "summary");
 
     if (styleArtifact) {
-      fetch(buildWorkflowFileUrl(styleArtifact.public_url))
+      // credentials: the artifact endpoints require the session cookie, and
+      // API_BASE is cross-origin in the standard dev setup (vite 5173 ->
+      // backend 18999), so cookies are NOT sent without this option.
+      fetch(buildWorkflowFileUrl(styleArtifact.public_url), { credentials: "include" })
         .then((res) => (res.ok ? res.json() : null))
         .then((payload) => {
-          if (!cancelled && payload && typeof payload === "object" && payload.type === "graduated") {
+          if (!cancelled && payload && typeof payload === "object" && (payload.type === "graduated" || payload.type === "simple")) {
             setStyleObj(payload as GraduatedStyle);
           }
         })
@@ -301,7 +402,7 @@ export function WorkflowDock({
     }
 
     if (statsArtifact) {
-      fetch(buildWorkflowFileUrl(statsArtifact.public_url))
+      fetch(buildWorkflowFileUrl(statsArtifact.public_url), { credentials: "include" })
         .then((res) => (res.ok ? res.json() : null))
         .then((payload) => {
           if (!cancelled && payload && typeof payload === "object") {
@@ -314,7 +415,7 @@ export function WorkflowDock({
     }
 
     if (summaryArtifact) {
-      fetch(buildWorkflowFileUrl(summaryArtifact.public_url))
+      fetch(buildWorkflowFileUrl(summaryArtifact.public_url), { credentials: "include" })
         .then((res) => (res.ok ? res.text() : ""))
         .then((text) => {
           if (!cancelled) {
@@ -341,13 +442,23 @@ export function WorkflowDock({
     if (!geojsonArtifact) {
       return;
     }
+    // The effect also re-runs when style/stats artifacts join the list; keep
+    // the already-loaded layer instead of rebuilding (and killing a replay).
+    if (loadedArtifactRef.current === geojsonArtifact.artifact_id && layerRef.current) {
+      return;
+    }
     const url = buildWorkflowFileUrl(geojsonArtifact.public_url);
     if (!url) {
       return;
     }
 
+    // New result incoming: stop any running replay before replacing the layer.
+    cancelReplay();
+    featuresRef.current = null;
+    setReplayDone(false);
+
     let cancelled = false;
-    fetch(url)
+    fetch(url, { credentials: "include" })
       .then((res) => (res.ok ? res.json() : null))
       .then((payload) => {
         if (cancelled || !payload) {
@@ -365,13 +476,15 @@ export function WorkflowDock({
         const source = new VectorSource({ features });
         const layer = new VectorLayer({
           source,
-          style: buildStyleFunction(styleObj),
+          style: buildStyleFunction(styleRef.current),
           zIndex: 220
         });
         layer.set("workflow_layer", true);
         layer.set("workflow_id", stream.workflowId);
         map.addLayer(layer);
         layerRef.current = layer;
+        loadedArtifactRef.current = geojsonArtifact.artifact_id;
+        featuresRef.current = features as FeatureLike[];
         const extent = source.getExtent();
         if (extent && extent.every((value) => Number.isFinite(value))) {
           map.getView().fit(extent, { duration: 400, padding: [60, 60, 60, 60] });
@@ -379,6 +492,9 @@ export function WorkflowDock({
         if (onToast) {
           onToast("success", "工作流结果已加载到地图");
         }
+        // Replay the colouring when the graduated style is already here; if
+        // style.json is still in flight the styleObj effect starts it later.
+        startReplay(stream.workflowId);
       })
       .catch(() => {
         if (onToast) {
@@ -392,17 +508,25 @@ export function WorkflowDock({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stream.artifacts, mapRef]);
 
-  // Re-apply style when style.json updates.
+  // Re-apply style when style.json updates. While a replay owns the layer
+  // style we leave it alone; the replay restores this style when it ends.
   useEffect(() => {
-    if (layerRef.current) {
+    styleRef.current = styleObj;
+    if (!replayRef.current && layerRef.current) {
       layerRef.current.setStyle(buildStyleFunction(styleObj));
       layerRef.current.changed();
     }
+    if (styleObj) {
+      startReplay(stream.workflowId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [styleObj]);
 
   // Cleanup layer when dock unmounts or workflow id resets.
   useEffect(() => {
     return () => {
+      replayRef.current?.cancel();
+      replayRef.current = null;
       const map = mapRef.current;
       if (map && layerRef.current) {
         map.removeLayer(layerRef.current);
@@ -460,17 +584,30 @@ export function WorkflowDock({
     }
   }, [message, onToast, primaryDataset, projectId, secondaryConfig, secondaryDataset, templateId]);
 
+  const handleSkipReplay = useCallback(() => {
+    replayRef.current?.skip();
+  }, []);
+
+  const handleReplayAgain = useCallback(() => {
+    replayedForRef.current = "";
+    startReplay(stream.workflowId);
+  }, [startReplay, stream.workflowId]);
+
   const handleClear = useCallback(() => {
+    cancelReplay();
     setActiveWorkflowId("");
     setStyleObj(null);
     setStatsObj(null);
     setSummaryText("");
+    setReplayDone(false);
+    featuresRef.current = null;
+    loadedArtifactRef.current = "";
     const map = mapRef.current;
     if (map && layerRef.current) {
       map.removeLayer(layerRef.current);
       layerRef.current = null;
     }
-  }, [mapRef]);
+  }, [cancelReplay, mapRef]);
 
   const placeholder = useMemo(() => {
     if (!templates.length) {
@@ -569,7 +706,46 @@ export function WorkflowDock({
         error={stream.error}
         onClear={activeWorkflowId ? handleClear : undefined}
       />
-      <LegendPanel style={styleObj} />
+      {replayRunning || replayDone ? (
+        <div className="replay-bar" data-testid="replay-bar">
+          {replayRunning ? (
+            <>
+              <span className="replay-bar__label" data-testid="replay-phase">
+                {replayPhase
+                  ? replayPhase.label
+                    ? `正在填色：${replayPhase.label}`
+                    : `分级设色中 · 第 ${Math.max(replayPhase.classIndex, 0) + 1}/${replayPhase.classCount} 级`
+                  : "准备分级设色…"}
+              </span>
+              <button
+                type="button"
+                className="replay-bar__button"
+                onClick={handleSkipReplay}
+                data-testid="replay-skip"
+              >
+                跳过动画
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="replay-bar__button"
+              onClick={handleReplayAgain}
+              data-testid="replay-again"
+            >
+              重新回放制图过程
+            </button>
+          )}
+        </div>
+      ) : null}
+      <LegendPanel
+        style={styleObj}
+        revealedItems={
+          replayRunning && replayPhase && replayPhase.classIndex >= 0
+            ? replayPhase.classIndex + 1
+            : undefined
+        }
+      />
       <StatsPanel stats={statsObj} />
       <ResultExplanation markdown={summaryText} />
     </aside>
