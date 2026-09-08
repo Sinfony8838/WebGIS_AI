@@ -28,6 +28,38 @@ class LessonDesignServiceTest(unittest.TestCase):
         self.project = self.runtime.create_project()["project_id"]
         self.addCleanup(self.temp_dir.cleanup)
 
+    def test_legacy_structured_objectives_resume_as_text_without_read_mutation(self) -> None:
+        design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
+        stored = self.store.get_lesson_design(design["design_id"])
+        stored.draft["objectives"] = [{"id": 1, "statement": "描述人口分布", "type": "基础"}, "比较人口密度"]
+        stored.draft["core_questions"] = {"core": "为什么分布不均？", "sub_questions": [{"statement": "哪里人口密集？", "objective_refs": [1]}]}
+        self.store.upsert_lesson_design(stored)
+        resumed = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
+        self.assertEqual(resumed["draft"]["objectives"], ["描述人口分布", "比较人口密度"])
+        self.assertEqual(resumed["draft"]["core_questions"]["sub_questions"], ["哪里人口密集？"])
+        self.assertEqual(resumed["draft"]["structured_text_originals"]["objectives"][0]["type"], "基础")
+        self.assertIsInstance(self.store.get_lesson_design(design["design_id"]).draft["objectives"][0], dict)
+        self.assertEqual(resumed["revision"], design["revision"])
+
+    def test_direct_objective_and_core_question_edits_accept_section_payloads(self) -> None:
+        design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
+        result = self.runtime.classroom.resolve_lesson_design(design["design_id"], "objectives", "edit", "", 0, ["描述分布", "比较密度"])["design"]
+        self.assertEqual(result["draft"]["objectives"], ["描述分布", "比较密度"])
+        result = self.runtime.classroom.resolve_lesson_design(design["design_id"], "core_questions", "edit", "", result["revision"], {"core": "为何不均？", "sub_questions": ["稠密区在哪？"]})["design"]
+        self.assertEqual(result["draft"]["core_questions"]["core"], "为何不均？")
+        with self.assertRaisesRegex(ValueError, "缺少可读文字"):
+            self.runtime.classroom.resolve_lesson_design(design["design_id"], "objectives", "edit", "", result["revision"], [{"id": 1}])
+        self.assertEqual(self.store.get_lesson_design(design["design_id"]).draft["objectives"], ["描述分布", "比较密度"])
+
+    def test_model_text_objects_are_normalized_at_merge_and_unknown_shapes_rejected(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        payload = service._validate_model_payload({"section_patch": {"objectives": [{"statement": "描述分布"}], "core_questions": {"sub_questions": [{"text": "人口在哪里？"}]} }})
+        draft = {}
+        service._merge_patch(draft, payload["section_patch"])
+        self.assertEqual(draft["objectives"], ["描述分布"])
+        self.assertEqual(draft["core_questions"]["sub_questions"], ["人口在哪里？"])
+        self.assertIsNone(service._validate_model_payload({"section_patch": {"objectives": [{"id": 1}]}}))
+
     def advance(self, design_id: str, message: str, revision: int) -> tuple[dict, int]:
         current = self.store.get_lesson_design(design_id).current_step
         result = self.runtime.classroom.turn_lesson_design(design_id, message, revision)

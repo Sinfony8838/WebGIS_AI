@@ -94,6 +94,35 @@ class LessonDesignService:
         self.question_bank_service = question_bank_service
 
     @staticmethod
+    def _normalize_text_lists(draft: Dict[str, Any]) -> None:
+        """Canonical text fields stay renderable; keep rich model details separately."""
+        fields = [(draft, "objectives", "objectives")]
+        core = draft.get("core_questions")
+        if isinstance(core, dict):
+            fields.append((core, "sub_questions", "core_questions.sub_questions"))
+        for parent, key, path in fields:
+            if key not in parent:
+                continue
+            values = parent[key]
+            if not isinstance(values, list):
+                raise ValueError("教学目标和子问题必须按条目保存，不能使用整段对象。")
+            normalized = []
+            details = []
+            for item in values:
+                text = item if isinstance(item, str) else next(
+                    (item[field] for field in ("statement", "text", "question", "description")
+                     if isinstance(item.get(field), str) and item[field].strip()), None
+                ) if isinstance(item, dict) else None
+                if not isinstance(text, str) or not text.strip():
+                    raise ValueError("教学目标或子问题缺少可读文字，请补充具体内容。")
+                normalized.append(text.strip())
+                details.append(copy.deepcopy(item) if isinstance(item, dict) else None)
+            if any(item is not None for item in details):
+                # Archival metadata only; current text and 1-based order remain authoritative.
+                draft.setdefault("structured_text_originals", {})[path] = details
+            parent[key] = normalized
+
+    @staticmethod
     def _backfill_draft(draft: Dict[str, Any]) -> Dict[str, Any]:
         """旧教案/旧设计载入时补齐新章节默认值，保证字段完整可用。"""
         fresh = default_draft()
@@ -109,6 +138,7 @@ class LessonDesignService:
         draft["homework"].setdefault("inquiry", [])
         if not isinstance(draft.get("question_citations"), list):
             draft["question_citations"] = []
+        LessonDesignService._normalize_text_lists(draft)
         return draft
 
     def create_or_resume(
@@ -118,7 +148,7 @@ class LessonDesignService:
         existing = self.store.list_lesson_designs(project_id=project_id, owner_user_id=owner_user_id, active_only=True)
         for item in existing:
             if str(item.base_lesson_id or "") == str(base_lesson_id or ""):
-                return item
+                return self.get(item.design_id)
         draft = default_draft()
         if base_lesson_id:
             lesson = self.store.get_lesson(base_lesson_id)
@@ -150,6 +180,8 @@ class LessonDesignService:
         design = self.store.get_lesson_design(design_id)
         if design is None:
             raise KeyError("Unknown lesson design")
+        design = copy.deepcopy(design)
+        self._backfill_draft(design.draft)
         return design
 
     def capability_catalog(self) -> List[Dict[str, Any]]:
@@ -309,6 +341,12 @@ class LessonDesignService:
         normalized_decision = str(decision).lower()
         if normalized_decision in {"edit", "direct_edit", "直接编辑"}:
             patch_value = copy.deepcopy(value)
+            # A section can share a step name (objectives/core_questions).
+            # Single-section payloads and grouped step payloads are both supported.
+            if section_id == "objectives" and isinstance(patch_value, list):
+                patch_value = {"objectives": patch_value}
+            elif section_id == "core_questions" and isinstance(patch_value, dict) and "core_questions" not in patch_value:
+                patch_value = {"core_questions": patch_value}
             if section_id in STEP_SECTIONS:
                 if not isinstance(patch_value, dict):
                     raise ValueError("当前步骤的直接编辑内容格式不正确")
@@ -334,6 +372,7 @@ class LessonDesignService:
                         design.section_status[key] = "proposed"
                 if not any(key in allowed_group for key in patch_value):
                     raise ValueError("没有可保存的当前步骤内容")
+                self._normalize_text_lists(design.draft)
                 design.revision += 1
                 design.diff_summary = self._build_diff_summary(design)
                 self.store.upsert_lesson_design(design)
@@ -348,6 +387,7 @@ class LessonDesignService:
                 if not patch_value:
                     raise ValueError("直接编辑内容不能为空")
             design.draft[section_id] = patch_value
+            self._normalize_text_lists(design.draft)
             if section_id in SECTION_KEYS:
                 design.section_status[section_id] = "proposed"
             design.revision += 1
@@ -901,6 +941,7 @@ class LessonDesignService:
             "核心章节要求：设计思路100-150字；3-4个可观察教学目标；1个核心问题+2-4个递进子问题；"
             "每环节包含 material/question_chain/teacher_activities/student_activities/knowledge_conclusion/"
             "design_intent/minutes/system_steps/objective_refs（1-based目标序号）；板书设计；基础作业+探究作业；预设教学反思。"
+            'objectives 必须是字符串数组；core_questions 必须为 {"core":"核心问题文字","sub_questions":["子问题文字"]}，不要把条目写成对象。'
             "题目匹配只能引用题库检索给出的题目，不得编造题目内容。"
             "草稿：" + json.dumps(design.draft, ensure_ascii=False)[:12000] +
             "。真实能力目录：" + json.dumps(self.capability_catalog(), ensure_ascii=False)[:8000]
@@ -1165,6 +1206,10 @@ class LessonDesignService:
             return None
         allowed = set(SECTION_KEYS) | {"title", "subject", "grade", "topic", "duration_minutes"}
         normalized_patch = {str(key): copy.deepcopy(value) for key, value in patch.items() if str(key) in allowed}
+        try:
+            LessonDesignService._normalize_text_lists(copy.deepcopy(normalized_patch))
+        except ValueError:
+            return None
         next_step = str(payload.get("next_step") or "")
         source_refs = payload.get("source_refs") if isinstance(payload.get("source_refs"), list) else []
         bindings = payload.get("capability_bindings") if isinstance(payload.get("capability_bindings"), list) else []
@@ -1188,6 +1233,7 @@ class LessonDesignService:
                 draft[key] = {**draft[key], **copy.deepcopy(value)}
             else:
                 draft[key] = copy.deepcopy(value)
+        LessonDesignService._normalize_text_lists(draft)
 
     @staticmethod
     def _next_step(step: str) -> str:
