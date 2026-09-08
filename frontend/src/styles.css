@@ -7644,3 +7644,22 @@ button {
 
 .map-tools-dock .visual-map-title { white-space:nowrap; font-size:12px; }
 .map-tools-dock .visual-map-header { gap:5px; }
+
+/* A static header at tablet widths fell behind the absolutely positioned map. */
+@media (min-width:701px) and (max-width:1120px) {
+  .screen-shell-classroom .app-header {
+    position:absolute; inset:0 0 auto; margin:0; box-sizing:border-box;
+    height:var(--header-height); min-height:var(--header-height);
+    grid-template-areas:"brand actions" "search search";
+  }
+  .screen-shell-classroom .app-header .brand-block { grid-area:brand; }
+  .screen-shell-classroom .app-header .header-actions { grid-area:actions; min-width:0; }
+  .screen-shell-classroom .app-header .header-search { grid-area:search; }
+}
+.map-basemap-notice {
+  position:fixed; z-index:17; top:calc(var(--header-height) + 8px); left:50%; transform:translateX(-50%);
+  display:flex; gap:10px; align-items:center; max-width:calc(100vw - 40px); padding:8px 12px;
+  color:var(--text-main); background:var(--surface-raised); border:1px solid var(--panel-border);
+  border-radius:10px; font-size:12px; line-height:1.5;
+}
+.map-basemap-notice button { flex-shrink:0; cursor:pointer; color:var(--accent); background:transparent; border:0; font:inherit; }

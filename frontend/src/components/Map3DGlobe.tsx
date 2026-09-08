@@ -44,6 +44,9 @@ export type Map3DGlobeHandle = {
   ) => void;
   lookAtLocation: (lon:number, lat:number, range:number, pitchDeg?:number) => void;
   resetView: () => void;
+  inkToWorld: (client: [number,number]) => [number,number] | null;
+  inkToClient: (world: [number,number]) => [number,number] | null;
+  subscribeInkRender: (render: () => void) => (() => void) | undefined;
   getCameraState: () => CameraState | null;
   captureImage: () => string;
   getCanvasRect: () => { left: number; top: number; width: number; height: number } | null;
@@ -587,6 +590,32 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
           },
           duration: 1.4
         });
+      },
+      inkToWorld: (client) => {
+        const viewer=viewerRef.current; if(!viewer) return null;
+        const rect=viewer.canvas.getBoundingClientRect(); if(!rect.width || !rect.height) return null;
+        const pixel=new Cesium.Cartesian2((client[0]-rect.left)*viewer.canvas.clientWidth/rect.width,(client[1]-rect.top)*viewer.canvas.clientHeight/rect.height);
+        const point=viewer.camera.pickEllipsoid(pixel,viewer.scene.globe.ellipsoid);
+        if(!point) return null;
+        const cartographic=Cesium.Cartographic.fromCartesian(point);
+        return [Cesium.Math.toDegrees(cartographic.longitude),Cesium.Math.toDegrees(cartographic.latitude)];
+      },
+      inkToClient: (world) => {
+        const viewer=viewerRef.current; if(!viewer) return null;
+        const point=Cesium.Cartesian3.fromDegrees(world[0],world[1]);
+        const delta=Cesium.Cartesian3.subtract(point,viewer.camera.positionWC,new Cesium.Cartesian3());
+        const distance=Cesium.Cartesian3.magnitude(delta);
+        const ray=new Cesium.Ray(viewer.camera.positionWC,Cesium.Cartesian3.normalize(delta,delta));
+        const intersection=Cesium.IntersectionTests.rayEllipsoid(ray,viewer.scene.globe.ellipsoid);
+        if(intersection && intersection.start < distance-1) return null;
+        const pixel=Cesium.SceneTransforms.worldToWindowCoordinates(viewer.scene,point);
+        if(!pixel) return null;
+        const rect=viewer.canvas.getBoundingClientRect();
+        return [rect.left+pixel.x*rect.width/viewer.canvas.clientWidth,rect.top+pixel.y*rect.height/viewer.canvas.clientHeight];
+      },
+      subscribeInkRender: (render) => {
+        const viewer=viewerRef.current; if(!viewer) return undefined;
+        return viewer.scene.postRender.addEventListener(render);
       },
       getCameraState: () => lastCameraStateRef.current,
       captureImage: () => {

@@ -1,4 +1,4 @@
-.map-evidence-legend { position:fixed; left:16px; bottom:88px; z-index:9; width:290px; max-height:42vh; overflow:auto; box-sizing:border-box; padding:14px; border:1px solid var(--panel-border); border-radius:12px; background:var(--surface-raised,rgba(245,251,253,.96)); color:var(--text-main); box-shadow:0 3px 16px #0b25351a; font-size:12px; line-height:1.6; }
+.map-evidence-legend { position:fixed; left:16px; bottom:88px; z-index:16; width:290px; max-height:42vh; overflow:auto; box-sizing:border-box; padding:14px; border:1px solid var(--panel-border); border-radius:12px; background:var(--surface-raised,rgba(245,251,253,.96)); color:var(--text-main); box-shadow:0 3px 16px #0b25351a; font-size:12px; line-height:1.6; }
 .screen-shell:has(.class-run-panel) .map-evidence-legend { left:352px; }
 .map-evidence-legend strong { display:block; font-size:13px; margin-bottom:7px; }
 .map-evidence-legend strong small { font-size:11px; color:var(--text-dim); font-weight:400; }

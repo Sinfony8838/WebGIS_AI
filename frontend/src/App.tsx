@@ -97,7 +97,7 @@ import { VisualMapPanel } from "./components/VisualMapPanel";
 import { WorkflowDock } from "./components/WorkflowDock";
 import { UserMenu } from "./components/UserMenu";
 import { PptViewer } from "./components/PptViewer";
-import { BrushOverlay, type BrushOverlayHandle, type BrushSettings } from "./components/BrushOverlay";
+import { type BrushOverlayHandle, type BrushSettings } from "./components/BrushOverlay";
 import { BrushToolbar } from "./components/BrushToolbar";
 import {
   DOUBLE_CLICK_LANDING_ALTITUDE,
@@ -107,6 +107,8 @@ import {
 } from "./lib/altitudeZoom";
 import { parsePptxFile, releaseSlideObjectUrls } from "./lib/pptxRenderer";
 import { decideLessonGlobeScene } from "./lib/lessonGlobeScene";
+import { MapBrushOverlay } from "./components/MapBrushOverlay";
+import type { MapInkProjection } from "./lib/mapInk";
 import type { ViewMode } from "./lib/viewMode";
 import type {
   AssistantInputMode,
@@ -614,6 +616,28 @@ export default function App({
     zoom: number;
   } | null>(null);
   const globeRef = useRef<Map3DGlobeHandle | null>(null);
+  const mapInkProjection = useMemo<MapInkProjection>(() => ({
+    toWorld: (client) => {
+      if (viewMode === "globe") return globeRef.current?.inkToWorld(client) || null;
+      const map=mapRef.current; if(!map) return null;
+      const rect=map.getViewport().getBoundingClientRect(), size=map.getSize();
+      if(!size || !rect.width || !rect.height) return null;
+      const coordinate=map.getCoordinateFromPixel([(client[0]-rect.left)*size[0]/rect.width,(client[1]-rect.top)*size[1]/rect.height]);
+      return coordinate ? toLonLat(coordinate) as [number,number] : null;
+    },
+    toClient: (world) => {
+      if (viewMode === "globe") return globeRef.current?.inkToClient(world) || null;
+      const map=mapRef.current; if(!map) return null;
+      const rect=map.getViewport().getBoundingClientRect(), size=map.getSize();
+      const pixel=map.getPixelFromCoordinate(fromLonLat(world));
+      return pixel && size && size[0] && size[1] ? [rect.left+pixel[0]*rect.width/size[0],rect.top+pixel[1]*rect.height/size[1]] : null;
+    },
+    subscribe: (render) => {
+      if(viewMode === "globe") return globeRef.current?.subscribeInkRender(render);
+      const map=mapRef.current; if(!map) return undefined;
+      map.on("postrender",render); return () => { map.un("postrender",render); };
+    }
+  }), [viewMode]);
   const planeAutoArmedRef = useRef(true);
   // Timestamp until which plane→globe auto transitions are suppressed. Set
   // before programmatic view changes (layer-load fit, teaching-map fly) so a
@@ -2235,7 +2259,7 @@ export default function App({
       return candidate.urls[0];
     }
     // Sane fallback when no project / basemap yet
-    return "https://webrd0{s}.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}";
+    return "https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={x}&y={y}&z={z}";
   }, [layerState?.base_map]);
 
   const transitionToPlane = useCallback(
@@ -3424,8 +3448,16 @@ export default function App({
           setViewMode("plane");
         }}
       />
+      {viewMode === "globe" && layerState?.base_map.layers.length && !layerState.base_map.layers.some(layer => layer.kind === "xyz" && layer.usable_in_3d !== false && layer.urls.length) ? (
+        <div className="map-basemap-notice" role="status">
+          当前底图仅支持二维，三维显示高德参考底图。
+          <button type="button" onClick={() => handleViewModeToggle("plane")}>返回 2D 查看专题图</button>
+        </div>
+      ) : null}
       <MapEvidenceLegend basemapId={activeBasemapId} layers={layerState?.items || []} globe={viewMode === "globe"} themeIds={globeThemeIds} showFit={showTeachingFit} onShowFit={setShowTeachingFit} />
-      <BrushOverlay
+      <MapBrushOverlay
+        projection={mapInkProjection}
+        scope={project?.project_id || ""}
         ref={brushRef}
         active={interactionMode === "brush"}
         settings={brushSettings}
