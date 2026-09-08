@@ -32,6 +32,7 @@ backend/data/uploads/
 backend/data/outputs/
 backend/data/workflows/
 backend/data/auth/
+backend/data/voice-models/
 backend/data/_backup/
 backend/app/data/builtin/one_map/_cache/
 backend/app/data/builtin/population/_datav_china_full.json

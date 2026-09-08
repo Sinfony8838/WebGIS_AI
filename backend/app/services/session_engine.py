@@ -14,6 +14,7 @@ from ..store import RuntimeStore
 from .assistant import ASSISTANT_TOOL_SCHEMA, AssistantService
 from .knowledge_base import KnowledgeBaseService
 from .llm_planner import LLMPlanner
+from .workflow_templates import INTERACTION_ALLOWED_TEMPLATES
 
 
 GEOGRAPHY_ALLOWLIST = (
@@ -317,6 +318,9 @@ class PromptRegistry:
             "teaching_mode": "Act as a professional geography teaching agent: explain first, operate maps only through validated tools, always close with classroom guidance."
             if mode.startswith("teaching")
             else "",
+            "interaction_mode": "Execute the teacher's spoken command with validated tools only; reply with short spoken-style Chinese suitable for classroom broadcast."
+            if mode == "interaction"
+            else "",
             "citation_policy": "Prefer authoritative sources, expose freshness, and never present timely facts as definitive without evidence.",
             "tool_safety_policy": "High-risk actions require confirmation; blocked or rejected actions must not execute.",
             "map_grounding": map_summary,
@@ -428,6 +432,16 @@ class AssistantRouter:
             return {
                 "intent": "knowledge",
                 "reason": "explicit knowledge mode",
+                "confidence": "1.00",
+                "ambiguity_reason": "",
+                "recommended_clarification": "",
+            }
+        if assistant_mode == "interaction":
+            # 智能交互：语音操控专用模式。intent 固定，绝不经由教学路由，
+            # 教学脚手架与知识检索不会串扰进来。
+            return {
+                "intent": "interaction",
+                "reason": "explicit interaction mode",
                 "confidence": "1.00",
                 "ambiguity_reason": "",
                 "recommended_clarification": "",
@@ -1523,6 +1537,17 @@ class ToolPlanner:
         input_mode: str,
         intent: str = "",
     ) -> Dict[str, Any]:
+        if intent == "interaction":
+            # 智能交互：语音/文字都直达分层规划（规则快通道 → MiniMax），
+            # 不做 tool 模式的 clarification 降级。
+            return self.llm_planner.plan_actions(
+                message,
+                project,
+                map_context=map_context,
+                target=target,
+                input_mode=input_mode,
+                assistant_mode="interaction",
+            )
         if input_mode == "voice" and target == "webgis":
             return self.llm_planner.plan_actions(
                 message,
@@ -1652,8 +1677,19 @@ class ToolExecutor:
             "open_material": {"target": "webgis", "category": "material", "risk_level": "low", "reversible": True, "requires_confirmation": False},
             "generate_image": {"target": "webgis", "category": "paid_generation", "risk_level": "high", "reversible": False, "requires_confirmation": True, "validator": self._require_image_generation_prompt},
             "run_visual_query": {"target": "webgis", "category": "analysis", "risk_level": "medium", "reversible": True, "requires_confirmation": False},
-            "record_observation": {"target": "webgis", "category": "classroom", "risk_level": "medium", "reversible": False, "requires_confirmation": False, "validator": self._require_active_session},
-            "launch_question": {"target": "webgis", "category": "classroom", "risk_level": "medium", "reversible": False, "requires_confirmation": False, "validator": self._require_active_session},
+            # 课堂学情/提问工具只属于教学智能体；interaction 模式调用会被
+            # visible_in_mode 门控为 blocked（默认列表不含 interaction）。
+            "record_observation": {"target": "webgis", "category": "classroom", "risk_level": "medium", "reversible": False, "requires_confirmation": False, "validator": self._require_active_session, "visible_in_mode": ["tool", "hybrid", "knowledge", "teaching", "teaching_action"]},
+            "launch_question": {"target": "webgis", "category": "classroom", "risk_level": "medium", "reversible": False, "requires_confirmation": False, "validator": self._require_active_session, "visible_in_mode": ["tool", "hybrid", "knowledge", "teaching", "teaching_action"]},
+            # --- 智能交互（interaction）专用操控工具 ---
+            "switch_view_mode": {"target": "webgis", "category": "view", "risk_level": "low", "reversible": True, "requires_confirmation": False, "visible_in_mode": ["interaction"], "validator": self._require_view_mode_param},
+            "open_panel": {"target": "webgis", "category": "ui", "risk_level": "low", "reversible": True, "requires_confirmation": False, "visible_in_mode": ["interaction"], "validator": self._require_panel_param},
+            "focus_layer": {"target": "webgis", "category": "layer", "risk_level": "low", "reversible": True, "requires_confirmation": False, "visible_in_mode": ["interaction"], "validator": self._require_layer_ref},
+            "set_layer_opacity": {"target": "webgis", "category": "layer", "risk_level": "low", "reversible": True, "requires_confirmation": False, "visible_in_mode": ["interaction"], "validator": self._require_layer_opacity},
+            "enter_lesson_stage": {"target": "webgis", "category": "classroom", "risk_level": "medium", "reversible": True, "requires_confirmation": False, "visible_in_mode": ["interaction"], "validator": self._require_active_session},
+            "run_workflow": {"target": "webgis", "category": "analysis", "risk_level": "medium", "reversible": True, "requires_confirmation": False, "visible_in_mode": ["interaction"], "validator": self._require_workflow_template},
+            "start_class_session": {"target": "webgis", "category": "classroom", "risk_level": "medium", "reversible": False, "requires_confirmation": False, "visible_in_mode": ["interaction"], "validator": self._require_no_active_session},
+            "end_class_session": {"target": "webgis", "category": "classroom", "risk_level": "high", "reversible": False, "requires_confirmation": True, "visible_in_mode": ["interaction"], "validator": self._require_active_session},
         }
         return registry
 
@@ -1729,6 +1765,69 @@ class ToolExecutor:
             return "图片生成 prompt 不能超过 1500 个字符"
         return ""
 
+    def _require_view_mode_param(self, params: Dict[str, Any], project_state: Dict[str, Any], map_context: Dict[str, Any]) -> str:
+        del project_state, map_context
+        mode = str(params.get("mode") or "").strip().lower()
+        if mode not in {"plane", "globe"}:
+            return "切换视图需要 mode 取 plane 或 globe"
+        return ""
+
+    def _require_panel_param(self, params: Dict[str, Any], project_state: Dict[str, Any], map_context: Dict[str, Any]) -> str:
+        del project_state, map_context
+        panel = str(params.get("panel") or "").strip().lower()
+        if panel not in {"layers", "database", "workflow"}:
+            return "open_panel 的 panel 取值需为 layers、database 或 workflow"
+        return ""
+
+    def _require_layer_ref(self, params: Dict[str, Any], project_state: Dict[str, Any], map_context: Dict[str, Any]) -> str:
+        del project_state
+        if str(params.get("layer_id") or "").strip() or str(params.get("layer_name") or "").strip():
+            return ""
+        if str(map_context.get("active_layer_id") or "").strip():
+            return ""
+        return "定位图层需要 layer_id、layer_name 或当前激活图层"
+
+    def _require_layer_opacity(self, params: Dict[str, Any], project_state: Dict[str, Any], map_context: Dict[str, Any]) -> str:
+        del project_state
+        has_ref = (
+            str(params.get("layer_id") or "").strip()
+            or str(params.get("layer_name") or "").strip()
+            or str(map_context.get("active_layer_id") or "").strip()
+        )
+        if not has_ref:
+            return "调整透明度需要 layer_id、layer_name 或当前激活图层"
+        try:
+            opacity = float(params.get("opacity"))
+        except (TypeError, ValueError):
+            return "透明度需要 0 到 1 之间的数值"
+        if not (0.0 <= opacity <= 1.0):
+            return "透明度需要 0 到 1 之间的数值"
+        return ""
+
+    def _require_workflow_template(self, params: Dict[str, Any], project_state: Dict[str, Any], map_context: Dict[str, Any]) -> str:
+        del project_state, map_context
+        template_id = str(params.get("template_id") or "").strip()
+        description = str(params.get("description") or "").strip()
+        if template_id:
+            if template_id not in INTERACTION_ALLOWED_TEMPLATES:
+                return f"语音分析暂只支持模板：{ '、'.join(INTERACTION_ALLOWED_TEMPLATES) }"
+            return ""
+        if not description:
+            return "run_workflow 需要 template_id 或分析描述 description"
+        return ""
+
+    def _require_no_active_session(self, params: Dict[str, Any], project_state: Dict[str, Any], map_context: Dict[str, Any]) -> str:
+        teaching_context = map_context.get("teaching_context") if isinstance(map_context.get("teaching_context"), dict) else {}
+        lesson_id = str((teaching_context or {}).get("lesson_id") or "").strip()
+        if not lesson_id and not str(params.get("lesson_id") or "").strip() and not str(params.get("lesson_title") or "").strip():
+            return "开始上课需要当前课堂绑定的教案（teaching_context.lesson_id）或显式 lesson_id"
+        project_id = str(project_state.get("project_id") or "").strip()
+        if project_id:
+            running = self.store.list_class_sessions(project_id=project_id, status="running")
+            if running:
+                return "已有一节进行中的班课，请先结束当前课再开始新课"
+        return ""
+
 
 class AssistantSessionEngine:
     def __init__(
@@ -1777,7 +1876,7 @@ class AssistantSessionEngine:
         input_mode: str,
         stage_callback: Callable[[str, str, str, str], None],
     ) -> Dict[str, Any]:
-        normalized_mode = assistant_mode if assistant_mode in {"teaching", "knowledge", "tool"} else "teaching"
+        normalized_mode = assistant_mode if assistant_mode in {"teaching", "knowledge", "tool", "interaction"} else "teaching"
         # Heavy GIS work moved to /workflow/*; the in-classroom assistant is WebGIS-only.
         normalized_target = "webgis"
         effective_target = "webgis"
@@ -1816,22 +1915,40 @@ class AssistantSessionEngine:
             },
         )
 
-        stage_callback("routing", "running", "Routing request", "")
+        if normalized_mode == "interaction":
+            # 智能交互：全程中文阶段反馈，让教师在等待 LLM 规划时也能看到
+            # 系统正在做什么（SSE stages → 前端思考指示器/光晕副文案）。
+            stage_callback("routing", "running", "正在解析语音指令…", "")
+        else:
+            stage_callback("routing", "running", "Routing request", "")
         context = self.memory.build_context(conversation)
         route = self.router.route(normalized_mode, message, context["raw_messages"], map_context, {"project_id": project.project_id})
         intent = route["intent"]
         if image_attachment is not None:
             intent = "knowledge" if normalized_mode == "knowledge" else "teaching_explain"
             route = {**route, "intent": intent, "reason": "image attachment requires visual understanding"}
-        stage_callback("routing", "success", f"Intent: {intent}", route["reason"])
+        if intent == "interaction":
+            stage_callback("routing", "success", "已识别为系统操控指令", route["reason"])
+        else:
+            stage_callback("routing", "success", f"Intent: {intent}", route["reason"])
 
         if intent == "knowledge" or (intent in TEACHING_TASKS and intent != "teaching_action"):
             teaching_task = intent if intent.startswith("teaching") else ""
             return self._handle_knowledge(project, conversation, message, map_context, stage_callback, teaching_task=teaching_task)
 
-        stage_callback("planning", "running", "Planning GIS actions", "")
+        if intent == "interaction":
+            stage_callback("planning", "running", "正在理解指令并匹配操作…", "")
+        else:
+            stage_callback("planning", "running", "Planning GIS actions", "")
         plan = self.tool_planner.plan(message, project, map_context, effective_target, input_mode, intent=intent)
-        stage_callback("planning", "success", f"Planner: {plan.get('planner', 'unknown')}", plan.get("assistant_message", ""))
+        if intent == "interaction":
+            planner_label = str(plan.get("planner") or "unknown")
+            if planner_label == "interaction_rule":
+                stage_callback("planning", "success", "快速通道命中，无需等待", plan.get("assistant_message", ""))
+            else:
+                stage_callback("planning", "success", "AI 已完成操作规划", plan.get("assistant_message", ""))
+        else:
+            stage_callback("planning", "success", f"Planner: {plan.get('planner', 'unknown')}", plan.get("assistant_message", ""))
 
         actions = list(plan.get("actions") or [])
         assessment = self.tool_executor.assess(
@@ -1951,6 +2068,10 @@ class AssistantSessionEngine:
                     if image_prompt
                     else "即将使用普通余额 API 生成并保存一张 AI 示意图。此操作会产生 API 费用，请确认。"
                 )
+            end_session_action = next((item for item in actions if str(item.get("tool_name") or "") == "end_class_session"), None)
+            if end_session_action is not None:
+                confirm_title = "结束本节课"
+                confirm_reason = "即将结束当前进行中的班课并生成课堂小结。结束后课堂工具将不可用，请确认。"
             confirmation = self.store.create_confirmation(
                 project.project_id,
                 conversation.conversation_id,

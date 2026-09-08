@@ -289,6 +289,8 @@ export type ChatMessage = {
   /** Tools the agent executed for this reply - drives the collapsible tool-use trace. */
   actions_executed?: ExecutedAction[] | null;
   image_attachment?: ImageAttachment | null;
+  /** Planner that produced this reply (interaction_rule/interaction_minimax/…) - drives the 快速通道/AI 规划 badge. */
+  planner?: string | null;
 };
 
 export type ImageAttachment = {
@@ -329,9 +331,24 @@ export type TeachingContract = {
   summary: string;
 };
 
-export type AssistantMode = "teaching" | "knowledge" | "tool";
+export type AssistantMode = "teaching" | "knowledge" | "tool" | "interaction";
 export type AssistantTarget = "webgis" | "qgis";
 export type AssistantInputMode = "text" | "voice";
+
+/**
+ * CopilotWidget 顶部的功能页签：教学助手（默认，原有 GeoBot 教学智能体）
+ * 与智能交互（语音操控舱，interaction 模式）。两者共享面板、各持独立会话。
+ */
+export type AssistantTab = "teaching" | "interaction";
+
+/**
+ * 服务端执行工具后广播给前端的界面动作（ui_actions）。App.tsx 的
+ * handleAssistantUiActions 是唯一分发点。
+ */
+export type AssistantUiAction =
+  | { type: "open_material"; title?: string; materials?: TeachingMaterial[] }
+  | { type: "switch_view"; mode: "plane" | "globe" }
+  | { type: "open_panel"; panel: "layers" | "database" | "workflow"; open?: boolean };
 
 /**
  * Where the teacher currently is in the lesson workflow. Sent with every
@@ -556,6 +573,12 @@ export type HealthResponse = {
     provider_source?: string;
     api_key_source?: string;
     error?: string;
+  };
+  /** 本地流式语音识别（sherpa-onnx WebSocket）：available=false 时前端降级 Web Speech。 */
+  voice_asr?: {
+    available: boolean;
+    reason?: string;
+    model?: string;
   };
   vision?: {
     enabled: boolean;

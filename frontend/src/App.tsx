@@ -100,7 +100,9 @@ import type { ViewMode } from "./lib/viewMode";
 import type {
   AssistantInputMode,
   AssistantMode,
+  AssistantTab,
   AssistantTarget,
+  AssistantUiAction,
   ArtifactRecord,
   AuthUser,
   ChatMessage,
@@ -126,6 +128,8 @@ import type {
   TeachingContract,
   TeachingMaterial
 } from "./types";
+import { speak, cancelSpeech } from "./speechSynthesis";
+import { AgentControlOverlay } from "./components/AgentControlOverlay";
 import "./styles.css";
 import "./lesson-workflow.css";
 
@@ -515,6 +519,28 @@ export default function App({
     }
   ]);
   const [conversationId, setConversationId] = useState("");
+  // ===== 智能交互（interaction 模式）=====
+  // 与教学助手共享 CopilotWidget，但各持独立会话线程；语音/TTS/光晕都只属于交互 Tab。
+  const [assistantTab, setAssistantTab] = useState<AssistantTab>("teaching");
+  const assistantTabRef = useRef<AssistantTab>("teaching");
+  const [interactionChatLog, setInteractionChatLog] = useState<ChatMessage[]>([
+    {
+      role: "assistant",
+      text: "智能交互模式已就绪：点麦克风说指令，或开启常开聆听后说“小智，切换到三维地球”。高频指令走快速通道，秒级响应。",
+      timestamp: timestamp()
+    }
+  ]);
+  const [interactionConversationId, setInteractionConversationId] = useState("");
+  const [ttsEnabled, setTtsEnabled] = useState(true);
+  const lastInputModeRef = useRef<AssistantInputMode>("text");
+  const lastSubmittedTabRef = useRef<AssistantTab>("teaching");
+  const [interactionBusy, setInteractionBusy] = useState(false);
+  const [overlayListening, setOverlayListening] = useState(false);
+  const [overlayPartial, setOverlayPartial] = useState("");
+  const [overlayCaptured, setOverlayCaptured] = useState("");
+  const [overlayPulse, setOverlayPulse] = useState(0);
+  const transitionToPlaneRef = useRef<((opts: { lon: number; lat: number; zoom?: number; reason: "manual" | "altitude" | "dblclick" }) => void) | null>(null);
+  const transitionToGlobeRef = useRef<((opts: { lon?: number; lat?: number; zoom?: number; reason: "manual" | "zoom" }) => void) | null>(null);
   const [assistantInput, setAssistantInput] = useState("");
   const [pendingImage, setPendingImage] = useState<ImageAttachment | null>(null);
   const [imageGenerationLoading, setImageGenerationLoading] = useState(false);
@@ -743,23 +769,28 @@ export default function App({
       teachingContract?: TeachingContract | null,
       intent?: string | null,
       actionsExecuted?: ExecutedAction[] | null,
-      imageAttachment?: ImageAttachment | null
+      imageAttachment?: ImageAttachment | null,
+      planner?: string | null,
+      targetTab?: AssistantTab
     ) => {
       if (!text.trim() && !imageAttachment) {
         return;
       }
-      setChatLog((previous) => [
-        ...previous,
-        {
-          role,
-          text,
-          timestamp: timestamp(),
-          teaching_contract: teachingContract ?? undefined,
-          intent: intent ?? undefined,
-          actions_executed: actionsExecuted ?? undefined,
-          image_attachment: imageAttachment ?? undefined
-        }
-      ]);
+      const message: ChatMessage = {
+        role,
+        text,
+        timestamp: timestamp(),
+        teaching_contract: teachingContract ?? undefined,
+        intent: intent ?? undefined,
+        actions_executed: actionsExecuted ?? undefined,
+        image_attachment: imageAttachment ?? undefined,
+        planner: planner ?? undefined
+      };
+      if (targetTab === "interaction") {
+        setInteractionChatLog((previous) => [...previous, message]);
+        return;
+      }
+      setChatLog((previous) => [...previous, message]);
     },
     []
   );
@@ -1181,24 +1212,54 @@ export default function App({
     return wasTracked;
   }, []);
 
-  const handleAssistantUiActions = useCallback((payload: JobRecord) => {
-    const executed = payload.result?.actions_executed || [];
-    const openMaterialActions = executed.flatMap((entry) => {
-      const result = entry.result || {};
-      const uiActions = Array.isArray(result.ui_actions) ? result.ui_actions : [];
-      return uiActions.filter((item): item is { type: string; title?: string; materials?: TeachingMaterial[] } => {
-        return Boolean(item && typeof item === "object" && (item as { type?: string }).type === "open_material");
+  const handleAssistantUiActions = useCallback(
+    (payload: JobRecord) => {
+      const executed = payload.result?.actions_executed || [];
+      const uiActions = executed.flatMap((entry) => {
+        const result = entry.result || {};
+        return Array.isArray(result.ui_actions) ? (result.ui_actions as AssistantUiAction[]) : [];
       });
-    });
-    const latest = openMaterialActions.at(-1);
-    const materials = latest?.materials || [];
-    if (!latest || !materials.length) {
-      return;
-    }
-    setMaterialViewerTitle(latest.title || materials[0]?.title || "课堂资料");
-    setMaterialViewerItems(materials);
-    setMaterialViewerOpen(true);
-  }, []);
+      for (const action of uiActions) {
+        if (!action || typeof action !== "object") {
+          continue;
+        }
+        if (action.type === "open_material") {
+          const materials = action.materials || [];
+          if (!materials.length) {
+            continue;
+          }
+          setMaterialViewerTitle(action.title || materials[0]?.title || "课堂资料");
+          setMaterialViewerItems(materials);
+          setMaterialViewerOpen(true);
+          setOverlayPulse((value) => value + 1);
+          continue;
+        }
+        if (action.type === "switch_view") {
+          setOverlayPulse((value) => value + 1);
+          if (action.mode === "plane") {
+            const center = project?.view?.center || [104, 35];
+            transitionToPlaneRef.current?.({ lon: Number(center[0]), lat: Number(center[1]), reason: "manual" });
+          } else {
+            transitionToGlobeRef.current?.({ reason: "manual" });
+          }
+          continue;
+        }
+        if (action.type === "open_panel") {
+          setOverlayPulse((value) => value + 1);
+          const open = action.open !== false;
+          if (action.panel === "layers") {
+            setLayerManagerOpen(open);
+          } else if (action.panel === "database") {
+            setDatabaseViewerOpen(open);
+          } else if (action.panel === "workflow") {
+            setWorkflowDockOpen(open);
+          }
+          continue;
+        }
+      }
+    },
+    [project]
+  );
 
   const subscribeToJob = useCallback(
     (jobId: string) => {
@@ -1227,16 +1288,31 @@ export default function App({
           handleAssistantUiActions(payload);
           const message = payload.result?.assistant_message || payload.result?.summary || payload.error || "";
           const nextConversationId = String(payload.result?.conversation_id || "");
+          const submittedTab = lastSubmittedTabRef.current;
           if (nextConversationId) {
-            setConversationId(nextConversationId);
+            if (submittedTab === "interaction") {
+              setInteractionConversationId(nextConversationId);
+            } else {
+              setConversationId(nextConversationId);
+            }
           }
           appendChat(
             payload.status === "failed" ? "system" : "assistant",
             message,
             payload.result?.teaching_contract,
             payload.result?.intent,
-            payload.result?.actions_executed
+            payload.result?.actions_executed,
+            undefined,
+            payload.result?.planner,
+            submittedTab
           );
+          if (submittedTab === "interaction") {
+            setInteractionBusy(false);
+            // 语音发起的交互回合：播报结果（可关）。新回合开始时会先 cancel。
+            if (payload.status === "completed" && ttsEnabled && lastInputModeRef.current === "voice" && message) {
+              speak(message);
+            }
+          }
           const isAssistantAnswer = Boolean(payload.result?.assistant_message || payload.result?.conversation_id);
           if (payload.status === "failed") {
             pushToast("error", "任务失败", payload.error || message);
@@ -1252,7 +1328,7 @@ export default function App({
         }
       });
     },
-    [appendChat, closeJobStream, handleAssistantUiActions, pushToast, refreshProjectState]
+    [appendChat, closeJobStream, handleAssistantUiActions, pushToast, refreshProjectState, ttsEnabled]
   );
 
   useEffect(() => {
@@ -1278,17 +1354,41 @@ export default function App({
       const effectiveMessage = message.trim() || (imageAttachment ? "请识别并分析这张图片中的地理信息。" : "");
       if (!effectiveMessage || assistantSubmittingRef.current) return false;
       assistantSubmittingRef.current = true;
+      // 智能交互 Tab 走 interaction 模式（独立会话、直达工具规划）；
+      // 教学助手 Tab 保持 teaching 模式与既有行为完全一致。
+      const submittedTab: AssistantTab = assistantTabRef.current === "interaction" ? "interaction" : "teaching";
+      const requestMode: AssistantMode = submittedTab === "interaction" ? "interaction" : assistantMode;
+      lastInputModeRef.current = inputMode;
+      lastSubmittedTabRef.current = submittedTab;
+      cancelSpeech();
       try {
         const response = await sendAssistantMessage(project.project_id, effectiveMessage, buildMapContext(overrides), target, inputMode, {
-          assistantMode,
-          conversationId: health?.ui.assistant_v2_enabled ? conversationId : undefined,
-          history: health?.ui.assistant_v2_enabled ? chatLog : undefined,
+          assistantMode: requestMode,
+          conversationId:
+            submittedTab === "interaction"
+              ? interactionConversationId || undefined
+              : health?.ui.assistant_v2_enabled
+                ? conversationId
+                : undefined,
+          history:
+            submittedTab === "interaction"
+              ? undefined
+              : health?.ui.assistant_v2_enabled
+                ? chatLog
+                : undefined,
           imageAttachments: imageAttachment ? [{ artifact_id: imageAttachment.artifact_id }] : [],
           teachingContext: teachingContextRef.current || undefined
         });
-        appendChat("user", displayMessage || effectiveMessage, null, null, null, imageAttachment);
+        appendChat("user", displayMessage || effectiveMessage, null, null, null, imageAttachment, undefined, submittedTab);
         if (response.conversation_id) {
-          setConversationId(response.conversation_id);
+          if (submittedTab === "interaction") {
+            setInteractionConversationId(response.conversation_id);
+          } else {
+            setConversationId(response.conversation_id);
+          }
+        }
+        if (submittedTab === "interaction") {
+          setInteractionBusy(true);
         }
         if (response.lesson_design) {
           // 助教识别到整节课设计请求：直接打开全屏教案设计工作台并续上该会话。
@@ -1304,7 +1404,18 @@ export default function App({
         assistantSubmittingRef.current = false;
       }
     },
-    [appendChat, buildMapContext, chatLog, conversationId, health?.ui.assistant_v2_enabled, openLessonDesignWorkspace, project, pushToast, subscribeToJob]
+    [
+      appendChat,
+      buildMapContext,
+      chatLog,
+      conversationId,
+      health?.ui.assistant_v2_enabled,
+      interactionConversationId,
+      openLessonDesignWorkspace,
+      project,
+      pushToast,
+      subscribeToJob
+    ]
   );
 
   assistantDispatchRef.current = (message, overrides, displayMessage) => {
@@ -1980,6 +2091,11 @@ export default function App({
     },
     [pushToast, viewMode]
   );
+
+  // 智能交互 ui_action 的切换句柄：handleAssistantUiActions 定义在两个
+  // transition 之前，通过 ref 桥接避免声明顺序问题。
+  transitionToPlaneRef.current = transitionToPlane;
+  transitionToGlobeRef.current = transitionToGlobe;
 
   const handleViewModeToggle = useCallback(
     (next: ViewMode) => {
@@ -3420,11 +3536,38 @@ export default function App({
       ) : null}
 
       {project ? (
+        <>
+        <AgentControlOverlay
+          active={interactionBusy}
+          listening={overlayListening}
+          partialTranscript={overlayPartial}
+          capturedCommand={overlayCaptured}
+          workingDetail={
+            interactionBusy
+              ? Object.values(currentJob?.stages || {}).find((stage) => stage?.status === "running")?.summary || ""
+              : ""
+          }
+          pulseSignal={overlayPulse}
+        />
         <CopilotWidget
-          chatLog={chatLog}
+          chatLog={assistantTab === "interaction" ? interactionChatLog : chatLog}
           currentJob={currentJob}
           inputValue={assistantInput}
           onInputChange={setAssistantInput}
+          assistantTab={assistantTab}
+          onTabChange={(tab) => {
+            setAssistantTab(tab);
+            assistantTabRef.current = tab;
+          }}
+          ttsEnabled={ttsEnabled}
+          onTtsToggle={(enabled) => setTtsEnabled(enabled)}
+          voiceStreamAvailable={Boolean(health?.voice_asr?.available)}
+          onListeningChange={setOverlayListening}
+          onPartialTranscript={setOverlayPartial}
+          onCapturedCommand={(command) => {
+            setOverlayCaptured(command);
+            window.setTimeout(() => setOverlayCaptured((current) => (current === command ? "" : current)), 1200);
+          }}
           onSubmit={() => {
             const message = assistantInput.trim();
             if (!message && !pendingImage) {
@@ -3475,6 +3618,7 @@ export default function App({
           imageGenerationConfigured={Boolean(health?.image_generation?.configured)}
           imageGenerationModel={health?.image_generation?.model || "image-01"}
         />
+        </>
       ) : null}
 
       {screenshotSource && screenshotBounds ? (

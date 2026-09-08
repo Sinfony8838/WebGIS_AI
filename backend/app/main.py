@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
@@ -1331,6 +1331,59 @@ def get_assistant_conversation(conversation_id: str, request: Request) -> Dict[s
         return runtime.get_conversation(conversation_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def _websocket_authorized(websocket: "WebSocket") -> bool:
+    """Mirror of the HTTP auth middleware for the voice WebSocket.
+
+    HTTP middleware does not intercept WebSocket scopes, so the handshake is
+    authenticated here. CSRF is skipped because the handshake is a GET and
+    cannot carry custom headers; the session cookie (users mode) or the
+    ``access_token`` query parameter (legacy token mode) is checked instead.
+    """
+    if config.auth_mode == "disabled":
+        return True
+    if config.auth_mode == "legacy_token":
+        supplied = websocket.query_params.get("access_token", "").strip()
+        return bool(supplied) and secrets.compare_digest(supplied, config.auth_token.strip())
+    if auth_service is None:
+        return False
+    return auth_service.authenticate(websocket.cookies.get(SESSION_COOKIE, "")) is not None
+
+
+@app.websocket("/assistant/voice/stream")
+async def assistant_voice_stream(websocket: "WebSocket") -> None:
+    # Not authorized: close with 4401 so the frontend can fall back to
+    # browser speech recognition instead of retrying forever.
+    if not _websocket_authorized(websocket):
+        await websocket.close(code=4401)
+        return
+    engine = runtime.voice_asr
+    if not engine.available():
+        await websocket.close(code=4403)
+        return
+    await websocket.accept()
+    session = engine.create_session()
+    try:
+        while True:
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
+            pcm = message.get("bytes")
+            if pcm:
+                for event in session.feed(pcm):
+                    await websocket.send_text(json.dumps(event, ensure_ascii=False))
+                continue
+            text = message.get("text")
+            if text == "flush":
+                final = session.flush()
+                if final:
+                    await websocket.send_text(json.dumps(final, ensure_ascii=False))
+                break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        session.close()
 
 
 @app.post("/templates/{template_id}/run")
