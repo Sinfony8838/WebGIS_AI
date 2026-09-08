@@ -261,6 +261,11 @@ describe("ClassRunPanel", () => {
     expect(props.onEnterStage).toHaveBeenCalledWith("s2");
   });
 
+  it("does not mark skipped stages as completed", () => {
+    renderPanel({ currentStageId: "s2" });
+    expect(screen.getByTestId("stage-chip-s1").className).not.toContain("done");
+  });
+
   it("presents choice questions orally without exposing teacher answers", () => {
     const props = renderPanel();
     fireEvent.click(screen.getByTestId("oral-toggle-s1q1"));
@@ -370,7 +375,7 @@ describe("ClassRunPanel", () => {
     });
 
     const steps = screen.getByTestId("evidence-layer-steps");
-    expect(within(steps).getByText("① 气候").className).toContain("active");
+    expect(within(steps).getByText("气候").className).toContain("active");
     fireEvent.click(within(steps).getByTestId("evidence-layer-china_terrain_steps"));
     expect(onFocusEvidenceLayer).toHaveBeenCalledWith("china_terrain_steps", [
       "china_climate_types",

@@ -964,6 +964,46 @@ class LessonDesignService:
                 pass
         return mode, refs
 
+    def _dataset_facts(self, draft: Dict[str, Any], message: str) -> List[Dict[str, Any]]:
+        """Bounded scalar excerpts from referenced local datasets, never geometry or remote fetches."""
+        if self.catalog_service is None:
+            return []
+        identifiers = []
+        for stage in draft.get("stages") or []:
+            scene = stage.get("scene") if isinstance(stage, dict) else None
+            for identifier in scene.get("catalog_layers") or [] if isinstance(scene, dict) else []:
+                if isinstance(identifier, str) and identifier not in identifiers:
+                    identifiers.append(identifier)
+        context = message + json.dumps({k: v for k, v in draft.items() if k != "structured_text_originals"}, ensure_ascii=False)
+        excerpts = []
+        for identifier in identifiers[:8]:
+            try:
+                item = self.catalog_service.get_item(identifier)
+                path = self.catalog_service.resolve_item_path(item)
+                if path.suffix.lower() not in {".json", ".geojson"} or path.stat().st_size > 4_000_000:
+                    continue
+                data = json.loads(path.read_text(encoding="utf-8"))
+                features = data.get("features") if isinstance(data, dict) else None
+                if not isinstance(features, list):
+                    continue
+                records = []
+                keys = list(dict.fromkeys(["name", "short_name", "source_year", *item.get("fields", [])]))
+                for feature in features:
+                    props = feature.get("properties") if isinstance(feature, dict) else None
+                    if not isinstance(props, dict) or not any(isinstance(props.get(key), (int, float)) and not isinstance(props.get(key), bool) for key in item.get("fields", []) if key not in {"adcode", "region_code"}):
+                        continue
+                    record = {key: props[key] for key in keys if isinstance(props.get(key), (str, int, float, bool)) and (not isinstance(props[key], str) or len(props[key]) <= 160)}
+                    records.append(record)
+                if not records:
+                    continue
+                records.sort(key=lambda row: not any(isinstance(row.get(key), str) and row[key] and row[key] in context for key in ("name", "short_name")))
+                excerpts.append({"dataset_id": identifier, "source_name": item.get("source_name", ""),
+                                 "source_url": item.get("source_url", ""), "source_year": item.get("source_year", ""),
+                                 "sampled": len(records) > 12, "record_count": len(records), "records": records[:12]})
+            except (OSError, ValueError, KeyError, TypeError):
+                logger.warning("Lesson dataset excerpt unavailable")
+        return excerpts
+
     def _ask_minimax(self, design: LessonDesignRecord, step: str, message: str) -> Optional[Dict[str, Any]]:
         if self.minimax_client is None:
             return None
@@ -984,7 +1024,10 @@ class LessonDesignService:
             "你的回复只说明本轮草稿修改，不得声称已发布、已生成文件、预演通过或全部步骤完成；这些状态由系统核验。"
             "题目匹配只能引用题库检索给出的题目，不得编造题目内容。"
             "草稿：" + json.dumps(design.draft, ensure_ascii=False)[:12000] +
-            "。真实能力目录：" + json.dumps(self.capability_catalog(), ensure_ascii=False)[:8000]
+            "。真实能力目录：" + json.dumps(self.capability_catalog(), ensure_ascii=False)[:8000] +
+            "。当前引用图层的本地统计摘录（只是本地数据，不代表已独立核验来源；sampled=true 时只是部分记录）：" +
+            json.dumps(self._dataset_facts(design.draft, message) if step == "process" else [], ensure_ascii=False) +
+            "。涉及数字、大小关系或排名时必须与摘录一致；摘录未覆盖或单位未明确时说明需核对，不要补造数值或宣称统计口径相同。"
         )
         messages = [{"role": "system", "content": system}, {"role": "user", "content": message[:6000]}]
         # One bounded correction for model formatting/content errors, never for network failures.

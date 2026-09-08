@@ -1,7 +1,7 @@
 import Polygon from "ol/geom/Polygon";
 import MultiPolygon from "ol/geom/MultiPolygon";
 import { UrbanStudyPanel, type UrbanSource, type UrbanStatus } from "./components/UrbanStudyPanel";
-import { densityColor, densityRadius, rankColor } from "./lib/populationVisual";
+import { shanghaiDensityColor, densityColor, densityRadius, rankColor } from "./lib/populationVisual";
 import { MapEvidenceLegend } from "./components/MapEvidenceLegend";
 import { MapToolsDock } from "./components/MapToolsDock";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -438,6 +438,10 @@ function layerStyle(record: LayerRecord, showFit = false) {
     if (densityTemplate) {
       fillColor = densityColor(feature.get("density")); fillOpacity = .88; strokeColor = "#ffffff"; strokeWidth = .9;
       radius = densityRadius(feature.get("density"));
+    }
+    if (record.metadata?.catalog_id === "shanghai_population_density") {
+      fillColor = shanghaiDensityColor(feature.get("density"));
+      fillOpacity = 0.98; strokeColor = "#4b7776"; strokeWidth = 0.9;
     }
     if (ranked) { fillColor = rankColor(Number(feature.get("rank")), rankCount); fillOpacity = .94; strokeColor = "#ffffff"; strokeWidth = 1.4; }
     if (record.layer_id === "generated_hu_line") { strokeColor = feature.get("line_type") === "dynamic" ? "#d88a26" : "#07575f"; strokeWidth = feature.get("line_type") === "dynamic" ? 2 : 3; }

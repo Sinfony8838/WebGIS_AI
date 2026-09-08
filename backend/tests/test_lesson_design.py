@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import json
 import unittest
 from unittest.mock import Mock, patch
 from pathlib import Path
@@ -154,6 +155,27 @@ class LessonDesignServiceTest(unittest.TestCase):
         self.assertEqual(result["draft"]["stages"], relocated)
         open_question = {"question_id": "q2", "text": "原开放题"}
         self.assertEqual(service._questions_to_preserve({"stages": [{"questions": [open_question]}]}, "保留现有三道开放题及原文"), [open_question])
+
+    def test_dataset_context_uses_local_values_prioritizes_named_regions_and_omits_geometry(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        data_path = Path(self.temp_dir.name) / "population.geojson"
+        features = [{"properties": {"name": f"区域{i}", "population": i * 100, "source_year": "2020"}, "geometry": {"type": "Point", "coordinates": [100, 30]}} for i in range(15)]
+        data_path.write_text(json.dumps({"features": features}), encoding="utf-8")
+        catalog = Mock()
+        catalog.get_item.return_value = {"fields": ["name", "population"], "source_name": "测试统计表", "source_year": "2020", "source_url": "https://example.test/source"}
+        catalog.resolve_item_path.return_value = data_path
+        service.catalog_service = catalog
+        draft = {"stages": [{"scene": {"catalog_layers": ["population", "population"]}}]}
+        excerpts = service._dataset_facts(draft, "请比较区域14")
+        self.assertEqual(len(excerpts), 1)
+        rows = excerpts[0]["records"]
+        self.assertTrue(excerpts[0]["sampled"])
+        self.assertEqual(len(rows), 12)
+        self.assertEqual(next(row for row in rows if row["name"] == "区域14")["population"], 1400)
+        self.assertNotIn("geometry", json.dumps(excerpts))
+        self.assertEqual(excerpts[0]["source_year"], "2020")
+        catalog.resolve_item_path.side_effect = FileNotFoundError("missing")
+        self.assertEqual(service._dataset_facts(draft, ""), [])
 
     def test_rules_are_disclosed_in_response_and_history(self) -> None:
         service = self.runtime.classroom.lesson_design

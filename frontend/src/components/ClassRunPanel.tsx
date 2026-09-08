@@ -35,11 +35,11 @@ function formatElapsed(seconds: number): string {
 
 const OPTION_LABELS = ["A", "B", "C", "D", "E", "F", "G", "H"];
 const EVIDENCE_LAYER_LABELS: Record<string, string> = {
-  china_climate_types: "① 气候",
-  china_terrain_steps: "② 地形",
-  china_major_rivers: "③ 河流",
-  china_vegetation_zones: "④ 植被验证",
-  china_province_gdp_per_capita: "⑤ 经济"
+  china_climate_types: "气候",
+  china_terrain_steps: "地形",
+  china_major_rivers: "河流",
+  china_vegetation_zones: "植被",
+  china_province_gdp_per_capita: "经济"
 };
 
 type KnowledgePosition = { x: number; y: number };
@@ -155,6 +155,7 @@ function BasicKnowledgeOverlay({
 }
 
 export function ClassRunPanel({
+  session,
   lesson,
   currentStageId,
   stageEnteredAt,
@@ -384,7 +385,7 @@ export function ClassRunPanel({
       <nav className="class-panel-stages" aria-label="课堂环节">
         {lesson.stages.map((stage, index) => {
           const active = stage.stage_id === currentStageId;
-          const done = currentStageIndex >= 0 && index < currentStageIndex;
+          const done = !active && session.events.some(event => event.type === "stage_enter" && event.stage_id === stage.stage_id);
           return (
             <button
               key={stage.stage_id}
@@ -434,14 +435,14 @@ export function ClassRunPanel({
           </div>
         ) : null}
 
-        {currentStage?.scene?.catalog_layers && currentStage.scene.catalog_layers.length > 1 && onFocusEvidenceLayer ? (
+        {currentStage?.scene?.catalog_layers && currentStage.scene.catalog_layers.filter(id => EVIDENCE_LAYER_LABELS[id]).length > 1 && onFocusEvidenceLayer ? (
           <div className="class-evidence-layer-steps" data-testid="evidence-layer-steps">
             <div className="class-evidence-layer-heading">
-              <span className="question-detail-label">证据图层步骤</span>
-              <small>逐张聚焦，避免图层堆叠</small>
+              <span className="question-detail-label">切换地图</span>
+
             </div>
             <div className="class-evidence-layer-buttons">
-              {currentStage.scene.catalog_layers.map((datasetId) => (
+              {currentStage.scene.catalog_layers.filter(id => EVIDENCE_LAYER_LABELS[id]).map((datasetId) => (
                 <button
                   key={datasetId}
                   type="button"

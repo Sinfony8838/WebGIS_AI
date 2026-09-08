@@ -1,4 +1,4 @@
-import { DENSITY_SCALE } from "../lib/populationVisual";
+import { DENSITY_SCALE, SHANGHAI_DENSITY_SCALE } from "../lib/populationVisual";
 import { GLOBE_THEMES } from "../lib/globeThemes";
 import type { LayerRecord } from "../types";
 import "./MapEvidenceLegend.css";
@@ -7,11 +7,12 @@ type Props = { layers:LayerRecord[]; globe:boolean; themeIds:string[]; showFit:b
 export function MapEvidenceLegend({layers,globe,themeIds,showFit,onShowFit}:Props) {
   const visible = layers.filter(layer => layer.visible);
   const hasDensity = globe ? themeIds.some(id => ["density_fill","density_3d","population_columns"].includes(id)) : visible.some(layer => ["builtin_population_regions","builtin_population_density"].includes(layer.layer_id));
+  const shanghai = !globe && visible.find(layer => layer.metadata?.catalog_id === "shanghai_population_density");
   const line = visible.find(layer => layer.layer_id === "generated_hu_line");
   const hasLine = globe ? themeIds.includes("hu_line") : Boolean(line);
   const otherThemes = globe ? GLOBE_THEMES.filter(theme => themeIds.includes(theme.id) && !["density_fill","density_3d","population_columns","hu_line"].includes(theme.id)) : [];
   const ranked = !globe && visible.some(layer => Boolean(layer.metadata?.visualization));
-  if (!hasDensity && !hasLine && !otherThemes.length && !ranked) return null;
+  if (!shanghai && !hasDensity && !hasLine && !otherThemes.length && !ranked) return null;
   const share = line?.metadata?.classic_share;
   return <section className="map-evidence-legend" aria-label="地图图例与依据">
     {hasDensity && <>
@@ -21,6 +22,17 @@ export function MapEvidenceLegend({layers,globe,themeIds,showFit,onShowFit}:Prop
       {!globe && visible.some(layer => layer.layer_id === "builtin_population_density") && <p>圆点表示省级密度，非城市位置；半径按 √密度 缩放，4–24 px 截断。</p>}
       {globe && themeIds.includes("density_3d") && <p>高度按 √密度 夸张，不代表真实地形。</p>}
       {globe && themeIds.includes("population_columns") && <p>柱高表示人口总量；颜色表示密度；高度为视觉缩放。</p>}
+    </>}
+    {shanghai && <>
+      <strong>上海 · 人口密度 <small>人/km²</small></strong>
+      <div className="map-density-key">{SHANGHAI_DENSITY_SCALE.map(item => <span key={item.label}><i style={{background:item.color}}/><small>{item.label}</small></span>)}</div>
+      <p>2020 年常住人口 ÷ 区域面积 · 区级平均值，不能代表街镇或居住用地密度。</p>
+      <details><summary>数据来源与口径</summary>
+        <p>人口：上海市第七次全国人口普查。面积：《上海统计年鉴2021》表2.2（2020年）。密度由七普时点人口计算，与年末人口密度不同。</p>
+        <a href="https://tjj.sh.gov.cn/tjnj/2020rktjnj/fu02.pdf" target="_blank" rel="noreferrer">上海统计局 · 各区常住人口 ↗</a>
+        <a href="https://tjj.sh.gov.cn/tjnj/2021tjnj/C0202.htm" target="_blank" rel="noreferrer">2020 年区划面积 ↗</a>
+        <p>按 1千、5千、1万、2万人/km² 分级；灰色表示缺失。点击区县查看数值。</p>
+      </details>
     </>}
     {ranked && <><strong>人口排名图层</strong><p>深蓝到浅蓝表示排名由前到后，具体数值与年份见查询结果。行政区总量不等于城区密度。</p></>}
     {hasLine && <>

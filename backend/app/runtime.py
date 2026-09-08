@@ -1513,7 +1513,7 @@ class WebGISRuntime:
             kind="vector",
             source="one_map_catalog",
             geometry_type=geometry_type,
-            opacity=0.86,
+            opacity=1.0 if dataset_id == "shanghai_population_density" else 0.86,
             z_index=z_index,
             style={"labelField": "name"},
             data=payload,
