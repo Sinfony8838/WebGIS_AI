@@ -689,7 +689,7 @@ export function LessonWorkflowShell({
   );
 
   const workflowBusy = busy || localBusy;
-  const teachPanelVisible = lessonMode === "teach" && Boolean(activeSession) && Boolean(activeLesson);
+  const teachPanelVisible = lessonMode === "teach" && activeSession?.status === "running" && Boolean(activeLesson);
 
   return (
     <>
@@ -745,10 +745,10 @@ export function LessonWorkflowShell({
               type="button"
               className={`toolbar-button compact ${lessonMode === "teach" || lessonMode === "prep" ? "active" : ""}`}
               onClick={() =>
-                setLessonMode((value) => (value === "teach" ? "off" : activeSession ? "teach" : "prep"))
+                setLessonMode((value) => (value === "teach" ? "off" : activeSession?.status === "running" ? "teach" : "prep"))
               }
               data-testid="class-mode-toggle"
-              title={activeSession ? "进入课堂面板" : "先选择课时并开始上课"}
+              title={activeSession?.status === "running" ? "进入课堂面板" : "先选择课时并开始上课"}
             >
               课堂模式
             </button>

@@ -166,4 +166,7 @@ it("adopts assistant classroom results without starting a second class", async (
   rerender(<LessonWorkflowShell {...props} assistantJob={job("end", "end_class_session", { class_session: { ...session, status: "ended" } })} />);
   await waitFor(() => expect(onTeachingContextChange).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "post_class" })));
   expect(screen.getByLabelText("关闭复盘面板")).toBeInTheDocument();
+  fireEvent.click(screen.getByTestId("class-mode-toggle"));
+  expect(screen.queryByText("结束上课")).not.toBeInTheDocument();
+  expect(screen.getByText("开始上课")).toBeInTheDocument();
 });

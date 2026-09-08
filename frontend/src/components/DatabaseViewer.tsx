@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { buildAuthenticatedUrl, type TeachingMapItem } from "../api";
 import type {
   ArtifactRecord,
@@ -132,16 +132,48 @@ const CATEGORIES: Array<{ key: DatabaseCategory; label: string }> = [
   { key: "materials", label: "教学资料" },
   { key: "questions", label: "题库" },
   { key: "lesson", label: "课时资源" },
-  { key: "resources", label: "检索与获取" },
+  { key: "resources", label: "查找新资料" },
 ];
 
 const SECTION_LABELS: Record<string, string> = {
   layer: "项目图层",
-  "one-map": "一张图",
+  "one-map": "基础与专题数据",
   "teaching-map": "课本地图",
   material: "素材",
   knowledge: "知识条目",
 };
+
+const MAP_TOPICS = ["人口", "气温", "降水", "气候", "地形", "行政区", "水系", "交通与城市", "其他"];
+const MATERIAL_TYPES = ["知识条目", "视频", "图片", "文档", "网页链接", "音频", "其他"];
+
+function entryFacet(entry: DatabaseEntry): string {
+  if (entry.kind === "knowledge") return "知识条目";
+  if (entry.kind === "material") {
+    const type = entry.raw.type.toLowerCase();
+    const url = entry.raw.url.toLowerCase().split(/[?#]/)[0];
+    if (/video|视频/.test(type) || /\.(mp4|webm|mov|m3u8)$/.test(url)) return "视频";
+    if (/image|图片/.test(type) || /\.(png|jpe?g|gif|webp|svg)$/.test(url)) return "图片";
+    if (/pdf|document|doc|ppt|文档/.test(type) || /\.(pdf|docx?|pptx?|xlsx?|txt)$/.test(url)) return "文档";
+    if (/audio|音频/.test(type) || /\.(mp3|wav|ogg)$/.test(url)) return "音频";
+    if (/url|link|web|链接/.test(type) || /^https?:/.test(url)) return "网页链接";
+    return "其他";
+  }
+  if (entry.category !== "map-data") return "其他";
+  const patterns: Array<[string, RegExp]> = [
+    ["气温", /气温|温度|temperature/i], ["降水", /降水|降雨|雨量|precipitation|rainfall/i],
+    ["人口", /人口|胡焕庸|老龄|population|density/i], ["气候", /气候|climate/i],
+    ["地形", /地形|高程|海拔|山脉|地势|terrain|elevation|relief/i],
+    ["行政区", /行政|国界|省界|边界|区划|boundary|boundaries|admin/i],
+    ["水系", /水系|河流|流域|湖泊|river|hydro/i],
+    ["交通与城市", /交通|城市|铁路|公路|港口|urban|transport|road/i],
+  ];
+  // 标题优先，避免通用介绍中的其他主题盖过数据自身主题。
+  for (const text of [entry.title, entry.subtitle + " " + entry.tags.join(" ")]) {
+    const match = patterns.find(([, pattern]) => pattern.test(text));
+    if (match) return match[0];
+  }
+  return "其他";
+}
 
 const IMAGE_ARTIFACT_TYPES = new Set(["uploaded_image", "generated_image", "map_snapshot"]);
 /** 产物行的「上图」只对矢量结果开放。 */
@@ -237,7 +269,16 @@ export function DatabaseViewer({
   onOpenResource,
 }: Props) {
   const [query, setQuery] = useState("");
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
   const category = activeCategory;
+  const [facetSelection, setFacetSelection] = useState({ category, value: "全部" });
+  const facet = facetSelection.category === category ? facetSelection.value : "全部";
+  const facetOptions = category === "map-data" ? MAP_TOPICS : category === "materials" ? MATERIAL_TYPES : [];
   const trimmedResourceQuery = resourceQuery.trim();
 
   const entries = useMemo<DatabaseEntry[]>(() => {
@@ -436,16 +477,17 @@ export function DatabaseViewer({
     for (const entry of entries) {
       next.set(entry.category, (next.get(entry.category) || 0) + 1);
     }
-    next.set("all", entries.length);
+    next.set("all", entries.filter((entry) => entry.category !== "resources").length);
     // 检索与获取是工具类：以结果数参与计数，未搜索时为 0。
     next.set("resources", resourceResults.length);
     return next;
   }, [entries, resourceResults.length]);
 
   const filteredEntries = useMemo(() => {
-    const keyword = query.trim().toLowerCase();
+    const keyword = category === "resources" ? "" : query.trim().toLowerCase();
     const list = entries
-      .filter((entry) => category === "all" || entry.category === category)
+      .filter((entry) => category === "all" ? entry.category !== "resources" : entry.category === category)
+      .filter((entry) => !facetOptions.length || facet === "全部" || entryFacet(entry) === facet)
       .filter((entry) => {
         if (!keyword) return true;
         const haystack = [entry.title, entry.subtitle, entry.description, entry.status, ...entry.tags].join(" ").toLowerCase();
@@ -460,7 +502,7 @@ export function DatabaseViewer({
       const rightTime = Date.parse(right.updatedAt || "");
       return (Number.isNaN(rightTime) ? 0 : rightTime) - (Number.isNaN(leftTime) ? 0 : leftTime);
     });
-  }, [category, entries, query]);
+  }, [category, entries, query, facet, facetOptions.length]);
 
   const sectionGroups = useMemo(() => {
     if (category !== "map-data" && category !== "all") {
@@ -471,7 +513,7 @@ export function DatabaseViewer({
     if (category === "all") {
       return [
         { key: "layer" as const, label: "项目图层" },
-        { key: "one-map" as const, label: "一张图数据" },
+        { key: "one-map" as const, label: "基础与专题数据" },
         { key: "teaching-map" as const, label: "课本地图" },
         { key: "images" as const, label: "图片" },
         { key: "outputs" as const, label: "分析产物" },
@@ -517,40 +559,45 @@ export function DatabaseViewer({
   if (!open) return null;
 
   return (
-    <section className="database-viewer" role="dialog" aria-modal="true" aria-label="数据库">
+    <section className="database-viewer database-workbench" role="dialog" aria-modal="true" aria-label="数据库">
       <header className="database-viewer-header">
         <div className="database-viewer-heading">
-          <span>DATA ASSETS</span>
+          <span className="database-brand-icon" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7"/></svg></span>
           <h2>数据库</h2>
-          <p>地图数据、图片、分析产物、教学资料、题库与课时资源统一管理；检索与获取负责从知识库与权威联网补入新资料。</p>
+          <p>按主题浏览地图，按形式查找教学资料；需要补充内容时，使用“查找新资料”。</p>
         </div>
         <div className="database-viewer-actions">
-          <label className="database-viewer-search">
-            <span>搜索</span>
+          {category !== "resources" && <label className="database-viewer-search">
+            <span>筛选已入库内容</span>
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索名称、分类、来源、关键词"
+              placeholder="筛选名称、来源或关键词"
             />
-          </label>
+          </label>}
+          <button type="button" className="database-secondary-action" aria-pressed={category === "resources"}
+            onClick={() => onCategoryChange(category === "resources" ? "all" : "resources")}>
+            {category === "resources" ? "返回数据库" : "查找新资料"}
+          </button>
           {onUpload && (
             <button type="button" className="database-primary-action" onClick={onUpload}>
               导入数据
             </button>
           )}
-          <button type="button" className="database-secondary-action" onClick={onClose}>
-            关闭
+          <button type="button" className="database-close-button" onClick={onClose} aria-label="关闭" title="关闭数据库（Esc）">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg>
           </button>
         </div>
       </header>
 
       <nav className="database-viewer-tabs" aria-label="数据库分类">
-        {CATEGORIES.map((item) => (
+        <span className="database-nav-caption">资源分类</span>
+        {CATEGORIES.filter((item) => item.key !== "resources").map((item) => (
           <button
             key={item.key}
             type="button"
             className={category === item.key ? "active" : ""}
-            onClick={() => onCategoryChange(item.key)}
+            onClick={() => { setFacetSelection({ category: item.key, value: "全部" }); onCategoryChange(item.key); }}
           >
             <span>{item.label}</span>
             <em>{counts.get(item.key) || 0}</em>
@@ -558,23 +605,29 @@ export function DatabaseViewer({
         ))}
       </nav>
 
+      {facetOptions.length > 0 && (
+        <nav className="database-facets" aria-label={category === "map-data" ? "地图主题分类" : "教学资料类型"}>
+          <span>{category === "map-data" ? "主题" : "形式"}</span>
+          {["全部", ...facetOptions].map((value) => (
+            <button key={value} type="button" aria-pressed={facet === value} className={facet === value ? "active" : ""}
+              onClick={() => setFacetSelection({ category, value })}>
+              {value}<em>{entries.filter((entry) => entry.category === category && (value === "全部" || entryFacet(entry) === value)).length}</em>
+            </button>
+          ))}
+        </nav>
+      )}
       <div className="database-viewer-body">
-        <aside className="database-viewer-summary">
-          <strong>{filteredEntries.length}</strong>
-          <span>当前结果</span>
-          <small>总记录 {entries.length}</small>
-          <small>地图数据 {counts.get("map-data") || 0}</small>
-          <small>图片 {counts.get("images") || 0}</small>
-          <small>分析产物 {counts.get("outputs") || 0}</small>
-          <small>教学资料 {counts.get("materials") || 0}</small>
-          <small>题库 {counts.get("questions") || 0}</small>
-          <small>课时资源 {counts.get("lesson") || 0}</small>
-          <small>检索结果 {counts.get("resources") || 0}</small>
-        </aside>
+        <div className="database-results-heading">
+          <h3>{CATEGORIES.find(item => item.key === category)?.label}{facet !== "全部" ? ` / ${facet}` : ""}</h3>
+          <span>{filteredEntries.length} 项</span>
+          <small>{category === "resources" ? "搜索结果，保存后进入数据库" : `已入库 ${counts.get("all") || 0} 项`}</small>
+        </div>
 
         <div className="database-viewer-list">
           {category === "resources" ? (
             <div className="database-resource-search" data-testid="database-resource-search">
+              <h3>查找新资料</h3>
+              <p>搜索知识库或联网资料，选中后保存为素材或导入本课时。</p>
               <form
                 className="live-resource-searchbar"
                 onSubmit={(event) => {
@@ -732,7 +785,7 @@ type RowHandlerProps = Pick<
 
 function DatabaseRow({ entry, props }: { entry: DatabaseEntry; props: RowHandlerProps }) {
   const categoryLabel = CATEGORIES.find((item) => item.key === entry.category)?.label || entry.category;
-  const sectionLabel = SECTION_LABELS[entry.section] || "";
+  const sectionLabel = entry.category === "materials" ? entryFacet(entry) : SECTION_LABELS[entry.section] || "";
   return (
     <article className="database-row">
       <div className="database-row-main">
@@ -770,7 +823,7 @@ function DatabaseRow({ entry, props }: { entry: DatabaseEntry; props: RowHandler
         ) : null}
         {entry.kind === "material" ? (
           <button type="button" onClick={() => props.onOpenMaterial(entry.title, [entry.raw])}>
-            {entry.raw.type === "video" ? "播放" : entry.raw.type === "image" ? "预览" : "打开"}
+            {entryFacet(entry) === "视频" ? "播放" : entryFacet(entry) === "图片" ? "预览" : "打开"}
           </button>
         ) : null}
         {entry.kind === "resource" ? (

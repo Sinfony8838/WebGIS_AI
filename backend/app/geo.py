@@ -137,9 +137,9 @@ def generate_dynamic_hu_line(
                         "name": "经典胡焕庸线",
                         "line_type": "classic",
                         "east_share": round(classic_share, 4),
-                        "__strokeColor": "#1c3d61",
+                        "__strokeColor": "#07575f",
                         "__strokeWidth": 3,
-                        "__lineDash": [10, 8]
+                        "__lineDash": []
                     },
                     "geometry": {
                         "type": "LineString",
@@ -149,11 +149,12 @@ def generate_dynamic_hu_line(
                 {
                     "type": "Feature",
                     "properties": {
-                        "name": "动态拟合线",
+                        "name": "教学拟合线（预设94%目标）",
                         "line_type": "dynamic",
                         "east_share": round(best_candidate["share"], 4),
-                        "__strokeColor": "#ffb703",
-                        "__strokeWidth": 4
+                        "__strokeColor": "#d88a26",
+                        "__lineDash": [7, 5],
+                        "__strokeWidth": 2
                     },
                     "geometry": {
                         "type": "LineString",

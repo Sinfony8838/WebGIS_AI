@@ -322,7 +322,7 @@
         "globe": {
           "enabled": true,
           "themes": ["density_fill", "climate_zones"],
-          "camera": {"lon": 104.0, "lat": 8.0, "altitudeMeters": 4800000, "pitchDeg": -48}
+          "camera": {"lon": 104.0, "lat": 18.0, "altitudeMeters": 8200000, "pitchDeg": -78}
         }
       },
       "script": [
@@ -467,7 +467,7 @@
         "globe": {
           "enabled": true,
           "themes": ["density_3d", "hu_line"],
-          "camera": {"lon": 105.0, "lat": 9.0, "altitudeMeters": 5200000, "pitchDeg": -50}
+          "camera": {"lon": 106.0, "lat": 22.0, "altitudeMeters": 7800000, "pitchDeg": -80}
         }
       },
       "script": [

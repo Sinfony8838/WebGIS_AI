@@ -4,7 +4,6 @@
  *
  * Fields:
  *   - 经度 / 纬度    lon / lat
- *   - 海拔           ground elevation (set to "—" until terrain is wired)
  *   - 层级           OL zoom (plane) or estimated zoom from camera altitude (globe)
  *   - 视高           camera altitude (m / km)
  */
@@ -15,8 +14,6 @@ type Props = {
   mode: ViewMode;
   lon: number | null;
   lat: number | null;
-  /** Ground elevation in meters at the current cursor / focus. */
-  elevationMeters?: number | null;
   /** OL zoom (used in plane mode). */
   zoom?: number | null;
   /** Camera altitude in meters (used in globe mode). */
@@ -53,7 +50,6 @@ export function MapStatusBar({
   mode,
   lon,
   lat,
-  elevationMeters,
   zoom,
   altitudeMeters
 }: Props) {
@@ -66,7 +62,6 @@ export function MapStatusBar({
     <div className="map-status-bar glass-panel" data-testid="map-status-bar" role="status" aria-live="polite">
       <Field label="经度" value={formatLonLat(lon, "lon")} />
       <Field label="纬度" value={formatLonLat(lat, "lat")} />
-      <Field label="海拔" value={formatMeters(elevationMeters ?? null)} />
       <Field label="层级" value={formatZoom(effectiveZoom)} />
       {mode === "globe" ? (
         <Field label="视高" value={formatMeters(altitudeMeters ?? null)} />

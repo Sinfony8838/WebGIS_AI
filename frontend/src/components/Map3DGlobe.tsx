@@ -1,3 +1,4 @@
+import type { UrbanSource, UrbanStatus } from "./UrbanStudyPanel";
 /**
  * Cesium-based 3D digital globe view.
  *
@@ -41,6 +42,7 @@ export type Map3DGlobeHandle = {
     durationSeconds?: number,
     pitchDeg?: number
   ) => void;
+  lookAtLocation: (lon:number, lat:number, range:number, pitchDeg?:number) => void;
   resetView: () => void;
   getCameraState: () => CameraState | null;
   captureImage: () => string;
@@ -48,6 +50,8 @@ export type Map3DGlobeHandle = {
 };
 
 type Props = {
+  urbanSource?: UrbanSource|null;
+  onUrbanStatus?: (status:UrbanStatus) => void;
   /** Visible state — hides the canvas without destroying the scene. */
   visible: boolean;
   /** XYZ template URL used as the globe imagery. Use {x}/{y}/{z} placeholders. */
@@ -97,6 +101,8 @@ function extractTokenPattern(template: string): { url: string; subdomains?: stri
 export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlobe(
   {
     visible,
+    urbanSource,
+    onUrbanStatus,
     imageryUrl,
     imagerySubdomains,
     showGraticule,
@@ -112,6 +118,8 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
   ref
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const urbanStatusRef = useRef(onUrbanStatus);
+  urbanStatusRef.current = onUrbanStatus;
   const tooltipRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<Cesium.Viewer | null>(null);
   const screenHandlerRef = useRef<Cesium.ScreenSpaceEventHandler | null>(null);
@@ -355,8 +363,8 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
           tooltipEl.appendChild(row);
         }
         tooltipEl.style.display = "flex";
-        tooltipEl.style.left = `${Math.round(endPosition.x + 14)}px`;
-        tooltipEl.style.top = `${Math.round(endPosition.y + 12)}px`;
+        tooltipEl.style.left = `${Math.max(8, Math.min(Math.round(endPosition.x + 14), viewer.canvas.clientWidth-tooltipEl.offsetWidth-8))}px`;
+        tooltipEl.style.top = `${Math.max(8, Math.min(Math.round(endPosition.y + 12), viewer.canvas.clientHeight-tooltipEl.offsetHeight-8))}px`;
       });
     }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
     screenHandlerRef.current = screenHandler;
@@ -395,6 +403,30 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
     // through the dedicated effects below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Each source owns its primitive and listeners; a stale request cannot replace a newer source.
+  useEffect(() => {
+    const viewer=viewerRef.current;
+    if (!viewer || !urbanSource) { urbanStatusRef.current?.("idle"); return; }
+    let cancelled=false;
+    let tileset:Cesium.Cesium3DTileset|null=null;
+    const removeListeners:(()=>void)[]=[];
+    urbanStatusRef.current?.("loading");
+    Cesium.Cesium3DTileset.fromUrl(urbanSource.url,{maximumScreenSpaceError:16,showCreditsOnScreen:true}).then(result=>{
+      if(cancelled || viewer.isDestroyed()) { result.destroy(); return; }
+      tileset=result;
+      viewer.scene.primitives.add(result);
+      urbanStatusRef.current?.("manifest");
+      removeListeners.push(result.tileVisible.addEventListener(()=>urbanStatusRef.current?.("visible")));
+      removeListeners.push(result.tileFailed.addEventListener(()=>urbanStatusRef.current?.("error")));
+      viewer.scene.requestRender();
+    }).catch(()=>{if(!cancelled)urbanStatusRef.current?.("error");});
+    return ()=>{
+      cancelled=true;
+      removeListeners.forEach(remove=>remove());
+      if(tileset && !viewer.isDestroyed()) viewer.scene.primitives.remove(tileset);
+    };
+  },[urbanSource]);
 
   // Live-swap the base imagery layer when the URL prop changes.
   useEffect(() => {
@@ -528,6 +560,13 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
             roll: 0
           },
           duration: durationSeconds
+        });
+      },
+      lookAtLocation: (lon,lat,range,pitchDeg=-40) => {
+        const viewer=viewerRef.current;
+        if(!viewer) return;
+        viewer.camera.flyToBoundingSphere(new Cesium.BoundingSphere(Cesium.Cartesian3.fromDegrees(lon,lat),100), {
+          offset:new Cesium.HeadingPitchRange(0,Cesium.Math.toRadians(pitchDeg),range), duration:1.6
         });
       },
       resetView: () => {

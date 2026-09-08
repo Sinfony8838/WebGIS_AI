@@ -2793,3 +2793,11 @@
   .qpm-timer { flex-wrap: wrap; gap: 10px; }
   .qpm-timer-clock { font-size: 26px; min-width: 120px; }
 }
+
+/* Keep the question action readable beside long prompts, at every panel width. */
+.ldw-question-list p { min-width: 0; overflow-wrap: anywhere; }
+.ldw-remove-question { flex: 0 0 auto; align-self: flex-start; display: inline-flex; align-items: center; justify-content: center; min-width: 54px; min-height: 32px; padding: 5px 10px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text-soft, #60758b); font-family: inherit; font-size: 12px; font-weight: 500; line-height: 20px; white-space: nowrap; cursor: pointer; transition: background .15s, color .15s, border-color .15s; }
+.ldw-remove-question:hover { color: var(--danger, #d45866); border-color: var(--danger, #d45866); background: var(--danger-soft, #d4586614); }
+.ldw-remove-question:focus-visible { outline: 2px solid var(--accent, #57c4da); outline-offset: 2px; }
+.ldw-remove-question:disabled { opacity: .45; cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) { .ldw-remove-question { transition: none; } }

@@ -386,7 +386,7 @@ class ReportService:
         elif verdicts.get("misconception"):
             lines.append(f"教师共记录 {verdicts['misconception']} 次误区表现，建议课后回看具体备注。")
         else:
-            lines.append("本节课未记录到明显共性误区。")
+            lines.append("本次记录没有明确的共性误区证据；未记录不等于学生不存在误区。")
 
         lines.append("")
         lines.append("### 下节课教学建议")
@@ -405,7 +405,7 @@ class ReportService:
         if tags:
             lines.append(f"建议围绕“{tags[0][0]}”设计一道对比辨析题，在下节课导入环节即时检测。")
         if not overtime and not tags:
-            lines.append("课堂节奏与理解情况总体正常，可按原计划推进下一课时，并适当增加学生自主读图任务。")
+            lines.append("现有记录不足以判断学生掌握情况。建议下节课先用一道读图或概念辨析题收集作答，再据证据调整教学安排。")
         return "\n".join(lines)
 
     # ------------------------------------------------------------------

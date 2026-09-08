@@ -1,3 +1,4 @@
+import { ThinkingIndicator } from "./ThinkingIndicator";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   bindLessonDesignQuestion,
@@ -587,6 +588,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
             ))}
             <div ref={chatEndRef} />
           </div>
+          {busy ? <ThinkingIndicator label={`正在处理${STEPS.find(([key]) => key === viewStep)?.[1] || "教案"}…`} testId="lesson-design-thinking" /> : null}
           {error ? <p className="lesson-design-error" data-testid="ldw-error">{error}</p> : null}
           <div className="ldw-composer">
             <textarea
@@ -683,7 +685,7 @@ function SectionBody({
                     <p>{formatQuestion(question)}</p>
                     <button
                       type="button"
-                      className="mini-control"
+                      className="ldw-remove-question"
                       disabled={busy}
                       onClick={() => onRemoveQuestion(stage.stage_id, question.question_id)}
                       aria-label="移除题目"

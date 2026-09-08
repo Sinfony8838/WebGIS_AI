@@ -3,6 +3,7 @@ import App from "./App";
 import { AuthGate } from "./components/AuthGate";
 import { ThemeProvider, applyTheme, readTheme } from "./theme";
 import "./theme.css";
+import "./components/DatabaseViewer.css";
 
 applyTheme(readTheme());
 

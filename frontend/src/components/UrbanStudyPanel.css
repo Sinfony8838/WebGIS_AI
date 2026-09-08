@@ -1,0 +1,12 @@
+.urban-study-panel { border:1px solid var(--panel-border,#afc9d5); border-radius:14px; background:var(--panel-bg,rgba(241,249,253,.9)); color:var(--text-main,#193947); font:13px/1.5 "Microsoft YaHei UI",system-ui,sans-serif; }
+.urban-study-panel>summary { cursor:pointer; padding:12px; text-align:center; white-space:nowrap; }
+.right-rail.map-tools-dock:has(.urban-study-panel[open]) { width:320px; }
+.urban-study-body { padding:0 14px 14px; }
+.urban-study-body p { margin:10px 0; font-size:12px; }
+.urban-study-stops { display:flex; gap:5px; margin-top:10px; }
+.urban-study-panel button { border:1px solid var(--panel-border,#afc9d5); background:transparent; color:inherit; padding:7px 9px; font:inherit; border-radius:7px; cursor:pointer; }
+.urban-study-panel button[aria-pressed="true"] { background:#c5e6df; color:#134e4a; border-color:#288b87; }
+.urban-study-panel label { display:grid; gap:4px; margin:10px 0; font-size:12px; }
+.urban-study-panel input,.urban-study-panel select { width:100%; min-width:0; box-sizing:border-box; padding:7px; color:inherit; background:var(--panel-bg,#fff); border:1px solid var(--panel-border,#afc9d5); border-radius:6px; }
+.urban-study-status { padding:8px; border-left:3px solid #288b87; background:#288b8710; }
+@media(max-width:500px) { .right-rail.map-tools-dock:has(.urban-study-panel[open]) { width:min(320px,calc(100vw - 32px)); } }

@@ -65,3 +65,28 @@ class TemplateServiceTest(unittest.TestCase):
         second = service.apply_template(project_id, "population_classroom_pack")
 
         self.assertNotEqual(first["artifacts"][0]["path"], second["artifacts"][0]["path"])
+
+    def test_population_colors_encode_density_and_symbols_stay_inside_provinces(self) -> None:
+        from shapely.geometry import shape
+        _, store, service, project_id = self.build_service()
+        service.apply_template(project_id, "population_classroom_pack")
+        layers = {layer.layer_id: layer for layer in store.get_project(project_id).layers}
+        regions = layers["builtin_population_regions"]
+        by_name = {f["properties"]["short_name"]: f for f in regions.data["features"]}
+        self.assertEqual(regions.metadata["metric"], "density")
+        # A populous but sparse province must not receive the dark high-density colour.
+        for feature in regions.data["features"]:
+            props = feature["properties"]
+            if props["density"] is None:
+                self.assertEqual(props["__fillColor"], "#dbe1e6")
+                continue
+            if props["density"] < 10:
+                self.assertEqual(props["__fillColor"], "#e8f4f2")
+            if props["density"] >= 800:
+                self.assertEqual(props["__fillColor"], "#07575f")
+        points = layers["builtin_population_density"].data["features"]
+        self.assertGreater(len(points), 30)
+        for point in points:
+            region = by_name[point["properties"]["name"]]
+            self.assertTrue(shape(region["geometry"]).covers(shape(point["geometry"])))
+        self.assertGreater(len({f["properties"]["__radius"] for f in points}), 3)

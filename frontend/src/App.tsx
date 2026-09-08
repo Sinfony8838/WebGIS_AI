@@ -1,3 +1,9 @@
+import Polygon from "ol/geom/Polygon";
+import MultiPolygon from "ol/geom/MultiPolygon";
+import { UrbanStudyPanel, type UrbanSource, type UrbanStatus } from "./components/UrbanStudyPanel";
+import { densityColor, densityRadius, rankColor } from "./lib/populationVisual";
+import { MapEvidenceLegend } from "./components/MapEvidenceLegend";
+import { MapToolsDock } from "./components/MapToolsDock";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "ol/ol.css";
 import Feature from "ol/Feature";
@@ -415,14 +421,26 @@ function emptyKnowledgeItem(): KnowledgeBaseItem {
   };
 }
 
-function layerStyle(record: LayerRecord) {
+function layerStyle(record: LayerRecord, showFit = false) {
+  const visualization = record.metadata?.visualization as { items?: unknown[] } | undefined;
+  const rankCount = (Array.isArray(visualization?.items) ? visualization.items.length : 0)
+    || (Array.isArray(record.data.features) ? record.data.features.length : 0) || 20;
   return (feature: { getGeometry: () => { getType: () => string } | undefined; get: (key: string) => unknown }) => {
     const geometryType = feature.getGeometry()?.getType() || record.geometry_type;
-    const fillColor = String(record.style.fillColor || feature.get("__fillColor") || "#47a3ff");
-    const fillOpacity = Number(record.style.fillOpacity || feature.get("__fillOpacity") || 0.22);
-    const strokeColor = String(record.style.strokeColor || feature.get("__strokeColor") || "#e7edf5");
-    const strokeWidth = Number(record.style.strokeWidth || feature.get("__strokeWidth") || 2);
-    const radius = Number(record.style.radius || feature.get("__radius") || 7);
+    if (record.layer_id === "generated_hu_line" && feature.get("line_type") === "dynamic" && !showFit) return undefined;
+    const densityTemplate = ["builtin_population_regions", "builtin_population_density"].includes(record.layer_id);
+    const ranked = Boolean(record.metadata?.visualization) && Number(feature.get("rank")) > 0;
+    let fillColor = String(record.style.fillColor || feature.get("__fillColor") || "#47a3ff");
+    let fillOpacity = Number(record.style.fillOpacity || feature.get("__fillOpacity") || 0.22);
+    let strokeColor = String(record.style.strokeColor || feature.get("__strokeColor") || "#e7edf5");
+    let strokeWidth = Number(record.style.strokeWidth || feature.get("__strokeWidth") || 2);
+    let radius = Number(record.style.radius || feature.get("__radius") || 7);
+    if (densityTemplate) {
+      fillColor = densityColor(feature.get("density")); fillOpacity = .88; strokeColor = "#ffffff"; strokeWidth = .9;
+      radius = densityRadius(feature.get("density"));
+    }
+    if (ranked) { fillColor = rankColor(Number(feature.get("rank")), rankCount); fillOpacity = .94; strokeColor = "#ffffff"; strokeWidth = 1.4; }
+    if (record.layer_id === "generated_hu_line") { strokeColor = feature.get("line_type") === "dynamic" ? "#d88a26" : "#07575f"; strokeWidth = feature.get("line_type") === "dynamic" ? 2 : 3; }
     const labelField = String(record.style.labelField || "name");
     const labelValue = String(feature.get(labelField) || feature.get("name") || "");
     const catalogId = String(record.metadata?.catalog_id || "");
@@ -444,23 +462,25 @@ function layerStyle(record: LayerRecord) {
       stroke: new Stroke({
         color: strokeColor,
         width: strokeWidth,
-        lineDash: (feature.get("__lineDash") as number[] | undefined) || undefined
+        lineDash: record.layer_id === "generated_hu_line" ? feature.get("line_type") === "dynamic" ? [7, 5] : undefined : (feature.get("__lineDash") as number[] | undefined) || undefined
       }),
       image: geometryType.includes("Point")
         ? new CircleStyle({
+            declutterMode: densityTemplate ? "none" : undefined,
             radius,
             fill: new Fill({ color: withOpacity(fillColor, Math.min(fillOpacity + 0.36, 0.9)) }),
             stroke: new Stroke({ color: strokeColor, width: 1.2 })
           })
         : undefined,
-      text: labelValue && !provinceLevelLayer
+      text: labelValue && (!provinceLevelLayer || geometryType.includes("Point"))
         ? new Text({
             text: labelValue,
-            font: "600 11px 'Microsoft YaHei UI', 'Segoe UI', sans-serif",
-            fill: new Fill({ color: "#f7fafc" }),
-            backgroundFill: new Fill({ color: "rgba(18, 25, 35, 0.68)" }),
+            font: "500 12px 'Microsoft YaHei UI', 'Segoe UI', sans-serif",
+            fill: new Fill({ color: "#18343f" }),
+            stroke: new Stroke({ color: "#ffffff", width: 3 }),
+            backgroundFill: new Fill({ color: "rgba(255,255,255,.9)" }),
             padding: [3, 4, 3, 4],
-            offsetY: geometryType.includes("Point") ? -16 : 0
+            offsetY: geometryType.includes("Point") ? -(radius + 12) : 0
           })
         : undefined
     });
@@ -573,11 +593,15 @@ export default function App({
   // Boot into the 3D globe view; users land on the digital earth first
   // and can drill in to the 2D map either by zooming, double-clicking, or
   // toggling the header button.
+  const [urbanActive, setUrbanActive] = useState(false);
+  const [urbanSource, setUrbanSource] = useState<UrbanSource|null>(null);
+  const [urbanStatus, setUrbanStatus] = useState<UrbanStatus>("idle");
   const [viewMode, setViewMode] = useState<ViewMode>("globe");
   const [showGraticule, setShowGraticule] = useState(false);
   const [globeCamera, setGlobeCamera] = useState<CameraState | null>(null);
   // Active 3D thematic teaching layers (population columns, Hu line, …).
   const [globeThemeIds, setGlobeThemeIds] = useState<string[]>([]);
+  const [showTeachingFit, setShowTeachingFit] = useState(false);
   // Mirror of the OpenLayers view center/zoom so the bottom status bar
   // stays live while the user pans / zooms the 2D map.
   const [planeViewState, setPlaneViewState] = useState<{
@@ -2969,6 +2993,14 @@ export default function App({
     const format = new GeoJSON();
     const cache = businessLayerCacheRef.current;
     const seen = new Set<string>();
+    // Province symbols use an interior point of the largest land polygon, not a capital or an offshore centroid.
+    const provinceAnchors = new globalThis.Map<string,number[]>();
+    const regions = layerState.items.find(item=>item.layer_id === "builtin_population_regions");
+    if(regions) format.readFeatures(regions.data,{dataProjection:"EPSG:4326",featureProjection:"EPSG:3857"}).forEach(feature=>{
+      const geometry=feature.getGeometry();
+      const polygon=geometry instanceof MultiPolygon ? geometry.getPolygons().sort((a,b)=>b.getArea()-a.getArea())[0] : geometry instanceof Polygon ? geometry : null;
+      if(polygon) { const coordinate=polygon.getInteriorPoint().getCoordinates().slice(0,2); for(const key of ["name","short_name"]) if(feature.get(key)) provinceAnchors.set(String(feature.get(key)),coordinate); }
+    });
 
     layerState.items.forEach((record) => {
       const isRaster = record.kind === "raster";
@@ -2980,8 +3012,8 @@ export default function App({
       seen.add(record.layer_id);
       const signature = isRaster
         ? `raster|${assetUrl}|${JSON.stringify(bounds)}`
-        : `vector|${record.data_rev ?? 0}`;
-      const styleKey = JSON.stringify(record.style || {});
+        : `vector|${record.data_rev ?? 0}|${record.layer_id === "builtin_population_density" ? regions?.data_rev ?? "none" : ""}`;
+      const styleKey = JSON.stringify([record.style || {}, showTeachingFit]);
 
       let entry = cache.get(record.layer_id);
       if (entry && entry.signature !== signature) {
@@ -3008,6 +3040,10 @@ export default function App({
             dataProjection: "EPSG:4326",
             featureProjection: "EPSG:3857"
           });
+          if(record.layer_id === "builtin_population_density") features.forEach(feature=>{
+            const anchor=provinceAnchors.get(String(feature.get("name")));
+            if(anchor) feature.setGeometry(new Point(anchor));
+          });
           const vectorLayer = new VectorLayer({
             source: new VectorSource({ features }),
             visible: record.visible,
@@ -3015,7 +3051,7 @@ export default function App({
             zIndex: record.z_index,
             // 标注抽稀：重叠的要素标签自动隐藏，省级/世界尺度不再一片叠字。
             declutter: true,
-            style: layerStyle(record)
+            style: layerStyle(record, showTeachingFit)
           });
           vectorLayerByIdRef.current.set(record.layer_id, vectorLayer);
           olLayer = vectorLayer;
@@ -3030,7 +3066,7 @@ export default function App({
       olLayer.setOpacity(record.opacity);
       olLayer.setZIndex(record.z_index);
       if (!isRaster && entry.styleKey !== styleKey) {
-        (olLayer as VectorLayer<any>).setStyle(layerStyle(record));
+        (olLayer as VectorLayer<any>).setStyle(layerStyle(record, showTeachingFit));
         entry.styleKey = styleKey;
       }
     });
@@ -3060,7 +3096,7 @@ export default function App({
       map.updateSize();
       map.renderSync();
     });
-  }, [layerState]);
+  }, [layerState, showTeachingFit]);
 
   useEffect(() => {
     if (!mapRef.current || !searchAreaSourceRef.current) {
@@ -3366,7 +3402,9 @@ export default function App({
           pushToast("error", "三维专题图层加载失败", `${themeId}: ${message}`);
         }}
         onCameraChange={setGlobeCamera}
-        onAltitudeThreshold={handleGlobeAltitudeThreshold}
+        onAltitudeThreshold={urbanActive ? undefined : handleGlobeAltitudeThreshold}
+        urbanSource={urbanActive ? urbanSource : null}
+        onUrbanStatus={setUrbanStatus}
         onDoubleClickGlobe={handleGlobeDoubleClick}
         onUserInteraction={() => {
           if (lessonGlobePinnedRef.current) {
@@ -3381,6 +3419,7 @@ export default function App({
           setViewMode("plane");
         }}
       />
+      <MapEvidenceLegend layers={layerState?.items || []} globe={viewMode === "globe"} themeIds={globeThemeIds} showFit={showTeachingFit} onShowFit={setShowTeachingFit} />
       <BrushOverlay
         ref={brushRef}
         active={interactionMode === "brush"}
@@ -3445,6 +3484,78 @@ export default function App({
           </div>
         </div>
 
+        <div className="header-actions">
+          <BasemapMenu
+            items={basemapItems}
+            activeId={activeBasemapId}
+            disabled={!project}
+            onSelect={async (basemapId) => {
+              if (!project) {
+                return;
+              }
+              await switchBasemap(project.project_id, basemapId);
+              await refreshProjectState(project.project_id);
+              const title = basemapItems.find((item) => item.id === basemapId)?.title || "底图";
+              pushToast("success", "底图已切换", `当前底图：${title}`);
+            }}
+          />
+          <button
+            type="button"
+            className={`toolbar-button ${workflowDockOpen ? "active" : ""}`}
+            onClick={() => setWorkflowDockOpen((value) => !value)}
+            data-testid="toolbar-workflow-toggle"
+          >
+            GIS 分析工作流
+          </button>
+          <button
+            type="button"
+            className={`toolbar-button ${databaseViewerOpen ? "active" : ""}`}
+            onClick={() => setDatabaseViewerOpen(true)}
+          >
+            数据库
+          </button>
+          <button
+            type="button"
+            className="toolbar-button"
+            disabled={pptLoading}
+            onClick={() => {
+              const input = document.createElement("input");
+              input.type = "file";
+              input.accept = ".pptx";
+              input.onchange = () => {
+                const file = input.files?.[0];
+                if (file) void handleRenderedPptImport(file);
+              };
+              input.click();
+            }}
+          >
+            {pptLoading ? "解析中…" : "导入 PPT"}
+          </button>
+          <button type="button" className="toolbar-button" onClick={() => void handleStartScreenshot()}>
+            截图
+          </button>
+          {initError ? (
+            <button
+              type="button"
+              className="toolbar-button active"
+              onClick={() => {
+                setProject(null);
+                setLayerState(null);
+                setOutputs([]);
+                setCurrentJob(null);
+                setConversationId("");
+                setSearchResults([]);
+                setSearchSummary("");
+                setKbItems([]);
+                setKbTotal(0);
+                setKbEditingItem(null);
+                setInitAttempt((value) => value + 1);
+              }}
+            >
+              重试连接
+            </button>
+          ) : null}
+        </div>
         <div className="header-search">
           <label className="header-search-label" htmlFor="poi-keyword">POI 检索</label>
           <div className="header-search-row">
@@ -3511,87 +3622,6 @@ export default function App({
           </div>
         </div>
 
-        <div className="header-actions">
-          <BasemapMenu
-            items={basemapItems}
-            activeId={activeBasemapId}
-            disabled={!project}
-            onSelect={async (basemapId) => {
-              if (!project) {
-                return;
-              }
-              await switchBasemap(project.project_id, basemapId);
-              await refreshProjectState(project.project_id);
-              const title = basemapItems.find((item) => item.id === basemapId)?.title || "底图";
-              pushToast("success", "底图已切换", `当前底图：${title}`);
-            }}
-          />
-          <button
-            type="button"
-            className={`toolbar-button ${workflowDockOpen ? "active" : ""}`}
-            onClick={() => setWorkflowDockOpen((value) => !value)}
-            data-testid="toolbar-workflow-toggle"
-          >
-            GIS 分析工作流
-          </button>
-          <button
-            type="button"
-            className={`toolbar-button ${databaseViewerOpen ? "active" : ""}`}
-            onClick={() => setDatabaseViewerOpen(true)}
-          >
-            数据库
-          </button>
-          <button
-            type="button"
-            className="toolbar-button"
-            disabled={pptLoading}
-            onClick={() => {
-              const input = document.createElement("input");
-              input.type = "file";
-              input.accept = ".pptx";
-              input.onchange = () => {
-                const file = input.files?.[0];
-                if (file) void handleRenderedPptImport(file);
-              };
-              input.click();
-            }}
-          >
-            {pptLoading ? "解析中…" : "导入 PPT"}
-          </button>
-          <button type="button" className="toolbar-button" onClick={() => void handleStartScreenshot()}>
-            截图
-          </button>
-          <button
-            type="button"
-            className={`toolbar-button${layerManagerOpen ? " active" : ""}`}
-            onClick={() => setLayerManagerOpen((value) => !value)}
-            data-testid="layer-manager-toggle"
-            title="查看、显隐、定位、删除或添加业务图层（重置视角请使用左侧地图工具）"
-          >
-            图层管理
-          </button>
-          {initError ? (
-            <button
-              type="button"
-              className="toolbar-button active"
-              onClick={() => {
-                setProject(null);
-                setLayerState(null);
-                setOutputs([]);
-                setCurrentJob(null);
-                setConversationId("");
-                setSearchResults([]);
-                setSearchSummary("");
-                setKbItems([]);
-                setKbTotal(0);
-                setKbEditingItem(null);
-                setInitAttempt((value) => value + 1);
-              }}
-            >
-              重试连接
-            </button>
-          ) : null}
-        </div>
       </header>
 
       <main className="workspace-shell">
@@ -3610,8 +3640,10 @@ export default function App({
 
         <section className="map-workspace" aria-hidden="true" />
 
-        <aside className="right-rail">
+        <MapToolsDock>
           <MapToolRail
+            layersOpen={layerManagerOpen}
+            onToggleLayers={() => setLayerManagerOpen((value) => !value)}
             mode={interactionMode}
             viewMode={viewMode}
             hasSearchArea={Boolean(searchAreaGeometry)}
@@ -3633,7 +3665,7 @@ export default function App({
               if (viewMode === "globe") {
                 const cam = globeCamera;
                 if (cam) {
-                  globeRef.current?.flyTo(cam.lon, cam.lat, Math.max(cam.altitudeMeters * 0.55, 300_000), 0.5);
+                  globeRef.current?.flyTo(cam.lon, cam.lat, Math.max(cam.altitudeMeters * 0.55, urbanActive ? 100 : 300_000), 0.5);
                 }
                 return;
               }
@@ -3666,6 +3698,7 @@ export default function App({
             onChangeThemes={(ids) => {
               lessonGlobePinnedRef.current = false;
               lessonGlobeRestoreRef.current = null;
+              setUrbanActive(false);
               setGlobeThemeIds(ids);
               // 开启 3D 主题时经统一过渡切到地球（带相机同步），而非硬切。
               if (ids.length && viewMode === "plane") {
@@ -3676,13 +3709,10 @@ export default function App({
               lessonGlobePinnedRef.current = false;
               lessonGlobeRestoreRef.current = null;
               setViewMode("globe");
+              setUrbanActive(false);
               setGlobeThemeIds(preset.themes);
-              globeRef.current?.flyTo(
-                preset.camera.lon,
-                preset.camera.lat,
-                preset.camera.altitudeMeters,
-                1.6,
-                preset.camera.pitchDeg
+              globeRef.current?.lookAtLocation(
+                preset.camera.lon, 35, preset.camera.altitudeMeters, preset.camera.pitchDeg
               );
             }}
             textbookItems={textbookMapItems}
@@ -3711,7 +3741,11 @@ export default function App({
             }}
           />
 
-        </aside>
+          <UrbanStudyPanel active={urbanActive} source={urbanSource} status={urbanStatus}
+            onVisit={stop => { lessonGlobePinnedRef.current=false; lessonGlobeRestoreRef.current=null; setUrbanActive(true); setViewMode("globe"); setGlobeThemeIds([]); globeRef.current?.lookAtLocation(stop.lon,stop.lat,stop.range); }}
+            onSource={setUrbanSource}
+            onExit={() => {setUrbanActive(false);setUrbanSource(null);globeRef.current?.resetView();}} />
+        </MapToolsDock>
         </main>
 
         <aside

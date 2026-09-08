@@ -1,3 +1,4 @@
+import { ThinkingIndicator } from "./ThinkingIndicator";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent as ReactDragEvent, PointerEvent as ReactPointerEvent } from "react";
 import { getSpeechRecognitionConstructor, getSpeechRecognitionErrorMessage, type BrowserSpeechRecognition } from "../speechRecognition";
@@ -1230,21 +1231,7 @@ export function CopilotWidget({
                 </article>
               );
             })}
-            {busy ? (
-              <div
-                className="copilot-thinking"
-                role="status"
-                aria-live="polite"
-                data-testid="copilot-thinking"
-              >
-                <span className="copilot-thinking-dots" aria-hidden="true">
-                  <span />
-                  <span />
-                  <span />
-                </span>
-                <span className="copilot-thinking-label">{pickThinkingLabel(jobStages)}</span>
-              </div>
-            ) : null}
+            {busy ? <ThinkingIndicator label={pickThinkingLabel(jobStages)} testId="copilot-thinking" /> : null}
           </div>
         </div>
 
