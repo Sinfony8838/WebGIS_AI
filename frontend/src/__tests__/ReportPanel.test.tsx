@@ -128,7 +128,7 @@ describe("ReportPanel", () => {
     expect(screen.getByText(/规则生成 · 证据保护/)).toBeTruthy();
     expect(screen.getByText("课后推荐练习巩固")).toBeTruthy();
     expect(screen.getByText(/人口总量与人口密度辨析/)).toBeTruthy();
-    expect(screen.getByText(/不计入40分钟课时/)).toBeTruthy();
+    expect(screen.getByText(/不计入课堂教学用时/)).toBeTruthy();
     expect(screen.queryByText(/正确率/)).toBeNull();
   });
 
@@ -163,4 +163,22 @@ it("labels a projection without responses as uncollected instead of drawing zero
   await waitFor(() => expect(screen.getByText(/本题未采集作答数据/)).toBeTruthy());
   expect(screen.queryByText(/0 人作答/)).toBeNull();
   expect(document.querySelector(".tally-bar")).toBeNull();
+});
+
+
+it("renders preset open homework without fabricated answer or duration", async () => {
+  const payload = structuredClone(await fetchJob("fixture")) as any;
+  payload.result.practice_recommendations = [{practice_id:"homework",level:"探究作业",title:"教案预设作业",
+    prompt:"查找上海一个区的资料并说明来源。",suggested_minutes:null,answer_points:[],
+    evidence_basis:"来自开课时保存的教案；本次进入2/8个环节。"}];
+  vi.mocked(fetchJob).mockResolvedValueOnce(payload);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByTestId("generate-report")).toBeEnabled());
+  fireEvent.click(screen.getByTestId("generate-report"));
+  await waitFor(() => expect(screen.getByText("查找上海一个区的资料并说明来源。")).toBeTruthy());
+  const list=screen.getByTestId("report-practice-list");
+  expect(list.textContent).not.toContain("建议");
+  expect(list.textContent).not.toContain("答案要点：");
+  expect(list.textContent).toContain("开放任务或未附参考答案");
+  expect(list.textContent).toContain("2/8");
 });

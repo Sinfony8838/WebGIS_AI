@@ -326,16 +326,16 @@ export function ReportPanel({ projectId, onClose }: Props) {
 
           <h3>
             课后推荐练习巩固
-            <em className="diagnosis-source">（课堂结束后 · 不计入40分钟课时）</em>
+            <em className="diagnosis-source">（课堂结束后 · 不计入课堂教学用时）</em>
           </h3>
           <div className="report-practice-list" data-testid="report-practice-list">
             {practiceRecommendations.map((item) => (
               <article key={item.practice_id} className="report-question">
                 <p className="report-question-text">
-                  [{item.level}] {item.title} · 建议 {item.suggested_minutes} 分钟
+                  [{item.level}] {item.title}{item.suggested_minutes ? ` · 建议 ${item.suggested_minutes} 分钟` : ""}
                 </p>
                 <p>{item.prompt}</p>
-                <p className="report-note">答案要点：{item.answer_points.join("；")}</p>
+                <p className="report-note">{item.answer_points.length ? `参考要点：${item.answer_points.join("；")}` : "开放任务或未附参考答案，请结合原题材料评阅。"}</p>
                 <p className="report-note">推荐依据：{item.evidence_basis}</p>
               </article>
             ))}

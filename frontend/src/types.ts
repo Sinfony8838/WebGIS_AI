@@ -1234,7 +1234,7 @@ export type ReportPracticeRecommendation = {
   practice_id: string;
   level: string;
   title: string;
-  suggested_minutes: number;
+  suggested_minutes: number | null;
   prompt: string;
   answer_points: string[];
   evidence_basis: string;
