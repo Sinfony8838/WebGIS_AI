@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import tempfile
 import unittest
+from unittest.mock import Mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -62,6 +63,60 @@ class PracticeExportTestBase(unittest.TestCase):
             datetime.now(timezone.utc) - timedelta(seconds=seconds)
         ).isoformat()
         self.store.set_active_question(session_id, active)
+
+
+class PracticeExportLessonGoalsTest(PracticeExportTestBase):
+    def test_population_auto_selection_requires_relevant_complete_material(self):
+        runtime, store, project_id = self.build_runtime()
+        lesson = store.get_lesson("lesson_builtin_population_distribution")
+        session = store.get_class_session(runtime.classroom.create_class_session(lesson.lesson_id, project_id)["session"]["session_id"])
+        service = runtime.classroom.practice_export
+        bank = Mock()
+        def question(qid, text, **extra):
+            return {"question_id": qid, "text": text, "answer": "示例答案", "answer_complete": True, **extra}
+        bank.search.return_value = {"items": [
+            question("transport", "铁路建设的主要目的是？"),
+            question("no-image", "图中人口密度如何分布？"),
+            question("no-answer", "人口密度如何计算？", answer_complete=False),
+            question("unrelated", "人口分布", auto_selectable=False),
+            question("good", "人口密度如何计算？"),
+        ]}
+        service.question_bank = bank
+        items, _, notes = service.collect_items(session, lesson)
+        self.assertEqual([item["question"]["question_id"] for item in items if item["kind"] == "question"], ["good"])
+        self.assertIn("读图题缺少题图", "；".join(notes))
+        self.assertIn("题干未直接考查人口分布", "；".join(notes))
+
+    def test_builtin_without_plan_searches_goals_and_does_not_invent_misconceptions(self):
+        runtime, store, project_id = self.build_runtime()
+        lesson = store.get_lesson("lesson_builtin_population_distribution")
+        lesson.plan = {}
+        session = store.get_class_session(runtime.classroom.create_class_session(lesson.lesson_id, project_id)["session"]["session_id"])
+        service = runtime.classroom.practice_export
+        bank = Mock()
+        bank.search.return_value = {"items": [{"question_id": "bank-q", "text": "影响人口分布的因素", "type": "open", "answer": "自然与人文因素", "answer_complete": True}]}
+        service.question_bank = bank
+        items, summary, notes = service.collect_items(session, lesson)
+        self.assertEqual(bank.search.call_count, 1)
+        self.assertEqual(bank.search.call_args.kwargs["project_id"], project_id)
+        self.assertEqual(bank.search.call_args.kwargs["topic"], "人口分布")
+        self.assertEqual(bank.search.call_args.kwargs["knowledge"], "人口分布")
+        self.assertEqual(bank.search.call_args.kwargs["objectives"], lesson.objectives)
+        self.assertEqual([item["origin"] for item in items], ["bank_core"])
+
+    def test_empty_export_fails_before_writing_files_and_search_failure_is_distinct(self):
+        runtime, store, project_id = self.build_runtime()
+        lesson = runtime.classroom.lesson_service.create_lesson({"title": "无题库课程", "stages": []})
+        session = store.get_class_session(runtime.classroom.create_class_session(lesson.lesson_id, project_id)["session"]["session_id"])
+        service = runtime.classroom.practice_export
+        bank = Mock()
+        bank.search.return_value = {"items": []}
+        service.question_bank = bank
+        with self.assertRaisesRegex(ValueError, "未找到可用作业"):
+            service.export(session, lesson)
+        bank.search.side_effect = RuntimeError("offline")
+        with self.assertRaisesRegex(ValueError, "题库检索失败"):
+            service.export(session, lesson)
 
 
 class PracticeExportDualPaperTest(PracticeExportTestBase):

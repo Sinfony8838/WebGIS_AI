@@ -1125,9 +1125,16 @@ class QuestionBankService:
             return grouped
         placeholders = ",".join("?" for _ in question_ids)
         rows = connection.execute(
-            f"SELECT * FROM images WHERE question_id IN ({placeholders}) ORDER BY order_idx",
+            f"""SELECT i.*, q.question_id AS target_question_id
+                FROM questions q JOIN images i ON i.bank_id = q.bank_id AND (
+                    i.question_id = q.question_id OR (
+                        (i.question_id IS NULL OR i.question_id = '')
+                        AND i.anchor = 'group' AND i.group_key = q.group_key
+                    )
+                )
+                WHERE q.question_id IN ({placeholders}) ORDER BY i.order_idx, i.image_id""",
             question_ids,
         ).fetchall()
         for row in rows:
-            grouped.setdefault(str(row["question_id"]), []).append(self._image_payload(row))
+            grouped.setdefault(str(row["target_question_id"]), []).append(self._image_payload(row))
         return grouped

@@ -446,12 +446,12 @@ class ReportService:
             lines.append("本节课未记录教师提问。")
         for index, question in enumerate(questions, start=1):
             teacher_oral = question.get("collection_mode") == "teacher_observation"
-            collection_label = "教师口头呈现，表现由教师观察记录" if teacher_oral else f"{question.get('response_count', 0)} 人作答"
+            collection_label = "教师口头呈现，表现由教师观察记录" if teacher_oral else (f"{question.get('response_count', 0)} 人作答" if question.get("response_count", 0) > 0 else "本题未采集作答数据")
             lines.append(f"**Q{index}. {question.get('text', '')}**（{collection_label}）")
             options = question.get("options") or []
             counts = question.get("option_counts") or []
             total = max(question.get("response_count", 0), 1)
-            if not teacher_oral:
+            if not teacher_oral and question.get("response_count", 0) > 0:
                 for option_index, option in enumerate(options):
                     count = counts[option_index] if option_index < len(counts) else 0
                     marker = " ✅" if question.get("answer_index") == option_index else ""

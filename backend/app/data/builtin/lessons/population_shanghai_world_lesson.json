@@ -1,0 +1,603 @@
+{
+  "lesson_id": "lesson_builtin_population_shanghai_world",
+  "title": "人口分布：从上海看中国与世界",
+  "subject": "地理",
+  "grade": "高中必修二 第一章第一节",
+  "source": "builtin",
+  "objectives": [
+    "用人口总量、人口密度与夜间灯光的不同含义选择读图指标，标明时间与空间尺度。",
+    "从上海区级比较出发，描述差异并用自然与人文资料检验原因，区分观察事实和解释假设。",
+    "在中国人口图上自主绘线，比较胡焕庸线及两侧差异，解释绿洲、河谷等区域例外。",
+    "迁移到世界尺度识别稠密与稀疏地区，综合解释分布并讨论合理布局人口的人地关系。"
+  ],
+  "metadata": {
+    "builtin_version": "2",
+    "duration_minutes": 40,
+    "recommended": true,
+    "reference": "人口分布教案参照.docx；地方情境由广东适配上海",
+    "data_limitations": [
+      "三维实景数据源尚未取得；二维影像不可称为三维实景",
+      "自然专题的真实等降水量线、地形验证资料仍需补充",
+      "影像、灯光与人口资料年份不同，不能直接作定量时序比较"
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "shanghai_intro",
+      "title": "从上海出发：人口都分布在哪里",
+      "minutes": 3,
+      "scene": {
+        "basemap_id": "amap_light",
+        "templates": [],
+        "catalog_layers": [
+          "shanghai_population_density"
+        ],
+        "catalog_layer_focus": "shanghai_population_density",
+        "layer_visibility": {
+          "builtin_population_regions": false,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {
+          "center": [
+            121.47,
+            31.23
+          ],
+          "zoom": 9
+        },
+        "annotations": [],
+        "globe": {
+          "enabled": false
+        }
+      },
+      "script": [
+        "从身边的上海出发，再看中国，最后看世界。先提出问题，再使用地图检验。",
+        "2020年11月1日七普时点上海常住人口24870895人。图中为区级平均人口密度，人口最多的区不一定密度最高。"
+      ],
+      "questions": [
+        {
+          "question_id": "sh_intro_q",
+          "type": "open",
+          "text": "你认为上海人口最多的区，也一定是人口密度最高的区吗？还需要什么信息？",
+          "options": [],
+          "answer_index": null,
+          "expected_points": [
+            "区分人口总量和密度",
+            "同时需要同口径面积"
+          ],
+          "misconceptions": [],
+          "answer": "参考要点：区分人口总量和密度；同时需要同口径面积。开放题允许其他有依据的表述。",
+          "knowledge_points": [
+            "人口分布",
+            "人口密度",
+            "区域比较"
+          ],
+          "answer_complete": true,
+          "source": "lesson"
+        }
+      ],
+      "assistant_prompts": [
+        "依据当前图名、年份、尺度和本环节问题组织追问；先请学生提出观察，再核对资料。没有学生回答或来源时明确未采集或待核实，不代写学习结果。"
+      ]
+    },
+    {
+      "stage_id": "concept",
+      "title": "概念辨析：灯光亮就等于人口密度大吗",
+      "minutes": 5,
+      "scene": {
+        "basemap_id": "nasa_nightlights_2016",
+        "templates": [],
+        "catalog_layers": [],
+        "catalog_layer_focus": "",
+        "layer_visibility": {
+          "builtin_population_regions": false,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {
+          "center": [
+            121.47,
+            31.23
+          ],
+          "zoom": 4
+        },
+        "annotations": [],
+        "globe": {
+          "enabled": false
+        }
+      },
+      "script": [
+        "在2016年夜间灯光图上寻找上海及长三角，描述亮区与暗区，不急于给出原因。",
+        "夜间灯光记录照明活动，受产业、能源使用等影响；不是人口计数，也不能直接与2020年人口数对应。",
+        "人口分布具有时间和空间范围；人口密度=同一范围人口数÷面积。区级均值不能反映每个街镇的内部差异。"
+      ],
+      "questions": [
+        {
+          "question_id": "concept_q",
+          "type": "open",
+          "text": "灯光图能支持哪些判断，不能支持哪些判断？",
+          "options": [],
+          "answer_index": null,
+          "expected_points": [
+            "可观察夜间活动的空间差异",
+            "不能直接给出人口总量或每平方千米人数",
+            "比较时核对年份"
+          ],
+          "misconceptions": [],
+          "answer": "参考要点：可观察夜间活动的空间差异；不能直接给出人口总量或每平方千米人数；比较时核对年份。开放题允许其他有依据的表述。",
+          "knowledge_points": [
+            "人口分布",
+            "人口密度",
+            "区域比较"
+          ],
+          "answer_complete": true,
+          "source": "lesson"
+        },
+        {
+          "question_id": "density_q",
+          "type": "open",
+          "text": "两地总人口相同，面积不同，人口密度会怎样变化？",
+          "options": [],
+          "answer_index": null,
+          "expected_points": [
+            "同总量下面积较小者平均密度较大",
+            "均值不能说明内部均匀"
+          ],
+          "misconceptions": [],
+          "answer": "参考要点：同总量下面积较小者平均密度较大；均值不能说明内部均匀。开放题允许其他有依据的表述。",
+          "knowledge_points": [
+            "人口分布",
+            "人口密度",
+            "区域比较"
+          ],
+          "answer_complete": true,
+          "source": "lesson"
+        }
+      ],
+      "assistant_prompts": [
+        "依据当前图名、年份、尺度和本环节问题组织追问；先请学生提出观察，再核对资料。没有学生回答或来源时明确未采集或待核实，不代写学习结果。"
+      ]
+    },
+    {
+      "stage_id": "shanghai_inquiry",
+      "title": "看上海：比较黄浦与崇明",
+      "minutes": 7,
+      "scene": {
+        "basemap_id": "amap_light",
+        "templates": [],
+        "catalog_layers": [
+          "shanghai_population_density"
+        ],
+        "catalog_layer_focus": "shanghai_population_density",
+        "layer_visibility": {
+          "builtin_population_regions": false,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {
+          "center": [
+            121.47,
+            31.23
+          ],
+          "zoom": 9
+        },
+        "annotations": [],
+        "globe": {
+          "enabled": false
+        }
+      },
+      "script": [
+        "先读图例、单位、年份和区级尺度，再找高低值区；点击黄浦、崇明核对数值。",
+        "小组提出自然条件、交通、城市功能、土地利用与规划等可能因素，并列出需要验证的资料。",
+        "不要把人口数量、区级均值和街镇集聚混为一谈，也不要仅凭一张密度图确定因果。"
+      ],
+      "questions": [
+        {
+          "question_id": "sh_compare_q",
+          "type": "open",
+          "text": "上海人口密度有哪些差异？请用两个区的数值支持描述。",
+          "options": [],
+          "answer_index": null,
+          "expected_points": [
+            "完整标注2020年与人/平方千米",
+            "中心城区总体较高、远郊和崇明较低",
+            "用地图属性数据举证"
+          ],
+          "misconceptions": [],
+          "answer": "按2020年七普时点人口与2020年区划面积计算，黄浦区约32357人/平方千米，崇明区约538人/平方千米。可见两区平均密度差异显著；区级平均值不能代表街镇或居住用地密度。",
+          "knowledge_points": [
+            "人口分布",
+            "人口密度",
+            "区域比较"
+          ],
+          "answer_complete": true,
+          "source": "lesson",
+          "material": "上海七普常住人口：黄浦662030人，崇明637921人；2020年区划面积：黄浦20.46平方千米，崇明1185.49平方千米。人口来源：https://tjj.sh.gov.cn/tjnj/2020rktjnj/fu02.pdf；面积来源：https://tjj.sh.gov.cn/tjnj/2021tjnj/C0202.htm。",
+          "explanation": "人口密度=常住人口/区划面积；两区的分子与分母使用同一说明口径。密度图能支持分布描述，不能独立证明交通、产业或规划是原因。"
+        },
+        {
+          "question_id": "sh_factors_q",
+          "type": "open",
+          "text": "黄浦与崇明的差异可能由哪些因素造成？哪些只是待检验的假设？",
+          "options": [],
+          "answer_index": null,
+          "expected_points": [
+            "自然与人文两方面列举",
+            "城市功能、交通、土地利用及规划需要对应证据",
+            "区分观察和解释"
+          ],
+          "misconceptions": [],
+          "answer": "参考要点：自然与人文两方面列举；城市功能、交通、土地利用及规划需要对应证据；区分观察和解释。开放题允许其他有依据的表述。",
+          "knowledge_points": [
+            "人口分布",
+            "人口密度",
+            "区域比较"
+          ],
+          "answer_complete": true,
+          "source": "lesson"
+        }
+      ],
+      "assistant_prompts": [
+        "依据当前图名、年份、尺度和本环节问题组织追问；先请学生提出观察，再核对资料。没有学生回答或来源时明确未采集或待核实，不代写学习结果。"
+      ]
+    },
+    {
+      "stage_id": "shanghai_verify",
+      "title": "地图验证：从密度图走向城市空间",
+      "minutes": 4,
+      "scene": {
+        "basemap_id": "amap_imagery",
+        "templates": [],
+        "catalog_layers": [
+          "shanghai_districts"
+        ],
+        "catalog_layer_focus": "shanghai_districts",
+        "layer_visibility": {
+          "builtin_population_regions": false,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {
+          "center": [
+            121.47,
+            31.23
+          ],
+          "zoom": 10
+        },
+        "annotations": [],
+        "globe": {
+          "enabled": false
+        }
+      },
+      "script": [
+        "用影像比较中心城区与崇明的建成空间、水域、农田等景观。影像现势与七普年份不同，应说明差异。",
+        "观察能支持或反驳哪些解释？就业、公共服务和规划定位仍需统计或规划资料，不能从影像直接断言。",
+        "当前演示为二维遥感影像；三维实景只有在已加载并注明数据来源后才可作为补充，不能把示意模型称为实景。"
+      ],
+      "questions": [
+        {
+          "question_id": "sh_verify_q",
+          "type": "open",
+          "text": "影像中的哪些现象支持你的解释？还缺少什么资料？",
+          "options": [],
+          "answer_index": null,
+          "expected_points": [
+            "指出可见地表景观",
+            "说明资料时间及尺度限制",
+            "列出下一步需要的证据"
+          ],
+          "misconceptions": [],
+          "answer": "参考要点：指出可见地表景观；说明资料时间及尺度限制；列出下一步需要的证据。开放题允许其他有依据的表述。",
+          "knowledge_points": [
+            "人口分布",
+            "人口密度",
+            "区域比较"
+          ],
+          "answer_complete": true,
+          "source": "lesson"
+        }
+      ],
+      "assistant_prompts": [
+        "依据当前图名、年份、尺度和本环节问题组织追问；先请学生提出观察，再核对资料。没有学生回答或来源时明确未采集或待核实，不代写学习结果。"
+      ]
+    },
+    {
+      "stage_id": "china_inquiry",
+      "title": "看中国：先绘出你的人口分界线",
+      "minutes": 5,
+      "scene": {
+        "basemap_id": "amap_light",
+        "templates": [
+          "population_distribution"
+        ],
+        "catalog_layers": [],
+        "catalog_layer_focus": "",
+        "layer_visibility": {
+          "builtin_population_regions": true,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {
+          "center": [
+            104,
+            35
+          ],
+          "zoom": 4
+        },
+        "annotations": [],
+        "globe": {
+          "enabled": false
+        }
+      },
+      "script": [
+        "先独立观察中国人口密度图，描述总体格局、高值与低值地区。",
+        "用地图画笔尝试画一条区分人口疏密的线，保留结果。此时不显示标准参考线。",
+        "比较小组之间的画法，并说明依据；人口分布有连续变化和区域例外，不是沿一条线突然跳变。"
+      ],
+      "questions": [
+        {
+          "question_id": "china_draw_q",
+          "type": "open",
+          "text": "你的线怎样画？图上哪些高低值地区是依据？",
+          "options": [],
+          "answer_index": null,
+          "expected_points": [
+            "用真实图上观察说明画法",
+            "东南较稠密、西北较稀疏",
+            "允许合理差异并说明比例尺局限"
+          ],
+          "misconceptions": [],
+          "answer": "参考要点：用真实图上观察说明画法；东南较稠密、西北较稀疏；允许合理差异并说明比例尺局限。开放题允许其他有依据的表述。",
+          "knowledge_points": [
+            "人口分布",
+            "人口密度",
+            "区域比较"
+          ],
+          "answer_complete": true,
+          "source": "lesson"
+        }
+      ],
+      "assistant_prompts": [
+        "依据当前图名、年份、尺度和本环节问题组织追问；先请学生提出观察，再核对资料。没有学生回答或来源时明确未采集或待核实，不代写学习结果。"
+      ]
+    },
+    {
+      "stage_id": "china_explain",
+      "title": "看中国：比较胡焕庸线并解释例外",
+      "minutes": 6,
+      "scene": {
+        "basemap_id": "amap_light",
+        "templates": [
+          "population_distribution",
+          "hu_line_comparison"
+        ],
+        "catalog_layers": [],
+        "catalog_layer_focus": "",
+        "layer_visibility": {
+          "builtin_population_regions": true,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": true
+        },
+        "view": {
+          "center": [
+            104,
+            35
+          ],
+          "zoom": 4
+        },
+        "annotations": [],
+        "globe": {
+          "enabled": false
+        }
+      },
+      "script": [
+        "对照黑河—腾冲参考线与刚才的画线；1935年的历史人口比例不能冒用为今天的统计结论。",
+        "从气候、水源、地形到经济交通综合解释。胡焕庸线与降水界线是不同概念，不能仅凭大致走向就认定重合。",
+        "西北并非处处无人：绿洲、河流沿岸、河谷等说明局地条件会改变人口格局。没有等降水量或地形实测资料时，先保留解释假设。"
+      ],
+      "questions": [
+        {
+          "question_id": "china_reason_q",
+          "type": "open",
+          "text": "如何解释线两侧差异？为什么西北仍有较稠密地区？",
+          "options": [],
+          "answer_index": null,
+          "expected_points": [
+            "综合自然与人文条件",
+            "水源、河谷等区域例外",
+            "不同空间尺度下主导因素不同"
+          ],
+          "misconceptions": [],
+          "answer": "参考要点：综合自然与人文条件；水源、河谷等区域例外；不同空间尺度下主导因素不同。开放题允许其他有依据的表述。",
+          "knowledge_points": [
+            "人口分布",
+            "人口密度",
+            "区域比较"
+          ],
+          "answer_complete": true,
+          "source": "lesson"
+        }
+      ],
+      "assistant_prompts": [
+        "依据当前图名、年份、尺度和本环节问题组织追问；先请学生提出观察，再核对资料。没有学生回答或来源时明确未采集或待核实，不代写学习结果。"
+      ]
+    },
+    {
+      "stage_id": "world_inquiry",
+      "title": "看世界：迁移读图与解释方法",
+      "minutes": 7,
+      "scene": {
+        "basemap_id": "nasa_population_2020",
+        "templates": [],
+        "catalog_layers": [],
+        "catalog_layer_focus": "",
+        "layer_visibility": {
+          "builtin_population_regions": false,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {
+          "center": [
+            15,
+            20
+          ],
+          "zoom": 2
+        },
+        "annotations": [],
+        "globe": {
+          "enabled": false
+        }
+      },
+      "script": [
+        "读2020年GPW人口密度栅格图例，找出稠密区与稀疏区，再归纳总体格局。栅格为人口统计分配估计，不是逐户测量。",
+        "比较亚洲东部和南部、欧洲等稠密地区与荒漠、高纬寒冷地区等稀疏地区；不要用国别平均值代替内部差异。",
+        "用上海和中国探究所得方法解释另一地区。相似自然条件不必产生相同人口格局，历史发展、技术与经济也需考虑。"
+      ],
+      "questions": [
+        {
+          "question_id": "world_pattern_q",
+          "type": "open",
+          "text": "选择两个稠密地区和两个稀疏地区，描述它们的位置与共同或不同条件。",
+          "options": [],
+          "answer_index": null,
+          "expected_points": [
+            "从图中定位并引用图例",
+            "自然与人文综合解释",
+            "区域间差异不能只归结为单一原因"
+          ],
+          "misconceptions": [],
+          "answer": "参考要点：从图中定位并引用图例；自然与人文综合解释；区域间差异不能只归结为单一原因。开放题允许其他有依据的表述。",
+          "knowledge_points": [
+            "人口分布",
+            "人口密度",
+            "区域比较"
+          ],
+          "answer_complete": true,
+          "source": "lesson"
+        },
+        {
+          "question_id": "world_transfer_q",
+          "type": "open",
+          "text": "人类提高环境适应能力后，是否就能不受自然条件约束地布局人口？",
+          "options": [],
+          "answer_index": null,
+          "expected_points": [
+            "技术改变条件但有资源环境成本",
+            "遵循自然规律与承载条件",
+            "提出有依据的合理布局建议"
+          ],
+          "misconceptions": [],
+          "answer": "参考要点：技术改变条件但有资源环境成本；遵循自然规律与承载条件；提出有依据的合理布局建议。开放题允许其他有依据的表述。",
+          "knowledge_points": [
+            "人口分布",
+            "人口密度",
+            "区域比较"
+          ],
+          "answer_complete": true,
+          "source": "lesson"
+        }
+      ],
+      "assistant_prompts": [
+        "依据当前图名、年份、尺度和本环节问题组织追问；先请学生提出观察，再核对资料。没有学生回答或来源时明确未采集或待核实，不代写学习结果。"
+      ]
+    },
+    {
+      "stage_id": "summary",
+      "title": "课堂总结：整理自己的解释路径",
+      "minutes": 3,
+      "scene": {
+        "basemap_id": "amap_light",
+        "templates": [],
+        "catalog_layers": [
+          "shanghai_population_density"
+        ],
+        "catalog_layer_focus": "shanghai_population_density",
+        "layer_visibility": {
+          "builtin_population_regions": false,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {
+          "center": [
+            121.47,
+            31.23
+          ],
+          "zoom": 9
+        },
+        "annotations": [],
+        "globe": {
+          "enabled": false
+        }
+      },
+      "script": [
+        "小组用思维导图整理：指标与尺度→观察格局→提出假设→用资料检验→解释例外→迁移应用。",
+        "每组保留一张地图、一条有依据的结论及一个尚未解决的问题。记录来源、年份和尺度。",
+        "教师根据实际课堂观察形成复盘；没有采集学生作答时，不生成正确率或虚构掌握结论。"
+      ],
+      "questions": [
+        {
+          "question_id": "summary_q",
+          "type": "open",
+          "text": "回看最初关于上海的判断，你修改了什么？用哪条证据说明？",
+          "options": [],
+          "answer_index": null,
+          "expected_points": [
+            "对应最初问题",
+            "说明证据如何改变判断",
+            "保留仍需验证的问题"
+          ],
+          "misconceptions": [],
+          "answer": "参考要点：对应最初问题；说明证据如何改变判断；保留仍需验证的问题。开放题允许其他有依据的表述。",
+          "knowledge_points": [
+            "人口分布",
+            "人口密度",
+            "区域比较"
+          ],
+          "answer_complete": true,
+          "source": "lesson"
+        }
+      ],
+      "assistant_prompts": [
+        "依据当前图名、年份、尺度和本环节问题组织追问；先请学生提出观察，再核对资料。没有学生回答或来源时明确未采集或待核实，不代写学习结果。"
+      ]
+    }
+  ],
+  "plan": {
+    "title": "人口分布：从上海看中国与世界",
+    "topic": "人口分布",
+    "duration_minutes": 40,
+    "objectives": [
+      "用人口总量、人口密度与夜间灯光的不同含义选择读图指标，标明时间与空间尺度。",
+      "从上海区级比较出发，描述差异并用自然与人文资料检验原因，区分观察事实和解释假设。",
+      "在中国人口图上自主绘线，比较胡焕庸线及两侧差异，解释绿洲、河谷等区域例外。",
+      "迁移到世界尺度识别稠密与稀疏地区，综合解释分布并讨论合理布局人口的人地关系。"
+    ],
+    "core_questions": {
+      "core": "如何从上海、中国与世界不同尺度描述人口分布，并用资料解释差异？",
+      "sub_questions": [
+        "哪些指标能描述人口分布？",
+        "哪些自然和人文因素影响上海人口分布？",
+        "如何描绘中国人口分布并解释区域例外？",
+        "怎样将方法迁移到世界其他地区？"
+      ]
+    },
+    "homework": {
+      "basic": [
+        "完成教师根据本课目标从题库选出的练习；每道读图题写出图名、年份、单位和尺度。",
+        "整理课堂思维导图，补充一条地图依据与一个尚未解决的问题。"
+      ],
+      "inquiry": [
+        "选择上海一个区，查找有来源和年份的人口或城市功能资料，用一幅图支持解释并说明局限。"
+      ]
+    },
+    "teaching_approach": "一境到底、问题式教学、小组合作与地图验证；上海→中国→世界，先观察和自主绘线，再对照与解释。"
+  }
+}

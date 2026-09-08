@@ -269,17 +269,17 @@ export function QuestionPracticeModal({
 
           {revealed ? (
             <div className="qpm-answer" data-testid="qpm-answer">
-              <span className="qpm-section-label">官方答案</span>
+              <span className="qpm-section-label">{question.source === "question_bank" ? "题库答案" : "参考答案"}</span>
               <p className="qpm-answer-main">
                 {question.answer
                   ? `${question.answer_letter ? `${question.answer_letter}. ` : ""}${question.answer}`
                   : question.answer_index !== null && question.answer_index !== undefined && question.options.length
                     ? `正确选项：${OPTION_LABELS[question.answer_index] || question.answer_index + 1}. ${question.options[question.answer_index]}`
-                    : "（本题未提供官方答案）"}
+                    : "（本题未提供参考答案）"}
               </p>
               {question.explanation ? (
                 <div className="qpm-explanation">
-                  <span className="qpm-section-label">官方解析</span>
+                  <span className="qpm-section-label">{question.source === "question_bank" ? "题库解析" : "参考解析"}</span>
                   <p>{question.explanation}</p>
                 </div>
               ) : null}

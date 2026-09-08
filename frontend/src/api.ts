@@ -886,8 +886,8 @@ export async function endClassSession(sessionId: string): Promise<ClassSessionRe
 export async function enterSessionStage(
   sessionId: string,
   stageId: string
-): Promise<{ status: string; session_id: string; scene?: { globe?: import("./types").LessonGlobeScene } }> {
-  return requestJson<{ status: string; session_id: string; scene?: { globe?: import("./types").LessonGlobeScene } }>(`/class-sessions/${encodeURIComponent(sessionId)}/stage`, {
+): Promise<{ status: string; session_id: string; session?: ClassSessionRecord; scene?: { globe?: import("./types").LessonGlobeScene } }> {
+  return requestJson<{ status: string; session_id: string; session?: ClassSessionRecord; scene?: { globe?: import("./types").LessonGlobeScene } }>(`/class-sessions/${encodeURIComponent(sessionId)}/stage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ stage_id: stageId })

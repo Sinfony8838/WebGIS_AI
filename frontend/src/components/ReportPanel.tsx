@@ -252,10 +252,10 @@ export function ReportPanel({ projectId, onClose }: Props) {
                 Q{index + 1}. {question.text}（
                 {question.collection_mode === "teacher_observation"
                   ? "教师口头呈现 · 表现见教师观察"
-                  : `${question.response_count} 人作答${question.correct_rate !== null ? ` · 正确率 ${(question.correct_rate * 100).toFixed(0)}%` : ""}`}
+                  : question.response_count === 0 ? "本题未采集作答数据" : `${question.response_count} 人作答${question.correct_rate !== null ? ` · 正确率 ${(question.correct_rate * 100).toFixed(0)}%` : ""}`}
                 ）
               </p>
-              {question.collection_mode !== "teacher_observation" ? question.options.map((option, optionIndex) => {
+              {question.collection_mode !== "teacher_observation" && question.response_count > 0 ? question.options.map((option, optionIndex) => {
                 const count = question.option_counts[optionIndex] || 0;
                 const total = Math.max(question.response_count, 1);
                 return (

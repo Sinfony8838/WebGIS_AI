@@ -109,6 +109,14 @@ function lessonSnapshotFromSession(session: ClassSessionRecord): LessonRecord | 
   return candidate as LessonRecord;
 }
 
+function sessionStageEnteredAt(session: ClassSessionRecord): number | null {
+  const event = [...session.events].reverse().find(
+    (item) => item.type === "stage_enter" && item.stage_id === session.current_stage_id
+  );
+  const value = event ? Date.parse(event.timestamp) : NaN;
+  return Number.isFinite(value) ? value : null;
+}
+
 async function waitForLessonImport(jobId: string): Promise<LessonRecord | null> {
   for (let attempt = 0; attempt < 120; attempt += 1) {
     const job = await fetchJob(jobId);
@@ -344,7 +352,7 @@ export function LessonWorkflowShell({
         setLessons((previous) => previous.some((item) => item.lesson_id === lesson.lesson_id)
           ? previous.map((item) => (item.lesson_id === lesson.lesson_id ? lesson : item))
           : [lesson, ...previous]);
-        setStageEnteredAt(Date.now());
+        setStageEnteredAt(sessionStageEnteredAt(running));
         setLessonMode("teach");
         setPanelCollapsed(false);
       })
@@ -369,15 +377,16 @@ export function LessonWorkflowShell({
         setActiveSession(session);
         const lesson = lessonSnapshotFromSession(session);
         if (lesson) setActiveLesson(lesson);
-        setStageEnteredAt(Date.now());
+        setStageEnteredAt(sessionStageEnteredAt(session));
         setLessonMode(session.status === "running" ? "teach" : "review");
         setPanelCollapsed(false);
       }
       if (entry.action.tool_name === "enter_lesson_stage") {
         const stage = entry.result?.stage as LessonStage | undefined;
         if (!stage?.stage_id) continue;
-        setActiveSession((previous) => previous ? { ...previous, current_stage_id: stage.stage_id } : previous);
-        setStageEnteredAt(Date.now());
+        const session = entry.result?.session as ClassSessionRecord | undefined;
+        setActiveSession((previous) => session || (previous ? { ...previous, current_stage_id: stage.stage_id } : previous));
+        setStageEnteredAt(session ? sessionStageEnteredAt(session) : Date.now());
         onApplyGlobeScene?.(stage.scene?.globe || {});
         setLessonMode("teach");
       }
@@ -437,8 +446,8 @@ export function LessonWorkflowShell({
         if (viaSession && activeSession) {
           const response = await enterSessionStage(activeSession.session_id, stageId);
           globe = response.scene?.globe || {};
-          setActiveSession((previous) => (previous ? { ...previous, current_stage_id: stageId } : previous));
-          setStageEnteredAt(Date.now());
+          setActiveSession((previous) => response.session || (previous ? { ...previous, current_stage_id: stageId } : previous));
+          setStageEnteredAt(response.session ? sessionStageEnteredAt(response.session) : Date.now());
         } else {
           const response = await applyLessonScene(activeLesson.lesson_id, stageId, project.project_id);
           globe = response.globe || {};
@@ -559,12 +568,19 @@ export function LessonWorkflowShell({
       const response = await createClassSession(activeLesson.lesson_id, project.project_id);
       setActiveSession(response.session);
       setLessonMode("teach");
-      const firstStage = activeLesson.stages[0];
+      setPanelCollapsed(false);
+      const firstStage = (lessonSnapshotFromSession(response.session) || activeLesson).stages[0];
       if (firstStage) {
-        await applyScene(firstStage.stage_id, true);
+        // Use the newly created ID; React state still holds the previous session here.
+        const entered = await enterSessionStage(response.session.session_id, firstStage.stage_id);
+        const session = entered.session || { ...response.session, current_stage_id: firstStage.stage_id };
+        setActiveSession(session);
+        setStageEnteredAt(entered.session ? sessionStageEnteredAt(session) : Date.now());
+        onApplyGlobeScene?.(entered.scene?.globe || {});
       }
+      await onRefresh();
     });
-  }, [activeLesson, applyScene, project, runWithBusy]);
+  }, [activeLesson, onApplyGlobeScene, onRefresh, project, runWithBusy]);
 
   const endSession = useCallback(async () => {
     if (!activeSession) return;

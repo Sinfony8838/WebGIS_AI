@@ -2926,6 +2926,7 @@ export default function App({
         const source = new XYZ({
           ...(descriptor.urls.length > 1 ? { urls: descriptor.urls } : { url: descriptor.urls[0] }),
           attributions: descriptor.attribution || undefined,
+          maxZoom: descriptor.max_zoom ?? 18,
           crossOrigin: descriptor.cross_origin || "anonymous"
         });
         listenerKeys.push(
@@ -3423,7 +3424,7 @@ export default function App({
           setViewMode("plane");
         }}
       />
-      <MapEvidenceLegend layers={layerState?.items || []} globe={viewMode === "globe"} themeIds={globeThemeIds} showFit={showTeachingFit} onShowFit={setShowTeachingFit} />
+      <MapEvidenceLegend basemapId={activeBasemapId} layers={layerState?.items || []} globe={viewMode === "globe"} themeIds={globeThemeIds} showFit={showTeachingFit} onShowFit={setShowTeachingFit} />
       <BrushOverlay
         ref={brushRef}
         active={interactionMode === "brush"}

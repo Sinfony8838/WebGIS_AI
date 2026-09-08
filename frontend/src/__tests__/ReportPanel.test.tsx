@@ -108,6 +108,7 @@ vi.mock("../api", () => ({
 }));
 
 import { ReportPanel } from "../components/ReportPanel";
+import { fetchJob } from "../api";
 
 afterEach(() => {
   cleanup();
@@ -149,4 +150,17 @@ describe("ReportPanel", () => {
     expect(screen.getByText(/教师课堂速记（原题回炉） ×2/)).toBeTruthy();
     expect(screen.queryByText(/教案课后作业（探究）/)).toBeNull();
   });
+});
+
+it("labels a projection without responses as uncollected instead of drawing zero-percent bars", async () => {
+  const payload = await fetchJob("fixture");
+  const result = structuredClone(payload) as any;
+  result.result.statistics.questions[0].collection_mode = "student_response";
+  vi.mocked(fetchJob).mockResolvedValueOnce(result);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByTestId("generate-report")).toBeEnabled());
+  fireEvent.click(screen.getByTestId("generate-report"));
+  await waitFor(() => expect(screen.getByText(/本题未采集作答数据/)).toBeTruthy());
+  expect(screen.queryByText(/0 人作答/)).toBeNull();
+  expect(document.querySelector(".tally-bar")).toBeNull();
 });

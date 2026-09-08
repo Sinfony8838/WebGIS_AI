@@ -16,6 +16,7 @@ answers cannot leak into it.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -60,6 +61,8 @@ class PracticeExportService:
             (lesson.title if lesson else "") or (session.metadata or {}).get("lesson_title") or "本课"
         )
         items, summary, notes = self.collect_items(session, lesson)
+        if not items:
+            raise ValueError("未找到可用作业内容。请检查当前项目题库、课时目标或先添加作业任务；未生成空白试卷。")
 
         output_dir = self.config.project_output_dir(session.project_id)
         student_path = self.config.unique_path(output_dir, f"practice_student_{session.session_id[:12]}.docx")
@@ -123,13 +126,19 @@ class PracticeExportService:
     def collect_items(
         self, session: ClassSessionRecord, lesson: Optional[LessonRecord]
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
-        plan = (lesson.plan if lesson is not None else {}) or {}
+        plan = dict((lesson.plan if lesson is not None else {}) or {})
+        # Built-in/legacy lessons may store goals at the top level, without a plan.
+        if lesson is not None:
+            plan["title"] = plan.get("title") or lesson.title
+            plan["topic"] = plan.get("topic") or lesson.title
+            plan["objectives"] = plan.get("objectives") or list(lesson.objectives or [])
         lesson_questions = self._lesson_question_index(lesson)
         evidence = self._classroom_evidence(session)
         observations = self._practice_observations(session)
 
         items: List[Dict[str, Any]] = []
         included_ids: set = set()
+        skipped: List[str] = []
 
         # ① 教案指定的课后作业（homework basic/inquiry 文本任务）
         homework = plan.get("homework") if isinstance(plan.get("homework"), dict) else {}
@@ -163,8 +172,8 @@ class PracticeExportService:
                 variant_queries.append(observation["tag"])
 
         for snapshot in self._search_bank(
-            session, plan, knowledge_queries=variant_queries[:VARIANT_TAG_LIMIT], limit=VARIANT_LIMIT,
-            exclude_ids=included_ids,
+            session, plan, knowledge_queries=variant_queries[:VARIANT_TAG_LIMIT], limit=VARIANT_LIMIT if variant_queries else 0,
+            exclude_ids=included_ids, skipped=skipped,
         ):
             included_ids.add(snapshot["question_id"])
             items.append(
@@ -176,7 +185,7 @@ class PracticeExportService:
 
         # ③ 围绕课时核心目标从题库检索强关联题
         for snapshot in self._search_bank(
-            session, plan, knowledge_queries=[], limit=CORE_LIMIT, exclude_ids=included_ids
+            session, plan, knowledge_queries=[], limit=CORE_LIMIT, exclude_ids=included_ids, skipped=skipped
         ):
             included_ids.add(snapshot["question_id"])
             items.append(
@@ -188,6 +197,8 @@ class PracticeExportService:
 
         summary = self._selection_summary(items)
         notes = self._selection_notes(items, lesson)
+        if skipped:
+            notes.append("自动选题已跳过：" + "；".join(dict.fromkeys(skipped)) + "。未为凑题数补入不完整题目。")
         return items, summary, notes
 
     @staticmethod
@@ -319,10 +330,13 @@ class PracticeExportService:
         knowledge_queries: List[str],
         limit: int,
         exclude_ids: set,
+        skipped: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         if self.question_bank is None or limit <= 0:
             return []
         topic = str(plan.get("topic") or plan.get("title") or "")
+        if "人口分布" in topic:
+            topic = "人口分布"
         core = (plan.get("core_questions") or {}) if isinstance(plan.get("core_questions"), dict) else {}
         core_question = str(core.get("core") or "")
         objectives = [str(item) for item in plan.get("objectives") or [] if str(item).strip()]
@@ -330,7 +344,9 @@ class PracticeExportService:
         excluded = set(exclude_ids)
         queries = list(knowledge_queries)
         if not queries:
-            queries.append(" ".join(part for part in (topic, core_question) if part))
+            # Long prose diluted the topic score and rejected even direct matches.
+            # Objectives are already passed separately to the bank ranker.
+            queries.append(topic or core_question)
         for query in queries:
             if not query.strip() or len(found) >= limit:
                 continue
@@ -341,16 +357,33 @@ class PracticeExportService:
                     knowledge=query,
                     objectives=objectives,
                     exclude_ids=sorted(excluded),
-                    limit=max(1, limit - len(found)),
+                    limit=10,
                 )
-            except Exception:
-                continue
+            except Exception as exc:
+                raise ValueError("题库检索失败，请重试；未将失败当作无题库或生成空卷。") from exc
             for item in result.get("items") or []:
                 if not isinstance(item, dict):
                     continue
                 snapshot = QuestionBankService.normalize_snapshot_question(item)
                 question_id = snapshot["question_id"]
                 if not question_id or question_id in excluded:
+                    continue
+                reason = ""
+                stem = snapshot["text"] + " " + snapshot["task_text"]
+                if not snapshot.get("answer_complete"):
+                    reason = "答案不完整"
+                elif item.get("auto_selectable") is False:
+                    reason = "关联度不足"
+                elif "人口分布" in topic and not re.search(r"人口|人类.{0,5}居住|聚落", stem):
+                    reason = "题干未直接考查人口分布"
+                elif re.search(r"图示|图中|下图|如图|图为|读图", stem + snapshot["material"]) and not snapshot["images"]:
+                    reason = "读图题缺少题图"
+                elif any(self._resolve_image_path(image["url"]) is None for image in snapshot["images"]):
+                    reason = "题图文件不可用"
+                if reason:
+                    if skipped is not None:
+                        skipped.append(reason)
+                    excluded.add(question_id)
                     continue
                 snapshot["selection_reason"] = str(item.get("selection_reason") or "")
                 found.append(snapshot)
@@ -377,7 +410,7 @@ class PracticeExportService:
         else:
             notes.append("选题依据当前课时内容生成。")
         if not any(item["kind"] == "question" for item in items):
-            notes.append("本卷暂无可用题目：未导入题库或课堂记录中没有可回炉的题目，仅包含教案课后作业任务。")
+            notes.append("没有选到符合当前目标且材料完整的题库题，也没有可回炉的课堂题；本卷仅包含教案作业任务。")
         return notes
 
     # ------------------------------------------------------------------

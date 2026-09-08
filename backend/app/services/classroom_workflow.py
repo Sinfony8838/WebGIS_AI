@@ -539,7 +539,7 @@ class ClassroomWorkflowRuntime:
                 stage_id=stage_id,
                 payload={"stage_title": scene_result.get("stage_title", "")},
             )
-        return {"status": "success", "session_id": session_id, "stage": stage, "scene": scene_result}
+        return {"status": "success", "session_id": session_id, "session": self._require_session(session_id).to_dict(), "stage": stage, "scene": scene_result}
 
     def launch_session_question(
         self,

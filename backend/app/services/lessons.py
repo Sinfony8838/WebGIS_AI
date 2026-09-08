@@ -228,6 +228,7 @@ class LessonService:
                 for lesson in lessons
                 if lesson.source == "builtin" or lesson.owner_user_id == owner_user_id
             ]
+        lessons.sort(key=lambda lesson: not bool(lesson.metadata.get("recommended")))
         return {"status": "success", "items": [lesson.to_dict() for lesson in lessons]}
 
     def get_lesson(self, lesson_id: str) -> LessonRecord:
@@ -397,6 +398,10 @@ class LessonService:
         scene_catalog_ids = {str(item) for item in scene.get("catalog_layers") or []}
         for layer in list(project.layers):
             layer_id = layer.layer_id
+            # Assistant annotations belong to the previous map discussion. Keep
+            # their data, but hide them unless this scene explicitly requests them.
+            if layer_id == "assistant_annotations" and layer.visible:
+                self.store.patch_layer(project_id, layer_id, {"visible": False})
             if layer_id.startswith("visual_query_"):
                 self.store.remove_layer(project_id, layer_id)
                 continue

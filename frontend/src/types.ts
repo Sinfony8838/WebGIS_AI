@@ -49,6 +49,7 @@ export type BasemapLayerDescriptor = {
   z_index: number;
   class_name?: string;
   cross_origin?: string;
+  max_zoom?: number;
   /**
    * Whether the backend considers this raster layer safe to use as a
    * Cesium ImageryProvider in the 3D globe view. Weather overlays and

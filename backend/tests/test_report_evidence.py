@@ -27,3 +27,14 @@ def test_teacher_misconception_evidence_remains_actionable(tmp_path: Path) -> No
     assert "总量与密度混淆" in result["text"]
     assert "设计一道对比辨析题" in result["text"]
     assert "正确率" not in result["text"]
+
+
+def test_projected_question_without_responses_is_not_reported_as_zero_percent(tmp_path: Path):
+    service = ReportService(AppConfig(root_dir=tmp_path))
+    text = service.render_markdown({
+        "questions": [{"text": "比较人口密度", "collection_mode": "student_response", "response_count": 0, "options": ["甲", "乙"], "option_counts": [0, 0], "correct_rate": None}],
+        "observations": {},
+    }, {"text": "未采集", "generator": "rules"})
+    assert "本题未采集作答数据" in text
+    assert "0 人作答" not in text
+    assert "（0%）" not in text
