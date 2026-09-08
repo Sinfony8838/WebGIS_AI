@@ -1,9 +1,24 @@
 """Entry point of the PyQGIS worker subprocess.
 
 The worker reads control / step messages from ``input_queue``, executes
-them, and pushes structured results back through ``output_queue``. Both
-queues are :class:`multiprocessing.Queue` instances created by
-:class:`PyQgisWorkerManager`.
+them one at a time (QGIS objects are single-owner and must never be shared
+across threads), and pushes structured results back through
+``output_queue``. Both queues are :class:`multiprocessing.Queue` instances
+created by :class:`PyQgisWorkerManager`.
+
+Protocol (every step message carries a unique ``request_id``):
+
+* ``run_step``      → ``step_started`` ack when the worker dequeues it
+                      (lets the manager separate queue time from exec time),
+                      then ``step_result`` echoing the same ``request_id``.
+* ``cancel_step``   → if the request has not started yet it is skipped and
+                      answered with ``step_cancelled``; a running step cannot
+                      be interrupted safely, its late result is dropped by
+                      the manager instead.
+* ``release_workflow`` → frees the workflow's in-memory layers/step
+                      registry and deletes its per-step temp directories;
+                      published artifacts under ``outputs/`` are kept.
+* ``ping`` / ``shutdown`` → ``pong`` / graceful QGIS shutdown.
 
 All QGIS imports happen inside this module / its handlers, never in the
 FastAPI main process.
@@ -15,7 +30,7 @@ import os
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Set
 
 
 def _make_logger() -> logging.Logger:
@@ -37,18 +52,6 @@ def _safe_put(queue: Any, message: Dict[str, Any]) -> None:
 
 def _emit_ready(output_queue: Any) -> None:
     _safe_put(output_queue, {"type": "worker_ready", "timestamp": time.time()})
-
-
-def _emit_error(output_queue: Any, code: str, message: str, user_friendly: str = "", **details: Any) -> None:
-    payload = {
-        "type": "worker_error",
-        "code": code,
-        "message": message,
-        "user_friendly": user_friendly or message,
-        "details": details,
-        "timestamp": time.time(),
-    }
-    _safe_put(output_queue, payload)
 
 
 def worker_loop(input_queue: Any, output_queue: Any, qgis_root: str, workflows_root: str) -> None:
@@ -88,8 +91,10 @@ def worker_loop(input_queue: Any, output_queue: Any, qgis_root: str, workflows_r
     from .workspace import Workspace
     from .errors import WorkflowExecutionError, make_error
     from .task_router import dispatch
+    from .validation import validate_step_outputs
 
     workspaces: Dict[str, Workspace] = {}
+    cancelled: Set[str] = set()
 
     _emit_ready(output_queue)
     if qgis_init_error:
@@ -114,16 +119,43 @@ def worker_loop(input_queue: Any, output_queue: Any, qgis_root: str, workflows_r
             _safe_put(output_queue, {"type": "pong", "timestamp": time.time()})
             continue
 
+        if msg_type == "cancel_step":
+            request_id = str(message.get("request_id") or "")
+            if request_id:
+                cancelled.add(request_id)
+            continue
+
         if msg_type == "run_step":
+            request_id = str(message.get("request_id") or "")
             workflow_id = str(message.get("workflow_id") or "")
             step = message.get("step") or {}
             step_id = str(step.get("id") or "")
             op = str(step.get("op") or "")
             params = step.get("params") or {}
 
+            # Acknowledge start (manager measures exec time from here) —
+            # unless the request was cancelled while queued.
+            if request_id and request_id in cancelled:
+                cancelled.discard(request_id)
+                _safe_put(output_queue, {
+                    "type": "step_cancelled",
+                    "request_id": request_id,
+                    "workflow_id": workflow_id,
+                    "step_id": step_id,
+                })
+                continue
+            _safe_put(output_queue, {
+                "type": "step_started",
+                "request_id": request_id,
+                "workflow_id": workflow_id,
+                "step_id": step_id,
+                "timestamp": time.time(),
+            })
+
             if qgis_init_error:
                 _safe_put(output_queue, {
                     "type": "step_result",
+                    "request_id": request_id,
                     "workflow_id": workflow_id,
                     "step_id": step_id,
                     "status": "error",
@@ -140,6 +172,7 @@ def worker_loop(input_queue: Any, output_queue: Any, qgis_root: str, workflows_r
                 except Exception as exc:
                     _safe_put(output_queue, {
                         "type": "step_result",
+                        "request_id": request_id,
                         "workflow_id": workflow_id,
                         "step_id": step_id,
                         "status": "error",
@@ -153,15 +186,21 @@ def worker_loop(input_queue: Any, output_queue: Any, qgis_root: str, workflows_r
                     })
                     continue
 
-            workspace.append_log(f"[step_start] id={step_id} op={op}")
+            workspace.append_log(f"[step_start] id={step_id} op={op} request={request_id}")
             try:
                 outputs = dispatch(op, params, workspace) or {}
+                # Validate published artifacts BEFORE reporting success: the
+                # files must exist, be non-empty and re-openable with the
+                # right format. A legitimate empty result (feature_count=0)
+                # passes — it is expressed by data, not by an error.
+                validate_step_outputs(outputs, workspace)
                 workspace.register_step_outputs(step_id, outputs)
                 workspace.append_log(
                     f"[step_success] id={step_id} op={op} keys={sorted(outputs.keys())}"
                 )
                 _safe_put(output_queue, {
                     "type": "step_result",
+                    "request_id": request_id,
                     "workflow_id": workflow_id,
                     "step_id": step_id,
                     "status": "success",
@@ -176,6 +215,7 @@ def worker_loop(input_queue: Any, output_queue: Any, qgis_root: str, workflows_r
                 )
                 _safe_put(output_queue, {
                     "type": "step_result",
+                    "request_id": request_id,
                     "workflow_id": workflow_id,
                     "step_id": step_id,
                     "status": "error",
@@ -189,6 +229,7 @@ def worker_loop(input_queue: Any, output_queue: Any, qgis_root: str, workflows_r
                 )
                 _safe_put(output_queue, {
                     "type": "step_result",
+                    "request_id": request_id,
                     "workflow_id": workflow_id,
                     "step_id": step_id,
                     "status": "error",
@@ -207,7 +248,7 @@ def worker_loop(input_queue: Any, output_queue: Any, qgis_root: str, workflows_r
             workflow_id = str(message.get("workflow_id") or "")
             ws = workspaces.pop(workflow_id, None)
             if ws is not None:
-                ws.cleanup()
+                ws.cleanup(purge_temp=True)
             _safe_put(output_queue, {"type": "workflow_released", "workflow_id": workflow_id})
             continue
 

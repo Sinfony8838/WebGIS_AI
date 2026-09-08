@@ -121,6 +121,17 @@ def require_layer(workspace: Workspace, ref: Any) -> Any:
     resolved = workspace.resolve_reference(ref)
     layer_obj = workspace.get_layer(resolved)
     if isinstance(layer_obj, str):
+        if layer_obj.startswith("_layer__") and not workspace.has_layer(layer_obj):
+            # The alias came from this workflow, but the in-memory layer is
+            # gone (worker restarted after a crash, or the workflow was
+            # released). Fail with the accurate cause instead of pretending
+            # the alias is a file path.
+            raise WorkflowExecutionError(
+                code="WORKER_RESTARTED",
+                message=f"worker-internal layer '{layer_obj}' no longer exists",
+                user_friendly="上游步骤的内存图层已丢失（Worker 已重启或工作流已释放），请重新运行整个工作流。",
+                details={"alias": layer_obj},
+            )
         # treat as a path; load lazily
         return _load_layer_from_path(layer_obj)
     return layer_obj
