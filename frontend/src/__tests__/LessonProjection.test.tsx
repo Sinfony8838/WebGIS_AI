@@ -4,6 +4,7 @@ import { LessonWorkflowShell } from "../components/LessonWorkflowShell";
 import type { ClassSessionRecord, LessonRecord, ProjectRecord } from "../types";
 
 const fetchLessonsMock = vi.fn();
+const createDesignMock = vi.fn();
 const fetchClassSessionsMock = vi.fn();
 const fetchLessonMock = vi.fn();
 const launchSessionQuestionMock = vi.fn();
@@ -17,6 +18,9 @@ vi.mock("../api", async () => {
   const actual = await vi.importActual<typeof import("../api")>("../api");
   return {
     ...actual,
+    createLessonDesign: (...args: unknown[]) => createDesignMock(...args),
+    fetchPopulationSources: async () => ({items: []}),
+    fetchPopulationSourceVersions: async () => ({items: []}),
     fetchLessons: (...args: unknown[]) => fetchLessonsMock(...args),
     fetchClassSessions: (...args: unknown[]) => fetchClassSessionsMock(...args),
     fetchLesson: (...args: unknown[]) => fetchLessonMock(...args),
@@ -245,4 +249,21 @@ it("ignores a commentary response arriving after the teacher closes the question
   await act(async()=>resolve({question_id:"qb_1",timer:{...pending,ai_explanation_status:"ready",ai_explanation:{text:"迟到结果",generator:"minimax"}}}));
   expect(screen.queryByText("迟到结果")).toBeNull();
   expect(screen.queryByTestId("question-practice-modal")).toBeNull();
+});
+
+
+it("opens a separate co-design session seeded by the selected built-in lesson", async () => {
+  const lesson={...makeLesson(), source:"builtin"};
+  fetchLessonsMock.mockResolvedValue({items:[lesson]});
+  fetchLessonMock.mockResolvedValue(lesson);
+  fetchClassSessionsMock.mockResolvedValue({items:[]});
+  createDesignMock.mockResolvedValue({design_id:"design_shanghai"});
+  const openDesign=vi.fn();
+  render(<LessonWorkflowShell project={project} layerState={null} onRefresh={vi.fn()} onOpenDesignWorkspace={openDesign}/>);
+  fireEvent.click(screen.getByTestId("class-mode-toggle"));
+  await waitFor(() => expect(screen.getByTestId("design-from-lesson")).toBeEnabled());
+  fireEvent.click(screen.getByTestId("design-from-lesson"));
+  await waitFor(() => expect(openDesign).toHaveBeenCalledWith("design_shanghai"));
+  expect(createDesignMock).toHaveBeenCalledWith("project_1", "lesson_1");
+  expect(screen.queryByTestId("lesson-panel")).toBeNull();
 });

@@ -30,6 +30,24 @@ class LessonDesignServiceTest(unittest.TestCase):
         self.project = self.runtime.create_project()["project_id"]
         self.addCleanup(self.temp_dir.cleanup)
 
+    def test_shanghai_seed_keeps_old_draft_and_original_scenes_questions_homework(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        old = service.create_or_resume(self.project, "local_admin")
+        old_before = json.dumps(old.to_dict(), ensure_ascii=False, sort_keys=True)
+        base = self.store.get_lesson("lesson_builtin_population_shanghai_world")
+        base_before = json.dumps(base.to_dict(), ensure_ascii=False, sort_keys=True)
+        design = service.create_or_resume(self.project, "local_admin", base.lesson_id)
+        self.assertNotEqual(design.design_id, old.design_id)
+        self.assertEqual(len(design.draft["stages"]), 8)
+        self.assertEqual(sum(len(s["questions"]) for s in design.draft["stages"]), 11)
+        self.assertEqual(design.draft["stages"], base.stages)
+        self.assertEqual(design.draft["homework"], base.plan["homework"])
+        self.assertEqual(design.draft["stages"][0]["scene"]["view"]["center"], [121.47, 31.23])
+        self.assertEqual(service.create_or_resume(self.project, "local_admin", base.lesson_id).design_id, design.design_id)
+        design.draft["stages"][0]["title"] = "教师草稿修改"
+        self.assertEqual(json.dumps(base.to_dict(), ensure_ascii=False, sort_keys=True), base_before)
+        self.assertEqual(json.dumps(self.store.get_lesson_design(old.design_id).to_dict(), ensure_ascii=False, sort_keys=True), old_before)
+
     def test_legacy_structured_objectives_resume_as_text_without_read_mutation(self) -> None:
         design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
         stored = self.store.get_lesson_design(design["design_id"])

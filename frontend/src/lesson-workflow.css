@@ -123,10 +123,14 @@
 
 .lesson-panel-toolbar {
   display: flex;
+  flex-wrap: wrap;
+  flex-shrink: 0;
   gap: 8px;
   align-items: center;
   margin-bottom: 10px;
 }
+
+.lesson-panel-toolbar .toolbar-button { white-space: nowrap; }
 
 .lesson-panel-toolbar select,
 .report-toolbar select {
@@ -140,6 +144,8 @@
   padding: 4px 8px;
   font-size: 12px;
 }
+
+.lesson-panel-toolbar select { flex: 1 0 100%; width: 100%; }
 
 .toolbar-button.primary {
   border-color: rgba(94, 160, 231, 0.65);

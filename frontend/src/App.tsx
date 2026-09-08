@@ -3910,7 +3910,7 @@ export default function App({
           layerState={layerState}
           busy={busy}
           openSignal={lessonWorkflowOpenSignal}
-          onOpenDesignWorkspace={() => openLessonDesignWorkspace()}
+          onOpenDesignWorkspace={openLessonDesignWorkspace}
           rehearsalSignal={rehearsalTarget.signal}
           rehearsalLessonId={rehearsalTarget.lessonId}
           onRefresh={() => (project ? refreshProjectState(project.project_id) : undefined)}

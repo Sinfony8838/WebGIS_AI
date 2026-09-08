@@ -6,6 +6,7 @@ import {
   captureLessonScene,
   closeSessionQuestion,
   createClassSession,
+  createLessonDesign,
   endClassSession,
   enterSessionStage,
   fetchClassSessions,
@@ -63,7 +64,7 @@ type Props = {
   /** 助教识别到整节课设计请求时自动打开共创面板。 */
   designOpenSignal?: number;
   /** 打开全屏教案设计工作台（教案设计入口；未提供时退回右侧共创面板）。 */
-  onOpenDesignWorkspace?: () => void;
+  onOpenDesignWorkspace?: (designId?: string) => void;
   /** 打开指定课时的模拟测试（教案设计工作台「进入模拟测试」入口）。 */
   rehearsalSignal?: number;
   rehearsalLessonId?: string;
@@ -428,6 +429,19 @@ export function LessonWorkflowShell({
       setLocalBusy(false);
     }
   }, []);
+
+  const designRequest = useRef(0);
+  useEffect(() => () => { designRequest.current += 1; }, [project?.project_id]);
+  const designFromLesson = useCallback(async (lesson: LessonRecord) => {
+    if (!project || !onOpenDesignWorkspace) return;
+    const requestId = ++designRequest.current;
+    await runWithBusy(async () => {
+      const design = await createLessonDesign(project.project_id, lesson.lesson_id);
+      if (requestId !== designRequest.current) return;
+      setLessonMode("off");
+      onOpenDesignWorkspace(design.design_id);
+    });
+  }, [project, onOpenDesignWorkspace, runWithBusy]);
 
   const selectLesson = useCallback(
     async (lessonId: string) => {
@@ -823,6 +837,7 @@ export function LessonWorkflowShell({
           onPrepareLesson={(input) => void prepareLesson(input)}
           onChangePopulationSourceVersion={(version) => void changePopulationSourceVersion(version)}
           onResolvePrepChangeSet={(decision, stageIds) => void resolvePrepChangeSet(decision, stageIds)}
+          onDesignFromLesson={onOpenDesignWorkspace ? (lesson) => void designFromLesson(lesson) : undefined}
           onStartClass={() => void startClass()}
           onStartRehearsal={startRehearsal}
           onClose={() => setLessonMode("off")}
