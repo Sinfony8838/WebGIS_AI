@@ -440,6 +440,20 @@ class KnowledgeMaterialLinkRequest(BaseModel):
     region_binding: Dict[str, Any] = Field(default_factory=dict)
 
 
+class ArtifactLoadLayerRequest(BaseModel):
+    project_id: str
+
+
+class ResourceSaveRequest(BaseModel):
+    project_id: str
+    title: str = ""
+    url: str
+    summary: str = ""
+    source: str = ""
+    type: str = ""
+    thumbnail_url: str = ""
+
+
 class LessonResourceSetRequest(BaseModel):
     item: Dict[str, Any] = Field(default_factory=dict)
 
@@ -2278,6 +2292,47 @@ def list_outputs(request: Request, project_id: Optional[str] = None) -> Dict[str
             )
         ]
     return response
+
+
+@app.post("/outputs/{artifact_id}/load-layer")
+def load_output_layer(artifact_id: str, payload: ArtifactLoadLayerRequest, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, payload.project_id)
+    try:
+        return runtime.load_output_as_layer(payload.project_id, artifact_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/outputs/{artifact_id}")
+def delete_output(artifact_id: str, request: Request, project_id: str = Query(...)) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
+    try:
+        return runtime.delete_output(project_id, artifact_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/resources/save")
+def save_resource_result(payload: ResourceSaveRequest, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, payload.project_id)
+    context = _current_auth(request)
+    try:
+        return runtime.save_resource_result(
+            payload.project_id,
+            {
+                "title": payload.title,
+                "url": payload.url,
+                "summary": payload.summary,
+                "source": payload.source,
+                "type": payload.type,
+                "thumbnail_url": payload.thumbnail_url,
+            },
+            owner_user_id=str(context.user["user_id"]),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
