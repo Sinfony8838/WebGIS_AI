@@ -40,6 +40,178 @@ ASSISTANT_TOOL_SCHEMA = [
 ]
 
 
+# JSON-Schema contracts are shared by the model-facing catalog and the
+# execution-time input guard.  The older ``parameters`` summaries above stay
+# in place for compatibility with existing prompt snapshots.
+ASSISTANT_TOOL_INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
+    "set_view": {
+        "type": "object",
+        "properties": {
+            "center": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+            "zoom": {"type": "number", "minimum": 0, "maximum": 24},
+            "extent": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+        },
+        "minProperties": 1,
+        "additionalProperties": False,
+    },
+    "toggle_layer": {
+        "type": "object",
+        "properties": {"layer_id": {"type": "string", "minLength": 1}, "visible": {"type": "boolean"}},
+        "required": ["layer_id", "visible"],
+        "additionalProperties": False,
+    },
+    "reorder_layer": {
+        "type": "object",
+        "properties": {"layer_id": {"type": "string", "minLength": 1}, "z_index": {"type": "number"}},
+        "required": ["layer_id", "z_index"],
+        "additionalProperties": False,
+    },
+    "style_layer": {
+        "type": "object",
+        "properties": {"layer_id": {"type": "string", "minLength": 1}, "style": {"type": "object"}},
+        "required": ["layer_id", "style"],
+        "additionalProperties": False,
+    },
+    "query_features": {
+        "type": "object",
+        "properties": {"layer_id": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}},
+        "additionalProperties": False,
+    },
+    "draw_annotation": {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string", "minLength": 1, "maxLength": 500},
+            "position": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+        },
+        "required": ["text"],
+        "additionalProperties": False,
+    },
+    "measure": {
+        "type": "object",
+        "properties": {
+            "mode": {"type": "string"},
+            "extent": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+        },
+        "additionalProperties": False,
+    },
+    "apply_template": {
+        "type": "object",
+        "properties": {"template_id": {"type": "string", "minLength": 1}},
+        "required": ["template_id"],
+        "additionalProperties": False,
+    },
+    "export_snapshot": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "file_path": {"type": "string"},
+            "path": {"type": "string"},
+            "output_path": {"type": "string"},
+        },
+        "additionalProperties": False,
+    },
+    "explain_current_view": {
+        "type": "object",
+        "properties": {"focus": {"type": "string", "maxLength": 2000}},
+        "additionalProperties": False,
+    },
+    "switch_basemap": {
+        "type": "object",
+        "properties": {"basemap_id": {"type": "string", "minLength": 1}},
+        "required": ["basemap_id"],
+        "additionalProperties": False,
+    },
+    "search_poi": {
+        "type": "object",
+        "properties": {
+            "keyword": {"type": "string", "minLength": 1, "maxLength": 200},
+            "mode": {"type": "string"},
+            "extent": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+            "geometry": {"type": "object"},
+        },
+        "required": ["keyword"],
+        "additionalProperties": False,
+    },
+    "run_visual_query": {
+        "type": "object",
+        "properties": {
+            "dataset": {"type": "string"},
+            "year": {"type": "integer"},
+            "geo_level": {"type": "string"},
+            "metric": {"type": "string"},
+            "operation": {"type": "string"},
+            "order": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+        },
+        "additionalProperties": False,
+    },
+    "toggle_teaching_map": {
+        "type": "object",
+        "properties": {"map_id": {"type": "string", "minLength": 1}, "visible": {"type": "boolean"}},
+        "required": ["map_id"],
+        "additionalProperties": False,
+    },
+    "open_material": {
+        "type": "object",
+        "properties": {"material_id": {"type": "string", "minLength": 1}, "material": {"type": "object"}},
+        "anyOf": [{"required": ["material_id"]}, {"required": ["material"]}],
+        "additionalProperties": False,
+    },
+    "generate_image": {
+        "type": "object",
+        "properties": {
+            "prompt": {"type": "string", "minLength": 1, "maxLength": 1500},
+            "title": {"type": "string", "maxLength": 200},
+            "model": {"type": "string"},
+            "aspect_ratio": {"type": "string"},
+            "prompt_optimizer": {"type": "boolean"},
+        },
+        "required": ["prompt"],
+        "additionalProperties": False,
+    },
+    "record_observation": {
+        "type": "object",
+        "properties": {
+            "verdict": {"type": "string", "minLength": 1},
+            "tag": {"type": "string"},
+            "note": {"type": "string", "maxLength": 1000},
+            "question_id": {"type": "string"},
+            "stage_id": {"type": "string"},
+        },
+        "required": ["verdict"],
+        "additionalProperties": False,
+    },
+    "launch_question": {
+        "type": "object",
+        "properties": {
+            "question_id": {"type": "string", "minLength": 1},
+            "text": {"type": "string", "minLength": 1, "maxLength": 1000},
+            "options": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
+            "answer_index": {"type": "integer", "minimum": 0},
+            "stage_id": {"type": "string"},
+        },
+        "anyOf": [{"required": ["question_id"]}, {"required": ["text"]}],
+        "additionalProperties": False,
+    },
+}
+
+ASSISTANT_TOOL_INPUT_SCHEMAS.update({
+    "switch_view_mode": {"type": "object", "properties": {"mode": {"type": "string", "enum": ["plane", "globe"]}}, "required": ["mode"], "additionalProperties": False},
+    "open_panel": {"type": "object", "properties": {"panel": {"type": "string", "enum": ["layers", "database", "workflow"]}, "open": {"type": "boolean"}}, "required": ["panel"], "additionalProperties": False},
+    "focus_layer": {"type": "object", "properties": {"layer_id": {"type": "string"}, "layer_name": {"type": "string"}}, "additionalProperties": False},
+    "set_layer_opacity": {"type": "object", "properties": {"layer_id": {"type": "string"}, "layer_name": {"type": "string"}, "opacity": {"type": "number", "minimum": 0, "maximum": 1}}, "required": ["opacity"], "additionalProperties": False},
+    "enter_lesson_stage": {"type": "object", "properties": {"stage_id": {"type": "string"}, "stage_title": {"type": "string"}, "offset": {"type": "string", "enum": ["next", "previous"]}}, "additionalProperties": False},
+    "run_workflow": {"type": "object", "properties": {"template_id": {"type": "string"}, "description": {"type": "string"}, "parameters": {"type": "object"}}, "additionalProperties": False},
+    "start_class_session": {"type": "object", "properties": {"lesson_id": {"type": "string"}, "lesson_title": {"type": "string"}}, "additionalProperties": False},
+    "end_class_session": {"type": "object", "properties": {}, "additionalProperties": False},
+})
+# Match the existing visual-query endpoint's supported limit.
+ASSISTANT_TOOL_INPUT_SCHEMAS["run_visual_query"]["properties"]["limit"]["maximum"] = 200
+
+for _tool_descriptor in ASSISTANT_TOOL_SCHEMA:
+    _tool_descriptor["input_schema"] = ASSISTANT_TOOL_INPUT_SCHEMAS[_tool_descriptor["name"]]
+
+
 COLOR_MAP = {
     "yellow": "#facc15",
     "黄色": "#facc15",

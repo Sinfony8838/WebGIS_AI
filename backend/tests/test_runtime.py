@@ -122,6 +122,9 @@ class WebGISRuntimeTest(unittest.TestCase):
 
         self.assertIn("gis_workflow", health)
         self.assertEqual(health["gis_workflow"]["engine"], "pyqgis_worker")
+        self.assertTrue(health["ui"]["assistant_v2_enabled"])
+        self.assertEqual(health["ui"]["agent_harness"]["id"], "webgis-teaching-agent")
+        self.assertEqual(health["ui"]["agent_harness"]["version"], "3.0")
         self.assertNotIn("qgis", health)
         self.assertNotIn("pyqgis_workflow", health)
 

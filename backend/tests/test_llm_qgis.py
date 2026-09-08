@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import time
 import unittest
@@ -22,8 +23,10 @@ class _FailingMiniMaxClient:
 class _SuccessMiniMaxClient:
     def __init__(self, payload: str):
         self.payload = payload
+        self.messages = []
 
     def chat_completion(self, messages, temperature=0.2):  # noqa: ANN001, ANN201
+        self.messages = messages
         return self.payload
 
 
@@ -80,7 +83,7 @@ class LlmAndQgisIntegrationTest(unittest.TestCase):
         planner = LLMPlanner(_SuccessMiniMaxClient(payload), self.rule_planner)
         plan = planner.plan_actions("perform batch map operations", self.project, target="webgis")
         self.assertEqual(plan["planner"], "minimax")
-        self.assertEqual(len(plan["actions"]), 12)
+        self.assertEqual(len(plan["actions"]), 8)
 
     def test_llm_unknown_tool_is_blocked_and_fallback_used(self) -> None:
         payload = (
@@ -91,6 +94,42 @@ class LlmAndQgisIntegrationTest(unittest.TestCase):
         plan = planner.plan_actions("执行未知工具", self.project, target="webgis")
         self.assertEqual(plan["planner"], "rule_fallback")
         self.assertEqual(plan["target"], "webgis")
+
+    def test_llm_catalog_defers_rare_tools_until_relevant(self) -> None:
+        client = _SuccessMiniMaxClient(
+            '{"assistant_message":"说明","actions":[{"tool_name":"explain_current_view","tool_params":{"focus":"custom"}}]}'
+        )
+        planner = LLMPlanner(client, self.rule_planner)
+
+        planner.plan_actions("perform a custom map operation", self.project, target="webgis")
+        context = json.loads(client.messages[1]["content"])
+        visible = {item["name"] for item in context["webgis_tools"]}
+
+        self.assertLessEqual(len(visible), 12)
+        self.assertNotIn("generate_image", visible)
+        self.assertNotIn("launch_question", visible)
+        self.assertNotIn("open_material", visible)
+
+    def test_llm_catalog_exposes_active_classroom_tools_for_question_intent(self) -> None:
+        catalog = LLMPlanner._tool_catalog(
+            "记录学情并呈现一道提问题目",
+            {"teaching_context": {"session_id": "session_1", "phase": "in_class"}},
+        )
+        visible = {item["name"] for item in catalog}
+
+        self.assertIn("record_observation", visible)
+        self.assertIn("launch_question", visible)
+
+    def test_llm_cannot_call_deferred_tool_when_not_exposed(self) -> None:
+        payload = (
+            '{"assistant_message":"生成","actions":'
+            '[{"tool_name":"generate_image","tool_params":{"prompt":"secret"}}]}'
+        )
+        planner = LLMPlanner(_SuccessMiniMaxClient(payload), self.rule_planner)
+
+        plan = planner.plan_actions("perform a custom map operation", self.project, target="webgis")
+
+        self.assertEqual(plan["planner"], "rule_fallback")
 
     def test_qgis_bridge_blocks_run_python_code(self) -> None:
         bridge = QgisBridgeClient(self.config)
