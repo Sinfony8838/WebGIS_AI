@@ -2021,9 +2021,21 @@ export default function App({
 
   const handleDatabaseOpenArtifact = useCallback(
     (artifact: ArtifactRecord) => {
-      openArtifactPreview(artifact);
+      if (["uploaded_image", "generated_image", "map_snapshot"].includes(artifact.artifact_type) || artifact.metadata?.kind === "png") {
+        openArtifactPreview(artifact);
+        return;
+      }
+      const publicUrl = typeof artifact.metadata?.public_url === "string" ? artifact.metadata.public_url : "";
+      if (!publicUrl) {
+        pushToast("error", "产物无法打开", artifact.title || artifact.artifact_id);
+        return;
+      }
+      const url = /^https?:\/\//i.test(publicUrl)
+        ? publicUrl
+        : `${getApiBase()}${publicUrl.startsWith("/") ? publicUrl : `/${publicUrl}`}`;
+      window.open(url, "_blank", "noopener,noreferrer");
     },
-    [openArtifactPreview]
+    [openArtifactPreview, pushToast]
   );
 
   const handleDatabaseDownloadArtifact = useCallback((artifact: ArtifactRecord) => {

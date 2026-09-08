@@ -31,7 +31,6 @@ def call(method, path, payload=None, csrf=""):
 
 
 def main() -> int:
-    global PROJECT
     if not PROJECT:
         raise ValueError("WEBGIS_TEST_PROJECT is required")
     target = sys.argv[1] if len(sys.argv) > 1 else "none"
@@ -41,8 +40,6 @@ def main() -> int:
         # Only a deliberately auth-disabled local test service permits this.
         login = call("GET", "/auth/me")
     csrf = login.get("csrf_token", "")
-    if not PROJECT:
-        PROJECT = call("POST", "/projects", {"name": "GIS acceptance test"}, csrf=csrf)["project_id"]
     project = call("GET", f"/projects/{PROJECT}")
     changed = []
     for layer in project.get("layers", []):
