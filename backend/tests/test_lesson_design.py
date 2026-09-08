@@ -92,13 +92,32 @@ class LessonDesignServiceTest(unittest.TestCase):
         client.chat_completion.return_value = '{"section_patch": {}}'
         service.minimax_client = client
         service._ask_minimax(design, "process", "生成课堂过程")
-        self.assertEqual(client.chat_completion.call_args.kwargs["extra_payload"]["max_completion_tokens"], 8192)
+        self.assertEqual(client.chat_completion.call_args.kwargs["extra_payload"]["max_completion_tokens"], 12288)
         self.assertEqual(client.chat_completion.call_args.kwargs["timeout"], 90.0)
         client.chat_completion.side_effect = TimeoutError("sensitive-provider-response")
         with self.assertLogs("backend.app.services.lesson_design", level="WARNING") as captured:
             self.assertIsNone(service._ask_minimax(design, "process", "生成课堂过程"))
         self.assertIn("TimeoutError", " ".join(captured.output))
         self.assertNotIn("sensitive-provider-response", " ".join(captured.output))
+
+    def test_invalid_model_json_is_corrected_once_and_failures_are_bounded(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        client = Mock()
+        service.minimax_client = client
+        client.chat_completion.side_effect = ['{"section_patch":', '{"reply":"修正后的草稿","section_patch":{"board_design":"读图与归因"}}']
+        result = service._ask_minimax(design, "process", "设计课堂过程")
+        self.assertEqual(result["section_patch"]["board_design"], "读图与归因")
+        self.assertEqual(client.chat_completion.call_count, 2)
+        self.assertIn("未通过系统校验", client.chat_completion.call_args.args[0][-1]["content"])
+        client.reset_mock()
+        client.chat_completion.side_effect = ['{"section_patch":[]}', '{"section_patch":[]}']
+        self.assertIsNone(service._ask_minimax(design, "process", "设计课堂过程"))
+        self.assertEqual(client.chat_completion.call_count, 2)
+        client.reset_mock()
+        client.chat_completion.side_effect = TimeoutError("timeout")
+        self.assertIsNone(service._ask_minimax(design, "process", "设计课堂过程"))
+        self.assertEqual(client.chat_completion.call_count, 1)
 
     def test_rules_are_disclosed_in_response_and_history(self) -> None:
         service = self.runtime.classroom.lesson_design

@@ -968,6 +968,9 @@ class LessonDesignService:
             "你是高中地理教案共创助手。默认简体中文，每轮只推进一个步骤，先复述教师意图，再给可修改建议，"
             "回复末尾只提一个推进问题。"
             "只输出 JSON，字段为 reply、section_patch、next_step、source_refs、capability_bindings、suggestions。"
+            'section_patch 必须是以章节名为键的对象，不是 JSON Patch 操作数组，不需要改动的章节请省略，不要填 null。'
+            '格式示例：{"reply":"本轮建议","section_patch":{"stages":[{"stage_id":"s1","title":"环节名","minutes":5,"material":"材料与来源或待补充说明","question_chain":["问题"],"teacher_activities":["教师操作"],"student_activities":["学生任务"],"knowledge_conclusion":"结论","design_intent":"意图","objective_refs":[1],"system_steps":["真实操作"],"scene":{"templates":[],"catalog_layers":[]},"questions":[]}],"board_design":"板书文字"},"next_step":"question_matching","source_refs":[],"capability_bindings":[],"suggestions":[]}。'
+            '当前为教学过程时只输出 stages 和 board_design，保持其他章节不变；每个活动字段简洁具体，避免重复长段落。'
             "不要输出内部轨迹。当前步骤：" + STEP_LABELS.get(step, step) +
             "。九个步骤依次是：需求确认→课标与学情→目标与重难点→核心问题与问题链→教学过程→题目匹配→GIS/AI能力→预演检查→确认发布。"
             "核心章节要求：设计思路100-150字；3-4个可观察教学目标；1个核心问题+2-4个递进子问题；"
@@ -980,21 +983,37 @@ class LessonDesignService:
             "草稿：" + json.dumps(design.draft, ensure_ascii=False)[:12000] +
             "。真实能力目录：" + json.dumps(self.capability_catalog(), ensure_ascii=False)[:8000]
         )
-        try:
-            content = self.minimax_client.chat_completion(
-                [{"role": "system", "content": system}, {"role": "user", "content": message[:6000]}],
-                temperature=0.2, extra_payload={"max_completion_tokens": 8192 if step == "process" else 2400},
-                timeout=90.0 if step == "process" else 45.0,
-            )
-            payload = self._extract_json(content)
-            result = self._validate_model_payload(payload)
-            if result is None:
-                logger.warning("Lesson generation rejected: step=%s reason=invalid_payload", step)
-            return result
-        except Exception as exc:
-            # Provider exception text can contain response bodies or credentials.
-            logger.warning("Lesson generation failed: step=%s error_type=%s", step, type(exc).__name__)
-            return None
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": message[:6000]}]
+        # One bounded correction for model formatting/content errors, never for network failures.
+        for attempt in range(2):
+            try:
+                content = self.minimax_client.chat_completion(
+                    messages, temperature=0.2,
+                    extra_payload={"max_completion_tokens": 12288 if step == "process" else 2400},
+                    timeout=90.0 if step == "process" else 45.0,
+                )
+            except Exception as exc:
+                logger.warning("Lesson generation failed: step=%s error_type=%s", step, type(exc).__name__)
+                return None
+            reason = "invalid_payload"
+            try:
+                payload = self._extract_json(content)
+                result = self._validate_model_payload(payload)
+            except (json.JSONDecodeError, ValueError, TypeError):
+                result, reason = None, "invalid_json"
+            schedule = self._requested_schedule(message) if step == "process" else []
+            if result is not None and schedule and not self._matches_schedule(result["section_patch"].get("stages"), schedule):
+                result, reason = None, "schedule_mismatch"
+            if result is not None:
+                return result
+            logger.warning("Lesson generation rejected: step=%s reason=%s attempt=%s", step, reason, attempt + 1)
+            if attempt == 0:
+                # Regenerate from the original teacher request, without replaying malformed output.
+                correction = "上次输出未通过系统校验。请重新生成完整 JSON 对象：section_patch 是章节字典，不是数组；不改动的字段省略，不填 null。"
+                if schedule:
+                    correction += "必须保留这些环节名称、顺序与分钟数：" + json.dumps(schedule, ensure_ascii=False)
+                messages.append({"role": "user", "content": correction + "只返回简洁的完整结果，不要解释格式错误。"})
+        return None
 
     @staticmethod
     def _requested_schedule(message: str) -> List[Dict[str, Any]]:
@@ -1267,15 +1286,19 @@ class LessonDesignService:
     @staticmethod
     def _validate_model_payload(payload: Any) -> Optional[Dict[str, Any]]:
         if not isinstance(payload, dict):
+            logger.warning("Lesson payload shape: root_type=%s", type(payload).__name__)
             return None
         patch = payload.get("section_patch", {})
         if not isinstance(patch, dict):
+            logger.warning("Lesson payload shape: patch_type=%s", type(patch).__name__)
             return None
         allowed = set(SECTION_KEYS) | {"title", "subject", "grade", "topic", "duration_minutes"}
         normalized_patch = {str(key): copy.deepcopy(value) for key, value in patch.items() if str(key) in allowed}
         try:
             LessonDesignService._normalize_text_lists(copy.deepcopy(normalized_patch))
         except ValueError:
+            core = normalized_patch.get("core_questions")
+            logger.warning("Lesson payload shape: objectives_type=%s sub_questions_type=%s", type(normalized_patch.get("objectives")).__name__, type(core.get("sub_questions") if isinstance(core, dict) else None).__name__)
             return None
         next_step = str(payload.get("next_step") or "")
         source_refs = payload.get("source_refs") if isinstance(payload.get("source_refs"), list) else []
