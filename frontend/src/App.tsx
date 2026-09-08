@@ -138,6 +138,7 @@ import { speak, cancelSpeech } from "./speechSynthesis";
 import { AgentControlOverlay } from "./components/AgentControlOverlay";
 import "./styles.css";
 import "./lesson-workflow.css";
+import { ThemeToggle } from "./theme";
 
 const PROJECT_ID_STORAGE_KEY = "webgis_ai_project_id";
 
@@ -2842,6 +2843,7 @@ export default function App({
           setQuestionBanks([]);
         }
       }
+      if (cancelled) return;
       if (restored) {
         pushToast("success", "课堂项目已恢复", "已加载上次的课堂地图环境。");
       } else {
@@ -2855,7 +2857,7 @@ export default function App({
     return () => {
       cancelled = true;
     };
-  }, [initAttempt, loadKnowledgeBase, pushToast, refreshProjectState, subscribeToJob]);
+  }, [currentUser.user_id, initAttempt, loadKnowledgeBase, pushToast, refreshProjectState]);
 
   useEffect(() => {
     if (!mapRef.current || !layerState?.base_map) {
@@ -3411,6 +3413,7 @@ export default function App({
       <header className="app-header glass-panel">
         <div className="brand-block">
           <BrandLogo className="brand-logo" />
+          <ThemeToggle />
           <div className="brand-title">
             <strong>GeoBot<span className="brand-platform-name"> 智能教学平台</span></strong>
             <span
@@ -3422,10 +3425,11 @@ export default function App({
         </div>
 
         <div className="header-search">
-          <span className="header-search-label">POI 检索</span>
+          <label className="header-search-label" htmlFor="poi-keyword">POI 检索</label>
           <div className="header-search-row">
             <input
               id="poi-keyword"
+              aria-label="POI 检索关键词"
               value={searchKeyword}
               onChange={(event) => setSearchKeyword(event.target.value)}
               onKeyDown={(event) => {
