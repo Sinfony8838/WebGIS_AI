@@ -728,12 +728,12 @@ class WebGISRuntime:
 
     @staticmethod
     def _project_payload(project: ProjectRecord) -> Dict[str, Any]:
-        payload = project.to_dict()
+        from dataclasses import asdict, replace
+
         # Layer GeoJSON is served by /layers; omitting it here keeps the
-        # project payload small (layers can hold multi-MB collections).
-        for layer in payload.get("layers", []):
-            layer["data"] = {}
-        return payload
+        # project payload small. Exclude it before asdict to avoid copying
+        # multi-MB coordinate arrays only to discard them immediately.
+        return asdict(replace(project, layers=[replace(layer, data={}) for layer in project.layers]))
 
     def list_projects(self, owner_user_id: str = "", include_all: bool = False) -> Dict[str, Any]:
         projects = sorted(self.store.projects.values(), key=lambda project: project.updated_at, reverse=True)
@@ -1293,7 +1293,7 @@ class WebGISRuntime:
             name=f"{layer_name}（{len(existing) + 1}）" if existing else layer_name,
             kind="vector",
             source="output_artifact",
-            geometry_type="Polygon",
+            geometry_type=self.dataset_service._infer_geometry_type(data.get("features", [])),
             data=data,
             style={"fillColor": "#60a5fa", "strokeColor": "#1d4ed8"},
             metadata={
@@ -1338,8 +1338,9 @@ class WebGISRuntime:
         if kind_guess in {"image", "video", "animation", "document", "link"}:
             material_type = kind_guess
         collection_title = "检索收藏"
-        existing_items = self.knowledge_base_service.get_manifest(include_all=True).get("items") or []
-        target = next((item for item in existing_items if str(item.get("title") or "") == collection_title), None)
+        existing_items = self.knowledge_base_service.get_manifest(owner_user_id=owner_user_id).get("items") or []
+        target = next((item for item in existing_items if str(item.get("title") or "") == collection_title
+                       and str(item.get("owner_user_id") or "") == owner_user_id), None)
         if target is not None:
             # 同一 URL 已保存过则直接复用，避免重复素材。
             seen_urls = {
@@ -1354,13 +1355,14 @@ class WebGISRuntime:
         if target is None:
             saved_item = self.knowledge_base_service.upsert_item(
                 {
+                    "id": f"resource_collection_{uuid4().hex}",
                     "title": collection_title,
                     "topic": "resource_collection",
                     "summary": "从资源检索保存的外部资料合集。",
                     "owner_user_id": owner_user_id,
                 },
                 owner_user_id=owner_user_id,
-                include_all=True,
+                include_all=False,
             )
             kb_item_id = str(saved_item.get("id") or "")
         else:
@@ -1369,12 +1371,12 @@ class WebGISRuntime:
             kb_item_id=kb_item_id,
             url=url,
             title=title,
-            description=summary or f"来源：{source_label}" if source_label else "",
+            description=summary or (f"来源：{source_label}" if source_label else ""),
             material_type=material_type,
             thumbnail_url=str(payload.get("thumbnail_url") or ""),
             region_binding=None,
             owner_user_id=owner_user_id,
-            include_all=True,
+            include_all=False,
         )
         return {"status": "success", "kb_item_id": kb_item_id, "material": linked.get("material") or linked}
 

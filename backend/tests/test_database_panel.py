@@ -121,6 +121,7 @@ class DatabasePanelBackendTest(unittest.TestCase):
         result = runtime.load_output_as_layer(project_id, artifact_id)
         layer = result["item"]
         self.assertEqual(layer["source"], "output_artifact")
+        self.assertEqual(layer["geometry_type"], "Point")
         project = runtime._require_project(project_id)
         self.assertTrue(any(item.layer_id == layer["layer_id"] for item in project.layers))
 
@@ -178,6 +179,16 @@ class DatabasePanelBackendTest(unittest.TestCase):
         runtime, _store, project_id = self.build_runtime()
         with self.assertRaises(ValueError):
             runtime.save_resource_result(project_id, {"title": "无链接"}, owner_user_id="local_admin")
+
+    def test_saved_resources_are_isolated_by_owner_and_keep_summary(self) -> None:
+        runtime, _store, project_id = self.build_runtime()
+        first = runtime.save_resource_result(project_id, {"url": "https://example.org/a", "summary": "摘要"}, owner_user_id="teacher-a")
+        second = runtime.save_resource_result(project_id, {"url": "https://example.org/a"}, owner_user_id="teacher-b")
+        self.assertNotEqual(first["kb_item_id"], second["kb_item_id"])
+        items = runtime.knowledge_base_service.get_manifest(owner_user_id="teacher-a")["items"]
+        owned = [item for item in items if item.get("owner_user_id")]
+        self.assertEqual([item["id"] for item in owned], [first["kb_item_id"]])
+        self.assertEqual(owned[0]["materials"][0]["description"], "摘要")
 
 
 if __name__ == "__main__":

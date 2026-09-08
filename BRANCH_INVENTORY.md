@@ -1,5 +1,7 @@
 # 分支与未提交内容梳理（2026-09-08）
 
+> 下文保留最初盘点时点的状态。zcode 已结束并推送至 `bb3d14b`；后续集成状态和验证结果以 [INTEGRATION_REVIEW.md](INTEGRATION_REVIEW.md) 为准。
+
 基线：`origin/main = a0491a1c1b029617b1f9161e9ee00446f415f2bb`。
 本次整理分支：`codex/branch-inventory`，从该基线创建独立 worktree。
 目标是保存尚未发布的代码、识别重复历史和集成风险，不把所有旧分支直接合入 main。

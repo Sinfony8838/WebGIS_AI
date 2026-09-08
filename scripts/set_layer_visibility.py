@@ -1,6 +1,7 @@
 """Set exactly one project layer visible (or none), hiding all others.
 
-Usage: python set_layer_visibility.py <dataset_id|none> [project_id]
+Usage: python set_layer_visibility.py <dataset_id|none>
+WEBGIS_TEST_PROJECT is required; this script changes visibility in that project.
 Set WEBGIS_TEST_BASE, WEBGIS_TEST_EMAIL, WEBGIS_TEST_PASSWORD and WEBGIS_TEST_PROJECT.
 """
 import os
@@ -30,9 +31,18 @@ def call(method, path, payload=None, csrf=""):
 
 
 def main() -> int:
+    global PROJECT
+    if not PROJECT:
+        raise ValueError("WEBGIS_TEST_PROJECT is required")
     target = sys.argv[1] if len(sys.argv) > 1 else "none"
-    login = call("POST", "/auth/login", {"email": EMAIL, "password": PASSWORD})
-    csrf = login["csrf_token"]
+    if EMAIL and PASSWORD:
+        login = call("POST", "/auth/login", {"email": EMAIL, "password": PASSWORD})
+    else:
+        # Only a deliberately auth-disabled local test service permits this.
+        login = call("GET", "/auth/me")
+    csrf = login.get("csrf_token", "")
+    if not PROJECT:
+        PROJECT = call("POST", "/projects", {"name": "GIS acceptance test"}, csrf=csrf)["project_id"]
     project = call("GET", f"/projects/{PROJECT}")
     changed = []
     for layer in project.get("layers", []):

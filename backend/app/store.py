@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import threading
 import time
 from contextlib import contextmanager
@@ -89,13 +90,23 @@ class RuntimeStore:
                     features_file = layer_data.get("features_file") if layer_data else None
                     if not features_file:
                         continue
-                    features_path = layer_data_dir / str(features_file)
+                    # References are filenames written by this store, never
+                    # arbitrary paths from a restored state file.
+                    filename = str(features_file)
+                    if "/" in filename or "\\" in filename or ":" in filename or filename in {".", ".."}:
+                        continue
+                    features_path = layer_data_dir / filename
+                    if features_path.resolve().parent != layer_data_dir.resolve():
+                        continue
                     if features_path.exists():
                         try:
                             hydrated = json.loads(features_path.read_text(encoding="utf-8"))
+                            if not isinstance(hydrated, dict) or not isinstance(hydrated.get("features"), list):
+                                continue
                             layer_data.pop("features_file", None)
                             layer_data["type"] = hydrated.get("type", layer_data.get("type"))
                             layer_data["features"] = hydrated.get("features", [])
+                            self._layer_data_files[(project_id, layer.layer_id, layer.data_rev)] = filename
                         except (OSError, json.JSONDecodeError):
                             continue
                 project = ProjectRecord(**data)
@@ -266,8 +277,15 @@ class RuntimeStore:
                     safe_layer = "".join(
                         ch for ch in str(layer.get("layer_id") or "layer") if ch.isalnum() or ch in "-_"
                     ) or "layer"
-                    filename = f"{safe_layer}_{rev}_{abs(hash(serialized)) % 10**10:x}.json"
-                    (layer_data_dir / filename).write_text(serialized, encoding="utf-8")
+                    digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+                    filename = f"{safe_layer}_{rev}_{digest}.json"
+                    target = layer_data_dir / filename
+                    temporary = target.with_suffix(f".{uuid4().hex}.tmp")
+                    try:
+                        temporary.write_text(serialized, encoding="utf-8")
+                        temporary.replace(target)
+                    finally:
+                        temporary.unlink(missing_ok=True)
                     cached = filename
                     self._layer_data_files[key] = filename
                 # Mutate the serialized copy only — the live record keeps the
@@ -554,6 +572,10 @@ class RuntimeStore:
             for index, layer in enumerate(project.layers):
                 if layer.layer_id == layer_id:
                     removed = project.layers.pop(index)
+                    self._layer_data_files = {
+                        key: value for key, value in self._layer_data_files.items()
+                        if key[:2] != (project_id, layer_id)
+                    }
                     if project.active_layer_id == layer_id:
                         project.active_layer_id = project.layers[-1].layer_id if project.layers else ""
                     project.updated_at = utc_now()

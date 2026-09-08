@@ -155,8 +155,8 @@ def execute(params: Dict[str, Any], workspace: Workspace) -> Dict[str, Any]:
         "method": method,
         "classes": [
             {
-                "min": entry["min"],
-                "max": entry["max"],
+                "min": entry["class_id"],
+                "max": entry["class_id"],
                 "color": palette[index],
                 "label": entry["label"],
             }
@@ -165,6 +165,11 @@ def execute(params: Dict[str, Any], workspace: Workspace) -> Dict[str, Any]:
         "stroke": {"color": "#5b5b5b", "width": 0.6},
         "default": {"color": "#cccccc"},
         "title": f"字段分级 · {field}",
+        "legend": {
+            "title": f"字段分级 · {field}",
+            "items": [{"label": entry["label"], "color": palette[index]}
+                      for index, entry in enumerate(classes_applied)],
+        },
     }
     style_path = workspace.alloc_output_path("classify_style", ".json")
     style_path.write_text(json.dumps(style_payload, ensure_ascii=False, indent=2), encoding="utf-8")

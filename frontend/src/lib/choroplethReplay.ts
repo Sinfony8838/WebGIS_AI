@@ -10,7 +10,7 @@
  * `restoreStyle` so the dock's own style function is put back when the
  * replay finishes, is skipped, or is cancelled.
  */
-import { Fill, Stroke, Style } from "ol/style";
+import { Circle, Fill, Stroke, Style } from "ol/style";
 import type { FeatureLike } from "ol/Feature";
 import type VectorLayer from "ol/layer/Vector";
 
@@ -249,6 +249,7 @@ export function startChoroplethReplay(options: {
       ? replayColorAt(baseColor, entry, elapsed, plan.fadeDuration)
       : baseColor;
     return new Style({
+      image: new Circle({ radius: 5.5, fill: new Fill({ color }), stroke: new Stroke({ color: strokeColor, width: strokeWidth }) }),
       fill: new Fill({ color }),
       stroke: new Stroke({ color: strokeColor, width: strokeWidth })
     });

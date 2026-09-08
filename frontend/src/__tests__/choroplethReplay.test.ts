@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import Feature from "ol/Feature";
+import Point from "ol/geom/Point";
+import VectorLayer from "ol/layer/Vector";
+import { Style } from "ol/style";
 
 import {
   buildReplayPlan,
@@ -7,6 +11,7 @@ import {
   replayColorAt,
   DEFAULT_REPLAY_TIMING
 } from "../lib/choroplethReplay";
+import { startChoroplethReplay } from "../lib/choroplethReplay";
 import type { GraduatedStyle } from "../types";
 
 const STYLE: GraduatedStyle = {
@@ -26,6 +31,23 @@ const TIMING = {
   featureStagger: 10,
   fadeDuration: 40
 };
+
+it("keeps point results visible throughout replay and restores the final style", () => {
+  vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
+  vi.stubGlobal("cancelAnimationFrame", vi.fn());
+  try {
+    const layer = new VectorLayer();
+    const feature = new Feature({ geometry: new Point([104, 35]), density: 150 });
+    const restore = () => new Style();
+    const replay = startChoroplethReplay({ layer, style: STYLE, features: [feature], restoreStyle: restore });
+    const rendered = layer.getStyleFunction()!(feature, 1) as Style;
+    expect(rendered.getImage()).toBeTruthy();
+    replay.cancel();
+    expect(layer.getStyle()).toBe(restore);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
 
 describe("classIndexFor", () => {
   it("matches the first class containing the value (inclusive bounds)", () => {

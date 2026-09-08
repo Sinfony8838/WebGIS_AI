@@ -32,8 +32,15 @@ def call(method: str, path: str, payload: dict | None = None, csrf: str = ""):
 
 def main() -> int:
     t0 = time.perf_counter()
-    login = call("POST", "/auth/login", {"email": EMAIL, "password": PASSWORD})
-    csrf = login["csrf_token"]
+    global PROJECT
+    if EMAIL and PASSWORD:
+        login = call("POST", "/auth/login", {"email": EMAIL, "password": PASSWORD})
+    else:
+        # Only a deliberately auth-disabled local test service permits this.
+        login = call("GET", "/auth/me")
+    csrf = login.get("csrf_token", "")
+    if not PROJECT:
+        PROJECT = call("POST", "/projects", {"name": "GIS acceptance test"}, csrf=csrf)["project_id"]
     print("login ok")
 
     submit = call(
@@ -69,7 +76,7 @@ def main() -> int:
             key = f"{step.get('id')}:{step.get('status')}"
             if key not in seen_steps:
                 seen_steps.add(key)
-                detail = step.get("error") or ""
+                detail = str(step.get("error") or "")
                 print(f"[{time.perf_counter() - t0:7.2f}s] step {step.get('id')} ({step.get('title', '')}) -> {step.get('status')} {detail[:80]}")
         for artifact in record.get("artifacts", []):
             if artifact.get("artifact_id") not in seen_artifacts:

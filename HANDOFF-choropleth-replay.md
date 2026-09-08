@@ -1,5 +1,7 @@
 # 交接文档 — claude/choropleth-replay(QA 轮 + 优化轮)
 
+> 历史交接记录。`bb3d14b` 已确认推送；后续延迟归因、补验和剩余边界见 [INTEGRATION_REVIEW.md](INTEGRATION_REVIEW.md)。下文“store 已排除”“项目响应内联 features”等判断已由后续源码和实测修正。
+
 交接下来处理的 agent(Codex)。本文档总结了 2026-09-07/08 两轮工作:实机测试结果、已落地的修复、以及**未解决/未覆盖**的清单。
 
 ## 分支状态

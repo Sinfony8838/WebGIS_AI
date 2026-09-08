@@ -105,5 +105,35 @@ class ChoroplethBackwardsCompatTests(unittest.TestCase):
         self.assertIs(choropleth._format_label, _classification.format_label)
 
 
+class ClassifyStyleTests(unittest.TestCase):
+    def test_style_uses_class_ids_and_keeps_original_range_labels(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        from backend.app.services.pyqgis_worker.handlers import classify
+
+        with tempfile.TemporaryDirectory() as root:
+            output = Path(root) / "style.json"
+            workspace = mock.Mock()
+            workspace.resolve_reference.return_value = {"input": "layer", "field": "population", "classes": 2, "method": "equal_interval"}
+            workspace.alloc_output_path.return_value = output
+            workspace.relative.return_value = "outputs/style.json"
+            layer = mock.Mock()
+            layer.fields.return_value = []
+            layer.getFeatures.return_value = [mock.Mock(attribute=mock.Mock(return_value=value)) for value in [1000, 3000, 5000]]
+            processing = mock.Mock()
+            processing.run.return_value = {"OUTPUT": layer}
+            with mock.patch.dict("sys.modules", {"processing": processing}), \
+                 mock.patch.object(classify._common, "require_layer", return_value=layer), \
+                 mock.patch.object(classify._common, "ensure_field_exists"), \
+                 mock.patch.object(classify._common, "make_layer_alias", return_value="classified"):
+                classify.execute({}, workspace)
+            style = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(style["field"], "population_class")
+            self.assertEqual([(c["min"], c["max"]) for c in style["classes"]], [(0, 0), (1, 1)])
+            self.assertEqual(style["legend"]["items"][0]["label"], "1e+03 - 3e+03")
+
+
 if __name__ == "__main__":
     unittest.main()

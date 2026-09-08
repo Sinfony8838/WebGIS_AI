@@ -336,6 +336,7 @@ GIS 工作流：
 
 ```powershell
 # Windows 本机约定的 Python 3.12 路径；其他环境请替换为已安装项目依赖的解释器。
+& "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe" -m pip install -r requirements-test.txt
 & "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe" -m pytest backend/tests -q
 ```
 
@@ -356,6 +357,8 @@ npm test -- src/__tests__/voiceStream.test.ts src/__tests__/CopilotWidget.test.t
 这些回归使用模拟的麦克风、WebSocket、SSE 和识别器验证异常时序，不代表真实麦克风、ASR 模型或 PyQGIS 已完成端到端验收。真实语音验证还需检查授权期间断线、手动停止返回尾句，以及停止后麦克风是否释放。
 
 ## 当前边界
+
+分支集成与本轮实测见 [INTEGRATION_REVIEW.md](INTEGRATION_REVIEW.md)。GIS 验收脚本使用 `WEBGIS_TEST_BASE` 指定测试后端，`WEBGIS_TEST_PROJECT` 指定测试项目；矩阵和计时脚本未指定项目时会创建新测试项目。认证服务需要通过进程环境提供 `WEBGIS_TEST_EMAIL`、`WEBGIS_TEST_PASSWORD`，不要把账号密码写入脚本。无账号模式仅适用于显式关闭认证的本地隔离验收服务。`set_layer_visibility.py` 必须指定测试项目，会修改该项目所有图层的可见性。
 
 - 图片覆盖层和课本地图依赖人工配准，`bounds` 不准时不应作为课堂证据主图层。
 - POI、天气、大模型和视觉读图均依赖外部 Key；未配置时系统会降级或提示不可用。

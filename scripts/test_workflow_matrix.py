@@ -34,25 +34,28 @@ jar = http.cookiejar.CookieJar()
 opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
 
-def call(method: str, path: str, payload=None, csrf: str = "", timeout: int = 30):
+def call(method: str, path: str, payload=None, csrf: str = "", timeout: int = 30, raw: bool = False):
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
     req = urllib.request.Request(f"{BASE}{path}", data=data, method=method)
     req.add_header("Content-Type", "application/json")
     if csrf:
         req.add_header("X-WebGIS-CSRF", csrf)
     with opener.open(req, timeout=timeout) as resp:
-        body = resp.read().decode("utf-8")
+        body = resp.read()
+    if raw:
+        return body
+    body = body.decode("utf-8")
     return json.loads(body) if body.strip() else {}
 
 
-def artifact_summary(wf_id: str, artifacts: list) -> dict:
+def artifact_summary(wf_id: str, artifacts: list) -> list:
     summary = []
     for artifact in artifacts:
         kind = artifact.get("kind")
         entry = {"kind": kind, "title": artifact.get("title")}
         url = artifact.get("public_url", "")
         try:
-            payload = call("GET", url if url.startswith("/") else f"/{url}", timeout=20)
+            payload = call("GET", url if url.startswith("/") else f"/{url}", timeout=20, raw=kind in {"png", "summary"})
             if kind == "geojson":
                 feats = payload.get("features", [])
                 entry["features"] = len(feats)
@@ -64,7 +67,11 @@ def artifact_summary(wf_id: str, artifacts: list) -> dict:
             elif kind == "stats":
                 entry["rows"] = payload.get("all_rows_count", len(payload.get("rows", [])))
             elif kind == "png":
-                entry["bytes"] = len(json.dumps(payload))  # placeholder, replaced below
+                if not payload.startswith(b"\x89PNG\r\n\x1a\n"):
+                    raise ValueError("invalid PNG signature")
+                entry["bytes"] = len(payload)
+            elif kind == "summary":
+                entry["characters"] = len(payload.decode("utf-8"))
         except Exception as exc:
             entry["error"] = str(exc)[:80]
         summary.append(entry)
@@ -118,14 +125,21 @@ def parse_ts(value):
 
 
 def main() -> int:
-    login = call("POST", "/auth/login", {"email": EMAIL, "password": PASSWORD})
-    csrf = login["csrf_token"]
+    global PROJECT
+    if EMAIL and PASSWORD:
+        login = call("POST", "/auth/login", {"email": EMAIL, "password": PASSWORD})
+    else:
+        # Only a deliberately auth-disabled local test service permits this.
+        login = call("GET", "/auth/me")
+    csrf = login.get("csrf_token", "")
+    if not PROJECT:
+        PROJECT = call("POST", "/projects", {"name": "GIS acceptance test"}, csrf=csrf)["project_id"]
     results = []
     for case in CASES:
         outcome = run_case(case, csrf)
         results.append(outcome)
         print(json.dumps(outcome, ensure_ascii=False), flush=True)
-    fails = [r for r in results if r["result"] != "success"]
+    fails = [r for r in results if r["result"] != "success" or any(a.get("error") for a in r.get("artifacts", []))]
     print(f"\n== {len(results) - len(fails)}/{len(results)} templates succeeded ==", file=sys.stderr)
     return 1 if fails else 0
 

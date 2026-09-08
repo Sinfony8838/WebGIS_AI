@@ -358,7 +358,7 @@ export function WorkflowDock({
       setReplayRunning(true);
       setReplayDone(false);
       setReplayPhase(null);
-      replayRef.current = startChoroplethReplay({
+      const replay = startChoroplethReplay({
         layer,
         style,
         features,
@@ -371,6 +371,9 @@ export function WorkflowDock({
           setReplayDone(true);
         }
       });
+      // Reduced motion completes synchronously; do not retain a finished
+      // handle that would prevent subsequent style updates and replays.
+      replayRef.current = replay.duration > 0 ? replay : null;
     },
     [mapRef]
   );
@@ -406,7 +409,7 @@ export function WorkflowDock({
         .then((res) => (res.ok ? res.json() : null))
         .then((payload) => {
           if (!cancelled && payload && typeof payload === "object" && (payload.type === "graduated" || payload.type === "simple")) {
-            setStyleObj(payload as GraduatedStyle);
+            setStyleObj(payload as WorkflowLayerStyle);
           }
         })
         .catch(() => undefined);
