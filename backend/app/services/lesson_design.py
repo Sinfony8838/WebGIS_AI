@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -19,6 +20,9 @@ from .lessons import LessonService
 from .minimax_client import MiniMaxClient
 from .population_lesson_prep import ALLOWED_GLOBE_THEME_IDS
 from .question_bank import QuestionBankService
+
+
+logger = logging.getLogger(__name__)
 
 
 STEP_KEYS = (
@@ -271,7 +275,17 @@ class LessonDesignService:
                 "auto_bound_questions": [],
                 "active_design_question": self._active_design_question(design),
             }
-        result = self._ask_minimax(design, current_step, message) or self._fallback_turn(design, current_step, message)
+        schedule = self._requested_schedule(message) if current_step == "process" else []
+        result = self._ask_minimax(design, current_step, message)
+        generation_mode = "model" if result is not None else "rules"
+        if current_step == "process" and schedule:
+            stages = (result or {}).get("section_patch", {}).get("stages")
+            if not self._matches_schedule(stages, schedule):
+                logger.warning("Lesson generation rejected: step=process reason=%s", "schedule_mismatch" if result else "model_unavailable")
+                # Never replace an explicit teacher plan with the generic three-stage template.
+                raise ValueError("本次生成未能按你指定的环节和时长完成，原草稿已保留。请重试，或在教学过程里直接编辑。")
+        if result is None:
+            result = self._fallback_turn(design, current_step, message)
         if current_step == "requirements":
             result = self._normalize_requirements_result(result, message, design.draft)
         patch = result.get("section_patch") if isinstance(result, dict) else {}
@@ -297,10 +311,6 @@ class LessonDesignService:
             design.current_step = next_step
             design.pending_next_step = ""
         design.revision += 1
-        design.turns.append({
-            "revision": design.revision, "step": current_step, "message": message,
-            "reply": str(result.get("reply") or ""), "section_patch": copy.deepcopy(patch),
-        })
         retrieval_mode, retrieved_refs = self._retrieve(message, design.owner_user_id)
         design.source_refs = self._merge_refs(design.source_refs, result.get("source_refs"))
         design.source_refs = self._merge_refs(design.source_refs, retrieved_refs)
@@ -313,10 +323,32 @@ class LessonDesignService:
         auto_bound: List[Dict[str, Any]] = []
         if current_step == "question_matching":
             retrieval_candidates, auto_bound = self._auto_bind_questions(design)
+        rehearsal_report = None
+        if current_step in {"rehearsal", "confirmation"}:
+            rehearsal_report = self.validate_plan(design.draft, design.source_refs)
+            unconfirmed = [SECTION_LABELS.get(key, key) for key in REQUIRED_SECTIONS
+                           if design.section_status.get(key) != "confirmed"]
+            if rehearsal_report["errors"]:
+                reply = "预演检查未通过：" + "；".join(rehearsal_report["errors"])
+            else:
+                reply = "教案结构检查通过。"
+            if unconfirmed:
+                reply += " 尚待确认：" + "、".join(unconfirmed) + "。"
+            reply += " 当前尚未发布为课时草稿，也未生成 Word。"
+            if rehearsal_report["warnings"]:
+                reply += " 提醒：" + "；".join(rehearsal_report["warnings"])
+            result["reply"] = reply
+        if generation_mode == "rules":
+            result["reply"] = "本轮 AI 未返回有效内容，以下为规则草稿与系统检查结果，需逐项核对。" + str(result.get("reply") or "")
+        design.turns.append({
+            "revision": design.revision, "step": current_step, "message": message,
+            "reply": str(result.get("reply") or ""), "section_patch": copy.deepcopy(patch),
+            "generation_mode": generation_mode,
+        })
         self.store.upsert_lesson_design(design)
-        rehearsal_report = self.rehearse(design_id) if current_step == "rehearsal" else None
         return {
             "status": "success", "assistant_message": str(result.get("reply") or self._natural_prompt(next_step)),
+            "generation_mode": generation_mode,
             "next_step": design.current_step, "step_label": STEP_LABELS.get(design.current_step, design.current_step),
             "draft": copy.deepcopy(design.draft), "section_status": copy.deepcopy(design.section_status),
             "source_refs": copy.deepcopy(design.source_refs), "capability_bindings": copy.deepcopy(design.capability_bindings),
@@ -942,6 +974,8 @@ class LessonDesignService:
             "每环节包含 material/question_chain/teacher_activities/student_activities/knowledge_conclusion/"
             "design_intent/minutes/system_steps/objective_refs（1-based目标序号）；板书设计；基础作业+探究作业；预设教学反思。"
             'objectives 必须是字符串数组；core_questions 必须为 {"core":"核心问题文字","sub_questions":["子问题文字"]}，不要把条目写成对象。'
+            "教师明确指定的教学环节名称、顺序和每环节分钟数是硬约束，必须逐一原样保留，不能合并或改成通用模板。"
+            "你的回复只说明本轮草稿修改，不得声称已发布、已生成文件、预演通过或全部步骤完成；这些状态由系统核验。"
             "题目匹配只能引用题库检索给出的题目，不得编造题目内容。"
             "草稿：" + json.dumps(design.draft, ensure_ascii=False)[:12000] +
             "。真实能力目录：" + json.dumps(self.capability_catalog(), ensure_ascii=False)[:8000]
@@ -949,12 +983,45 @@ class LessonDesignService:
         try:
             content = self.minimax_client.chat_completion(
                 [{"role": "system", "content": system}, {"role": "user", "content": message[:6000]}],
-                temperature=0.2, extra_payload={"max_completion_tokens": 2400},
+                temperature=0.2, extra_payload={"max_completion_tokens": 8192 if step == "process" else 2400},
+                timeout=90.0 if step == "process" else 45.0,
             )
             payload = self._extract_json(content)
-            return self._validate_model_payload(payload)
-        except Exception:
+            result = self._validate_model_payload(payload)
+            if result is None:
+                logger.warning("Lesson generation rejected: step=%s reason=invalid_payload", step)
+            return result
+        except Exception as exc:
+            # Provider exception text can contain response bodies or credentials.
+            logger.warning("Lesson generation failed: step=%s error_type=%s", step, type(exc).__name__)
             return None
+
+    @staticmethod
+    def _requested_schedule(message: str) -> List[Dict[str, Any]]:
+        """Read explicit named time slots; do not interpret the lesson's total as a stage."""
+        content = re.split(r"环节安排(?:为|是)?[：:\s]*", message, maxsplit=1)[-1]
+        slots = []
+        for part in re.split(r"[、，,；;。\n]", content):
+            match = re.fullmatch(r"\s*(.+?)\s*(\d+)\s*分钟\s*", part)
+            if not match:
+                continue
+            title = re.sub(r"^\s*(?:\d+[.．、)]|第[一二三四五六七八九十\d]+环节[：:]?)\s*", "", match[1]).strip()
+            if not title or any(word in title for word in ("课时", "总计", "总共", "教案", "设计", "合计")):
+                continue
+            slots.append({"title": title, "minutes": int(match[2])})
+        return slots if len(slots) >= 2 else []
+
+    @staticmethod
+    def _matches_schedule(stages: Any, schedule: List[Dict[str, Any]]) -> bool:
+        if not isinstance(stages, list) or len(stages) != len(schedule):
+            return False
+        for stage, slot in zip(stages, schedule):
+            if not isinstance(stage, dict) or str(stage.get("title") or "").strip() != slot["title"]:
+                return False
+            # Numeric strings from a model are tolerated; fractional and boolean values are not.
+            if str(stage.get("minutes")) != str(slot["minutes"]):
+                return False
+        return True
 
     def _fallback_turn(self, design: LessonDesignRecord, step: str, message: str) -> Dict[str, Any]:
         draft, clean = design.draft, message.strip()

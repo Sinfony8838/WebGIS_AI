@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -59,6 +60,71 @@ class LessonDesignServiceTest(unittest.TestCase):
         self.assertEqual(draft["objectives"], ["描述分布"])
         self.assertEqual(draft["core_questions"]["sub_questions"], ["人口在哪里？"])
         self.assertIsNone(service._validate_model_payload({"section_patch": {"objectives": [{"id": 1}]}}))
+
+    def test_explicit_schedule_is_not_silently_replaced_on_model_failure(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        stored = self.store.get_lesson_design(design.design_id)
+        stored.draft["stages"] = [{"title": "已有课堂活动", "minutes": 40}]
+        self.store.upsert_lesson_design(stored)
+        message = "请生成40分钟教学过程。环节安排为世界人口分布读图5分钟、总量与密度辨析8分钟、胡焕庸线及成因探究15分钟、上海迁移应用8分钟、总结评价4分钟。"
+        schedule = service._requested_schedule(message)
+        self.assertEqual([s["minutes"] for s in schedule], [5, 8, 15, 8, 4])
+        bad_results = [None, {"section_patch": {"stages": service._make_stages("人口分布", 40)}},
+                       {"section_patch": {"stages": [{**item, "minutes": 8} for item in schedule]}}]
+        for result in bad_results:
+            with self.subTest(result=result), patch.object(service, "_ask_minimax", return_value=result):
+                with self.assertRaisesRegex(ValueError, "原草稿已保留"):
+                    service.turn(design.design_id, message, 0, "process")
+                unchanged = service.get(design.design_id)
+                self.assertEqual(unchanged.revision, 0)
+                self.assertEqual(unchanged.turns, [])
+                self.assertEqual(unchanged.draft["stages"], [{"title": "已有课堂活动", "minutes": 40}])
+        with patch.object(service, "_ask_minimax", return_value={"section_patch": {"stages": schedule}, "reply": "已按五个环节起草"}):
+            result = service.turn(design.design_id, message, 0, "process")
+        self.assertEqual(result["draft"]["stages"], schedule)
+        self.assertEqual(result["generation_mode"], "model")
+
+    def test_process_generation_has_headroom_and_diagnostics_do_not_log_response_secrets(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        client = Mock()
+        client.chat_completion.return_value = '{"section_patch": {}}'
+        service.minimax_client = client
+        service._ask_minimax(design, "process", "生成课堂过程")
+        self.assertEqual(client.chat_completion.call_args.kwargs["extra_payload"]["max_completion_tokens"], 8192)
+        self.assertEqual(client.chat_completion.call_args.kwargs["timeout"], 90.0)
+        client.chat_completion.side_effect = TimeoutError("sensitive-provider-response")
+        with self.assertLogs("backend.app.services.lesson_design", level="WARNING") as captured:
+            self.assertIsNone(service._ask_minimax(design, "process", "生成课堂过程"))
+        self.assertIn("TimeoutError", " ".join(captured.output))
+        self.assertNotIn("sensitive-provider-response", " ".join(captured.output))
+
+    def test_rules_are_disclosed_in_response_and_history(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        result = service.turn(design.design_id, "高一40分钟《人口分布》", 0)
+        self.assertEqual(result["generation_mode"], "rules")
+        self.assertIn("规则草稿", result["assistant_message"])
+        self.assertEqual(service.get(design.design_id).turns[-1]["reply"], result["assistant_message"])
+
+    def test_confirmation_uses_actual_post_patch_validation_not_model_claim(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        fake = {"reply": "全部9步完成，已发布并生成Word，资料全部来自题库检索", "section_patch": {"objectives": ["解释上海人口分布"]}}
+        for step in ("confirmation", "rehearsal"):
+            with self.subTest(step=step), patch.object(service, "_ask_minimax", return_value=fake):
+                result = service.turn(design.design_id, "请检查当前草稿", service.get(design.design_id).revision, step)
+            self.assertFalse(result["rehearsal_report"]["ready"])
+            self.assertIn("预演检查未通过", result["assistant_message"])
+            self.assertIn("尚未发布", result["assistant_message"])
+            self.assertNotIn("全部9步完成", result["assistant_message"])
+            self.assertNotIn("全部来自题库", result["assistant_message"])
+            self.assertNotIn("至少需要一个可观察的教学目标。", result["rehearsal_report"]["errors"])
+            saved = service.get(design.design_id)
+            self.assertEqual(saved.turns[-1]["reply"], result["assistant_message"])
+            self.assertEqual(saved.status, "active")
+            self.assertFalse(saved.final_lesson_id)
 
     def advance(self, design_id: str, message: str, revision: int) -> tuple[dict, int]:
         current = self.store.get_lesson_design(design_id).current_step
