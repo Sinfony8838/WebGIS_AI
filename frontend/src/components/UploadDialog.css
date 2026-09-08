@@ -1,0 +1,35 @@
+/* Scoped styles for the UploadDialog import feedback blocks.
+   Class names are prefixed `upload-dialog-` to avoid clashing with the
+   global dialog styles, which this component must not touch. */
+
+.upload-dialog-feedback {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.upload-dialog-feedback strong {
+  font-size: 13px;
+}
+
+.upload-dialog-feedback--error {
+  background: rgba(220, 68, 55, 0.12);
+  border: 1px solid rgba(220, 68, 55, 0.45);
+  color: #b3261e;
+}
+
+.upload-dialog-feedback--success {
+  background: rgba(46, 125, 50, 0.1);
+  border: 1px solid rgba(46, 125, 50, 0.4);
+  color: #1c5e20;
+}
+
+.upload-dialog-warning {
+  color: #9a6700;
+}
