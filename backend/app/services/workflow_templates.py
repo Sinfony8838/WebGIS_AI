@@ -232,10 +232,30 @@ def _template_facility_buffer(message: str, params: Dict[str, Any]) -> TemplateM
                 "depends_on": ["s2"],
                 "output_bindings": {"stats": "stats"},
             },
+            {
+                "id": "s6",
+                "op": "export_style_json",
+                "params": {
+                    "input": {
+                        "type": "simple",
+                        "title": "服务区缓冲区",
+                        "color": "rgba(59,130,246,0.30)",
+                        "stroke": {"color": "#1d4ed8", "width": 1.6},
+                        "legend": {
+                            "title": "缓冲区分析",
+                            "items": [{"label": f"缓冲区 {int(distance_m)} 米", "color": "rgba(59,130,246,0.45)"}],
+                        },
+                    },
+                    "name": "service_area",
+                },
+                "depends_on": ["s4"],
+                "output_bindings": {"style": "service_area_style"},
+            },
         ],
         "outputs": {
             "geojson": "${s4.geojson}",
             "stats": "${s5.stats}",
+            "style": "${s6.style}",
         },
     }
     return TemplateMatch(
@@ -422,10 +442,31 @@ def _template_clip_to_region(message: str, params: Dict[str, Any]) -> TemplateMa
                 "depends_on": ["s5"],
                 "output_bindings": {"stats": "stats"},
             },
+            {
+                "id": "s8",
+                "op": "export_style_json",
+                "params": {
+                    "input": {
+                        "type": "simple",
+                        "title": "裁剪结果",
+                        "point": {"color": "#f97316", "radius": 5.5, "stroke": "#ffffff"},
+                        "color": "rgba(249,115,22,0.35)",
+                        "stroke": {"color": "#ea580c", "width": 1.6},
+                        "legend": {
+                            "title": "裁剪结果",
+                            "items": [{"label": "区域内要素", "color": "#f97316"}],
+                        },
+                    },
+                    "name": output_name,
+                },
+                "depends_on": ["s6"],
+                "output_bindings": {"style": "clipped_style"},
+            },
         ],
         "outputs": {
             "geojson": "${s6.geojson}",
             "stats": "${s7.stats}",
+            "style": "${s8.style}",
         },
     }
     return TemplateMatch(
@@ -505,10 +546,30 @@ def _template_overlay_intersection(message: str, params: Dict[str, Any]) -> Temp
                 "depends_on": ["s5"],
                 "output_bindings": {"stats": "stats"},
             },
+            {
+                "id": "s8",
+                "op": "export_style_json",
+                "params": {
+                    "input": {
+                        "type": "simple",
+                        "title": "图层交集",
+                        "stroke": {"color": "#7c3aed", "width": 2.6},
+                        "color": "rgba(124,58,237,0.18)",
+                        "legend": {
+                            "title": "交集结果",
+                            "items": [{"label": "相交要素", "color": "#7c3aed"}],
+                        },
+                    },
+                    "name": output_name,
+                },
+                "depends_on": ["s6"],
+                "output_bindings": {"style": "intersected_style"},
+            },
         ],
         "outputs": {
             "geojson": "${s6.geojson}",
             "stats": "${s7.stats}",
+            "style": "${s8.style}",
         },
     }
     return TemplateMatch(
@@ -594,10 +655,31 @@ def _template_spatial_join_attributes(message: str, params: Dict[str, Any]) -> T
                 "depends_on": ["s5"],
                 "output_bindings": {"stats": "stats"},
             },
+            {
+                "id": "s8",
+                "op": "export_style_json",
+                "params": {
+                    "input": {
+                        "type": "simple",
+                        "title": "空间连接结果",
+                        "point": {"color": "#059669", "radius": 5.5, "stroke": "#ecfdf5"},
+                        "color": "rgba(5,150,105,0.35)",
+                        "stroke": {"color": "#047857", "width": 1.4},
+                        "legend": {
+                            "title": "空间连接",
+                            "items": [{"label": "已连接属性要素", "color": "#059669"}],
+                        },
+                    },
+                    "name": output_name,
+                },
+                "depends_on": ["s6"],
+                "output_bindings": {"style": "joined_style"},
+            },
         ],
         "outputs": {
             "geojson": "${s6.geojson}",
             "stats": "${s7.stats}",
+            "style": "${s8.style}",
         },
     }
     return TemplateMatch(
@@ -670,6 +752,7 @@ def _template_classify_field(message: str, params: Dict[str, Any]) -> TemplateMa
         "outputs": {
             "geojson": "${s4.geojson}",
             "stats": "${s5.stats}",
+            "style": "${s3.style}",
         },
     }
     return TemplateMatch(

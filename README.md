@@ -88,6 +88,7 @@
 - 课堂追问与课后复盘：支持带上下文的连续追问，以及课后要点收束与下一步建议。
 - 文本输入和浏览器语音识别输入。
 - 对话记忆、阶段状态展示和引用来源展示；高风险操作需教师确认后才执行。
+- 统一 Agent Harness：所有 assistant 模式共用可终止运行循环、结构化工具契约、执行前策略闸门、确认后重校验、停止前结果验证和隐私化追踪；详见 [AGENT_HARNESS.md](AGENT_HARNESS.md)。
 - 项目图片库：地图框选截图、本地图片和 AI 生成示意图都按项目保存，可加入助教进行连续识图问答。
 - MiniMax 图片生成：图片库可直接调用 `image-01` 或 `image-01-live`；生成结果使用 Base64 立即持久化，不依赖 24 小时临时 URL。
 
@@ -186,6 +187,8 @@ start_webgis_ai.cmd         # 一键启动入口
 
 ## 快速启动
 
+主页左上角及登录页右上角的太阳/月亮按钮可切换深色、浅色模式。默认保留深色，选择会保存在当前浏览器，刷新后仍生效；切换不会重置地图或课堂状态。新增的按钮和面板动效会遵循系统的“减少动态效果”设置。
+
 ### Windows 一键启动
 
 ```powershell
@@ -254,6 +257,14 @@ LLM / Vision：
 - `WEBGIS_AI_VISION_PROVIDER`
 - `WEBGIS_AI_VISION_MODEL`
 - `WEBGIS_AI_MINIMAX_TOKEN_PLAN_KEY`
+
+Agent Harness：
+
+- `WEBGIS_AI_AGENT_MAX_ACTIONS`：默认 8，限制单次计划和工具调用数
+- `WEBGIS_AI_AGENT_MAX_IDENTICAL_ACTIONS`：默认 2，阻止重复调用循环
+- `WEBGIS_AI_AGENT_MAX_TOOL_FAILURES`：默认 1，限制单次运行的工具失败数
+- `WEBGIS_AI_AGENT_MAX_SECONDS`：默认 180，阶段/工具边界的墙钟时间上限
+- `WEBGIS_AI_AGENT_MAX_TRACE_EVENTS`：默认 64，限制 job 内嵌追踪事件数
 
 GIS 工作流：
 
@@ -324,7 +335,9 @@ GIS 工作流：
 后端：
 
 ```powershell
-python -m unittest discover backend/tests
+# Windows 本机约定的 Python 3.12 路径；其他环境请替换为已安装项目依赖的解释器。
+& "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe" -m pip install -r requirements-test.txt
+& "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe" -m pytest backend/tests -q
 ```
 
 前端：
@@ -335,7 +348,17 @@ npm run test
 npm run build
 ```
 
+语音流和工作流状态的定向回归（在 `frontend` 目录执行）：
+
+```powershell
+npm test -- src/__tests__/voiceStream.test.ts src/__tests__/CopilotWidget.test.tsx src/__tests__/useWorkflowStream.test.ts
+```
+
+这些回归使用模拟的麦克风、WebSocket、SSE 和识别器验证异常时序，不代表真实麦克风、ASR 模型或 PyQGIS 已完成端到端验收。真实语音验证还需检查授权期间断线、手动停止返回尾句，以及停止后麦克风是否释放。
+
 ## 当前边界
+
+分支集成与本轮实测见 [INTEGRATION_REVIEW.md](INTEGRATION_REVIEW.md)。GIS 验收脚本使用 `WEBGIS_TEST_BASE` 指定测试后端，`WEBGIS_TEST_PROJECT` 指定测试项目；矩阵和计时脚本未指定项目时会创建新测试项目。认证服务需要通过进程环境提供 `WEBGIS_TEST_EMAIL`、`WEBGIS_TEST_PASSWORD`，不要把账号密码写入脚本。无账号模式仅适用于显式关闭认证的本地隔离验收服务。`set_layer_visibility.py` 必须指定测试项目，会修改该项目所有图层的可见性。
 
 - 图片覆盖层和课本地图依赖人工配准，`bounds` 不准时不应作为课堂证据主图层。
 - POI、天气、大模型和视觉读图均依赖外部 Key；未配置时系统会降级或提示不可用。

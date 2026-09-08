@@ -1,0 +1,292 @@
+/* Theme tokens and shared interaction polish. Map/slide/image content keeps
+   its own colors; changing the UI theme never changes the geographic data. */
+:root {
+  --surface: #102037;
+  --surface-raised: #172c45;
+  --input-bg: rgba(5, 16, 30, .6);
+  --text: var(--text-main);
+  --focus-ring: #58c7ff;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  color: #18334b;
+  background: #eef3f8;
+  --accent: #0676a8;
+  --accent-strong: #056a98;
+  --accent-soft: rgba(2, 119, 171, .1);
+  --accent-glow: rgba(2, 119, 171, .2);
+  --accent-iris: #4b58b8;
+  --success: #18734f;
+  --success-soft: #e5f4ec;
+  --warning: #996014;
+  --warning-soft: #fff2dc;
+  --danger: #b83745;
+  --danger-soft: #fdecee;
+  --panel-bg: rgba(248, 251, 255, .94);
+  --panel-bg-strong: rgba(255, 255, 255, .98);
+  --panel-bg-soft: rgba(29, 73, 106, .045);
+  --panel-border: rgba(39, 80, 111, .18);
+  --panel-border-strong: rgba(23, 91, 136, .32);
+  --panel-shadow: 0 12px 32px rgba(22, 47, 70, .12);
+  --glass-bg: linear-gradient(180deg, rgba(255,255,255,.96), rgba(239,246,252,.94));
+  --glass-border: rgba(39, 80, 111, .18);
+  --surface: #f3f7fb;
+  --surface-raised: #fff;
+  --input-bg: #fff;
+  --text-main: #18334b;
+  --text-soft: #496278;
+  --text-dim: #61778b;
+  --focus-ring: #087aa9;
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 6px 9px;
+  border: 1px solid var(--panel-border-strong);
+  border-radius: 10px;
+  background: var(--panel-bg-soft);
+  color: var(--text-main);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.brand-block .theme-toggle { order: 2; }
+.theme-toggle svg { transition: transform .24s ease; }
+.theme-toggle:hover { background: var(--accent-soft); border-color: var(--accent); }
+.theme-toggle:hover svg { transform: rotate(18deg); }
+.theme-toggle:active { transform: scale(.96); }
+.workflow-dock { backdrop-filter: blur(18px); }
+.lesson-panel-toolbar { flex-wrap: wrap; }
+.lesson-panel-toolbar select { flex: 1 0 100%; width: 100%; }
+.auth-theme-toggle { position: fixed; right: 24px; top: 20px; z-index: 10001; }
+
+/* The original POI input missed the shared field styling and rendered as a
+   native grey rectangle. Keep its label associated with the actual field. */
+.header-search { grid-template-columns: auto minmax(0, 1fr); }
+.header-search-row input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 7px 11px;
+  border: 1px solid var(--panel-border-strong);
+  border-radius: 9px;
+  background: var(--input-bg);
+  color: var(--text-main);
+  outline: none;
+}
+:where(button, a, input, textarea, select, summary):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+button:disabled { cursor: not-allowed; }
+.toast-stack { max-height: calc(100dvh - var(--header-height) - 32px); overflow-y: auto; }
+.tool-rail-label { white-space: nowrap; }
+@media (min-width: 961px) {
+  :root { --right-rail-width: 140px; }
+  .tool-rail-button { gap: 7px; }
+  .tool-rail-icon { flex: 0 0 22px; }
+}
+/* A full-screen database covers the map controls, without discarding their
+   state. Upload dialogs opened from the database remain above it. */
+.screen-shell:has(.database-viewer) :is(.bottom-stack, .account-dock, .right-rail,
+  .copilot-widget, .copilot-orb, .workflow-dock, .layer-manager) { visibility: hidden; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .theme-toggle, .toolbar-button, .mini-control {
+    transition: background-color .18s ease, color .18s ease, border-color .18s ease, box-shadow .18s ease;
+  }
+  .copilot-widget, .layer-manager-panel, .search-dropdown-menu, .user-menu-popover {
+    animation: ui-panel-in .18s ease-out;
+  }
+  @keyframes ui-panel-in { from { opacity: 0; translate: 0 5px; } to { opacity: 1; translate: 0 0; } }
+}
+@media (prefers-reduced-motion: reduce) {
+  .theme-toggle, .theme-toggle svg, .geobot-brand-logo { transition: none; }
+  .theme-toggle:hover svg, .theme-toggle:active { transform: none; }
+}
+
+/* Light surfaces: keep opaque enough to read over both satellite imagery and
+   the dark 3D sky, instead of using a page-wide inversion filter. */
+:root[data-theme="light"] :is(body, .screen-shell-qgis) { background: #eef3f8; }
+:root[data-theme="light"] :is(.glass-panel, .app-header, .copilot-widget,
+  .lesson-workflow-launcher, .map-status-bar, .tool-group, .knowledge-panel,
+  .visual-map-panel, .drawer-panel, .qgis-card, .workflow-dock, .layer-manager,
+  .layer-manager-panel, .dialog-panel,
+  .ppt-viewer-header, .ppt-viewer-nav, .ppt-viewer-dock, .admin-panel,
+  .auth-card, .user-menu-trigger, .user-menu-popover, .search-dropdown-menu,
+  .basemap-menu, .basemap-dropdown, .map-instruction-strip, .agent-control-badge) {
+  background: var(--glass-bg);
+  color: var(--text-main);
+  border-color: var(--panel-border);
+  box-shadow: 0 12px 32px rgba(22, 47, 70, .14);
+}
+:root[data-theme="light"] :is(.screen-shell, .auth-screen, .auth-modal-backdrop, .admin-panel)
+  :is(h1, h2, h3, h4, strong, label, button, input, textarea, select) {
+  color: var(--text-main);
+}
+:root[data-theme="light"] :is(.screen-shell, .auth-screen, .auth-modal-backdrop, .admin-panel)
+  :is(p, small, .panel-tag, .header-search-label, .copilot-role, .copilot-composer-hint) {
+  color: var(--text-soft);
+}
+:root[data-theme="light"] :is(input:not([type="range"]):not([type="checkbox"]):not([type="color"]), textarea, select) {
+  background: var(--input-bg);
+  color: var(--text-main);
+  border-color: var(--panel-border-strong);
+}
+:root[data-theme="light"] :is(input, textarea)::placeholder { color: var(--text-dim); }
+:root[data-theme="light"] :is(.toolbar-button, .mini-control, .tool-rail-button,
+  .tool-rail-mini, .kb-card, .kb-result-card, .chapter-card, .unit-card,
+  .template-card, .teaching-map-item, .copilot-bubble, .copilot-composer,
+  .copilot-capability-chip, .copilot-image-gen-models, .copilot-image-gen-ratios button,
+  .auth-actions button, .admin-close, .admin-row-actions button) {
+  background: var(--surface-raised);
+  border-color: var(--panel-border);
+  color: var(--text-main);
+  box-shadow: none;
+}
+:root[data-theme="light"] :is(.toolbar-button, .mini-control, .tool-rail-button,
+  .tool-rail-mini, .teaching-map-item, .copilot-capability-chip):hover:not(:disabled) {
+  background: #e7f2fa;
+  border-color: var(--accent);
+}
+:root[data-theme="light"] :is(.toolbar-button.active, .tool-rail-button.active,
+  .teaching-map-item.active, .copilot-bubble.user, .copilot-tab.active, .admin-tabs button.active) {
+  background: #dceef9;
+  color: #07587e;
+  border-color: #82bbd6;
+}
+:root[data-theme="light"] :is(.tool-rail-icon, .tool-rail-label, .tool-rail-shortcut,
+  .copilot-phase-chip, .copilot-intent-badge, .kb-tag, .kb-focus-link,
+  .visual-map-caption, .visual-map-topic-title, .visual-map-badge,
+  .status-pill, .service-pill, .map-status-bar span, .user-menu-label small,
+  .user-menu-profile span, .copilot-phase-chip, .copilot-planner-badge) {
+  color: var(--text-soft);
+}
+:root[data-theme="light"] :is(.copilot-widget-header, .copilot-widget-form, .copilot-composer,
+  .copilot-tabs, .copilot-chat-log, .copilot-widget-content, .kb-result-surface) {
+  background: transparent;
+  border-color: var(--panel-border);
+}
+:root[data-theme="light"] :is(.copilot-bubble.assistant, .copilot-tool-trace-item) {
+  background: var(--surface-raised);
+  color: var(--text-main);
+}
+:root[data-theme="light"] :is(.copilot-composer textarea, .copilot-composer textarea:focus) {
+  background: transparent;
+  box-shadow: none;
+}
+:root[data-theme="light"] :is(.toast-card.success, .service-pill.ready, .status-pill.ready, .status-chip.active) {
+  color: var(--success); background: var(--success-soft); border-color: #a1cdb7;
+}
+:root[data-theme="light"] :is(.toast-card.error, .auth-error, .status-chip.disabled) {
+  color: var(--danger); background: var(--danger-soft); border-color: #e0b0b7;
+}
+:root[data-theme="light"] .toast-card.info { background: #e7f1fc; border-color: #b3cce3; }
+:root[data-theme="light"] .auth-screen {
+  color: var(--text-main);
+  background: radial-gradient(ellipse at 20% 20%, #d4eafa, transparent 50%), linear-gradient(145deg, #f5f9fc, #e9f0f9);
+}
+:root[data-theme="light"] .auth-card { background: rgba(255,255,255,.94); }
+:root[data-theme="light"] :is(.auth-brand, .auth-eyebrow, .auth-loading) { color: var(--accent); }
+:root[data-theme="light"] :is(.auth-subtitle, .auth-field, .auth-card footer) { color: var(--text-soft); }
+:root[data-theme="light"] :is(.auth-primary, .copilot-send-button, .copilot-image-gen-submit,
+  .lesson-primary, .annotation-dialog-submit) { background: #096e9b; color: #fff; border-color: #096e9b; }
+:root[data-theme="light"] :is(.admin-table th, .admin-subdialog form) { background: var(--surface); color: var(--text-soft); }
+:root[data-theme="light"] .map-vignette,
+:root[data-theme="light"] .map-scanline { opacity: .15; }
+:root[data-theme="light"] .map-grid-overlay { opacity: .08; }
+
+:root[data-theme="light"] :is(.workflow-dock__selectmenu-button, .workflow-dock__selectmenu-list,
+  .layer-manager-add-list, .qgis-layer-item, .population-source-item,
+  .population-change-item, .population-change-set, .lesson-stage.expanded,
+  .class-panel-card, .class-panel-prompt, .class-question-card, .visual-query-popup,
+  .report-summary-card, .report-event, .report-diagnosis, .resource-topic-card) {
+  background: var(--surface-raised); color: var(--text-main); border-color: var(--panel-border);
+}
+:root[data-theme="light"] :is(.visual-query-bar-name, .visual-query-value, .visual-query-bar-rank,
+  .layer-manager-kind, .workflow-panel__status--pending, .workflow-panel__status--idle,
+  .class-stage-item .stage-item-title, .class-panel-card-title, .point-chip) { color: var(--text-soft); }
+:root[data-theme="light"] :is(.lesson-stage-index, .class-panel-kicker, .class-stage-item .stage-item-dot) { color: var(--accent); }
+:root[data-theme="light"] :is(.tool-rail-shortcut, .visual-query-bar-track) { background: var(--panel-bg-soft); }
+:root[data-theme="light"] .workflow-panel__status--success { color: var(--success); }
+:root[data-theme="light"] .workflow-panel__status--error { color: var(--danger); }
+:root[data-theme="light"] .workflow-panel__status--running { color: var(--warning); }
+:root[data-theme="light"] .database-viewer { background: #f1f5f9; }
+:root[data-theme="light"] .database-viewer .database-primary-action,
+:root[data-theme="light"] .screen-shell .toolbar-button.primary { background: #096e9b; color: #fff; border-color: #096e9b; }
+:root[data-theme="light"] .screen-shell .toolbar-button.danger { background: #ad3341; color: #fff; }
+
+/* Previously the database and lesson-design workbench were always white.
+   Their paper-like surfaces now share the selected application theme. */
+:root[data-theme="dark"] :is(.database-viewer, .ldw-shell, .qpm-shell) {
+  background: var(--surface); color: var(--text-main);
+}
+:root[data-theme="dark"] :is(.database-viewer-header, .database-viewer-summary small) { border-color: var(--panel-border); }
+:root[data-theme="dark"] .lesson-design-message > span { color: var(--text-dim); }
+:root[data-theme="dark"] :is(.database-viewer, .ldw-shell, .qpm-shell)
+  :is(h1, h2, h3, h4, strong, label, input, textarea, select, button, summary, dd, .qpm-stem) { color: var(--text-main); }
+:root[data-theme="dark"] :is(.database-viewer, .ldw-shell, .qpm-shell)
+  :is(p, small, dt, .ldw-progress, .ldw-sub, .ldw-hint, .database-viewer-heading span,
+    .database-viewer-search span, .database-viewer-summary span, .qpm-meta, .qpm-task, .qpm-timer-sub) { color: var(--text-soft); }
+:root[data-theme="dark"] :is(.database-viewer-tabs, .database-viewer-summary,
+  .database-viewer-list, .database-row, .database-resource-search, .ldw-left, .ldw-mid,
+  .ldw-right, .ldw-banks, .ldw-card, .ldw-stage, .ldw-question-list li,
+  .ldw-candidate-list li, .lesson-design-message p, .rehearsal-question, .rehearsal-checklist,
+  .qpm-header, .qpm-timer, .qpm-material, .qpm-options li, .qpm-feedback) {
+  background: var(--surface-raised); border-color: var(--panel-border);
+}
+:root[data-theme="dark"] :is(.database-viewer, .ldw-shell, .qpm-shell) :is(input, textarea, select, .toolbar-button),
+:root[data-theme="dark"] :is(.database-viewer-actions button, .database-viewer-tabs button, .database-row-actions button) {
+  background: var(--input-bg); border-color: var(--panel-border-strong); color: var(--text-main);
+}
+:root[data-theme="dark"] :is(.database-row-title span, .database-row-tags span, .database-row-meta span,
+  .database-viewer-tabs em, .ldw-step-no, .ldw-status-pending, .qpm-options .option-label) {
+  background: var(--accent-soft); color: var(--text-soft);
+}
+:root[data-theme="dark"] :is(.database-row:hover, .database-viewer-tabs button.active,
+  .ldw-step.active, .ldw-active-question, .ldw-finalize-card, .lesson-design-message.teacher p) {
+  background: #1b3b55; color: var(--text-main); border-color: var(--panel-border-strong);
+}
+:root[data-theme="dark"] :is(.database-viewer, .ldw-shell, .qpm-shell) .toolbar-button.primary,
+:root[data-theme="dark"] .database-viewer .database-primary-action { background: #137daa; color: #fff; }
+:root[data-theme="dark"] :is(.ldw-report.ok, .rehearsal-complete, .rehearsal-check-state.ok, .qpm-options li.correct) {
+  background: #173d31; color: var(--success); border-color: #357b60;
+}
+:root[data-theme="dark"] :is(.ldw-report.bad, .rehearsal-check-state.bad) {
+  background: #49242e; color: var(--danger); border-color: #94495b;
+}
+
+@media (min-width: 1121px) and (max-width: 1500px) {
+  .app-header { grid-template-columns: auto minmax(210px, 1fr) auto; }
+  .brand-block { gap: 9px; }
+  .theme-toggle span { display: none; }
+}
+@media (max-width: 1120px) {
+  :root { --header-height: 108px; }
+  .app-header { grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; }
+  .brand-block { grid-column: 1; }
+  .header-search { grid-column: 2; grid-row: 1; grid-template-columns: minmax(0, 1fr); }
+  .header-search-label { display: none; }
+  .header-search-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .header-actions { grid-column: 1 / -1; }
+}
+@media (max-width: 960px) {
+  .right-rail { width: 140px; flex-direction: column; flex-wrap: nowrap; }
+  .right-rail .tool-group { flex: 0 0 auto; }
+}
+@media (max-width: 600px) {
+  :root { --header-height: 140px; }
+  .app-header { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto; }
+  .header-search { grid-column: 1; grid-row: 2; }
+  .header-actions { grid-column: 1; grid-row: 3; }
+  .theme-toggle span { display: none; }
+  .brand-block strong { font-size: 14px; }
+  .brand-block { gap: 6px; }
+  .theme-toggle { padding: 5px; min-height: 30px; }
+  .app-header .header-search-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+}

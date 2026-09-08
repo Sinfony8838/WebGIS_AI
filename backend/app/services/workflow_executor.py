@@ -340,6 +340,50 @@ class WorkflowExecutor:
             if relative is None:
                 continue
             self._add_artifact(record, kind, default_title, relative, step_id=state.get("id"))
+        self._sync_artifacts_to_database(record)
+
+    def _sync_artifacts_to_database(self, record: WorkflowRecord) -> None:
+        """Mirror teacher-facing workflow artifacts into RuntimeStore outputs.
+
+        The 数据库 panel lists RuntimeStore artifacts only; without this
+        bridge, analysis results (结果矢量/地图图片/统计) are invisible there.
+        Idempotent: re-running a workflow replaces its previous mirror
+        entries (matched by metadata.workflow_id) so the panel never shows
+        stale duplicates.
+        """
+        try:
+            existing = [
+                item
+                for item in self.store.list_outputs(project_id=record.project_id)
+                if str((item.get("metadata") or {}).get("workflow_id") or "") == record.workflow_id
+            ]
+            for item in existing:
+                self.store.delete_artifact(item["artifact_id"])
+            for artifact in record.artifacts:
+                kind = str(artifact.get("kind") or "")
+                if kind not in {"geojson", "png", "stats", "summary"}:
+                    continue
+                relative = str(artifact.get("relative_path") or "")
+                absolute = self.config.workflow_dir(record.workflow_id) / relative
+                self.store.register_artifact(
+                    record.project_id,
+                    record.workflow_id,
+                    "workflow_output",
+                    str(artifact.get("title") or "工作流产物"),
+                    str(absolute),
+                    metadata={
+                        "workflow_id": record.workflow_id,
+                        "kind": kind,
+                        "public_url": str(artifact.get("public_url") or ""),
+                        "relative_path": relative,
+                        "template_id": record.template_id,
+                        "ai_summary": kind == "summary",
+                    },
+                )
+        except Exception:
+            # Mirroring must never fail the workflow itself; the authoritative
+            # artifact list stays on WorkflowRecord.
+            pass
 
     def _add_artifact(
         self,

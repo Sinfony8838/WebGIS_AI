@@ -36,7 +36,6 @@ from .workflow_templates import INTERACTION_ALLOWED_TEMPLATES, list_templates
 
 
 WEBGIS_ALLOWED_TOOLS = {item["name"] for item in ASSISTANT_TOOL_SCHEMA}
-MAX_LLM_ACTIONS = 12
 # Voice turns must feel instant in a live classroom; a slow plan is worse
 # than no plan (the clarification fallback answers immediately).
 VOICE_LLM_TIMEOUT_SECONDS = 12.0
@@ -53,6 +52,55 @@ def _tools_for_mode(assistant_mode: str) -> List[Dict[str, Any]]:
         for item in ASSISTANT_TOOL_SCHEMA
         if assistant_mode in item.get("modes", ["teaching", "tool", "knowledge", "interaction"])
     ]
+
+CORE_TOOL_NAMES = {
+    "set_view",
+    "toggle_layer",
+    "reorder_layer",
+    "style_layer",
+    "query_features",
+    "draw_annotation",
+    "measure",
+    "apply_template",
+    "export_snapshot",
+    "explain_current_view",
+    "switch_basemap",
+    "search_poi",
+}
+
+CONDITIONAL_TOOL_HINTS = {
+    "run_visual_query": ("人口", "统计", "排行", "排名", "top", "指标", "visual query", "population", "ranking"),
+    "toggle_teaching_map": ("教学地图", "课本", "教材", "胡焕庸", "降水", "气温", "地形图", "teaching map", "textbook"),
+    "open_material": ("素材", "材料", "资料", "视频", "bilibili", "material", "video"),
+    "generate_image": (
+        "生成图片",
+        "生成一张",
+        "画一张",
+        "画一个",
+        "插画",
+        "示意图",
+        "海报",
+        "generate image",
+        "create image",
+        "illustration",
+        "poster",
+    ),
+}
+
+CLASSROOM_TOOL_HINTS = (
+    "学情",
+    "观察",
+    "记录",
+    "提问",
+    "题目",
+    "发布",
+    "呈现",
+    "推送",
+    "observation",
+    "record",
+    "question",
+    "present",
+)
 
 
 class LLMPlanner:
@@ -100,12 +148,13 @@ class LLMPlanner:
             return rule_plan
 
         try:
+            tool_catalog = self._tool_catalog(message, map_context)
             raw_content = self.minimax_client.chat_completion(
-                self._messages(message, project, map_context),
+                self._messages(message, project, map_context, tool_catalog=tool_catalog),
                 temperature=0.15,
             )
             parsed = self._parse_json(raw_content)
-            return self._validate_plan(parsed)
+            return self._validate_plan(parsed, allowed_tools={item["name"] for item in tool_catalog})
         except Exception as exc:
             fallback = dict(rule_plan)
             fallback["target"] = normalized_target
@@ -127,7 +176,7 @@ class LLMPlanner:
     ) -> Dict[str, Any]:
         rule_plan = self.fallback_planner.plan_interaction_actions(message, project, map_context=map_context)
         rule_plan["target"] = normalized_target
-        if rule_plan.get("actions"):
+        if rule_plan.get("actions") or rule_plan.get("stop_planning"):
             rule_plan["planner"] = "interaction_rule"
             return rule_plan
 
@@ -144,7 +193,7 @@ class LLMPlanner:
                 timeout=VOICE_LLM_TIMEOUT_SECONDS,
             )
             parsed = self._parse_json(raw_content)
-            plan = self._validate_plan(parsed, planner="interaction_minimax")
+            plan = self._validate_plan(parsed, planner="interaction_minimax", allowed_tools={item["name"] for item in _tools_for_mode("interaction")})
             plan["target"] = normalized_target
             return plan
         except Exception as exc:
@@ -163,6 +212,7 @@ class LLMPlanner:
         message: str,
         project: ProjectRecord,
         map_context: Dict[str, Any],
+        tool_catalog: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Dict[str, str]]:
         visible_layers = [
             {
@@ -183,7 +233,10 @@ class LLMPlanner:
                 "view": project.view,
             },
             "map_context": map_context,
-            "webgis_tools": ASSISTANT_TOOL_SCHEMA,
+            # Keep the model-visible surface small.  Rare, paid, and
+            # classroom-mutating capabilities are exposed only when the
+            # request and current session make them relevant.
+            "webgis_tools": tool_catalog if tool_catalog is not None else self._tool_catalog(message, map_context),
         }
         system = (
             "You are a geography classroom WebGIS copilot. Return only valid JSON. "
@@ -213,6 +266,8 @@ class LLMPlanner:
                 "geometry_type": layer.geometry_type,
                 "visible": layer.visible,
                 "opacity": layer.opacity,
+                "style": layer.style,
+                "z_index": layer.z_index,
             }
             for layer in project.layers
         ]
@@ -228,6 +283,7 @@ class LLMPlanner:
             "map_context": map_context,
             "webgis_tools": _tools_for_mode("interaction"),
             "workflow_templates": allowed_templates,
+            "basemaps": [{"id": item["id"], "title": item["title"]} for item in self.fallback_planner.config.basemap_catalog()["items"]],
         }
 
     def _interaction_messages(
@@ -244,9 +300,17 @@ class LLMPlanner:
             "[{\"tool_name\": string, \"tool_params\": object}]}. "
             "Use only tools listed in webgis_tools; layer ids must come from all_layers "
             "(match by name if the id is unknown). run_workflow only accepts template ids "
-            "from workflow_templates. If the request is unclear or not an actionable "
-            "command, return exactly one explain_current_view action with a short "
-            "Chinese hint. Keep assistant_message concise and classroom-ready."
+            "from workflow_templates. Keep assistant_message concise and classroom-ready."
+            " switch_basemap must use an id from basemaps, never a guessed alias. "
+            "style_layer uses camelCase keys: fillColor, fillOpacity, strokeColor, strokeWidth, radius, labelField. "
+            "run_visual_query can load the built-in 2020 city population data even when no city layer is loaded: "
+            "dataset=prefecture_population, year=2020, geo_level=prefecture, metric=population, operation=top, "
+            "order=desc or asc, limit=1..200. Other years and datasets are not supported by this query tool. "
+            " Respect negated instructions: never execute an operation the teacher forbids. "
+            "Plan every requested operation in order, not just the first matching keyword. "
+            "For an unsupported or ambiguous request, return no actions and ask a concise clarification. "
+            "Do not invent results or layer identifiers. If a later action depends on a query result "
+            "you have not observed, do not guess that result or claim the dependent task is complete."
         )
         return [
             {"role": "system", "content": system},
@@ -287,7 +351,7 @@ class LLMPlanner:
                 raise
             return json.loads(extracted)
 
-    def _validate_plan(self, payload: Dict[str, Any], planner: str = "minimax") -> Dict[str, Any]:
+    def _validate_plan(self, payload: Dict[str, Any], planner: str = "minimax", allowed_tools: Optional[set[str]] = None) -> Dict[str, Any]:
         if not isinstance(payload, dict):
             raise ValueError("LLM plan must be an object")
         raw_actions = payload.get("actions")
@@ -299,17 +363,20 @@ class LLMPlanner:
             if not isinstance(item, dict):
                 raise ValueError("LLM action must be an object")
             tool_name = str(item.get("tool_name") or "")
-            if tool_name not in WEBGIS_ALLOWED_TOOLS:
+            visible_tools = allowed_tools if allowed_tools is not None else WEBGIS_ALLOWED_TOOLS
+            if tool_name not in visible_tools:
                 raise ValueError(f"LLM requested unsupported tool: {tool_name}")
             tool_params = item.get("tool_params") or {}
             if not isinstance(tool_params, dict):
                 raise ValueError(f"LLM tool_params must be an object for {tool_name}")
             actions.append({"tool_name": tool_name, "tool_params": tool_params})
 
-        if not actions:
+        if not actions and (planner != "interaction_minimax" or not str(payload.get("assistant_message") or "").strip()):
             raise ValueError("LLM plan did not produce any actions")
-        if len(actions) > MAX_LLM_ACTIONS:
-            actions = actions[:MAX_LLM_ACTIONS]
+        configured_limit = int(getattr(self.fallback_planner.config, "assistant_harness_max_actions", 8))
+        action_limit = max(1, min(configured_limit, 32))
+        if len(actions) > action_limit:
+            actions = actions[:action_limit]
 
         return {
             "assistant_message": str(payload.get("assistant_message") or "我将按当前地图上下文执行操作。"),
@@ -317,6 +384,26 @@ class LLMPlanner:
             "actions": actions,
             "planner": planner,
         }
+
+    @staticmethod
+    def _tool_catalog(message: str, map_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Return a capability-gated catalog for this single model turn."""
+
+        lowered = (message or "").lower()
+        visible_names = set(CORE_TOOL_NAMES)
+        for tool_name, hints in CONDITIONAL_TOOL_HINTS.items():
+            if any(hint in lowered for hint in hints):
+                visible_names.add(tool_name)
+
+        teaching_context = map_context.get("teaching_context")
+        if isinstance(teaching_context, dict):
+            active_session = bool(str(teaching_context.get("session_id") or "").strip()) and str(
+                teaching_context.get("phase") or ""
+            ) == "in_class"
+            if active_session and any(hint in lowered for hint in CLASSROOM_TOOL_HINTS):
+                visible_names.update({"record_observation", "launch_question"})
+
+        return [item for item in ASSISTANT_TOOL_SCHEMA if item["name"] in visible_names]
 
     @staticmethod
     def _extract_json_object(content: str) -> str:

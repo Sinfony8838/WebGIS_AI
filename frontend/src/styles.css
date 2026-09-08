@@ -3239,9 +3239,8 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 14px;
-  background: radial-gradient(120% 120% at 50% 20%, rgba(88, 199, 255, 0.14), rgba(20, 40, 66, 0.28));
-  border: 1px solid rgba(132, 178, 220, 0.18);
+  background: transparent;
+  border: 0;
 }
 
 .copilot-avatar.busy {
@@ -4476,7 +4475,6 @@ button {
   }
 }
 
-.live-resource-actions,
 .kb-material-actions,
 .kb-material-submit {
   display: flex;
@@ -4484,8 +4482,6 @@ button {
   gap: 8px;
 }
 
-.live-resource-actions button,
-.live-resource-actions a,
 .kb-material-actions button,
 .kb-material-submit button,
 .kb-material-actions a {
@@ -4499,14 +4495,6 @@ button {
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
-.live-resource-actions button:hover,
-.live-resource-actions a:hover {
-  background: rgba(150, 188, 226, 0.18);
-  border-color: rgba(150, 188, 226, 0.32);
-  color: #f0f6fc;
-}
-
-.live-resource-card,
 .kb-material-card {
   border: 1px solid rgba(132, 178, 220, 0.14);
   border-radius: 14px;
@@ -4517,33 +4505,6 @@ button {
   transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
 }
 
-.live-resource-card:hover {
-  border-color: rgba(140, 222, 255, 0.32);
-  background: linear-gradient(180deg, rgba(88, 199, 255, 0.12), rgba(30, 56, 86, 0.24));
-  transform: translateY(-1px);
-  box-shadow: 0 8px 18px rgba(10, 60, 110, 0.2);
-}
-
-.live-resource-main {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  text-align: left;
-  color: inherit;
-  display: grid;
-  gap: 6px;
-  cursor: pointer;
-}
-
-.live-resource-main strong {
-  display: block;
-  font-size: 13.5px;
-  font-weight: 600;
-  color: #f0f6fc;
-  line-height: 1.4;
-}
-
-.live-resource-main .live-resource-source,
 .kb-material-card span {
   display: inline-flex;
   align-self: flex-start;
@@ -4559,7 +4520,6 @@ button {
   text-transform: uppercase;
 }
 
-.live-resource-main p,
 .kb-material-card p {
   margin: 0;
   color: var(--text-soft);
@@ -5608,6 +5568,41 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
+  transition: opacity 0.35s ease;
+}
+
+.legend-panel__item--pending {
+  opacity: 0.18;
+}
+
+/* 制图回放状态条：分级填色进度 + 跳过 / 重放入口 */
+.replay-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid rgba(148, 163, 184, 0.25);
+  padding-top: 10px;
+  font-size: 12px;
+}
+
+.replay-bar__label {
+  color: #fbbf24;
+  font-weight: 600;
+}
+
+.replay-bar__button {
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.replay-bar__button:hover {
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .legend-panel__swatch {
@@ -7513,4 +7508,47 @@ button {
   margin-left: 6px;
   color: rgba(148, 163, 184, 0.75);
   font-size: 11px;
+}
+
+/* ===== 数据库面板：重组分类样式 ===== */
+.database-section {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.database-section-title {
+  margin: 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.28);
+  color: rgba(51, 65, 85, 0.85);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.database-resource-search-submit {
+  margin-left: auto;
+  border: 1px solid rgba(96, 165, 250, 0.5);
+  background: rgba(96, 165, 250, 0.16);
+  color: #1d4ed8;
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.database-resource-search-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.database-danger-action {
+  border-color: rgba(239, 68, 68, 0.4) !important;
+  color: #b91c1c !important;
+}
+
+.database-danger-action:hover {
+  background: rgba(239, 68, 68, 0.12) !important;
 }

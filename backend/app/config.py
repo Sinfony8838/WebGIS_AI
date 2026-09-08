@@ -210,11 +210,32 @@ class AppConfig:
     vision_enabled: bool = field(
         default_factory=lambda: os.getenv("WEBGIS_AI_VISION_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
     )
+    # Deprecated routing flag retained for older deployments.  Runtime health
+    # now advertises the unified harness as enabled and all assistant requests
+    # use it regardless of this stored value.
     assistant_v2_enabled: bool = field(
         default_factory=lambda: os.getenv("WEBGIS_AI_ASSISTANT_V2_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
     )
     voice_asr_enabled: bool = field(
         default_factory=lambda: os.getenv("WEBGIS_AI_VOICE_ASR_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+    )
+    # Cross-cutting agent-harness policy.  Keep operational limits in
+    # configuration rather than prompt prose so they are deterministic,
+    # inspectable, and testable.
+    assistant_harness_max_actions: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_AGENT_MAX_ACTIONS", "8"))
+    )
+    assistant_harness_max_identical_actions: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_AGENT_MAX_IDENTICAL_ACTIONS", "2"))
+    )
+    assistant_harness_max_tool_failures: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_AGENT_MAX_TOOL_FAILURES", "1"))
+    )
+    assistant_harness_max_seconds: float = field(
+        default_factory=lambda: float(os.getenv("WEBGIS_AI_AGENT_MAX_SECONDS", "180"))
+    )
+    assistant_harness_max_trace_events: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_AGENT_MAX_TRACE_EVENTS", "64"))
     )
     resource_search_endpoint: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_RESOURCE_SEARCH_ENDPOINT", ""))
     llm_provider_source: str = field(init=False, default="default")

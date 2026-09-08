@@ -40,6 +40,178 @@ ASSISTANT_TOOL_SCHEMA = [
 ]
 
 
+# JSON-Schema contracts are shared by the model-facing catalog and the
+# execution-time input guard.  The older ``parameters`` summaries above stay
+# in place for compatibility with existing prompt snapshots.
+ASSISTANT_TOOL_INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
+    "set_view": {
+        "type": "object",
+        "properties": {
+            "center": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+            "zoom": {"type": "number", "minimum": 0, "maximum": 24},
+            "extent": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+        },
+        "minProperties": 1,
+        "additionalProperties": False,
+    },
+    "toggle_layer": {
+        "type": "object",
+        "properties": {"layer_id": {"type": "string", "minLength": 1}, "visible": {"type": "boolean"}},
+        "required": ["layer_id", "visible"],
+        "additionalProperties": False,
+    },
+    "reorder_layer": {
+        "type": "object",
+        "properties": {"layer_id": {"type": "string", "minLength": 1}, "z_index": {"type": "number"}},
+        "required": ["layer_id", "z_index"],
+        "additionalProperties": False,
+    },
+    "style_layer": {
+        "type": "object",
+        "properties": {"layer_id": {"type": "string", "minLength": 1}, "style": {"type": "object"}},
+        "required": ["layer_id", "style"],
+        "additionalProperties": False,
+    },
+    "query_features": {
+        "type": "object",
+        "properties": {"layer_id": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}},
+        "additionalProperties": False,
+    },
+    "draw_annotation": {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string", "minLength": 1, "maxLength": 500},
+            "position": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+        },
+        "required": ["text"],
+        "additionalProperties": False,
+    },
+    "measure": {
+        "type": "object",
+        "properties": {
+            "mode": {"type": "string"},
+            "extent": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+        },
+        "additionalProperties": False,
+    },
+    "apply_template": {
+        "type": "object",
+        "properties": {"template_id": {"type": "string", "minLength": 1}},
+        "required": ["template_id"],
+        "additionalProperties": False,
+    },
+    "export_snapshot": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "file_path": {"type": "string"},
+            "path": {"type": "string"},
+            "output_path": {"type": "string"},
+        },
+        "additionalProperties": False,
+    },
+    "explain_current_view": {
+        "type": "object",
+        "properties": {"focus": {"type": "string", "maxLength": 2000}},
+        "additionalProperties": False,
+    },
+    "switch_basemap": {
+        "type": "object",
+        "properties": {"basemap_id": {"type": "string", "minLength": 1}},
+        "required": ["basemap_id"],
+        "additionalProperties": False,
+    },
+    "search_poi": {
+        "type": "object",
+        "properties": {
+            "keyword": {"type": "string", "minLength": 1, "maxLength": 200},
+            "mode": {"type": "string"},
+            "extent": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4},
+            "geometry": {"type": "object"},
+        },
+        "required": ["keyword"],
+        "additionalProperties": False,
+    },
+    "run_visual_query": {
+        "type": "object",
+        "properties": {
+            "dataset": {"type": "string"},
+            "year": {"type": "integer"},
+            "geo_level": {"type": "string"},
+            "metric": {"type": "string"},
+            "operation": {"type": "string"},
+            "order": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+        },
+        "additionalProperties": False,
+    },
+    "toggle_teaching_map": {
+        "type": "object",
+        "properties": {"map_id": {"type": "string", "minLength": 1}, "visible": {"type": "boolean"}},
+        "required": ["map_id"],
+        "additionalProperties": False,
+    },
+    "open_material": {
+        "type": "object",
+        "properties": {"material_id": {"type": "string", "minLength": 1}, "material": {"type": "object"}},
+        "anyOf": [{"required": ["material_id"]}, {"required": ["material"]}],
+        "additionalProperties": False,
+    },
+    "generate_image": {
+        "type": "object",
+        "properties": {
+            "prompt": {"type": "string", "minLength": 1, "maxLength": 1500},
+            "title": {"type": "string", "maxLength": 200},
+            "model": {"type": "string"},
+            "aspect_ratio": {"type": "string"},
+            "prompt_optimizer": {"type": "boolean"},
+        },
+        "required": ["prompt"],
+        "additionalProperties": False,
+    },
+    "record_observation": {
+        "type": "object",
+        "properties": {
+            "verdict": {"type": "string", "minLength": 1},
+            "tag": {"type": "string"},
+            "note": {"type": "string", "maxLength": 1000},
+            "question_id": {"type": "string"},
+            "stage_id": {"type": "string"},
+        },
+        "required": ["verdict"],
+        "additionalProperties": False,
+    },
+    "launch_question": {
+        "type": "object",
+        "properties": {
+            "question_id": {"type": "string", "minLength": 1},
+            "text": {"type": "string", "minLength": 1, "maxLength": 1000},
+            "options": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
+            "answer_index": {"type": "integer", "minimum": 0},
+            "stage_id": {"type": "string"},
+        },
+        "anyOf": [{"required": ["question_id"]}, {"required": ["text"]}],
+        "additionalProperties": False,
+    },
+}
+
+ASSISTANT_TOOL_INPUT_SCHEMAS.update({
+    "switch_view_mode": {"type": "object", "properties": {"mode": {"type": "string", "enum": ["plane", "globe"]}}, "required": ["mode"], "additionalProperties": False},
+    "open_panel": {"type": "object", "properties": {"panel": {"type": "string", "enum": ["layers", "database", "workflow"]}, "open": {"type": "boolean"}}, "required": ["panel"], "additionalProperties": False},
+    "focus_layer": {"type": "object", "properties": {"layer_id": {"type": "string"}, "layer_name": {"type": "string"}}, "additionalProperties": False},
+    "set_layer_opacity": {"type": "object", "properties": {"layer_id": {"type": "string"}, "layer_name": {"type": "string"}, "opacity": {"type": "number", "minimum": 0, "maximum": 1}}, "required": ["opacity"], "additionalProperties": False},
+    "enter_lesson_stage": {"type": "object", "properties": {"stage_id": {"type": "string"}, "stage_title": {"type": "string"}, "offset": {"type": "string", "enum": ["next", "previous"]}}, "additionalProperties": False},
+    "run_workflow": {"type": "object", "properties": {"template_id": {"type": "string"}, "description": {"type": "string"}, "parameters": {"type": "object"}}, "additionalProperties": False},
+    "start_class_session": {"type": "object", "properties": {"lesson_id": {"type": "string"}, "lesson_title": {"type": "string"}}, "additionalProperties": False},
+    "end_class_session": {"type": "object", "properties": {}, "additionalProperties": False},
+})
+# Match the existing visual-query endpoint's supported limit.
+ASSISTANT_TOOL_INPUT_SCHEMAS["run_visual_query"]["properties"]["limit"]["maximum"] = 200
+
+for _tool_descriptor in ASSISTANT_TOOL_SCHEMA:
+    _tool_descriptor["input_schema"] = ASSISTANT_TOOL_INPUT_SCHEMAS[_tool_descriptor["name"]]
+
+
 COLOR_MAP = {
     "yellow": "#facc15",
     "黄色": "#facc15",
@@ -409,6 +581,8 @@ class AssistantService:
         message: str,
         project: ProjectRecord,
         map_context: Optional[Dict[str, Any]] = None,
+        *,
+        allow_llm_geocoding: bool = True,
     ) -> Dict[str, Any]:
         map_context = map_context or {}
         normalized_message = self._normalize_voice_text(message)
@@ -435,7 +609,7 @@ class AssistantService:
                 actions.append({"tool_name": "toggle_layer", "tool_params": {"layer_id": target_layer["layer_id"], "visible": True}})
                 narrative_parts.append(f"已按语音指令显示图层“{target_layer['name']}”。")
 
-        place_target = self._resolve_voice_place(normalized_message, project)
+        place_target = self._resolve_voice_place(normalized_message, project, allow_llm=allow_llm_geocoding) if self._is_voice_view_command(lowered) else None
         if place_target and self._is_voice_view_command(lowered):
             tool_params: Dict[str, Any] = {
                 "center": list(place_target["center"]),
@@ -491,6 +665,24 @@ class AssistantService:
         normalized = self._normalize_voice_text(message)
         lowered = normalized.lower()
 
+        # A keyword match cannot resolve negation, conditions or multiple
+        # instructions. Let the existing planner see the complete request.
+        complex_request = bool(re.search(r"然后|接着|同时|并且|并|再|如果|否则|而是|只|(?:和|及|、).*(?:底图|图层|地图|面板)", normalized))
+        negation = r"不要|(?<!分)别|不用|无需|不必|不能|不许|禁止"
+        negated = bool(re.search(negation, normalized))
+        if negated:
+            clauses = re.split(r"[，,；;。]|然后|接着|同时|并且|而是|只|再", message)
+            has_positive_action = any(
+                not re.search(negation, clause)
+                and re.search(r"打开|关闭|切换|显示|隐藏|开始|结束|进入|调到|调成|设置|定位|转到", clause)
+                for clause in clauses
+            )
+            if not has_positive_action:
+                return {"assistant_message": "好的，保持当前状态，不执行该操作。", "actions": [], "stop_planning": True}
+            complex_request = True
+        if complex_request:
+            return {"assistant_message": "这条指令需要完整规划，暂未执行任何操作。", "actions": []}
+
         # --- 班课控制（短语最具体，优先判定）---
         if any(keyword in normalized for keyword in INTERACTION_SESSION_END_KEYWORDS):
             return {
@@ -538,6 +730,9 @@ class AssistantService:
             opacity = self._parse_opacity_phrase(normalized)
             if opacity is not None:
                 target_layer = self._resolve_target_layer(normalized, project, include_active_fallback=False)
+                named_target = re.match(r"(?:请)?(?:帮我)?(?:把|将)?(.*?)图层", normalized)
+                if not target_layer and named_target and named_target.group(1) not in ("", "当前", "选中", "这个", "该", "活动"):
+                    return {"assistant_message": "未匹配到指定图层，需要进一步确认目标。", "actions": []}
                 active_layer = next((layer for layer in project.layers if layer.layer_id == project.active_layer_id), None)
                 resolved = target_layer or (active_layer.to_dict() if active_layer else None)
                 if resolved:
@@ -597,7 +792,10 @@ class AssistantService:
         looks_like_command = any(keyword in normalized for keyword in interaction_command_words)
         looks_like_question = any(keyword in normalized for keyword in interaction_question_words)
         if looks_like_command or looks_like_question:
-            legacy_plan = self.plan_voice_actions(message, project, map_context=map_context)
+            legacy_plan = self.plan_voice_actions(message, project, map_context=map_context, allow_llm_geocoding=False)
+            allowed = {item["name"] for item in ASSISTANT_TOOL_SCHEMA if "interaction" in item.get("modes", [])}
+            if any(action["tool_name"] not in allowed for action in legacy_plan.get("actions", [])):
+                return {"assistant_message": "该指令需要进一步规划，暂未执行任何操作。", "actions": []}
             if legacy_plan.get("actions"):
                 return {
                     "assistant_message": str(legacy_plan.get("assistant_message") or ""),
@@ -1005,7 +1203,7 @@ class AssistantService:
             return True
         return lowered.endswith("?") or lowered.endswith("？")
 
-    def _resolve_voice_place(self, message: str, project: ProjectRecord) -> Optional[Dict[str, Any]]:
+    def _resolve_voice_place(self, message: str, project: ProjectRecord, *, allow_llm: bool = True) -> Optional[Dict[str, Any]]:
         normalized_message = self._normalize_voice_text(message)
         normalized_place = self._normalize_voice_place_text(message)
 
@@ -1038,7 +1236,7 @@ class AssistantService:
             return candidate
 
         # --- Pass 3: LLM geocoding fallback (any place the LLM knows) ---
-        return self._llm_geocode(message)
+        return self._llm_geocode(message) if allow_llm else None
 
     def _llm_geocode(self, message: str) -> Optional[Dict[str, Any]]:
         """Ask the LLM to extract a place name and return approximate coordinates."""

@@ -39,6 +39,11 @@ import {
   fetchLayers,
   fetchOutputs,
   fetchProject,
+  fetchQuestionBanks,
+  deleteQuestionBank,
+  loadOutputAsLayer,
+  deleteOutput,
+  saveResourceResult,
   generateImageLibraryAsset,
   getApiBase,
   logSessionEvent,
@@ -114,6 +119,7 @@ import type {
   JobRecord,
   KnowledgeBaseItem,
   KnowledgeTopicSummary,
+  QuestionBankSummary,
   LessonGlobeScene,
   LessonResourceSet,
   LayerRecord,
@@ -132,6 +138,7 @@ import { speak, cancelSpeech } from "./speechSynthesis";
 import { AgentControlOverlay } from "./components/AgentControlOverlay";
 import "./styles.css";
 import "./lesson-workflow.css";
+import { ThemeToggle } from "./theme";
 
 const PROJECT_ID_STORAGE_KEY = "webgis_ai_project_id";
 
@@ -580,6 +587,10 @@ export default function App({
   } | null>(null);
   const globeRef = useRef<Map3DGlobeHandle | null>(null);
   const planeAutoArmedRef = useRef(true);
+  // Timestamp until which plane→globe auto transitions are suppressed. Set
+  // before programmatic view changes (layer-load fit, teaching-map fly) so a
+  // world-extent layer cannot yank the class into 3D right after loading.
+  const programmaticViewGuardUntilRef = useRef(0);
   const lessonGlobePinnedRef = useRef(false);
   const lessonGlobeRestoreRef = useRef<{
     viewMode: ViewMode;
@@ -612,6 +623,7 @@ export default function App({
     const [resourceScope, setResourceScope] = useState<"all" | "kb" | "web">("all");
     const [resourceLoading, setResourceLoading] = useState(false);
     const [resourceResults, setResourceResults] = useState<ResourceSearchResult[]>([]);
+    const [questionBanks, setQuestionBanks] = useState<QuestionBankSummary[]>([]);
     const [lessonResourceSets, setLessonResourceSets] = useState<LessonResourceSet[]>([]);
     const [activeLessonResourceSetId, setActiveLessonResourceSetId] = useState("");
     const [focusedRegion, setFocusedRegion] = useState<FocusedRegion | null>(null);
@@ -620,6 +632,7 @@ export default function App({
     const [materialViewerItems, setMaterialViewerItems] = useState<TeachingMaterial[]>([]);
     const [teachingMaps, setTeachingMaps] = useState<TeachingMapItem[]>([]);
     const [datasetCatalogItems, setDatasetCatalogItems] = useState<DatasetCatalogItem[]>([]);
+    const [datasetCatalogError, setDatasetCatalogError] = useState(false);
     const [workflowInitialDataset, setWorkflowInitialDataset] = useState("");
     const [activeTeachingMapIds, setActiveTeachingMapIds] = useState<Set<string>>(new Set());
     const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -848,12 +861,19 @@ export default function App({
     }
     }, [pushToast]);
 
-    useEffect(() => {
-      const query = resourceQuery.trim();
-      const requestId = ++resourceSearchRequestRef.current;
-      const timer = window.setTimeout(() => {
+    // 资源检索按需触发：只在数据库面板打开且教师提交（回车/按钮/切换范围）
+    // 时请求，修掉原先全局 effect 在面板关闭时也持续联网的问题。
+    const runResourceSearch = useCallback(
+      (query: string, scope: "all" | "kb" | "web") => {
+        const trimmed = query.trim();
+        const requestId = ++resourceSearchRequestRef.current;
+        if (!trimmed) {
+          setResourceResults([]);
+          setResourceLoading(false);
+          return;
+        }
         setResourceLoading(true);
-        searchResources({ query, scope: resourceScope, limit: 16 })
+        searchResources({ query: trimmed, scope, limit: 16 })
           .then((response) => {
             if (resourceSearchRequestRef.current === requestId) {
               setResourceResults(response.items);
@@ -869,14 +889,9 @@ export default function App({
               setResourceLoading(false);
             }
           });
-      }, 320);
-      return () => {
-        window.clearTimeout(timer);
-        if (resourceSearchRequestRef.current === requestId) {
-          resourceSearchRequestRef.current += 1;
-        }
-      };
-    }, [pushToast, resourceQuery, resourceScope]);
+      },
+      [pushToast]
+    );
 
   const handleKbSaveItem = useCallback(async () => {
     if (!kbEditingItem) {
@@ -1155,9 +1170,61 @@ export default function App({
           void importToLesson(item.kb_item, item.material);
           return;
         }
+        // 联网结果先落库为「检索收藏」素材，再进入本课时节。
+        if (project) {
+          void (async () => {
+            try {
+              const saved = await saveResourceResult(project.project_id, {
+                title: item.title || "检索资料",
+                url: item.url,
+                summary: item.summary || "",
+                source: item.source || "",
+                type: item.type || "",
+                thumbnail_url: item.thumbnail_url || "",
+              });
+              await loadKnowledgeBase();
+              if (saved.material) {
+                // saved.material 需要父条目信息：用刚保存的收藏条目组装。
+                const collectionItem = kbAllItems.find((kbItem) => kbItem.id === saved.kb_item_id);
+                void importToLesson(collectionItem || ({ id: saved.kb_item_id } as KnowledgeBaseItem), saved.material);
+                return;
+              }
+              pushToast("success", "已保存到知识库", "可在「教学资料 · 检索收藏」中查看");
+            } catch (error) {
+              pushToast("error", "保存失败", error instanceof Error ? error.message : "请求失败");
+            }
+          })();
+          return;
+        }
         pushToast("info", "暂不能导入", "该结果不是知识库条目或已保存素材。");
       },
-      [importToLesson, pushToast]
+      [importToLesson, loadKnowledgeBase, project, pushToast]
+    );
+
+    const handleSaveResourceResult = useCallback(
+      (item: ResourceSearchResult) => {
+        if (!project) {
+          pushToast("info", "暂不能保存", "请先等待项目初始化完成。");
+          return;
+        }
+        void (async () => {
+          try {
+            await saveResourceResult(project.project_id, {
+              title: item.title || "检索资料",
+              url: item.url,
+              summary: item.summary || "",
+              source: item.source || "",
+              type: item.type || "",
+              thumbnail_url: item.thumbnail_url || "",
+            });
+            await loadKnowledgeBase();
+            pushToast("success", "已保存为素材", `「${item.title || "检索资料"}」已存入知识库·检索收藏`);
+          } catch (error) {
+            pushToast("error", "保存失败", error instanceof Error ? error.message : "请求失败");
+          }
+        })();
+      },
+      [loadKnowledgeBase, project, pushToast]
     );
 
   const buildMapContext = useCallback(
@@ -1279,7 +1346,16 @@ export default function App({
           if (!closeJobStream(source)) {
             return;
           }
-          await refreshProjectState(payload.project_id);
+          const uiOnly = Boolean(payload.result?.actions_executed?.length) && payload.result!.actions_executed!.every(
+            (entry) => ["switch_view_mode", "open_panel"].includes(entry.action.tool_name)
+          );
+          if (!uiOnly) {
+            try {
+              await refreshProjectState(payload.project_id);
+            } catch (error) {
+              pushToast("error", "地图状态刷新失败", error instanceof Error ? error.message : "请重试刷新地图。");
+            }
+          }
           handleAssistantUiActions(payload);
           const message = payload.result?.assistant_message || payload.result?.summary || payload.error || "";
           const nextConversationId = String(payload.result?.conversation_id || "");
@@ -1726,6 +1802,12 @@ export default function App({
     if (!project) {
       return;
     }
+    // Missing-image maps would otherwise create a blank overlay.
+    const mapInfo = teachingMaps.find((item) => item.id === mapId);
+    if (visible && mapInfo?.available === false) {
+      pushToast("error", "教学地图缺图", `“${mapInfo.name || mapId}”的图片文件未部署，无法叠加显示。`);
+      return;
+    }
     try {
       const result = await toggleTeachingMap(project.project_id, mapId, visible);
       setActiveTeachingMapIds((prev) => {
@@ -1743,6 +1825,7 @@ export default function App({
       if (visible && result.view?.center && result.view?.zoom) {
         const map = mapRef.current;
         if (map) {
+          programmaticViewGuardUntilRef.current = Date.now() + 2500;
           map.getView().animate({
             center: fromLonLat(result.view.center),
             zoom: result.view.zoom,
@@ -1753,7 +1836,7 @@ export default function App({
     } catch (error: unknown) {
       pushToast("error", "教学地图切换失败", String(error));
     }
-  }, [project, pushToast, refreshProjectState]);
+  }, [project, pushToast, refreshProjectState, teachingMaps]);
 
   const handleToggleTextbookMap = useCallback(
     async (datasetId: string, visible: boolean) => {
@@ -1815,15 +1898,47 @@ export default function App({
   );
 
   const handleDatabaseOpenKnowledgeItem = useCallback((item: KnowledgeBaseItem) => {
-    setKbEditingItem(item);
-    setDatabaseCategory("resources");
-  }, []);
+    // 打开素材查看器预览该条目的全部资料；无资料时退化为提示。
+    const materials = item.materials || [];
+    if (materials.length) {
+      setMaterialViewerTitle(item.title || item.id);
+      setMaterialViewerItems(materials);
+      setMaterialViewerOpen(true);
+    } else {
+      pushToast("info", item.title || "知识条目", item.summary || "该条目暂无可展示的资料");
+    }
+  }, [pushToast]);
 
   const handleDatabaseOpenMaterial = useCallback((title: string, materials: TeachingMaterial[]) => {
     setMaterialViewerTitle(title);
     setMaterialViewerItems(materials);
     setMaterialViewerOpen(true);
   }, []);
+
+  // 图片/产物预览：包装为 image 素材复用 TeachingMaterialViewer（原生支持 image 渲染）。
+  const openArtifactPreview = useCallback((artifact: ArtifactRecord) => {
+    const publicUrl = typeof artifact.metadata?.public_url === "string" ? artifact.metadata.public_url : "";
+    if (!publicUrl) {
+      pushToast("error", "无法预览", artifact.title || artifact.artifact_id);
+      return;
+    }
+    setMaterialViewerTitle(artifact.title || artifact.artifact_id);
+    setMaterialViewerItems([
+      {
+        id: artifact.artifact_id,
+        title: artifact.title || artifact.artifact_id,
+        type: "image",
+        source: "",
+        url: publicUrl,
+        thumbnail_url: publicUrl,
+        description: String(artifact.metadata?.summary || ""),
+        region_binding: {},
+        sort_order: 0,
+        created_at: artifact.created_at
+      }
+    ]);
+    setMaterialViewerOpen(true);
+  }, [pushToast]);
 
   const handleDatabaseToggleLayer = useCallback(async (layerId: string, visible: boolean) => {
     if (!project) {
@@ -1904,31 +2019,115 @@ export default function App({
     }
   }, [project, pushToast, refreshProjectState]);
 
-  const handleDatabaseOpenArtifact = useCallback((artifact: ArtifactRecord) => {
+  const handleDatabaseOpenArtifact = useCallback(
+    (artifact: ArtifactRecord) => {
+      if (["uploaded_image", "generated_image", "map_snapshot"].includes(artifact.artifact_type) || artifact.metadata?.kind === "png") {
+        openArtifactPreview(artifact);
+        return;
+      }
+      const publicUrl = typeof artifact.metadata?.public_url === "string" ? artifact.metadata.public_url : "";
+      if (!publicUrl) {
+        pushToast("error", "产物无法打开", artifact.title || artifact.artifact_id);
+        return;
+      }
+      const url = /^https?:\/\//i.test(publicUrl)
+        ? publicUrl
+        : `${getApiBase()}${publicUrl.startsWith("/") ? publicUrl : `/${publicUrl}`}`;
+      window.open(url, "_blank", "noopener,noreferrer");
+    },
+    [openArtifactPreview, pushToast]
+  );
+
+  const handleDatabaseDownloadArtifact = useCallback((artifact: ArtifactRecord) => {
     const publicUrl = typeof artifact.metadata?.public_url === "string" ? artifact.metadata.public_url : "";
     if (!publicUrl) {
-      pushToast("error", "产物无法打开", artifact.title || artifact.artifact_id);
       return;
     }
-    const url = /^https?:\/\//i.test(publicUrl)
-      ? publicUrl
-      : `${getApiBase()}${publicUrl.startsWith("/") ? publicUrl : `/${publicUrl}`}`;
-    window.open(url, "_blank", "noopener,noreferrer");
-  }, [pushToast]);
+    const link = document.createElement("a");
+    link.href = /^https?:\/\//i.test(publicUrl) ? publicUrl : `${getApiBase()}${publicUrl.startsWith("/") ? publicUrl : `/${publicUrl}`}`;
+    link.download = artifact.title || artifact.artifact_id;
+    link.rel = "noopener";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }, []);
 
-  const handleDatabaseLoadDataset = useCallback(async (item: DatasetCatalogItem) => {
-    if (!project) {
-      return;
-    }
-    try {
-      const response = await addCatalogDatasetLayer(project.project_id, item.id);
-      await refreshProjectState(project.project_id);
-      setViewMode("plane");
-      pushToast("success", "一张图数据已加载", response.layer.name || item.name || item.id);
-    } catch (error) {
-      pushToast("error", "一张图数据加载失败", error instanceof Error ? error.message : "请求失败");
-    }
-  }, [project, pushToast, refreshProjectState]);
+  const handleDatabaseDeleteArtifact = useCallback(
+    async (artifact: ArtifactRecord) => {
+      if (!project) {
+        return;
+      }
+      if (!window.confirm(`确定从数据库移除“${artifact.title || artifact.artifact_id}”吗？（文件保留在服务器磁盘）`)) {
+        return;
+      }
+      try {
+        await deleteOutput(artifact.artifact_id, project.project_id);
+        await refreshProjectState(project.project_id);
+        pushToast("success", "产物已移除", artifact.title || artifact.artifact_id);
+      } catch (error) {
+        pushToast("error", "产物删除失败", error instanceof Error ? error.message : "请求失败");
+      }
+    },
+    [project, pushToast, refreshProjectState]
+  );
+
+  const handleDatabaseLoadArtifactLayer = useCallback(
+    async (artifact: ArtifactRecord) => {
+      if (!project) {
+        return;
+      }
+      try {
+        const response = await loadOutputAsLayer(artifact.artifact_id, project.project_id);
+        await refreshProjectState(project.project_id);
+        setDatabaseViewerOpen(false);
+        const layer = response.item as { name?: string } | undefined;
+        pushToast("success", "产物已上图", layer?.name || artifact.title || artifact.artifact_id);
+      } catch (error) {
+        pushToast("error", "产物上图失败", error instanceof Error ? error.message : "请求失败");
+      }
+    },
+    [project, pushToast, refreshProjectState]
+  );
+
+  const handleDatabaseAttachImage = useCallback(
+    (artifact: ArtifactRecord) => {
+      const publicUrl = typeof artifact.metadata?.public_url === "string" ? artifact.metadata.public_url : "";
+      if (!publicUrl) {
+        pushToast("error", "图片无法附加", artifact.title || artifact.artifact_id);
+        return;
+      }
+      handleAttachImage({
+        artifact_id: artifact.artifact_id,
+        title: artifact.title || artifact.artifact_id,
+        public_url: publicUrl,
+      });
+      setDatabaseViewerOpen(false);
+    },
+    [handleAttachImage, pushToast]
+  );
+
+  const handleDatabaseDeleteQuestionBank = useCallback(
+    async (bank: QuestionBankSummary) => {
+      if (!project) {
+        return;
+      }
+      if (!window.confirm(`确定删除题库“${bank.title || bank.base_name}”（${bank.question_count} 题）吗？该操作不可恢复。`)) {
+        return;
+      }
+      try {
+        await deleteQuestionBank(bank.bank_id);
+        const refreshed = await fetchQuestionBanks(project.project_id);
+        setQuestionBanks(refreshed.items || []);
+        pushToast("success", "题库已删除", bank.title || bank.base_name);
+      } catch (error) {
+        pushToast("error", "题库删除失败", error instanceof Error ? error.message : "请求失败");
+      }
+    },
+    [project, pushToast]
+  );
+
+  // 与 handleLayerManagerAddDataset 相同的建层流程：保留单一实现，两个入口共用。
+  const handleDatabaseLoadDataset = handleLayerManagerAddDataset;
 
   const handleDatabaseUseDataset = useCallback((item: DatasetCatalogItem) => {
     if (!item.source) {
@@ -2262,6 +2461,9 @@ export default function App({
     };
     const checkThreshold = () => {
       if (!planeAutoArmedRef.current) {
+        return;
+      }
+      if (Date.now() < programmaticViewGuardUntilRef.current) {
         return;
       }
       const zoom = view.getZoom();
@@ -2630,10 +2832,12 @@ export default function App({
         const catalog = await fetchDatasetCatalog();
         if (!cancelled) {
           setDatasetCatalogItems(catalog.items || []);
+          setDatasetCatalogError(false);
         }
       } catch {
         if (!cancelled) {
           setDatasetCatalogItems([]);
+          setDatasetCatalogError(true);
         }
       }
       // Load teaching maps catalog
@@ -2649,6 +2853,18 @@ export default function App({
       } catch {
         // teaching maps are optional – do not block init
       }
+      // 题库列表：数据库面板「题库」分类的数据源（导入/删除后在此刷新）。
+      try {
+        const banks = await fetchQuestionBanks(active.project_id);
+        if (!cancelled) {
+          setQuestionBanks(banks.items || []);
+        }
+      } catch {
+        if (!cancelled) {
+          setQuestionBanks([]);
+        }
+      }
+      if (cancelled) return;
       if (restored) {
         pushToast("success", "课堂项目已恢复", "已加载上次的课堂地图环境。");
       } else {
@@ -2662,7 +2878,7 @@ export default function App({
     return () => {
       cancelled = true;
     };
-  }, [initAttempt, loadKnowledgeBase, pushToast, refreshProjectState, subscribeToJob]);
+  }, [currentUser.user_id, initAttempt, loadKnowledgeBase, pushToast, refreshProjectState]);
 
   useEffect(() => {
     if (!mapRef.current || !layerState?.base_map) {
@@ -2831,6 +3047,9 @@ export default function App({
     if (serverViewSignature !== lastAppliedViewRef.current) {
       const targetCenter = fromLonLat(layerState.view.center || [104, 35]);
       const targetZoom = layerState.view.zoom || 4;
+      // Server-driven fit (e.g. a just-loaded world-extent layer may land at
+      // zoom < 3) must not trigger the plane→globe auto switch.
+      programmaticViewGuardUntilRef.current = Date.now() + 3000;
       map.getView().animate(
         { center: targetCenter, zoom: targetZoom, duration: 1200, easing: easeOut },
       );
@@ -3215,6 +3434,7 @@ export default function App({
       <header className="app-header glass-panel">
         <div className="brand-block">
           <BrandLogo className="brand-logo" />
+          <ThemeToggle />
           <div className="brand-title">
             <strong>GeoBot<span className="brand-platform-name"> 智能教学平台</span></strong>
             <span
@@ -3226,10 +3446,11 @@ export default function App({
         </div>
 
         <div className="header-search">
-          <span className="header-search-label">POI 检索</span>
+          <label className="header-search-label" htmlFor="poi-keyword">POI 检索</label>
           <div className="header-search-row">
             <input
               id="poi-keyword"
+              aria-label="POI 检索关键词"
               value={searchKeyword}
               onChange={(event) => setSearchKeyword(event.target.value)}
               onKeyDown={(event) => {
@@ -3467,6 +3688,19 @@ export default function App({
             textbookItems={textbookMapItems}
             textbookActiveIds={textbookActiveIds}
             busy={busy}
+            catalogError={datasetCatalogError}
+            onRetryCatalog={() => {
+              setDatasetCatalogError(false);
+              fetchDatasetCatalog()
+                .then((res) => {
+                  setDatasetCatalogItems(res.items || []);
+                  setDatasetCatalogError(false);
+                })
+                .catch(() => {
+                  setDatasetCatalogItems([]);
+                  setDatasetCatalogError(true);
+                });
+            }}
             onToggleTextbook={(id, visible) => {
               // 只有"显示"一个 2D 图层才需要切到平面模式；在地球模式下
               // 取消勾选不再把用户踹回平面（修复既有反直觉行为）。
@@ -3602,6 +3836,7 @@ export default function App({
 
         <LessonWorkflowShell
           project={project}
+          assistantJob={currentJob}
           layerState={layerState}
           busy={busy}
           openSignal={lessonWorkflowOpenSignal}
@@ -3660,6 +3895,7 @@ export default function App({
         <UploadDialog open={uploadOpen} busy={busy} onClose={() => setUploadOpen(false)} onSubmit={handleUploadDataset} />
         <WorkflowDock
           projectId={project?.project_id || ""}
+          assistantJob={currentJob}
           mapRef={mapRef}
           open={workflowDockOpen}
           layerState={layerState}
@@ -3688,6 +3924,7 @@ export default function App({
           lessonResourceSets={lessonResourceSets}
           teachingMaps={teachingMaps}
           datasetCatalogItems={datasetCatalogItems}
+          questionBanks={questionBanks}
           activeTeachingMapIds={activeTeachingMapIds}
           activeLessonResourceSetId={activeLessonResourceSetId}
           onOpenKnowledgeItem={handleDatabaseOpenKnowledgeItem}
@@ -3695,6 +3932,11 @@ export default function App({
           onToggleLayer={(layerId, visible) => void handleDatabaseToggleLayer(layerId, visible)}
           onFocusLayer={(layerId) => void handleDatabaseFocusLayer(layerId)}
           onOpenArtifact={handleDatabaseOpenArtifact}
+          onDownloadArtifact={handleDatabaseDownloadArtifact}
+          onDeleteArtifact={(artifact) => void handleDatabaseDeleteArtifact(artifact)}
+          onLoadArtifactLayer={(artifact) => void handleDatabaseLoadArtifactLayer(artifact)}
+          onAttachImage={handleDatabaseAttachImage}
+          onDeleteQuestionBank={(bank) => void handleDatabaseDeleteQuestionBank(bank)}
           onActivateLessonSet={(setId) => void handleDatabaseActivateLessonSet(setId)}
           onToggleTeachingMap={(mapId, visible) => void handleToggleTeachingMap(mapId, visible)}
           onLoadDataset={handleDatabaseLoadDataset}
@@ -3706,8 +3948,13 @@ export default function App({
           resourceLoading={resourceLoading}
           resourceResults={resourceResults}
           onResourceQueryChange={setResourceQuery}
-          onResourceScopeChange={setResourceScope}
+          onResourceScopeChange={(scope) => {
+            setResourceScope(scope);
+            runResourceSearch(resourceQuery, scope);
+          }}
+          onResourceSearchSubmit={() => runResourceSearch(resourceQuery, resourceScope)}
           onImportResource={handleImportResourceResult}
+          onSaveResource={(item) => void handleSaveResourceResult(item)}
           onOpenResource={handleOpenResourceResult}
         />
         <PptViewer

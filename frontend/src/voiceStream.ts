@@ -86,6 +86,8 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
     let workletNode: AudioWorkletNode | null = null;
     let socket: WebSocket | null = null;
     let flushResolver: ((text: string | null) => void) | null = null;
+    let flushTimer: number | null = null;
+    let stopPromise: Promise<string | null> | null = null;
 
     const teardown = () => {
       try {
@@ -116,6 +118,12 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
     const finish = () => {
       if (state === "closed") return;
       state = "closed";
+      if (flushTimer !== null) {
+        window.clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      flushResolver?.(null);
+      flushResolver = null;
       teardown();
       events.onClose?.();
     };
@@ -127,11 +135,14 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
       } catch {
         return;
       }
+      if (!parsed || typeof parsed !== "object" || state === "closed") return;
       const text = String(parsed.text || "");
       if (parsed.type === "final") {
         if (flushResolver) {
           flushResolver(text || null);
           flushResolver = null;
+          finish();
+          closeSocket();
         } else {
           events.onFinal?.(text);
         }
@@ -168,10 +179,19 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
               autoGainControl: true,
             },
           });
+          // The socket can close while the permission prompt is still open.
+          if (state === "closed") {
+            teardown();
+            return;
+          }
           audioContext = new AudioContext();
-          await audioContext.audioWorklet.addModule(
-            URL.createObjectURL(new Blob([DOWNSAMPLER_WORKLET], { type: "application/javascript" }))
-          );
+          const moduleUrl = URL.createObjectURL(new Blob([DOWNSAMPLER_WORKLET], { type: "application/javascript" }));
+          try {
+            await audioContext.audioWorklet.addModule(moduleUrl);
+          } finally {
+            URL.revokeObjectURL(moduleUrl);
+          }
+          if ((state as VoiceStreamState) === "closed") return;
           sourceNode = audioContext.createMediaStreamSource(stream);
           workletNode = new AudioWorkletNode(audioContext, "pcm-downsampler");
           workletNode.port.onmessage = (event: MessageEvent<Int16Array>) => {
@@ -184,19 +204,21 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
           state = "open";
           events.onOpen?.();
           resolve({
-            stop: () =>
-              new Promise<string | null>((resolveStop) => {
+            stop: () => {
+              if (stopPromise) return stopPromise;
+              stopPromise = new Promise<string | null>((resolveStop) => {
                 if (state === "closed") {
                   resolveStop(null);
                   return;
                 }
+                teardown();
                 flushResolver = resolveStop;
                 if (socket && socket.readyState === WebSocket.OPEN) {
                   socket.send("flush");
                 }
                 // Safety timeout: never leave the caller hanging if the
                 // server drops without answering the flush.
-                window.setTimeout(() => {
+                flushTimer = window.setTimeout(() => {
                   if (flushResolver === resolveStop) {
                     flushResolver = null;
                     resolveStop(null);
@@ -204,7 +226,9 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
                     closeSocket();
                   }
                 }, 2000);
-              }),
+              });
+              return stopPromise;
+            },
             abort: () => {
               flushResolver?.(null);
               flushResolver = null;

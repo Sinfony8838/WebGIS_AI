@@ -72,6 +72,7 @@ export function useWorkflowStream(workflowId: string): WorkflowStreamState {
     }
 
     let cancelled = false;
+    let hydrationEvents: WorkflowEvent[] | null = [];
     setState({ ...INITIAL_STATE, workflowId, status: "pending" });
 
     // Hydrate initial state with whatever is already persisted on the server.
@@ -80,17 +81,25 @@ export function useWorkflowStream(workflowId: string): WorkflowStreamState {
         if (cancelled) {
           return;
         }
-        setState((prev) => ({
-          ...prev,
-          workflowId,
-          intent: record.intent || prev.intent,
-          status: (record.status as WorkflowStatus) || prev.status,
-          steps: record.steps || [],
-          artifacts: record.artifacts || [],
-          error: record.error || null
-        }));
+        // HTTP and SSE run concurrently. Replay events received while the
+        // snapshot was in flight so it cannot overwrite newer stream state.
+        const events = hydrationEvents || [];
+        hydrationEvents = null;
+        setState((prev) => {
+          const hydrated: WorkflowStreamState = {
+            ...prev,
+            workflowId,
+            intent: record.intent || prev.intent,
+            status: (record.status as WorkflowStatus) || prev.status,
+            steps: record.steps || [],
+            artifacts: record.artifacts || [],
+            error: record.error || null
+          };
+          return events.reduce((next, event) => applyEvent(next, event, workflowId), hydrated);
+        });
       })
       .catch(() => {
+        hydrationEvents = null;
         // ignore — events will populate the state
       });
 
@@ -99,9 +108,11 @@ export function useWorkflowStream(workflowId: string): WorkflowStreamState {
     sourceRef.current = source;
 
     function handleEvent(eventType: WorkflowEventType, raw: MessageEvent<string>) {
+      if (cancelled) return;
       try {
         const payload = raw.data ? (JSON.parse(raw.data) as Record<string, unknown>) : {};
         const event: WorkflowEvent = { type: eventType, payload };
+        hydrationEvents?.push(event);
         setState((prev) => applyEvent(prev, event, workflowId));
         if (TERMINAL_EVENTS.has(eventType)) {
           source.close();
@@ -128,6 +139,7 @@ export function useWorkflowStream(workflowId: string): WorkflowStreamState {
     eventTypes.forEach((type) => source.addEventListener(type, (event) => handleEvent(type, event as MessageEvent<string>)));
 
     source.onerror = () => {
+      if (cancelled) return;
       // Browser will retry automatically; we just note we lost connectivity.
       setState((prev) => ({ ...prev }));
       void fetchCurrentUser().catch(() => undefined);

@@ -23,6 +23,14 @@ function createProps(overrides: Partial<DatabaseViewerProps> = {}): DatabaseView
     onResourceScopeChange: vi.fn(),
     onImportResource: vi.fn(),
     onOpenResource: vi.fn(),
+    onResourceSearchSubmit: vi.fn(),
+    onSaveResource: vi.fn(),
+    questionBanks: [],
+    onDownloadArtifact: vi.fn(),
+    onDeleteArtifact: vi.fn(),
+    onLoadArtifactLayer: vi.fn(),
+    onAttachImage: vi.fn(),
+    onDeleteQuestionBank: vi.fn(),
     knowledgeItems: [
       {
         id: "kb_population",
@@ -98,14 +106,16 @@ describe("DatabaseViewer", () => {
     render(<DatabaseViewer {...createProps()} />);
 
     expect(screen.getByRole("heading", { name: "数据库" })).toBeInTheDocument();
-    expect(screen.getByText("集中管理知识库、素材、资源检索、图层、图片、产物和课时数据，课内外资源统一在此存储与检索。")).toBeInTheDocument();
-    expect(screen.getByText("人口分布知识")).toBeInTheDocument();
-    expect(screen.getByText("人口图层")).toBeInTheDocument();
+    expect(screen.getByText("地图数据、图片、分析产物、教学资料、题库与课时资源统一管理；检索与获取负责从知识库与权威联网补入新资料。")).toBeInTheDocument();
+    // 「全部」页按分区渲染：知识条目与项目图层分区都应出现。
+    expect(screen.getByTestId("database-section-knowledge")).toHaveTextContent("人口分布知识");
+    expect(screen.getByTestId("database-section-layer")).toHaveTextContent("人口图层");
 
-    fireEvent.change(screen.getByLabelText("搜索"), { target: { value: "人口图层" } });
+    fireEvent.change(screen.getByLabelText("搜索"), { target: { value: "不存在的关键词xyz" } });
 
     expect(screen.queryByText("人口分布知识")).not.toBeInTheDocument();
-    expect(screen.getByText("人口图层")).toBeInTheDocument();
+    expect(screen.queryByText("人口图层")).not.toBeInTheDocument();
+    expect(screen.getByText("没有匹配的数据")).toBeInTheDocument();
   });
 
   it("renders one-map catalog entries and supports loading or mapping", () => {
@@ -206,7 +216,153 @@ describe("DatabaseViewer", () => {
     render(<DatabaseViewer {...props} />);
 
     fireEvent.click(screen.getByRole("button", { name: "关联加载" }));
-
     expect(props.onLoadDataset).toHaveBeenCalledWith(props.datasetCatalogItems[0]);
+  });
+
+  it("organizes content into the 7-category navigation with section grouping", () => {
+    const props = createProps({
+      outputs: [
+        {
+          artifact_id: "wf_out",
+          project_id: "p1",
+          job_id: "j1",
+          artifact_type: "workflow_output",
+          title: "胡焕庸线分析结果",
+          path: "/tmp/out.geojson",
+          metadata: { kind: "geojson", public_url: "/files/out.geojson" },
+          created_at: "2026-06-13T08:00:00Z",
+        },
+      ],
+      questionBanks: [
+        {
+          bank_id: "bank1",
+          project_id: "p1",
+          title: "人口专题题库",
+          base_name: "人口",
+          import_mode: "paired",
+          answer_missing: false,
+          section_count: 2,
+          group_count: 3,
+          question_count: 12,
+          answer_complete_count: 12,
+          answer_coverage: 1,
+          image_count: 0,
+          pairing_note_count: 0,
+          stats: {},
+          created_at: "2026-06-13T08:00:00Z",
+          updated_at: "2026-06-13T08:00:00Z",
+        },
+      ],
+    });
+    render(<DatabaseViewer {...props} />);
+
+    // 新 7 类导航 + 每类计数（用导航容器内精确文本匹配，避免撞分区标题）。
+    const tabsNav = screen.getByLabelText("数据库分类");
+    for (const label of ["全部", "地图数据", "图片", "分析产物", "教学资料", "题库", "课时资源", "检索与获取"]) {
+      const tab = Array.from(tabsNav.querySelectorAll("button")).find((btn) => btn.textContent?.includes(label));
+      expect(tab, label).toBeTruthy();
+    }
+    // 「全部」页按分区渲染（项目图层/一张图/知识条目/题库…）。
+    expect(screen.getByTestId("database-section-layer")).toBeInTheDocument();
+    expect(screen.getByText("人口图层")).toBeInTheDocument();
+    expect(screen.getByText("胡焕庸线分析结果")).toBeInTheDocument();
+    expect(screen.getByText("人口专题题库")).toBeInTheDocument();
+    // 分析产物分区有工作流产物行。
+    expect(screen.getByTestId("database-section-outputs")).toBeInTheDocument();
+    // 旧分类词汇不再出现在导航中（分区标题里的「一张图数据」是分区名，允许存在）。
+    const tabTexts = Array.from(tabsNav.querySelectorAll("button")).map((btn) => btn.textContent || "");
+    expect(tabTexts.some((text) => text.includes("知识库") || text.includes("素材") || text.includes("图层"))).toBe(false);
+  });
+
+  it("shows image actions: attach to assistant, download and delete", () => {
+    const props = createProps({
+      activeCategory: "images",
+      outputs: [
+        {
+          artifact_id: "img1",
+          project_id: "p1",
+          job_id: "j1",
+          artifact_type: "generated_image",
+          title: "AI示意图",
+          path: "/tmp/img.png",
+          metadata: { public_url: "/files/img.png" },
+          created_at: "2026-06-13T08:00:00Z",
+        },
+      ],
+    });
+    render(<DatabaseViewer {...props} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "加入助教" }));
+    expect(props.onAttachImage).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "下载" }));
+    expect(props.onDownloadArtifact).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    expect(props.onDeleteArtifact).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers load-as-layer for geojson outputs only", () => {
+    const props = createProps({
+      activeCategory: "outputs",
+      outputs: [
+        {
+          artifact_id: "geo_out",
+          project_id: "p1",
+          job_id: "j1",
+          artifact_type: "workflow_output",
+          title: "矢量结果",
+          path: "/tmp/out.geojson",
+          metadata: { kind: "geojson", public_url: "/files/out.geojson" },
+          created_at: "2026-06-13T08:00:00Z",
+        },
+        {
+          artifact_id: "note_out",
+          project_id: "p1",
+          job_id: "j2",
+          artifact_type: "assistant_note",
+          title: "讲解笔记",
+          path: "/tmp/note.md",
+          metadata: {},
+          created_at: "2026-06-13T09:00:00Z",
+        },
+      ],
+    });
+    render(<DatabaseViewer {...props} />);
+
+    expect(screen.getByRole("button", { name: "上图" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "上图" }));
+    expect(props.onLoadArtifactLayer).toHaveBeenCalledWith(
+      expect.objectContaining({ artifact_id: "geo_out" })
+    );
+    // 非矢量产物没有上图按钮：只有 1 个。
+    expect(screen.getAllByRole("button", { name: "上图" })).toHaveLength(1);
+  });
+
+  it("searches resources on submit and offers save-to-library", () => {
+    const props = createProps({
+      activeCategory: "resources",
+      resourceQuery: "人口迁移",
+      resourceResults: [
+        {
+          id: "web1",
+          title: "世界人口迁移报告",
+          source: "authoritative_web",
+          type: "report",
+          summary: "联合国人口署报告",
+          url: "https://example.org/report",
+          thumbnail_url: "",
+          citations: [],
+          confidence: 0.9,
+        },
+      ],
+    });
+    render(<DatabaseViewer {...props} />);
+
+    fireEvent.submit(screen.getByRole("button", { name: "搜索" }).closest("form")!);
+    expect(props.onResourceSearchSubmit).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "保存为素材" }));
+    expect(props.onSaveResource).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "导入本课时" }));
+    expect(props.onImportResource).toHaveBeenCalledTimes(1);
   });
 });

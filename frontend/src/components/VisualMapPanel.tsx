@@ -58,6 +58,9 @@ type Props = {
   textbookActiveIds: Set<string>;
   busy: boolean;
   onToggleTextbook: (id: string, visible: boolean) => void;
+  /** True when the dataset catalog request failed (distinct from "loading"). */
+  catalogError?: boolean;
+  onRetryCatalog?: () => void;
 };
 
 export function VisualMapPanel({
@@ -68,7 +71,9 @@ export function VisualMapPanel({
   textbookItems,
   textbookActiveIds,
   busy,
-  onToggleTextbook
+  onToggleTextbook,
+  catalogError = false,
+  onRetryCatalog
 }: Props) {
   const [collapsed, setCollapsed] = useState(true);
 
@@ -153,7 +158,23 @@ export function VisualMapPanel({
             ))}
           </div>
 
-          {textbookItems.length === 0 ? (
+          {catalogError && textbookItems.length === 0 ? (
+            <div className="visual-map-error" data-testid="visual-map-error">
+              <p>数据目录加载失败，2D 专题图层不可用。</p>
+              {onRetryCatalog ? (
+                <button
+                  type="button"
+                  className="visual-map-error__retry"
+                  data-testid="visual-map-retry"
+                  onClick={onRetryCatalog}
+                >
+                  重试加载
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+
+          {textbookItems.length === 0 && !catalogError ? (
             <p className="visual-map-empty" data-testid="visual-map-empty">
               数据目录加载中，2D 专题图层稍后出现…
             </p>

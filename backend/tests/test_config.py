@@ -10,6 +10,26 @@ from backend.app.config import AppConfig
 
 
 class AppConfigTest(unittest.TestCase):
+    def test_agent_harness_policy_reads_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            os.environ,
+            {
+                "WEBGIS_AI_AGENT_MAX_ACTIONS": "6",
+                "WEBGIS_AI_AGENT_MAX_IDENTICAL_ACTIONS": "1",
+                "WEBGIS_AI_AGENT_MAX_TOOL_FAILURES": "2",
+                "WEBGIS_AI_AGENT_MAX_SECONDS": "45",
+                "WEBGIS_AI_AGENT_MAX_TRACE_EVENTS": "32",
+            },
+            clear=True,
+        ):
+            config = AppConfig(root_dir=Path(temp_dir))
+
+            self.assertEqual(config.assistant_harness_max_actions, 6)
+            self.assertEqual(config.assistant_harness_max_identical_actions, 1)
+            self.assertEqual(config.assistant_harness_max_tool_failures, 2)
+            self.assertEqual(config.assistant_harness_max_seconds, 45)
+            self.assertEqual(config.assistant_harness_max_trace_events, 32)
+
     def test_basemap_catalog_contains_amap_presets(self) -> None:
         config = AppConfig()
         catalog = config.basemap_catalog()

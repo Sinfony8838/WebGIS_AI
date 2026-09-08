@@ -17,6 +17,7 @@ import logging
 import os
 import re
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -149,8 +150,9 @@ class Workspace:
     def append_log(self, message: str) -> None:
         log_path = self.logs_dir / "workflow.log"
         try:
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
             with log_path.open("a", encoding="utf-8") as fh:
-                fh.write(message.rstrip() + "\n")
+                fh.write(f"[{timestamp}] {message.rstrip()}\n")
         except Exception:  # pragma: no cover - logging best-effort
             logger.exception("failed to append workspace log")
 

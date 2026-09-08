@@ -25,6 +25,7 @@ import {
 } from "../api";
 import type {
   ClassSessionRecord,
+  JobRecord,
   LayersResponse,
   LessonRecord,
   LessonQuestion,
@@ -50,6 +51,7 @@ type LessonMode = "off" | "prep" | "rehearsal" | "teach" | "review";
 
 type Props = {
   project: (ProjectRecord & { status?: string }) | null;
+  assistantJob?: JobRecord | null;
   layerState: LayersResponse | null;
   busy?: boolean;
   onRefresh: () => void | Promise<void>;
@@ -166,6 +168,7 @@ async function waitForPopulationPrep(
 
 export function LessonWorkflowShell({
   project,
+  assistantJob,
   layerState,
   busy = false,
   onRefresh,
@@ -187,6 +190,7 @@ export function LessonWorkflowShell({
   const [lessons, setLessons] = useState<LessonRecord[]>([]);
   const [activeLesson, setActiveLesson] = useState<LessonRecord | null>(null);
   const [activeSession, setActiveSession] = useState<ClassSessionRecord | null>(null);
+  const appliedAssistantJob = useRef("");
   const [stageEnteredAt, setStageEnteredAt] = useState<number | null>(null);
   const [panelCollapsed, setPanelCollapsed] = useState(true);
   const [localBusy, setLocalBusy] = useState(false);
@@ -351,6 +355,34 @@ export function LessonWorkflowShell({
       cancelled = true;
     };
   }, [project?.project_id]);
+
+  // Assistant actions mutate the same classroom on the server. Adopt their
+  // returned state so the next instruction carries the actual session/stage.
+  useEffect(() => {
+    if (assistantJob?.status !== "completed" || assistantJob.project_id !== project?.project_id
+      || appliedAssistantJob.current === assistantJob.job_id) return;
+    appliedAssistantJob.current = assistantJob.job_id;
+    for (const entry of assistantJob.result?.actions_executed || []) {
+      if (["start_class_session", "end_class_session"].includes(entry.action.tool_name)) {
+        const session = entry.result?.class_session as ClassSessionRecord | undefined;
+        if (!session?.session_id) continue;
+        setActiveSession(session);
+        const lesson = lessonSnapshotFromSession(session);
+        if (lesson) setActiveLesson(lesson);
+        setStageEnteredAt(Date.now());
+        setLessonMode(session.status === "running" ? "teach" : "review");
+        setPanelCollapsed(false);
+      }
+      if (entry.action.tool_name === "enter_lesson_stage") {
+        const stage = entry.result?.stage as LessonStage | undefined;
+        if (!stage?.stage_id) continue;
+        setActiveSession((previous) => previous ? { ...previous, current_stage_id: stage.stage_id } : previous);
+        setStageEnteredAt(Date.now());
+        onApplyGlobeScene?.(stage.scene?.globe || {});
+        setLessonMode("teach");
+      }
+    }
+  }, [assistantJob, project?.project_id, onApplyGlobeScene]);
 
   useEffect(() => () => {
     prepAbortRef.current?.abort();

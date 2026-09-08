@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import threading
 import time
 from contextlib import contextmanager
+from dataclasses import fields, is_dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 from uuid import uuid4
 
 from .models import (
@@ -34,6 +36,7 @@ class RuntimeStore:
     def __init__(self, state_file: Path):
         self.state_file = state_file
         self._lock = threading.RLock()
+        self._job_changed = threading.Condition(self._lock)
         self.projects: Dict[str, ProjectRecord] = {}
         self.jobs: Dict[str, JobRecord] = {}
         self.artifacts: Dict[str, ArtifactRecord] = {}
@@ -47,6 +50,10 @@ class RuntimeStore:
         self.workflows: Dict[str, WorkflowRecord] = {}
         self._batch_depth = 0
         self._batch_dirty = False
+        # Large GeoJSON feature payloads are offloaded to files so every
+        # state save does not rewrite megabytes of coordinates (see
+        # _offload_large_layer_data).
+        self._layer_data_files: Dict[Tuple[str, str, int], str] = {}
         self._load()
 
     @contextmanager
@@ -74,8 +81,34 @@ class RuntimeStore:
 
             self.projects = {}
             migrated_legacy_projects = False
+            layer_data_dir = self.state_file.parent / "layer_data"
             for project_id, data in payload.get("projects", {}).items():
                 layers = [LayerRecord(**layer) for layer in data.pop("layers", [])]
+                # Hydrate large feature payloads that were offloaded to files.
+                for layer in layers:
+                    layer_data = layer.data if isinstance(layer.data, dict) else None
+                    features_file = layer_data.get("features_file") if layer_data else None
+                    if not features_file:
+                        continue
+                    # References are filenames written by this store, never
+                    # arbitrary paths from a restored state file.
+                    filename = str(features_file)
+                    if "/" in filename or "\\" in filename or ":" in filename or filename in {".", ".."}:
+                        continue
+                    features_path = layer_data_dir / filename
+                    if features_path.resolve().parent != layer_data_dir.resolve():
+                        continue
+                    if features_path.exists():
+                        try:
+                            hydrated = json.loads(features_path.read_text(encoding="utf-8"))
+                            if not isinstance(hydrated, dict) or not isinstance(hydrated.get("features"), list):
+                                continue
+                            layer_data.pop("features_file", None)
+                            layer_data["type"] = hydrated.get("type", layer_data.get("type"))
+                            layer_data["features"] = hydrated.get("features", [])
+                            self._layer_data_files[(project_id, layer.layer_id, layer.data_rev)] = filename
+                        except (OSError, json.JSONDecodeError):
+                            continue
                 project = ProjectRecord(**data)
                 project.layers = layers
                 if self._remove_legacy_region_demo_layers(project):
@@ -206,6 +239,61 @@ class RuntimeStore:
             for y_value in y_values
         }
 
+    def _offload_large_layer_data(self, payload: Dict[str, Any]) -> None:
+        """Replace huge inline ``data.features`` arrays with file references.
+
+        Catalog/template layers keep their full GeoJSON in ``LayerRecord.data``
+        for rendering. Persisting those arrays inline bloats the state file
+        (tens of MB), which makes every mutation rewrite megabytes and stalls
+        all API paths. Large payloads are written once per ``data_rev`` into
+        ``state/layer_data/`` and hydrated again in ``_load``.
+        """
+        inline_limit = 256 * 1024
+        layer_data_dir = self.state_file.parent / "layer_data"
+        for project_id, project_payload in payload.get("projects", {}).items():
+            layers = [self._encode_record(layer) for layer in project_payload.get("layers", [])]
+            project_payload["layers"] = layers
+            for layer in layers:
+                data = layer.get("data")
+                if not isinstance(data, dict):
+                    continue
+                data = dict(data)
+                layer["data"] = data
+                features = data.get("features")
+                if not isinstance(features, list) or not features:
+                    continue
+                rev = int(layer.get("data_rev") or 0)
+                key = (str(project_id), str(layer.get("layer_id") or ""), rev)
+                cached = self._layer_data_files.get(key)
+                if cached is None:
+                    serialized = json.dumps(
+                        {"type": data.get("type"), "features": features},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    if len(serialized) <= inline_limit:
+                        continue
+                    layer_data_dir.mkdir(parents=True, exist_ok=True)
+                    safe_layer = "".join(
+                        ch for ch in str(layer.get("layer_id") or "layer") if ch.isalnum() or ch in "-_"
+                    ) or "layer"
+                    digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+                    filename = f"{safe_layer}_{rev}_{digest}.json"
+                    target = layer_data_dir / filename
+                    temporary = target.with_suffix(f".{uuid4().hex}.tmp")
+                    try:
+                        temporary.write_text(serialized, encoding="utf-8")
+                        temporary.replace(target)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+                    cached = filename
+                    self._layer_data_files[key] = filename
+                # Mutate the serialized copy only — the live record keeps the
+                # features in memory for API responses.
+                data["feature_count"] = data.get("feature_count") or len(features)
+                data["features_file"] = cached
+                del data["features"]
+
     def _save(self) -> None:
         if self._batch_depth > 0:
             self._batch_dirty = True
@@ -220,39 +308,27 @@ class RuntimeStore:
         completed classroom action still reaches disk exactly once.
         """
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        # Mutations hold _lock while this synchronous encoder runs. Encoding
+        # records directly avoids recursively deep-copying every GeoJSON on
+        # each job-stage update; the persisted JSON structure stays identical.
         payload = {
-            "projects": {project_id: project.to_dict() for project_id, project in self.projects.items()},
-            "jobs": {job_id: job.to_dict() for job_id, job in self.jobs.items()},
-            "artifacts": {artifact_id: artifact.to_dict() for artifact_id, artifact in self.artifacts.items()},
-            "lessons": {lesson_id: lesson.to_dict() for lesson_id, lesson in self.lessons.items()},
-            "lesson_designs": {
-                design_id: design.to_dict() for design_id, design in self.lesson_designs.items()
-            },
-            "lesson_rehearsals": {
-                rehearsal_id: rehearsal.to_dict()
-                for rehearsal_id, rehearsal in self.lesson_rehearsals.items()
-            },
-            "class_sessions": {
-                session_id: session.to_dict()
-                for session_id, session in self.class_sessions.items()
-            },
-            "conversations": {
-                conversation_id: conversation.to_dict() for conversation_id, conversation in self.conversations.items()
-            },
-            "messages": {message_id: message.to_dict() for message_id, message in self.messages.items()},
-            "confirmations": {
-                confirmation_id: confirmation.to_dict()
-                for confirmation_id, confirmation in self.confirmations.items()
-            },
-            "workflows": {
-                workflow_id: workflow.to_dict()
-                for workflow_id, workflow in self.workflows.items()
-            },
+            "projects": {key: self._encode_record(project) for key, project in self.projects.items()},
+            "jobs": self.jobs,
+            "artifacts": self.artifacts,
+            "lessons": self.lessons,
+            "lesson_designs": self.lesson_designs,
+            "lesson_rehearsals": self.lesson_rehearsals,
+            "class_sessions": self.class_sessions,
+            "conversations": self.conversations,
+            "messages": self.messages,
+            "confirmations": self.confirmations,
+            "workflows": self.workflows,
         }
         # Runtime state can include large GeoJSON coordinate arrays.  Pretty
         # printing multiplies that hot-path payload and every mutation rewrites
         # the complete file, so retain readable Unicode but use compact JSON.
-        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        self._offload_large_layer_data(payload)
+        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=self._encode_record)
         temp_path = self.state_file.with_suffix(f"{self.state_file.suffix}.{uuid4().hex}.tmp")
         try:
             temp_path.write_text(serialized, encoding="utf-8")
@@ -273,6 +349,12 @@ class RuntimeStore:
                     temp_path.unlink()
                 except OSError:
                     pass
+
+    @staticmethod
+    def _encode_record(value: Any) -> Dict[str, Any]:
+        if is_dataclass(value) and not isinstance(value, type):
+            return {item.name: getattr(value, item.name) for item in fields(value)}
+        raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
     def _quarantine_corrupt_state(self, reason: str) -> None:
         if not self.state_file.exists():
@@ -490,6 +572,10 @@ class RuntimeStore:
             for index, layer in enumerate(project.layers):
                 if layer.layer_id == layer_id:
                     removed = project.layers.pop(index)
+                    self._layer_data_files = {
+                        key: value for key, value in self._layer_data_files.items()
+                        if key[:2] != (project_id, layer_id)
+                    }
                     if project.active_layer_id == layer_id:
                         project.active_layer_id = project.layers[-1].layer_id if project.layers else ""
                     project.updated_at = utc_now()
@@ -595,6 +681,14 @@ class RuntimeStore:
         with self._lock:
             return self.jobs.get(job_id)
 
+    def wait_for_job_update(self, job_id: str, version: str, timeout: float = 1.0) -> None:
+        """Wake an SSE subscriber on change, including changes before waiting."""
+        with self._job_changed:
+            self._job_changed.wait_for(
+                lambda: job_id not in self.jobs or self.jobs[job_id].updated_at != version,
+                timeout=timeout,
+            )
+
     def set_job_status(
         self,
         job_id: str,
@@ -611,6 +705,7 @@ class RuntimeStore:
             if error:
                 job.error = error
             self._save()
+            self._job_changed.notify_all()
             return job
 
     def append_job_step(self, job_id: str, title: str, detail: str, status: str = "info") -> JobRecord:
@@ -626,6 +721,7 @@ class RuntimeStore:
             )
             job.updated_at = utc_now()
             self._save()
+            self._job_changed.notify_all()
             return job
 
     def update_job_stage(
@@ -646,6 +742,7 @@ class RuntimeStore:
                 job.stages[stage_name]["detail"] = detail
             job.updated_at = utc_now()
             self._save()
+            self._job_changed.notify_all()
             return job
 
     def register_artifact(
@@ -667,8 +764,10 @@ class RuntimeStore:
                 metadata=metadata,
             )
             self.artifacts[artifact.artifact_id] = artifact
-            self.jobs[job_id].artifact_ids.append(artifact.artifact_id)
-            self.jobs[job_id].updated_at = utc_now()
+            job = self.jobs.get(job_id)
+            if job is not None:
+                job.artifact_ids.append(artifact.artifact_id)
+                job.updated_at = utc_now()
             project = self.projects[project_id]
             project.artifact_ids.append(artifact.artifact_id)
             project.updated_at = utc_now()
@@ -678,6 +777,23 @@ class RuntimeStore:
     def get_artifact(self, artifact_id: str) -> Optional[ArtifactRecord]:
         with self._lock:
             return self.artifacts.get(artifact_id)
+
+    def delete_artifact(self, artifact_id: str) -> Optional[ArtifactRecord]:
+        """Remove an artifact record; the backing file is left untouched."""
+        with self._lock:
+            artifact = self.artifacts.pop(artifact_id, None)
+            if artifact is None:
+                return None
+            project = self.projects.get(artifact.project_id)
+            if project is not None and artifact.artifact_id in project.artifact_ids:
+                project.artifact_ids.remove(artifact.artifact_id)
+                project.updated_at = utc_now()
+            job = self.jobs.get(artifact.job_id)
+            if job is not None and artifact.artifact_id in job.artifact_ids:
+                job.artifact_ids.remove(artifact.artifact_id)
+                job.updated_at = utc_now()
+            self._save()
+            return artifact
 
     def list_outputs(self, project_id: Optional[str] = None) -> List[Dict[str, Any]]:
         with self._lock:
