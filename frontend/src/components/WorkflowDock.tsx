@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import GeoJSON from "ol/format/GeoJSON";
 import VectorLayer from "ol/layer/Vector";
 import VectorSource from "ol/source/Vector";
-import { Fill, Stroke, Style } from "ol/style";
+import { Circle, Fill, Stroke, Style } from "ol/style";
 import type { FeatureLike } from "ol/Feature";
 import type Map from "ol/Map";
 
@@ -34,6 +34,7 @@ import {
 } from "../lib/choroplethReplay";
 import type {
   GraduatedStyle,
+  WorkflowLayerStyle,
   DatasetCatalogItem,
   LayersResponse,
   StatsPayload,
@@ -112,20 +113,53 @@ function styleClassFor(style: GraduatedStyle | null, value: number): string {
   return style.default?.color || DEFAULT_FILL;
 }
 
-function buildStyleFunction(style: GraduatedStyle | null) {
+/**
+ * Point geometries render nothing under a Fill/Stroke-only OL style, so any
+ * point result (clip / spatial join / classify of point layers) needs a Circle
+ * image. `strokeColor` keeps the polygon outline consistent for area styles.
+ */
+function pointStyle(color: string, strokeColor = "#ffffff", radius = 5.5): Style {
+  return new Style({
+    image: new Circle({
+      radius,
+      fill: new Fill({ color }),
+      stroke: new Stroke({ color: strokeColor, width: 1.4 })
+    })
+  });
+}
+
+function buildStyleFunction(style: WorkflowLayerStyle | null) {
   return (feature: FeatureLike) => {
-    const raw = style ? feature.get(style.field) : undefined;
+    if (style && style.type === "simple") {
+      const geomType = feature.getGeometry?.()?.getType();
+      if (geomType === "Point" || geomType === "MultiPoint") {
+        const pt = style.point || {};
+        return pointStyle(pt.color || style.color || DEFAULT_FILL, pt.stroke || "#ffffff", pt.radius ?? 5.5);
+      }
+      return new Style({
+        fill: style.color ? new Fill({ color: style.color }) : undefined,
+        stroke: style.stroke
+          ? new Stroke({ color: style.stroke.color || DEFAULT_STROKE, width: style.stroke.width ?? 1.6 })
+          : undefined
+      });
+    }
+    const graduated = style && style.type === "graduated" ? style : null;
+    const raw = graduated ? feature.get(graduated.field) : undefined;
     let color = DEFAULT_FILL;
-    if (style && typeof raw === "number" && Number.isFinite(raw)) {
-      color = styleClassFor(style, raw);
-    } else if (style && typeof raw === "string" && !Number.isNaN(Number(raw))) {
-      color = styleClassFor(style, Number(raw));
+    if (graduated && typeof raw === "number" && Number.isFinite(raw)) {
+      color = styleClassFor(graduated, raw);
+    } else if (graduated && typeof raw === "string" && !Number.isNaN(Number(raw))) {
+      color = styleClassFor(graduated, Number(raw));
+    }
+    const geomType = feature.getGeometry?.()?.getType();
+    if (geomType === "Point" || geomType === "MultiPoint") {
+      return pointStyle(color, graduated?.stroke?.color || "#ffffff");
     }
     return new Style({
       fill: new Fill({ color }),
       stroke: new Stroke({
-        color: style?.stroke?.color || DEFAULT_STROKE,
-        width: style?.stroke?.width ?? 0.6
+        color: graduated?.stroke?.color || DEFAULT_STROKE,
+        width: graduated?.stroke?.width ?? 0.6
       })
     });
   };
@@ -263,7 +297,7 @@ export function WorkflowDock({
 
   const stream = useWorkflowStream(activeWorkflowId);
 
-  const [styleObj, setStyleObj] = useState<GraduatedStyle | null>(null);
+  const [styleObj, setStyleObj] = useState<WorkflowLayerStyle | null>(null);
   const [statsObj, setStatsObj] = useState<StatsPayload | null>(null);
   const [summaryText, setSummaryText] = useState<string>("");
 
@@ -272,7 +306,7 @@ export function WorkflowDock({
   // ── Choropleth replay state ─────────────────────────────────────────
   // Mirrors styleObj/features for the replay callbacks without re-creating
   // them; replayRef owns the running animation (see lib/choroplethReplay).
-  const styleRef = useRef<GraduatedStyle | null>(null);
+  const styleRef = useRef<WorkflowLayerStyle | null>(null);
   const featuresRef = useRef<FeatureLike[] | null>(null);
   const replayRef = useRef<ChoroplethReplay | null>(null);
   const replayedForRef = useRef<string>("");
@@ -293,7 +327,15 @@ export function WorkflowDock({
       const layer = layerRef.current;
       const features = featuresRef.current;
       const style = styleRef.current;
-      if (!mapRef.current || !layer || !features || !style || !style.classes?.length) {
+      // Replay is a graduated-style feature; simple analysis styles skip it.
+      if (
+        !mapRef.current ||
+        !layer ||
+        !features ||
+        !style ||
+        style.type !== "graduated" ||
+        !style.classes?.length
+      ) {
         return;
       }
       if (replayRef.current || replayedForRef.current === workflowId) {
@@ -350,7 +392,7 @@ export function WorkflowDock({
       fetch(buildWorkflowFileUrl(styleArtifact.public_url), { credentials: "include" })
         .then((res) => (res.ok ? res.json() : null))
         .then((payload) => {
-          if (!cancelled && payload && typeof payload === "object" && payload.type === "graduated") {
+          if (!cancelled && payload && typeof payload === "object" && (payload.type === "graduated" || payload.type === "simple")) {
             setStyleObj(payload as GraduatedStyle);
           }
         })

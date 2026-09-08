@@ -1364,7 +1364,16 @@ class WebGISRuntime:
         ]
         catalog_fields = set(item.get("fields") or [])
         style_field = str(item.get("style_field") or "") or next((field for field in numeric_candidates if field in catalog_fields), "")
-        if style_field:
+        if item.get("category") == "boundaries":
+            # Boundary layers should read as outlines; classifying them by a
+            # numeric field turns an administrative map into a choropleth.
+            for feature in features:
+                props = feature.setdefault("properties", {})
+                props["__fillColor"] = "#e2e8f0"
+                props["__fillOpacity"] = 0.05
+                props["__strokeColor"] = "#475569"
+                props["__strokeWidth"] = 1.1
+        elif style_field:
             _classify_colors(features, style_field)
         else:
             _decorate_default_style(features, geometry_type)

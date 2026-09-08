@@ -1,7 +1,7 @@
-import type { GraduatedStyle } from "../types";
+import type { WorkflowLayerStyle } from "../types";
 
 export type LegendPanelProps = {
-  style: GraduatedStyle | null;
+  style: WorkflowLayerStyle | null;
   /** Items at/after this index are dimmed while a replay has not reached
    * them yet; leave undefined to show every item fully revealed. */
   revealedItems?: number;

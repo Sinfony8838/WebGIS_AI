@@ -347,7 +347,7 @@ export function DatabaseViewer({
       title: map.name || map.id,
       subtitle: map.category || "课本地图",
       description: (map.keywords || []).join("、"),
-      status: activeTeachingMapIds.has(map.id) ? "显示中" : "已关闭",
+      status: map.available === false ? "缺图" : activeTeachingMapIds.has(map.id) ? "显示中" : "已关闭",
       tags: compactTags([map.category, ...(map.keywords || [])]),
       updatedAt: "",
       raw: map,

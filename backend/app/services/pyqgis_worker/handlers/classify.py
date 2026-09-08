@@ -140,6 +140,35 @@ def execute(params: Dict[str, Any], workspace: Workspace) -> Dict[str, Any]:
         for i in range(len(breaks) - 1)
     ]
 
+    # Graduated style payload so the web frontend can re-render the classified
+    # layer in colour (same palette family as choropleth). Written to the
+    # workflow outputs directory so the executor can register it as an
+    # artifact (artifact registration only tracks files on disk).
+    import json
+
+    from .choropleth import _pick_palette
+
+    palette = _pick_palette("YlOrRd", len(classes_applied))
+    style_payload = {
+        "type": "graduated",
+        "field": output_field,
+        "method": method,
+        "classes": [
+            {
+                "min": entry["min"],
+                "max": entry["max"],
+                "color": palette[index],
+                "label": entry["label"],
+            }
+            for index, entry in enumerate(classes_applied)
+        ],
+        "stroke": {"color": "#5b5b5b", "width": 0.6},
+        "default": {"color": "#cccccc"},
+        "title": f"字段分级 · {field}",
+    }
+    style_path = workspace.alloc_output_path("classify_style", ".json")
+    style_path.write_text(json.dumps(style_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
     return {
         "layer": alias,
         "crs": out.crs().authid() if out.crs().isValid() else "EPSG:4326",
@@ -150,4 +179,6 @@ def execute(params: Dict[str, Any], workspace: Workspace) -> Dict[str, Any]:
         "method": method,
         "classes_applied": classes_applied,
         "breaks": [float(b) for b in breaks],
+        "style": str(style_path),
+        "style_relative": workspace.relative(style_path),
     }

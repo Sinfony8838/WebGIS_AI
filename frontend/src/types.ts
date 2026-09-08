@@ -1397,6 +1397,23 @@ export type GraduatedStyle = {
   title?: string;
 };
 
+/**
+ * Uniform (non data-driven) style shipped by analysis templates like buffer /
+ * clip / intersection / spatial join. `point` renders Point geometries, which
+ * OpenLayers ignores unless given a Circle image.
+ */
+export type SimpleWorkflowStyle = {
+  type: "simple";
+  title?: string;
+  /** Polygon fill colour (any CSS colour incl. rgba). */
+  color?: string;
+  stroke?: { color?: string; width?: number };
+  point?: { color?: string; radius?: number; stroke?: string };
+  legend?: { title?: string; items: GraduatedStyleLegendItem[] };
+};
+
+export type WorkflowLayerStyle = GraduatedStyle | SimpleWorkflowStyle;
+
 export type StatsRow = Record<string, string | number | boolean | null | undefined>;
 
 export type StatsPayload = {
