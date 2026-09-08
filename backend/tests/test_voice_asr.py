@@ -149,6 +149,23 @@ class VoiceAsrSessionLogicTest(unittest.TestCase):
         fake.chunks = 0
         self.assertIsNone(session.flush())
 
+    def test_flush_decodes_audio_made_ready_by_input_finished(self) -> None:
+        session, fake = self._session()
+        pending = ["尾句第一部分", "完整尾句"]
+        fake.stream.input_finished = mock.Mock()
+        fake.is_ready = mock.Mock(side_effect=lambda stream: bool(pending))
+        result = [""]
+
+        def decode(stream):
+            fake.stream.input_finished.assert_called_once_with()
+            result[0] = pending.pop(0)
+
+        fake.decode_stream = mock.Mock(side_effect=decode)
+        fake.get_result = mock.Mock(side_effect=lambda stream: result[0])
+
+        self.assertEqual(session.flush(), {"type": "final", "text": "完整尾句"})
+        self.assertEqual(fake.decode_stream.call_count, 2)
+
     def test_numpy_missing_keeps_engine_unavailable(self) -> None:
         with mock.patch.object(voice_asr_module, "_numpy", None), mock.patch.object(
             voice_asr_module, "_sherpa_onnx", None
