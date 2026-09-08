@@ -1799,10 +1799,16 @@
 
 .report-toolbar {
   display: flex;
+  flex-direction: column;
   gap: 8px;
-  align-items: center;
   margin-bottom: 10px;
+  flex-shrink: 0;
 }
+
+.report-toolbar select { width: 100%; flex: none; }
+.report-toolbar-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.report-toolbar-actions .toolbar-button { white-space: nowrap; }
+.report-load-error { font-size: 12px; line-height: 1.5; }
 
 .report-error {
   color: #ff9b8f;

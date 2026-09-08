@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../api", () => ({
@@ -108,7 +108,7 @@ vi.mock("../api", () => ({
 }));
 
 import { ReportPanel } from "../components/ReportPanel";
-import { fetchJob } from "../api";
+import { exportSessionPractice, fetchClassSessions, fetchJob, generateSessionReport } from "../api";
 
 afterEach(() => {
   cleanup();
@@ -181,4 +181,99 @@ it("renders preset open homework without fabricated answer or duration", async (
   expect(list.textContent).not.toContain("答案要点：");
   expect(list.textContent).toContain("开放任务或未附参考答案");
   expect(list.textContent).toContain("2/8");
+});
+
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
+
+async function twoSessions() {
+  const payload = structuredClone(await fetchClassSessions({projectId:"fixture"}));
+  payload.items.push({...payload.items[0], session_id:"session_second", started_at:"2026-08-05T08:00:00+00:00"});
+  vi.mocked(fetchClassSessions).mockClear().mockResolvedValueOnce(payload);
+  return payload;
+}
+
+it("separates pending, failure and empty history with a retry", async () => {
+  const request=deferred<Awaited<ReturnType<typeof fetchClassSessions>>>();
+  vi.mocked(fetchClassSessions).mockReturnValueOnce(request.promise);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  expect(screen.getByRole("status").textContent).toContain("正在加载");
+  expect(screen.queryByText(/还没有课堂/)).toBeNull();
+  await act(async () => request.reject(new Error("offline")));
+  expect(screen.getByRole("alert").textContent).toContain("加载失败");
+  expect(screen.queryByText(/还没有课堂/)).toBeNull();
+  vi.mocked(fetchClassSessions).mockResolvedValueOnce({status:"success", items:[]});
+  fireEvent.click(screen.getByText("重新加载课堂记录"));
+  await waitFor(() => expect(screen.getByText(/该项目还没有课堂记录/)).toBeTruthy());
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByRole("status")).toBeNull();
+});
+
+it("clears completed report and paper links immediately on session change without refetching history", async () => {
+  await twoSessions();
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByTestId("generate-report")).toBeEnabled());
+  fireEvent.click(screen.getByTestId("generate-report"));
+  fireEvent.click(screen.getByTestId("export-practice"));
+  await waitFor(() => expect(screen.getByTestId("report-diagnosis")).toBeTruthy());
+  await waitFor(() => expect(screen.getByTestId("practice-student-link")).toBeTruthy());
+  fireEvent.change(screen.getByRole("combobox"), {target:{value:"session_second"}});
+  expect(screen.queryByTestId("report-diagnosis")).toBeNull();
+  expect(screen.queryByTestId("practice-student-link")).toBeNull();
+  expect(fetchClassSessions).toHaveBeenCalledTimes(1);
+});
+
+it("ignores late report submission and paper responses even after switching back to the original session", async () => {
+  await twoSessions();
+  const paper=await exportSessionPractice("fixture");
+  const reportRequest=deferred<Awaited<ReturnType<typeof generateSessionReport>>>();
+  const paperRequest=deferred<typeof paper>();
+  vi.mocked(generateSessionReport).mockReturnValueOnce(reportRequest.promise);
+  vi.mocked(exportSessionPractice).mockReturnValueOnce(paperRequest.promise);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByTestId("generate-report")).toBeEnabled());
+  fireEvent.click(screen.getByTestId("generate-report"));
+  fireEvent.click(screen.getByTestId("export-practice"));
+  fireEvent.change(screen.getByRole("combobox"), {target:{value:"session_second"}});
+  fireEvent.change(screen.getByRole("combobox"), {target:{value:"session_teacher_only"}});
+  await act(async () => { reportRequest.resolve({job_id:"late-job"} as any); paperRequest.resolve(paper); });
+  expect(fetchJob).not.toHaveBeenCalled();
+  expect(screen.queryByTestId("practice-export-result")).toBeNull();
+  expect(screen.getByTestId("generate-report")).toBeEnabled();
+  expect(screen.getByTestId("export-practice")).toBeEnabled();
+});
+
+it("ignores an in-flight job result for the previous session", async () => {
+  await twoSessions();
+  const job=await fetchJob("fixture");
+  vi.mocked(fetchJob).mockClear();
+  const request=deferred<typeof job>();
+  vi.mocked(fetchJob).mockReturnValueOnce(request.promise);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByTestId("generate-report")).toBeEnabled());
+  fireEvent.click(screen.getByTestId("generate-report"));
+  await waitFor(() => expect(fetchJob).toHaveBeenCalledTimes(1));
+  fireEvent.change(screen.getByRole("combobox"), {target:{value:"session_second"}});
+  await act(async () => request.resolve(job));
+  expect(screen.queryByTestId("report-diagnosis")).toBeNull();
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("does not inherit a delayed history response from a different project", async () => {
+  const oldPayload=await twoSessions();
+  const oldRequest=deferred<typeof oldPayload>();
+  // Replace the one-time two-session response with the delayed old project's request.
+  vi.mocked(fetchClassSessions).mockReset().mockReturnValueOnce(oldRequest.promise)
+    .mockResolvedValueOnce({status:"success",items:[]}).mockResolvedValue(oldPayload);
+  const view=render(<ReportPanel projectId="project_old" onClose={vi.fn()} />);
+  view.rerender(<ReportPanel projectId="project_new" onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByText(/该项目还没有课堂记录/)).toBeTruthy());
+  await act(async () => oldRequest.resolve(oldPayload));
+  expect(screen.queryByRole("option", {name:/2026/})).toBeNull();
+  expect(screen.getByTestId("generate-report")).toBeDisabled();
 });

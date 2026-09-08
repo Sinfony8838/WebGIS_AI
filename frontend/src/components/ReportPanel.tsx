@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { buildAuthenticatedUrl, exportSessionPractice, fetchClassSessions, fetchJob, generateSessionReport } from "../api";
 import type { ClassSessionRecord, SessionPracticeExportResult, SessionReportResult, SessionReportStatistics } from "../types";
 
@@ -24,7 +24,12 @@ function formatTime(value: string): string {
   }
 }
 
-export function ReportPanel({ projectId, onClose }: Props) {
+export function ReportPanel(props: Props) {
+  // A project change owns a fresh selection and cannot inherit another project's results.
+  return <ProjectReportPanel key={props.projectId} {...props} />;
+}
+
+function ProjectReportPanel({ projectId, onClose }: Props) {
   const [sessions, setSessions] = useState<ClassSessionRecord[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [report, setReport] = useState<SessionReportResult | null>(null);
@@ -33,35 +38,56 @@ export function ReportPanel({ projectId, onClose }: Props) {
   const [exportingPractice, setExportingPractice] = useState(false);
   const [error, setError] = useState("");
 
-  const loadSessions = useCallback(async () => {
-    try {
-      const payload = await fetchClassSessions({ projectId });
-      setSessions(payload.items);
-      if (payload.items.length && !selectedSessionId) {
-        setSelectedSessionId(payload.items[0].session_id);
-      }
-    } catch {
-      setSessions([]);
-    }
-  }, [projectId, selectedSessionId]);
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const scope = useRef(0);
+  const reportRequest = useRef(0);
+  const exportRequest = useRef(0);
 
+  useEffect(() => () => { scope.current += 1; }, []);
   useEffect(() => {
-    void loadSessions();
-  }, [loadSessions]);
+    let cancelled = false;
+    setLoadState("loading");
+    void fetchClassSessions({ projectId }).then(payload => {
+      if (cancelled) return;
+      setSessions(payload.items);
+      setSelectedSessionId(payload.items[0]?.session_id || "");
+      setLoadState("ready");
+    }).catch(() => { if (!cancelled) setLoadState("error"); });
+    return () => { cancelled = true; };
+  }, [projectId, loadAttempt]);
+
+  function selectSession(sessionId: string) {
+    scope.current += 1;
+    setSelectedSessionId(sessionId);
+    setReport(null);
+    setPracticeExport(null);
+    setGenerating(false);
+    setExportingPractice(false);
+    setError("");
+  }
 
   async function generate() {
     if (!selectedSessionId) {
       return;
     }
+    const sessionId = selectedSessionId;
+    const requestScope = scope.current;
+    const requestId = ++reportRequest.current;
+    const current = () => scope.current === requestScope && reportRequest.current === requestId;
     setGenerating(true);
     setError("");
     setReport(null);
     try {
-      const { job_id } = await generateSessionReport(selectedSessionId);
+      const { job_id } = await generateSessionReport(sessionId);
+      if (!current()) return;
       for (let attempt = 0; attempt < 120; attempt += 1) {
+        if (!current()) return;
         const job = await fetchJob(job_id);
+        if (!current()) return;
         if (job.status === "completed") {
           const result = job.result as unknown as SessionReportResult & { status: string };
+          if (result.statistics?.session_id !== sessionId) throw new Error("报告与所选课堂不一致，请重新生成。");
           setReport({
             statistics: result.statistics,
             diagnosis: result.diagnosis,
@@ -78,6 +104,7 @@ export function ReportPanel({ projectId, onClose }: Props) {
       }
       throw new Error("报告生成超时");
     } catch (exc) {
+      if (!current()) return;
       setError(exc instanceof Error ? exc.message : String(exc));
       setGenerating(false);
     }
@@ -90,16 +117,23 @@ export function ReportPanel({ projectId, onClose }: Props) {
     if (!selectedSessionId) {
       return;
     }
+    const sessionId = selectedSessionId;
+    const requestScope = scope.current;
+    const requestId = ++exportRequest.current;
+    const current = () => scope.current === requestScope && exportRequest.current === requestId;
     setExportingPractice(true);
     setError("");
     setPracticeExport(null);
     try {
-      const result = await exportSessionPractice(selectedSessionId);
+      const result = await exportSessionPractice(sessionId);
+      if (!current()) return;
+      if (result.session_id !== sessionId) throw new Error("练习卷与所选课堂不一致，请重新导出。");
       setPracticeExport(result);
     } catch (exc) {
+      if (!current()) return;
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
-      setExportingPractice(false);
+      if (current()) setExportingPractice(false);
     }
   }
 
@@ -116,17 +150,19 @@ export function ReportPanel({ projectId, onClose }: Props) {
       </header>
 
       <div className="report-toolbar">
-        <select value={selectedSessionId} onChange={(event) => setSelectedSessionId(event.target.value)}>
+        <select aria-label="选择课堂记录" disabled={loadState !== "ready" || !sessions.length}
+          value={selectedSessionId} onChange={(event) => selectSession(event.target.value)}>
           <option value="" disabled>
             选择课堂会话…
           </option>
           {sessions.map((session) => (
             <option key={session.session_id} value={session.session_id}>
-              {String(session.metadata?.lesson_title || session.lesson_id)} · {formatTime(session.started_at)}
+              {formatTime(session.started_at)} · {String(session.metadata?.lesson_title || session.lesson_id)}
               {session.status === "running" ? "（进行中）" : ""}
             </option>
           ))}
         </select>
+        <div className="report-toolbar-actions">
         <button
           type="button"
           className="toolbar-button compact primary"
@@ -155,6 +191,7 @@ export function ReportPanel({ projectId, onClose }: Props) {
             下载 Markdown
           </a>
         ) : null}
+        </div>
       </div>
 
       {practiceExport ? (
@@ -194,8 +231,13 @@ export function ReportPanel({ projectId, onClose }: Props) {
         </div>
       ) : null}
 
-      {error ? <p className="report-error">{error}</p> : null}
-      {!sessions.length ? <p className="lesson-empty">该项目还没有课堂会话记录。先在「上课」模式完成一次课堂吧。</p> : null}
+      {error ? <p className="report-error" role="alert">{error}</p> : null}
+      {loadState === "loading" ? <p className="report-note" role="status">正在加载课堂记录…</p> : null}
+      {loadState === "error" ? <div className="report-load-error" role="alert">
+        <p>课堂记录加载失败，请重试。</p>
+        <button type="button" className="toolbar-button compact" onClick={() => setLoadAttempt(value => value + 1)}>重新加载课堂记录</button>
+      </div> : null}
+      {loadState === "ready" && !sessions.length ? <p className="lesson-empty">该项目还没有课堂记录。可先在「课堂模式」开始一节课。</p> : null}
 
       {statistics ? (
         <div className="report-body">
