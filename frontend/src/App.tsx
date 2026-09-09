@@ -30,6 +30,7 @@ import { Circle as CircleStyle, Fill, RegularShape, Stroke, Style, Text } from "
 import { easeOut } from "ol/easing";
 import { getCenter } from "ol/extent";
 import { captureMapSnapshot } from "./mapScreenshot";
+import { observePlaneView } from "./lib/planeViewState";
 import { collectLegendRows, composeSnapshotDocument, mergeSnapshotInk, plainAttribution, type SnapshotDocument } from "./lib/snapshotDocument";
 import {
   addCatalogDatasetLayer,
@@ -2445,55 +2446,6 @@ export default function App({
     return () => document.removeEventListener("click", close);
   }, [searchDropdownOpen]);
 
-  // Auto plane → globe: watch the OL view's resolution and pop back to 3D
-  // when the user zooms far enough out. Also mirror view state into
-  // `planeViewState` so the bottom status bar updates live.
-  useEffect(() => {
-    if (viewMode !== "plane") {
-      return undefined;
-    }
-    const map = mapRef.current;
-    if (!map) {
-      return undefined;
-    }
-    const view = map.getView();
-    const sync = () => {
-      const center = view.getCenter();
-      const zoom = view.getZoom();
-      if (center && typeof zoom === "number") {
-        const ll = toLonLat(center) as [number, number];
-        setPlaneViewState({ lon: ll[0], lat: ll[1], zoom });
-      }
-    };
-    const checkThreshold = () => {
-      if (!planeAutoArmedRef.current) {
-        return;
-      }
-      if (Date.now() < programmaticViewGuardUntilRef.current) {
-        return;
-      }
-      const zoom = view.getZoom();
-      if (typeof zoom === "number" && zoom < PLANE_TO_GLOBE_ZOOM_THRESHOLD) {
-        planeAutoArmedRef.current = false;
-        const center = view.getCenter();
-        const ll = center ? (toLonLat(center) as [number, number]) : [104, 35];
-        transitionToGlobe({ lon: ll[0], lat: ll[1], zoom, reason: "zoom" });
-        window.setTimeout(() => {
-          planeAutoArmedRef.current = true;
-        }, 1500);
-      }
-    };
-    sync();
-    view.on("change:center", sync);
-    view.on("change:resolution", sync);
-    view.on("change:resolution", checkThreshold);
-    return () => {
-      view.un("change:center", sync);
-      view.un("change:resolution", sync);
-      view.un("change:resolution", checkThreshold);
-    };
-  }, [transitionToGlobe, viewMode]);
-
   useEffect(() => {
     interactionModeRef.current = interactionMode;
   }, [interactionMode]);
@@ -2770,6 +2722,7 @@ export default function App({
     measureSourceRef.current = measureSource;
     annotationSourceRef.current = annotationSource;
     mapRef.current = map;
+    const stopTrackingView = observePlaneView(map.getView(), setPlaneViewState);
     map.on("singleclick", handleClick);
 
     return () => {
@@ -2784,6 +2737,7 @@ export default function App({
       window.clearTimeout(delayedResize);
       resizeObserver.disconnect();
       map.un("singleclick", handleClick);
+      stopTrackingView();
       map.setTarget(undefined);
       basemapLayersRef.current = [];
         businessLayerCacheRef.current.clear();
@@ -2796,6 +2750,41 @@ export default function App({
       mapRef.current = null;
     };
   }, []);
+
+  // Auto plane → globe: watch the OL view's resolution and pop back to 3D
+  // when the user zooms far enough out. Status tracking belongs to map creation.
+  useEffect(() => {
+    if (viewMode !== "plane") {
+      return undefined;
+    }
+    const map = mapRef.current;
+    if (!map) {
+      return undefined;
+    }
+    const view = map.getView();
+    const checkThreshold = () => {
+      if (!planeAutoArmedRef.current) {
+        return;
+      }
+      if (Date.now() < programmaticViewGuardUntilRef.current) {
+        return;
+      }
+      const zoom = view.getZoom();
+      if (typeof zoom === "number" && zoom < PLANE_TO_GLOBE_ZOOM_THRESHOLD) {
+        planeAutoArmedRef.current = false;
+        const center = view.getCenter();
+        const ll = center ? (toLonLat(center) as [number, number]) : [104, 35];
+        transitionToGlobe({ lon: ll[0], lat: ll[1], zoom, reason: "zoom" });
+        window.setTimeout(() => {
+          planeAutoArmedRef.current = true;
+        }, 1500);
+      }
+    };
+    view.on("change:resolution", checkThreshold);
+    return () => {
+      view.un("change:resolution", checkThreshold);
+    };
+  }, [transitionToGlobe, viewMode]);
 
   useEffect(() => {
     let cancelled = false;
