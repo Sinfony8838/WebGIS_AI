@@ -3703,7 +3703,7 @@ export default function App({
               setUrbanActive(false);
               setGlobeThemeIds(preset.themes);
               globeRef.current?.lookAtLocation(
-                preset.camera.lon, 35, preset.camera.altitudeMeters, preset.camera.pitchDeg
+                preset.camera.lon, preset.camera.lat, preset.camera.altitudeMeters, preset.camera.pitchDeg
               );
             }}
             textbookItems={textbookMapItems}

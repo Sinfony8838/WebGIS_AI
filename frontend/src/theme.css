@@ -335,3 +335,13 @@ button:disabled { cursor: not-allowed; }
     left:clamp(352px, var(--copilot-orb-x), calc(100vw - var(--right-rail-width) - 128px)) !important;
   }
 }
+
+
+/* The 3D inspector follows the page theme so its title stays readable. */
+:root[data-theme="light"] .globe-theme-tooltip {
+  background: rgba(255, 255, 255, .96);
+  color: #17354a;
+  border-color: rgba(23, 91, 136, .3);
+  box-shadow: 0 6px 22px rgba(22, 47, 70, .2);
+}
+:root[data-theme="light"] .screen-shell .globe-theme-tooltip strong { color: #096e9b; }

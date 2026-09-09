@@ -1,4 +1,5 @@
 import Polygon from "ol/geom/Polygon";
+import { selectVisibleLabels, type LabelBox } from "./labelLayout";
 /**
  * Thematic 3D layers for the Cesium digital globe.
  *
@@ -169,7 +170,7 @@ export function getEntityTooltip(picked: unknown): ThemeTooltip | null {
 
 // ── Theme builders ──────────────────────────────────────────────────
 
-type ThemeHandle = { dataSources: Cesium.DataSource[] };
+type ThemeHandle = { dataSources: Cesium.DataSource[]; labels?: Cesium.Entity[] };
 
 const LABEL_FONT = "500 15px 'Microsoft YaHei UI', sans-serif";
 const LABEL_FILL = Cesium.Color.fromCssColorString("#18343f");
@@ -208,7 +209,8 @@ async function buildPopulationColumns(): Promise<ThemeHandle> {
     .sort((a, b) => b - a);
   const labelThreshold = ranked[Math.min(9, ranked.length - 1)] ?? 0;
 
-  for (const feature of data.features) {
+  const labels: Cesium.Entity[] = [];
+  for (const feature of [...data.features].sort((a,b) => numberProp(b.properties,"population") - numberProp(a.properties,"population"))) {
     const props = feature.properties;
     const population = numberProp(props, "population");
     const density = numberProp(props, "density");
@@ -242,13 +244,14 @@ async function buildPopulationColumns(): Promise<ThemeHandle> {
           font: "500 14px 'Microsoft YaHei UI', sans-serif"
         })
       });
+      labels.push(label);
       setTooltip(label, {
         title: name,
         lines: [`常住人口：${formatPopulation(population)}`, `人口密度：${formatDensity(density)}`]
       });
     }
   }
-  return { dataSources: [source] };
+  return { dataSources: [source], labels };
 }
 
 /** 人口密度分级设色（extruded=false）或高度映射（extruded=true）。 */
@@ -546,9 +549,9 @@ export const GLOBE_SCENE_PRESETS: GlobeScenePreset[] = [
     id: "population_columns",
     name: "立体人口柱体",
     icon: "🏙️",
-    description: "省级人口柱体三维对比，胡焕庸线辅助分界",
-    themes: ["population_columns", "hu_line"],
-    camera: { lon: 104, lat: 30, altitudeMeters: 8_200_000, pitchDeg: -78 }
+    description: "柱高比较人口总量，颜色比较密度；悬停查看各省数值",
+    themes: ["population_columns"],
+    camera: { lon: 106, lat: 34, altitudeMeters: 6_800_000, pitchDeg: -55 }
   },
   {
     id: "density_terrain",
@@ -590,10 +593,36 @@ export class GlobeThemeManager {
   private wanted = new Set<GlobeThemeId>();
   private destroyed = false;
   private onError?: (themeId: GlobeThemeId, message: string) => void;
+  private removeLabelLayout: () => void;
+  private measure = document.createElement("canvas").getContext("2d");
 
   constructor(viewer: Cesium.Viewer, onError?: (themeId: GlobeThemeId, message: string) => void) {
     this.viewer = viewer;
     this.onError = onError;
+    this.removeLabelLayout = viewer.scene.preRender.addEventListener(() => this.layoutLabels());
+  }
+
+  private layoutLabels(): void {
+    const labels = [...this.handles.values()].flatMap(handle => handle.labels || []);
+    if (!labels.length || !this.measure) return;
+    const scene = this.viewer.scene, time = this.viewer.clock.currentTime;
+    const boxes: LabelBox[] = [];
+    const occluder = new Cesium.Occluder(new Cesium.BoundingSphere(Cesium.Cartesian3.ZERO, scene.globe.ellipsoid.minimumRadius), scene.camera.positionWC);
+    for (const entity of labels) {
+      const position = entity.position?.getValue(time);
+      if (!position || !occluder.isPointVisible(position)) continue;
+      const point = Cesium.SceneTransforms.worldToWindowCoordinates(scene, position);
+      if (!point) continue;
+      const label = entity.label!;
+      this.measure.font = label.font?.getValue(time) || LABEL_FONT;
+      const width = this.measure.measureText(label.text?.getValue(time) || "").width + 18;
+      boxes.push({id:entity.id, left:point.x-width/2, top:point.y-39, width, height:31});
+    }
+    const visible = selectVisibleLabels(boxes, scene.canvas.clientWidth, scene.canvas.clientHeight);
+    for (const entity of labels) {
+      const show = visible.has(entity.id);
+      if (entity.label!.show?.getValue(time) !== show) entity.label!.show = new Cesium.ConstantProperty(show);
+    }
   }
 
   syncThemes(ids: string[]): void {
@@ -636,6 +665,7 @@ export class GlobeThemeManager {
 
   destroy(): void {
     this.destroyed = true;
+    this.removeLabelLayout();
     this.wanted.clear();
     for (const handle of this.handles.values()) {
       this.disposeHandle(handle);
