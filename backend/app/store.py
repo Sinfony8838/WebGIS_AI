@@ -622,7 +622,13 @@ class RuntimeStore:
     def set_view(self, project_id: str, view_patch: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
             project = self.projects[project_id]
-            project.view = {**project.view, **(view_patch or {})}
+            patch = view_patch or {}
+            next_view = {**project.view, **patch}
+            # A new centre/zoom invalidates the previous visible bounds. Keeping
+            # a Shanghai extent after entering the world scene misleads the AI.
+            if "extent" not in patch and any(key in patch for key in ("center", "zoom")):
+                next_view.pop("extent", None)
+            project.view = next_view
             project.updated_at = utc_now()
             self._save()
             return project.view
@@ -676,6 +682,42 @@ class RuntimeStore:
             project.updated_at = utc_now()
             self._save()
             return job
+
+    def fail_interrupted_practice_exports(self, worker_run_id: str) -> List[str]:
+        """A new server run cannot retain the previous process's export threads."""
+        with self._lock:
+            interrupted = []
+            for job in self.jobs.values():
+                request = job.request or {}
+                if (job.job_type == "practice_export" and job.status in {"queued", "pending", "running"}
+                        and request.get("execution_mode") == "in_process"
+                        and request.get("worker_run_id") != worker_run_id):
+                    job.status = "failed"
+                    job.error = "服务重启中断了练习卷生成，请重新导出。"
+                    job.updated_at = utc_now()
+                    interrupted.append(job.job_id)
+            if interrupted:
+                self._save()
+                self._job_changed.notify_all()
+            return interrupted
+
+    def session_review_jobs(self, project_id: str, session_id: str) -> Dict[str, Any]:
+        """Return the most recently submitted report/export within one classroom."""
+        with self._lock:
+            project = self.projects.get(project_id)
+            latest: Dict[str, Any] = {"report": None, "practice": None}
+            if project is None:
+                return latest
+            for job_id in reversed(project.job_ids):
+                job = self.jobs.get(job_id)
+                if not job or job.project_id != project_id or job.request.get("session_id") != session_id:
+                    continue
+                kind = {"class_report": "report", "practice_export": "practice"}.get(job.job_type)
+                if kind and latest[kind] is None:
+                    latest[kind] = job.to_dict()
+                if all(latest.values()):
+                    break
+            return latest
 
     def get_job(self, job_id: str) -> Optional[JobRecord]:
         with self._lock:

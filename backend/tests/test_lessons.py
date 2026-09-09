@@ -31,6 +31,28 @@ class LessonServiceTest(unittest.TestCase):
         self.addCleanup(temp_dir.cleanup)
         return runtime, store, project["project_id"]
 
+    def test_review_history_is_session_scoped_and_persisted_without_generation(self):
+        runtime, store, project_id = self.build_runtime()
+        session_id = runtime.classroom.create_class_session(BUILTIN_LESSON_ID, project_id)["session"]["session_id"]
+        old = store.create_job(project_id, "class_report", "old", request={"session_id": session_id})
+        store.set_job_status(old.job_id, "completed", {"statistics": {"session_id": session_id}})
+        latest = store.create_job(project_id, "class_report", "pending", request={"session_id": session_id})
+        store.create_job(project_id, "class_report", "other class", request={"session_id": "other"})
+        other_project = runtime.create_project()["project_id"]
+        store.create_job(other_project, "class_report", "foreign", request={"session_id": session_id})
+        legacy = store.create_job(project_id, "practice_export", "legacy paper", request={"session_id": session_id})
+        store.set_job_status(legacy.job_id, "success", {"student_artifact": {}, "teacher_artifact": {}})
+        count = len(store.jobs)
+        history = runtime.classroom.session_review_history(session_id)
+        self.assertEqual(history["report"]["job_id"], latest.job_id)
+        self.assertEqual(history["practice"]["result"]["session_id"], session_id)
+        self.assertIn("未保存", history["practice"]["result"]["notes"][0])
+        self.assertNotIn("notes", store.get_job(legacy.job_id).result)
+        self.assertEqual(len(store.jobs), count)
+        restored = RuntimeStore(store.state_file)
+        self.assertEqual(restored.session_review_jobs(project_id, session_id)["report"]["job_id"], latest.job_id)
+        self.assertEqual(restored.session_review_jobs(other_project, "unrelated"), {"report": None, "practice": None})
+
     def test_builtin_lesson_is_seeded(self) -> None:
         runtime, store, _ = self.build_runtime()
 
@@ -41,7 +63,7 @@ class LessonServiceTest(unittest.TestCase):
         self.assertEqual(sum(int(stage.get("minutes") or 0) for stage in lesson.stages), 40)
         self.assertEqual(lesson.find_stage("s7")["title"], "当堂复盘：证据链定格")
         self.assertEqual(lesson.find_stage("s8")["title"], "当堂巩固：四步法检测")
-        self.assertEqual(lesson.metadata.get("builtin_version"), "7")
+        self.assertEqual(lesson.metadata.get("builtin_version"), "8")
         listing = runtime.classroom.list_lessons()
         self.assertTrue(any(item["lesson_id"] == BUILTIN_LESSON_ID for item in listing["items"]))
 
@@ -50,6 +72,28 @@ class LessonServiceTest(unittest.TestCase):
             self.assertTrue(stage["brainstorm"], stage["stage_id"])
             self.assertEqual(len(stage["brainstorm"]["regions"]), 5, stage["stage_id"])
             self.assertTrue(stage["brainstorm"]["prompt"], stage["stage_id"])
+
+    def test_shanghai_stage_replaces_national_thematic_layers(self) -> None:
+        runtime, store, project_id = self.build_runtime()
+        runtime.classroom.apply_lesson_scene(project_id, BUILTIN_LESSON_ID, "s4")
+        runtime.add_catalog_dataset_layer(project_id, "china_aging_rate_province")
+        runtime.classroom.apply_lesson_scene(project_id, BUILTIN_LESSON_ID, "s6")
+        project = store.get_project(project_id)
+        visible = {layer.layer_id: layer for layer in project.layers if layer.visible}
+        self.assertNotIn("builtin_population_regions", visible)
+        self.assertNotIn("builtin_population_density", visible)
+        self.assertNotIn("generated_hu_line", visible)
+        self.assertNotIn("one_map_china_aging_rate_province", visible)
+        layer = visible["one_map_shanghai_population_density"]
+        self.assertEqual(len(layer.data["features"]), 16)
+        self.assertEqual(layer.opacity, 1.0)
+        self.assertEqual(sum(f["properties"]["population"] for f in layer.data["features"]), 24870895)
+        for feature in layer.data["features"]:
+            props = feature["properties"]
+            self.assertAlmostEqual(props["density"], props["population"] / props["area_km2"], places=2)
+        self.assertEqual(project.view["center"], [121.47, 31.23])
+        runtime.classroom.apply_lesson_scene(project_id, BUILTIN_LESSON_ID, "s4")
+        self.assertFalse(next(item for item in store.get_project(project_id).layers if item.layer_id == layer.layer_id).visible)
 
     def test_legacy_lesson_without_brainstorm_remains_readable(self) -> None:
         runtime, _store, _project_id = self.build_runtime()

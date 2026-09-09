@@ -129,7 +129,7 @@ describe("QuestionPracticeModal", () => {
     expect(answer.textContent).toContain("A. 气候和地形");
     expect(answer.textContent).toContain("中低纬度沿海平原气候适宜、地形平坦。");
     expect(screen.getByTestId("qpm-ai").textContent).toContain("官方答案：气候和地形");
-    expect(screen.getByTestId("qpm-ai").textContent).toContain("规则生成");
+    expect(screen.getByTestId("qpm-ai").textContent).toContain("规则整理");
     expect(screen.getByTestId("qpm-revealed-timer").textContent).toContain("3:20");
     expect(screen.getByTestId("qpm-revealed-timer").textContent).toContain("1:20");
     // 揭示后不再出现计时控制。
@@ -170,4 +170,15 @@ describe("QuestionPracticeModal", () => {
     fireEvent.click(screen.getByTestId("qpm-close-footer"));
     expect(onClose).toHaveBeenCalledTimes(2);
   });
+});
+
+it("keeps the reference answer and close control usable while commentary is pending", () => {
+  const callbacks=props();
+  const {rerender}=render(<QuestionPracticeModal {...callbacks} question={question({},timer({status:"revealed",revealed:true,ai_explanation_status:"pending"}))}/>);
+  expect(screen.getByTestId("qpm-answer").textContent).toContain("气候和地形");
+  expect(screen.getByRole("status").textContent).toContain("正在整理讲解");
+  expect(screen.getByTestId("qpm-close")).not.toBeDisabled();
+  rerender(<QuestionPracticeModal {...callbacks} question={question({},timer({status:"revealed",revealed:true,ai_explanation_status:"interrupted"}))}/>);
+  fireEvent.click(screen.getByText("重试讲解"));
+  expect(callbacks.onReveal).toHaveBeenCalledTimes(1);
 });

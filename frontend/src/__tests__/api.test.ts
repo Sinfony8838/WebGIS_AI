@@ -414,3 +414,26 @@ describe("api.sendAssistantMessage", () => {
     expect(String(init?.body)).toContain('"topic":"shipping"');
   });
 });
+
+
+it("preserves HTTP status for distinguishing missing jobs from temporary service failures", async () => {
+  const { fetchJob, ApiError } = await import("../api");
+  const mock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ detail: "Job not found" }), { status: 404 }));
+  try {
+    await expect(fetchJob("missing")).rejects.toBeInstanceOf(ApiError);
+    mock.mockResolvedValue(new Response(JSON.stringify({ detail: "Service unavailable" }), { status: 503 }));
+    await expect(fetchJob("running")).rejects.toMatchObject({ status: 503 });
+  } finally { mock.mockRestore(); }
+});
+
+
+it("submits practice generation as a background task with the exact selected IDs", async () => {
+  const { submitSessionPracticeExport } = await import("../api");
+  const mock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ status: "accepted", job_id: "paper", session_id: "s1" }), { status: 200 }));
+  try {
+    await submitSessionPracticeExport("s1", { token: "selection", selected_ids: ["q1"] });
+    expect(mock.mock.calls[0][0]).toMatch(/practice-export\?background=true$/);
+    expect(mock.mock.calls[0][1]?.body).toBe(JSON.stringify({ token: "selection", selected_ids: ["q1"] }));
+    expect(new Headers(mock.mock.calls[0][1]?.headers).get("Content-Type")).toBe("application/json");
+  } finally { mock.mockRestore(); }
+});

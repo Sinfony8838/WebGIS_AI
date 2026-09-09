@@ -857,8 +857,8 @@ class WebGISRuntime:
                 result={
                     "status": "success",
                     "workflow_type": "dataset_upload",
-                    "summary": f"已导入 {result['layer']['name']}",
-                    "assistant_message": f"数据集 {result['layer']['name']} 已进入当前课堂项目。",
+                    "summary": result["message"],
+                    "assistant_message": result["message"],
                     "artifacts": {registered_artifact.artifact_id: registered_artifact.to_dict()},
                     "layer": result["layer"],
                     "stages": self.store.get_job(job.job_id).stages,
@@ -949,6 +949,9 @@ class WebGISRuntime:
             "project_id": project_id,
             "conversation_id": conversation_id,
             "assistant_mode": normalized_mode,
+            "read_only": normalized_mode == "knowledge" or (
+                normalized_mode == "teaching" and message.lstrip().startswith("GeoBot 头脑风暴：")
+            ),
         }
 
     def confirm_assistant_action(self, confirmation_id: str, decision: str = "approve") -> Dict[str, Any]:
@@ -1513,7 +1516,7 @@ class WebGISRuntime:
             kind="vector",
             source="one_map_catalog",
             geometry_type=geometry_type,
-            opacity=0.86,
+            opacity=1.0 if dataset_id == "shanghai_population_density" else 0.86,
             z_index=z_index,
             style={"labelField": "name"},
             data=payload,
@@ -1539,7 +1542,7 @@ class WebGISRuntime:
         self.store.upsert_layer(project_id, layer)
         return layer
 
-    def add_catalog_dataset_layer(self, project_id: str, dataset_id: str) -> Dict[str, Any]:
+    def add_catalog_dataset_layer(self, project_id: str, dataset_id: str, *, preserve_view: bool = False) -> Dict[str, Any]:
         layer = self.materialize_catalog_layer(project_id, dataset_id)
         self.store.set_active_layer(project_id, layer.layer_id)
 
@@ -1547,7 +1550,9 @@ class WebGISRuntime:
         width = max(0.0, bounds[2] - bounds[0])
         height = max(0.0, bounds[3] - bounds[1])
         zoom = 2 if width > 120 or height > 70 else 4 if width > 35 or height > 25 else 7 if width > 5 else 10
-        view = self.store.set_view(project_id, {"center": _bounds_center(bounds), "zoom": zoom, "extent": bounds})
+        view = dict(self._require_project(project_id).view) if preserve_view else self.store.set_view(
+            project_id, {"center": _bounds_center(bounds), "zoom": zoom, "extent": bounds}
+        )
         self.store.add_recent_action(
             project_id,
             "加载一张图数据",
@@ -1743,6 +1748,19 @@ class WebGISRuntime:
 
     def stream_workflow_events(self, workflow_id: str):
         return self.workflow_executor.stream(workflow_id)
+
+    def cancel_workflow(self, workflow_id: str) -> Dict[str, Any]:
+        record = self.store.get_workflow(workflow_id)
+        if record is None:
+            raise KeyError(f"Unknown workflow: {workflow_id}")
+        cancelled_requests = self.workflow_executor.cancel_workflow(workflow_id)
+        current = self.store.get_workflow(workflow_id) or record
+        return {
+            "status": "success",
+            "workflow_id": workflow_id,
+            "workflow_status": current.status,
+            "cancelled_requests": cancelled_requests,
+        }
 
     def workflow_init_warning(self) -> Optional[Dict[str, Any]]:
         return self.workflow_executor.init_warning()

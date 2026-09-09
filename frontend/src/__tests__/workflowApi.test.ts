@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildWorkflowFileUrl,
+  exportSessionPractice,
   buildWorkflowStreamUrl,
   fetchWorkflow,
   fetchWorkflowArtifacts,
@@ -85,4 +86,13 @@ describe("workflow API helpers", () => {
     expect(url.startsWith(getApiBase())).toBe(true);
     expect(url.endsWith("/workflow-files/wf1/outputs/x.geojson")).toBe(true);
   });
+});
+
+
+it("sends selected practice IDs as JSON rather than text", async () => {
+  await exportSessionPractice("session-1", {token:"preview", selected_ids:["q1"]});
+  const [url, init] = vi.mocked(global.fetch).mock.calls[0];
+  expect(String(url)).toContain("/class-sessions/session-1/practice-export");
+  expect(new Headers(init?.headers).get("Content-Type")).toBe("application/json");
+  expect(JSON.parse(String(init?.body))).toEqual({token:"preview",selected_ids:["q1"]});
 });

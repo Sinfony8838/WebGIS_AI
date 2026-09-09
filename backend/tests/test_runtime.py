@@ -37,7 +37,21 @@ class WebGISRuntimeTest(unittest.TestCase):
 
         job = next(iter(store.jobs.values()))
         self.assertEqual(job.status, "failed")
-        self.assertIn("valid coordinate", job.error)
+        self.assertIn("没有可导入的坐标行", job.error)
+
+    def test_upload_dataset_job_preserves_detailed_import_summary(self) -> None:
+        runtime, store, project_id = self.build_runtime()
+
+        result = runtime.upload_dataset(
+            project_id,
+            "points.csv",
+            b"name,lon,lat\nvalid,113.2,23.1\ninvalid,nope,23.2\n",
+        )
+
+        job = store.get_job(result["job_id"])
+        self.assertEqual(job.status, "completed")
+        self.assertEqual(job.result["summary"], result["message"])
+        self.assertIn("1 条被跳过", job.result["assistant_message"])
 
     def test_export_snapshot_marks_job_failed_on_invalid_data_url(self) -> None:
         runtime, store, project_id = self.build_runtime()

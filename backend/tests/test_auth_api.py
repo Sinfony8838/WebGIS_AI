@@ -26,6 +26,16 @@ class AuthApiTest(unittest.TestCase):
         app_main.auth_service = AuthService(config.auth_db_path)
         self.client = TestClient(app_main.app)
 
+    def test_brainstorm_material_does_not_open_lesson_design(self) -> None:
+        response = self.client.post("/auth/bootstrap", json={"email": "admin@school.edu.cn", "nickname": "测试教师", "password": "Strong-Admin-2026!"})
+        headers = {"X-WebGIS-CSRF": response.json()["csrf_token"]}
+        project_id = self.client.post("/projects", json={"name": "追问路由测试"}, headers=headers).json()["project_id"]
+        with patch.object(app_main.runtime, "submit_assistant_message", return_value={"status": "accepted", "job_id": "question_job"}), patch.object(app_main.runtime.classroom, "create_lesson_design") as create_design:
+            result = self.client.post("/assistant/messages", headers=headers, json={"project_id": project_id, "message": "GeoBot 头脑风暴：教案原题参考：点击地图，设计教案；请只生成上海追问。", "assistant_mode": "teaching"})
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertNotIn("lesson_design", result.json())
+        create_design.assert_not_called()
+
     def tearDown(self) -> None:
         self.client.close()
         app_main.config = self.previous_config
@@ -69,6 +79,38 @@ class AuthApiTest(unittest.TestCase):
             headers={"X-WebGIS-CSRF": csrf},
         )
         self.assertEqual(accepted.status_code, 200, accepted.text)
+
+    def test_opening_other_tabs_preserves_existing_tab_csrf(self) -> None:
+        _user, first_token = self.bootstrap_admin()
+        origin = app_main.config.cors_origins()[0]
+        tokens = [first_token]
+        for _ in range(3):
+            me = self.client.get("/auth/me", headers={"Origin": origin})
+            self.assertEqual(me.status_code, 200)
+            tokens.append(me.json()["csrf_token"])
+        for index, token in enumerate(tokens):
+            with self.subTest(tab=index):
+                response = self.client.post("/projects", json={"name": f"tab-{index}"},
+                    headers={"X-WebGIS-CSRF": token, "Origin": origin})
+                self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(tokens[1:], [tokens[1]] * 3)
+
+    def test_auth_rejections_are_readable_only_by_allowed_origins(self) -> None:
+        _user, token = self.bootstrap_admin()
+        origin = app_main.config.cors_origins()[0]
+        blocked = self.client.post("/projects", json={"name": "blocked"}, headers={"Origin": origin})
+        self.assertEqual(blocked.status_code, 403)
+        self.assertEqual(blocked.json()["detail"]["code"], "CSRF_FAILED")
+        self.assertEqual(blocked.headers.get("access-control-allow-origin"), origin)
+        self.assertEqual(blocked.headers.get("access-control-allow-credentials"), "true")
+        evil = self.client.post("/projects", json={"name": "blocked"},
+            headers={"Origin": "https://evil.example", "X-WebGIS-CSRF": token})
+        self.assertEqual(evil.status_code, 403)
+        self.assertNotIn("access-control-allow-origin", evil.headers)
+        self.client.cookies.clear()
+        expired = self.client.get("/auth/me", headers={"Origin": origin})
+        self.assertEqual(expired.status_code, 401)
+        self.assertEqual(expired.headers.get("access-control-allow-origin"), origin)
 
     def test_teacher_cannot_access_admin_or_another_teachers_project(self) -> None:
         _admin, csrf = self.bootstrap_admin()
@@ -115,6 +157,21 @@ class AuthApiTest(unittest.TestCase):
             )
             self.assertEqual(changed.status_code, 200, changed.text)
             self.assertEqual(teacher_client.get("/admin/users").status_code, 403)
+            history_lesson = app_main.runtime.classroom.create_lesson({"title": "权限测试", "stages": []})
+            admin_session = app_main.runtime.classroom.create_class_session(history_lesson["lesson_id"], admin_project["project_id"])["session"]["session_id"]
+            self.assertEqual(teacher_client.get(f"/class-sessions/{admin_session}/review-history").status_code, 404)
+            allowed_history = self.client.get(f"/class-sessions/{admin_session}/review-history")
+            self.assertEqual(allowed_history.status_code, 200)
+            self.assertEqual(allowed_history.json()["session_id"], admin_session)
+            accepted = {"status": "accepted", "job_id": "practice_test", "session_id": admin_session}
+            with patch.object(app_main.runtime.classroom, "submit_session_practice", return_value=accepted) as submit:
+                selection = {"token": "manifest", "selected_ids": ["q1"]}
+                queued = self.client.post(f"/class-sessions/{admin_session}/practice-export?background=true", json=selection, headers={"X-WebGIS-CSRF": csrf})
+                self.assertEqual(queued.status_code, 200, queued.text)
+                self.assertEqual(queued.json(), accepted)
+                blocked_export = teacher_client.post(f"/class-sessions/{admin_session}/practice-export?background=true", json=selection, headers={"X-WebGIS-CSRF": teacher_csrf})
+                self.assertEqual(blocked_export.status_code, 404)
+                submit.assert_called_once_with(admin_session, selection)
             self.assertEqual(
                 teacher_client.get(f"/projects/{admin_project['project_id']}").status_code,
                 404,

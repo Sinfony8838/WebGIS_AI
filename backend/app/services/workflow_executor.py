@@ -252,6 +252,11 @@ class WorkflowExecutor:
             ))
 
             result = self.worker_manager.run_step(workflow_id, step)
+            timings = result.get("timings") if isinstance(result, dict) else None
+            if timings:
+                logger.info(
+                    "step %s/%s timings %s", workflow_id, step_id, timings
+                )
             state["finished_at"] = utc_now()
             if result.get("status") == "success":
                 state["status"] = "success"
@@ -483,6 +488,23 @@ class WorkflowExecutor:
     # ------------------------------------------------------------------
     # Public helpers
     # ------------------------------------------------------------------
+
+    def cancel_workflow(self, workflow_id: str) -> int:
+        """Cancel the in-flight worker request(s) of ``workflow_id``.
+
+        The running workflow thread will observe ``STEP_CANCELLED`` for the
+        affected step and the workflow fails with that error. Late worker
+        results are isolated by request_id and can never leak into a rerun.
+        Returns how many in-flight requests were cancelled.
+        """
+        cancel = getattr(self.worker_manager, "cancel_workflow", None)
+        if cancel is None:  # stub managers in tests
+            return 0
+        try:
+            return int(cancel(workflow_id))
+        except Exception:  # pragma: no cover
+            logger.exception("failed to cancel workflow %s", workflow_id)
+            return 0
 
     def shutdown(self) -> None:
         try:

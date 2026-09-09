@@ -8,12 +8,16 @@ and falls back to data-driven rule text when the LLM is unavailable.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from urllib.parse import quote
+from typing import Any, Callable, Dict, List, Optional
 
 from ..config import AppConfig
 from ..models import ClassSessionRecord, LessonRecord
 from .minimax_client import MiniMaxClient
+from .lesson_homework import homework_guidance
 
 
 VERDICT_LABELS = {"correct": "回答正确", "partial": "部分正确", "misconception": "存在误区"}
@@ -35,7 +39,7 @@ class ReportService:
     # Statistics (rule-based, always available)
     # ------------------------------------------------------------------
 
-    def build_statistics(self, session: ClassSessionRecord, lesson: Optional[LessonRecord]) -> Dict[str, Any]:
+    def build_statistics(self, session: ClassSessionRecord, lesson: Optional[LessonRecord], artifact_resolver: Optional[Callable[[str], Any]] = None) -> Dict[str, Any]:
         events = list(session.events)
         stage_lookup: Dict[str, Dict[str, Any]] = {}
         question_lookup: Dict[str, Dict[str, Any]] = {}
@@ -51,7 +55,7 @@ class ReportService:
         participants = self._participants(session)
         response_data_collected = any(bool(items) for items in session.responses.values())
         snapshots = [
-            {"timestamp": event.get("timestamp", ""), **(event.get("payload") or {})}
+            self._snapshot_reference(event, session.project_id, stage_lookup, artifact_resolver)
             for event in events
             if event.get("type") == "snapshot"
         ]
@@ -71,6 +75,7 @@ class ReportService:
             "session_id": session.session_id,
             "lesson_id": session.lesson_id,
             "lesson_title": lesson.title if lesson else session.metadata.get("lesson_title", ""),
+            "lesson_snapshot_available": isinstance(session.metadata.get("lesson_snapshot"), dict),
             "started_at": session.started_at,
             "ended_at": session.ended_at,
             "duration_minutes": duration_minutes,
@@ -86,6 +91,25 @@ class ReportService:
             "assistant_exchanges": assistant_exchanges[:10],
             "event_count": len(events),
         }
+
+    def _snapshot_reference(self, event, project_id, stage_lookup, artifact_resolver):
+        payload = event.get("payload") or {}
+        stage_id = str(event.get("stage_id") or "")
+        artifact_id = str(payload.get("artifact_id") or "")
+        result = {"artifact_id": artifact_id, "timestamp": event.get("timestamp", ""),
+                  "stage_id": stage_id, "stage_title": stage_lookup.get(stage_id, {}).get("title", "未关联环节"),
+                  "title": str(payload.get("title") or "课堂地图"), "available": False, "image_url": ""}
+        artifact = artifact_resolver(artifact_id) if artifact_resolver and artifact_id else None
+        if not artifact or artifact.project_id != project_id or artifact.artifact_type != "map_snapshot":
+            return result
+        # Resolve registered files only; never trust a URL supplied in an event.
+        path = Path(artifact.path).resolve()
+        if path.suffix.lower() != ".png" or not path.is_file():
+            return result
+        if not path.is_relative_to((self.config.outputs_dir / project_id).resolve()):
+            return result
+        result.update(available=True, image_url=quote(self.config.public_url_for_path(path), safe="/"))
+        return result
 
     def _stage_durations(
         self,
@@ -181,14 +205,18 @@ class ReportService:
         verdict_counts = {"correct": 0, "partial": 0, "misconception": 0}
         tag_counts: Dict[str, int] = {}
         notes: List[Dict[str, Any]] = []
+        records: List[Dict[str, Any]] = []
         for event in observations:
             payload = event.get("payload") or {}
             verdict = str(payload.get("verdict") or "")
             if verdict in verdict_counts:
                 verdict_counts[verdict] += 1
             tag = str(payload.get("tag") or "").strip()
-            if tag:
+            if tag and verdict == "misconception":
                 tag_counts[tag] = tag_counts.get(tag, 0) + 1
+            records.append({"question_id": str(payload.get("question_id") or ""),
+                            "stage_id": event.get("stage_id", ""), "verdict": verdict,
+                            "tag": tag, "note": str(payload.get("note") or "")})
             if str(payload.get("note") or "").strip():
                 notes.append(
                     {
@@ -204,6 +232,7 @@ class ReportService:
             "verdict_counts": verdict_counts,
             "misconception_tags": sorted(tag_counts.items(), key=lambda item: -item[1]),
             "notes": notes,
+            "records": records,
         }
 
     def _participants(self, session: ClassSessionRecord) -> set[str]:
@@ -237,94 +266,83 @@ class ReportService:
     def build_practice_recommendations(
         self, statistics: Dict[str, Any], lesson: Optional[LessonRecord]
     ) -> List[Dict[str, Any]]:
-        """Build evidence-bounded after-class practice, separate from the 40-minute lesson."""
-        del lesson  # The current population pack is keyed by the persisted lesson title.
-        title = str(statistics.get("lesson_title") or "")
-        observations = statistics.get("observations") if isinstance(statistics.get("observations"), dict) else {}
-        verdicts = observations.get("verdict_counts") if isinstance(observations.get("verdict_counts"), dict) else {}
-        tags = [
-            item
-            for item in list(observations.get("misconception_tags") or [])
-            if isinstance(item, (list, tuple)) and len(item) >= 2
-        ]
-        rated = [
-            item
-            for item in list(statistics.get("questions") or [])
-            if isinstance(item, dict) and item.get("correct_rate") is not None
-        ]
-        if statistics.get("response_data_collected") and rated:
-            weakest = min(rated, key=lambda item: float(item.get("correct_rate") or 0))
-            evidence_basis = (
-                f"课堂已采集作答；最低正确率题为“{weakest.get('text', '')}”"
-                f"（{float(weakest.get('correct_rate') or 0):.0%}），优先安排同类变式。"
-            )
-        elif tags:
-            evidence_basis = f"教师明确记录的首要误区为“{tags[0][0]}”（{tags[0][1]}次），练习优先针对该误区。"
-        elif int(verdicts.get("partial") or 0) > 0:
-            evidence_basis = (
-                f"课堂作答未采集；教师记录到部分正确 {int(verdicts.get('partial') or 0)} 次，"
-                "但没有足够证据判定全班共性误区，因此安排核心目标复测。"
-            )
-        else:
-            evidence_basis = "未取得足够课堂作答或明确误区证据，以下为依据本课核心目标生成的通用巩固题，不代表学情诊断。"
+        """Use the opening lesson snapshot; observations can prioritize, not invent tasks."""
+        questions = [q for q in statistics.get("questions") or [] if isinstance(q, dict)]
+        observations = statistics.get("observations") or {}
+        verdicts = observations.get("verdict_counts") or {}
+        collected = bool(statistics.get("response_data_collected"))
+        evidence = "课堂作答已采集；请结合各题样本量复核，不据少量记录推断全班表现。" if collected else "课堂作答未采集；没有足够证据判定全班共性误区。"
+        if verdicts.get("partial"):
+            evidence += f"教师记录部分正确 {verdicts['partial']} 次。"
+        if verdicts.get("misconception"):
+            evidence += f"教师记录误区表现 {verdicts['misconception']} 次，仅代表所记录的观察。"
 
-        if "人口" in title:
-            return [
-                {
-                    "practice_id": "population_metric_check",
-                    "level": "基础必做",
-                    "title": "人口总量与人口密度辨析",
-                    "suggested_minutes": 6,
-                    "prompt": "甲地人口500万、面积50万平方千米；乙地人口300万、面积10万平方千米。计算两地人口密度，并解释为什么人口总量较大的地区不一定更稠密。",
-                    "answer_points": ["甲地10人/平方千米", "乙地30人/平方千米", "人口密度需同时考虑人口与面积"],
-                    "evidence_basis": evidence_basis,
-                },
-                {
-                    "practice_id": "population_evidence_chain",
-                    "level": "核心必做",
-                    "title": "胡焕庸线地图证据链",
-                    "suggested_minutes": 8,
-                    "prompt": "依据本节人口密度图、胡焕庸线和至少两类影响因素图层，用80—120字完成“指标与尺度—总体格局—分界与例外—自然和人文成因”的四步表达。",
-                    "answer_points": ["明确指标、年份或尺度", "描述东南稠密和西北稀疏", "说明胡焕庸线不是绝对边界", "至少形成一条因素—证据—机制链"],
-                    "evidence_basis": "对应40分钟课堂中Top20、胡焕庸线和影响因素探究的核心目标；用于检查学生能否把观察组织成规范论证。",
-                },
-                {
-                    "practice_id": "population_scale_transfer",
-                    "level": "迁移选做",
-                    "title": "上海城市内部尺度迁移",
-                    "suggested_minutes": 6,
-                    "prompt": "比较上海中心城区与崇明的人口密度差异，指出城市内部尺度下更重要的两项影响因素，并说明为什么不能主要用全国尺度的气候差异解释。",
-                    "answer_points": ["中心城区密度较高、生态与外围空间较低", "城市功能、交通、土地利用、公共服务或规划", "尺度改变后主导因素会变化"],
-                    "evidence_basis": "对应课堂上海区县尺度迁移环节；作为选做题检验方法迁移，不计入40分钟课堂时间。",
-                },
-            ]
+        stage_ids = {str(stage.get("stage_id")) for stage in (lesson.stages if lesson else [])}
+        entered_ids = {str(stage.get("stage_id")) for stage in statistics.get("stages") or []}
+        progress = (f"本次记录进入 {len(stage_ids & entered_ids)}/{len(stage_ids)} 个教案环节；进入记录不代表完成学习，布置前请核对教学进度。"
+                    if stage_ids else "缺少完整教案环节记录，布置前请核对教学进度。")
+        lesson_source = ("来自开课时保存的教案。" if statistics.get("lesson_snapshot_available")
+                         else "来自关联教案；本会话缺少开课快照，内容可能包含课后修改。")
+        plan = lesson.plan if lesson and isinstance(lesson.plan, dict) else {}
+        homework = plan.get("homework") if isinstance(plan.get("homework"), dict) else {}
+        result: List[Dict[str, Any]] = []
+        for key, label in (("basic", "基础作业"), ("inquiry", "探究作业")):
+            for index, text in enumerate(homework.get(key) or [], start=1):
+                if not isinstance(text, str) or not text.strip():
+                    continue
+                guide = homework_guidance(homework, text)
+                result.append({
+                    "practice_id": f"lesson_homework_{key}_{index}", "level": label,
+                    "title": guide.get("title") or f"教案预设作业 · {label}{index}", "suggested_minutes": guide.get("suggested_minutes"),
+                    "prompt": text.strip(), "answer_points": guide.get("answer_points", []),
+                    "evidence_basis": lesson_source + "这是教案预设任务。" + progress + evidence,
+                })
 
-        questions = [item for item in list(statistics.get("questions") or []) if isinstance(item, dict)]
-        seed_question = (
-            str(questions[0].get("text") or "概括本课核心概念并说明依据")
-            if questions
-            else "概括本课核心概念并说明依据"
-        )
-        return [
-            {
-                "practice_id": "core_recheck",
-                "level": "基础必做",
-                "title": "核心目标复测",
-                "suggested_minutes": 6,
-                "prompt": seed_question,
-                "answer_points": ["写出明确结论", "引用本课材料或地图证据"],
-                "evidence_basis": evidence_basis,
-            },
-            {
-                "practice_id": "transfer_task",
-                "level": "迁移选做",
-                "title": "新情境迁移",
-                "suggested_minutes": 8,
-                "prompt": "选择一个新的区域或材料，沿用本课的观察、比较和解释方法完成一段证据论证。",
-                "answer_points": ["说明情境或尺度", "引用证据", "解释形成机制"],
-                "evidence_basis": "依据本课教学目标生成的迁移任务，不代表未采集的学生表现。",
-            },
-        ]
+        defined = {
+            str(q.get("question_id")): q
+            for stage in (lesson.stages if lesson else [])
+            for q in stage.get("questions") or [] if isinstance(q, dict)
+        }
+        by_id = {str(q.get("question_id")): q for q in questions}
+        priorities: Dict[str, str] = {}
+        rated = [q for q in questions if collected and q.get("response_count", 0) > 0
+                 and isinstance(q.get("correct_rate"), (int, float)) and q["correct_rate"] < 0.6]
+        for q in sorted(rated, key=lambda item: item["correct_rate"]):
+            priorities[str(q["question_id"])] = (
+                f"本题已采集 {q['response_count']} 份作答，正确率 {q['correct_rate']:.0%}；建议回看原题并分析解题过程。")
+        for note in observations.get("records") or []:
+            qid = str(note.get("question_id") or "")
+            if note.get("verdict") in {"partial", "misconception"} and qid in by_id:
+                detail = str(note.get("tag") or note.get("note") or VERDICT_LABELS[note["verdict"]])
+                priorities.setdefault(qid, f"教师对本题记录“{detail}”；仅针对这条观察安排回看，不代表全班诊断。")
+
+        # Without preset homework, reuse presented questions, not a title-matched pack.
+        candidates = list(priorities) if result else list(dict.fromkeys([*priorities, *by_id]))
+        for qid in candidates[:2]:
+            q = {**defined.get(qid, {}), **by_id[qid]}
+            original = defined.get(qid, {})
+            answer = str(original.get("answer") or "").strip()
+            options, answer_index = q.get("options") or [], q.get("answer_index")
+            if not answer and isinstance(answer_index, int) and 0 <= answer_index < len(options):
+                answer = f"{chr(65 + answer_index)}. {options[answer_index]}"
+            points = [value for value in (answer, str(original.get("explanation") or "").strip()) if value]
+            result.append({
+                "practice_id": f"class_question_{qid}", "level": "课堂回看",
+                "title": "回看课堂原题", "suggested_minutes": None,
+                "prompt": f"结合课堂原题的图表和材料，再回答：{q.get('text', '')}",
+                "answer_points": points,
+                "evidence_basis": priorities.get(qid, "本次课堂已呈现此题；作为复习安排，不代表学生答错。") + evidence,
+            })
+        if not result:
+            objectives = [str(v).strip() for v in (lesson.objectives if lesson else []) if str(v).strip()]
+            result.append({
+                "practice_id": "lesson_review", "level": "教师待确认", "title": "确定课后复习任务",
+                "suggested_minutes": None,
+                "prompt": ("围绕本课目标“" + "；".join(objectives) + "”，选取课堂材料安排复习。"
+                           if objectives else "尚无预设作业或已呈现的课堂题目，请先补充教学目标与材料再选题。"),
+                "answer_points": [], "evidence_basis": progress + evidence,
+            })
+        return result
 
     def _diagnose_with_llm(self, statistics: Dict[str, Any]) -> str:
         if self.minimax_client is None:
@@ -372,6 +390,8 @@ class ReportService:
             weakest = min(rated, key=lambda item: item["correct_rate"])
             if weakest["correct_rate"] < 0.6:
                 lines.append(f"「{weakest['text']}」正确率仅 {weakest['correct_rate']:.0%}，需要针对性巩固。")
+        elif statistics.get("response_data_collected"):
+            lines.append("本节课已采集作答，但缺少可计算正确率的选择题数据；开放题需结合原文逐项评阅，不能据此判定掌握程度。")
         else:
             lines.append("本节课未采集课堂作答数据，诊断仅依据教师观察、环节用时和课堂证据。")
 
@@ -386,7 +406,7 @@ class ReportService:
         elif verdicts.get("misconception"):
             lines.append(f"教师共记录 {verdicts['misconception']} 次误区表现，建议课后回看具体备注。")
         else:
-            lines.append("本节课未记录到明显共性误区。")
+            lines.append("本次记录没有明确的共性误区证据；未记录不等于学生不存在误区。")
 
         lines.append("")
         lines.append("### 下节课教学建议")
@@ -405,7 +425,7 @@ class ReportService:
         if tags:
             lines.append(f"建议围绕“{tags[0][0]}”设计一道对比辨析题，在下节课导入环节即时检测。")
         if not overtime and not tags:
-            lines.append("课堂节奏与理解情况总体正常，可按原计划推进下一课时，并适当增加学生自主读图任务。")
+            lines.append("现有记录不足以判断学生掌握情况。建议下节课先用一道读图或概念辨析题收集作答，再据证据调整教学安排。")
         return "\n".join(lines)
 
     # ------------------------------------------------------------------
@@ -446,12 +466,12 @@ class ReportService:
             lines.append("本节课未记录教师提问。")
         for index, question in enumerate(questions, start=1):
             teacher_oral = question.get("collection_mode") == "teacher_observation"
-            collection_label = "教师口头呈现，表现由教师观察记录" if teacher_oral else f"{question.get('response_count', 0)} 人作答"
+            collection_label = "教师口头呈现，表现由教师观察记录" if teacher_oral else (f"{question.get('response_count', 0)} 人作答" if question.get("response_count", 0) > 0 else "本题未采集作答数据")
             lines.append(f"**Q{index}. {question.get('text', '')}**（{collection_label}）")
             options = question.get("options") or []
             counts = question.get("option_counts") or []
             total = max(question.get("response_count", 0), 1)
-            if not teacher_oral:
+            if not teacher_oral and question.get("response_count", 0) > 0:
                 for option_index, option in enumerate(options):
                     count = counts[option_index] if option_index < len(counts) else 0
                     marker = " ✅" if question.get("answer_index") == option_index else ""
@@ -476,18 +496,40 @@ class ReportService:
         for note in observations.get("notes") or []:
             lines.append(f"- [{VERDICT_LABELS.get(note.get('verdict', ''), '记录')}] {note.get('note', '')}")
 
+        lines.extend(["", "## 课堂地图回看", "", "截图是课堂展示记录，不能单独证明学生已经理解。", ""])
+        for snapshot in statistics.get("snapshots") or []:
+            lines.append(f"- {snapshot.get('stage_title', '未关联环节')} · {snapshot.get('timestamp', '')}")
+            if snapshot.get("available") and str(snapshot.get("image_url", "")).startswith("/files/outputs/"):
+                lines.append(f"  [查看地图原图](<{snapshot['image_url']}>)")
+            else:
+                lines.append("  截图文件不可用，保留原课堂记录。")
+        if not statistics.get("snapshots"):
+            lines.append("本次课堂没有可回看的截图记录。")
+
         lines.extend(["", "## 学情诊断与建议", "", diagnosis.get("text", ""), ""])
         generator = "AI 生成（MiniMax）" if diagnosis.get("generator") == "minimax" else "规则生成（证据保护）"
         lines.append(f"> 诊断内容来源：{generator}")
-        lines.extend(["", "## 课后推荐练习巩固", "", "以下练习在课堂结束后使用，不计入40分钟正式课时。", ""])
+        lines.extend(["", "## 课后推荐练习巩固", "", "以下任务在课堂结束后使用，不计入课堂教学用时；预设作业需由教师结合实际进度确认。", ""])
         for index, item in enumerate(practice_recommendations or [], start=1):
+            timing = f"（建议 {item['suggested_minutes']} 分钟）" if item.get("suggested_minutes") else ""
+            question = item.get("question") or {}
+            material = str(question.get("material") or "")
+            body = [material] if material else []
+            body.extend(f"![题图]({image['url']})" for image in question.get("images") or [] if image.get("url"))
+            body.append(str(item.get("prompt") or ""))
+            if question.get("task_text") and question["task_text"] != item.get("prompt"):
+                body.append(str(question["task_text"]))
+            body.extend(f"{chr(65 + n)}. " + re.sub(r"^[A-H][．.、]\s*", "", option) for n, option in enumerate(question.get("options") or []))
+            for sub in question.get("sub_questions") or []:
+                body.append(f"({sub['index']}) {sub['text']}")
+                body.extend(f"{chr(65 + n)}. " + re.sub(r"^[A-H][．.、]\s*", "", option) for n, option in enumerate(sub.get("options") or []))
             lines.extend(
                 [
-                    f"### {index}. [{item.get('level', '')}] {item.get('title', '')}（建议 {item.get('suggested_minutes', '—')} 分钟）",
+                    f"### {index}. [{item.get('level', '')}] {item.get('title', '')}{timing}",
                     "",
-                    str(item.get("prompt") or ""),
+                    "\n\n".join(body),
                     "",
-                    "- 答案要点：" + "；".join(str(point) for point in item.get("answer_points") or []),
+                    "- 参考要点：" + "；".join(str(point) for point in item["answer_points"]) if item.get("answer_points") else "- 开放任务或未附参考答案，请结合原题材料评阅。",
                     "- 推荐依据：" + str(item.get("evidence_basis") or ""),
                     "",
                 ]

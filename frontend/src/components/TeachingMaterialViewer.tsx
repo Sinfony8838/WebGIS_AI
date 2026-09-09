@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { getApiBase } from "../api";
 import type { TeachingMaterial } from "../types";
 
@@ -51,19 +52,31 @@ function renderMaterial(material: TeachingMaterial) {
 }
 
 export function TeachingMaterialViewer({ open, title, materials, onClose }: Props) {
-  if (!open) {
-    return null;
-  }
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const dialog = dialogRef.current;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (open && dialog && !dialog.open) dialog.showModal();
+    return () => {
+      if (dialog?.open) dialog.close();
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, [open]);
+  if (!open) return null;
 
   return (
-    <div className="material-viewer-backdrop" role="presentation" onClick={onClose}>
-      <section className="material-viewer glass-panel" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+    <dialog ref={dialogRef} className="material-viewer-backdrop" aria-label={title || "教学资料预览"}
+      onCancel={(event) => { event.preventDefault(); onClose(); }}
+      onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }}
+      onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="material-viewer glass-panel" onClick={(event) => event.stopPropagation()}>
         <div className="material-viewer-header">
           <div>
             <p className="panel-tag">Teaching Materials</p>
             <strong>{title || "地区教学资料"}</strong>
           </div>
-          <button type="button" className="mini-control" onClick={onClose}>
+          <button type="button" className="mini-control" onClick={onClose} aria-label="关闭资料预览">
             ×
           </button>
         </div>
@@ -83,6 +96,6 @@ export function TeachingMaterialViewer({ open, title, materials, onClose }: Prop
           )}
         </div>
       </section>
-    </div>
+    </dialog>
   );
 }

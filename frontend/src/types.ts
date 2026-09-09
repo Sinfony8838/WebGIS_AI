@@ -49,6 +49,7 @@ export type BasemapLayerDescriptor = {
   z_index: number;
   class_name?: string;
   cross_origin?: string;
+  max_zoom?: number;
   /**
    * Whether the backend considers this raster layer safe to use as a
    * Cesium ImageryProvider in the 3D globe view. Weather overlays and
@@ -98,6 +99,50 @@ export type ArtifactRecord = {
   path: string;
   metadata: Record<string, unknown>;
   created_at: string;
+};
+
+export type DatasetUploadLayer = Omit<LayerRecord, "metadata"> & {
+  metadata: Record<string, unknown> & {
+    feature_count?: number;
+    source_crs?: string | null;
+    stored_crs?: string | null;
+    crs_converted?: boolean;
+  };
+};
+
+export type DatasetUploadResponse = {
+  status: string;
+  job_id: string;
+  layer: DatasetUploadLayer;
+  artifact: {
+    artifact_type: string;
+    title: string;
+    path: string;
+    metadata: Record<string, unknown>;
+  };
+  crs: {
+    source_crs?: string | null;
+    target_crs?: string;
+    reprojected?: boolean;
+    warnings?: Array<{ code: string; message_zh: string }>;
+    detection_method?: string;
+  };
+  message: string;
+  row_report?: {
+    total_rows?: number;
+    imported_rows?: number;
+    skipped_rows?: number;
+    skip_reasons?: Record<string, number>;
+    encoding?: string;
+    lat_field?: string;
+    lon_field?: string;
+  };
+  feature_report?: {
+    total_features?: number;
+    imported_features?: number;
+    skipped_features?: number;
+    skip_reasons?: Record<string, number>;
+  };
 };
 
 export type RecentAction = {
@@ -288,6 +333,8 @@ export type ChatMessage = {
   intent?: string | null;
   /** Tools the agent executed for this reply - drives the collapsible tool-use trace. */
   actions_executed?: ExecutedAction[] | null;
+  /** Sources returned with this answer; never inferred from the latest job. */
+  citations?: CitationRecord[];
   image_attachment?: ImageAttachment | null;
   /** Planner that produced this reply (interaction_rule/interaction_minimax/…) - drives the 快速通道/AI 规划 badge. */
   planner?: string | null;
@@ -738,6 +785,9 @@ export type QuestionTimerState = {
   overtime_seconds: number;
   reset_count: number;
   ai_explanation: { text: string; generator: string } | null;
+  ai_explanation_status?: "pending" | "ready" | "interrupted";
+  ai_request_id?: string;
+  ai_explanation_note?: string;
 };
 
 export type QuestionRevealResult = {
@@ -1222,6 +1272,7 @@ export type SessionReportStatistics = {
     notes: Array<{ timestamp: string; stage_id: string; verdict: string; tag: string; note: string }>;
   };
   snapshot_count: number;
+  snapshots?: Array<{ artifact_id: string; timestamp: string; stage_id: string; stage_title: string; title: string; available: boolean; image_url: string }>;
   assistant_exchange_count: number;
   event_count: number;
 };
@@ -1230,16 +1281,19 @@ export type ReportPracticeRecommendation = {
   practice_id: string;
   level: string;
   title: string;
-  suggested_minutes: number;
+  suggested_minutes: number | null;
   prompt: string;
   answer_points: string[];
   evidence_basis: string;
+  question?: LessonQuestion;
 };
 
 export type SessionReportResult = {
   statistics: SessionReportStatistics;
   diagnosis: { text: string; generator: string };
   practice_recommendations: ReportPracticeRecommendation[];
+  practice_selection_notes?: string[];
+  practice_selection?: { token: string; item_ids: string[] };
   report_url: string;
 };
 

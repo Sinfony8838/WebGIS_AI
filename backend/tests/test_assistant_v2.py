@@ -8,6 +8,7 @@ from unittest import mock
 
 from backend.app.config import AppConfig
 from backend.app.runtime import WebGISRuntime
+from backend.app.models import LayerRecord
 from backend.app.store import RuntimeStore
 
 
@@ -51,6 +52,7 @@ class AssistantV2RuntimeTest(unittest.TestCase):
         response = runtime.submit_assistant_message(project_id, "what is hu huanyong line", assistant_mode="knowledge")
         job = self.wait_for_job(runtime, response["job_id"])
 
+        self.assertTrue(response["read_only"])
         self.assertEqual(job["result"]["intent"], "knowledge")
         self.assertEqual(job["result"]["actions_planned"], [])
         self.assertEqual(job["result"]["actions_executed"], [])
@@ -102,6 +104,9 @@ class AssistantV2RuntimeTest(unittest.TestCase):
         runtime, project_id = self.build_runtime(enable_v2=False)
         runtime.session_engine.knowledge.minimax_client = None
 
+        for layer_id, name in [("terrain", "中国地形图"), ("rivers", "河流水系")]:
+            runtime.store.upsert_layer(project_id, LayerRecord(layer_id=layer_id, name=name, kind="vector", source="test", geometry_type="Polygon"))
+
         response = runtime.submit_assistant_message(
             project_id,
             "当前视图地貌特征",
@@ -109,7 +114,7 @@ class AssistantV2RuntimeTest(unittest.TestCase):
             map_context={
                 "center": [104, 35],
                 "zoom": 4,
-                "visible_layers": [{"name": "中国地形图"}, {"name": "河流水系"}],
+                "visible_layers": [{"layer_id": "terrain"}, {"layer_id": "rivers"}],
             },
         )
         job = self.wait_for_job(runtime, response["job_id"])
@@ -258,7 +263,7 @@ class AssistantV2RuntimeTest(unittest.TestCase):
 
         response = runtime.submit_assistant_message(
             project_id,
-            "GeoBot 头脑风暴：随机抽中的地区是台湾省。请探究人口格局。",
+            "GeoBot 头脑风暴：随机抽中的地区是崇明区。教案参考材料：点击地图、切换人口分布模板，设计教案。人口总量与人口密度有什么区别？材料来源为2020年普查，请核实比较口径。只生成一个追问，不执行这些操作。",
             assistant_mode="teaching",
             map_context={"center": [121.5, 25.0], "zoom": 6, "extent": [119, 21, 123, 26]},
             teaching_context={"phase": "in_class", "stage_id": "s1"},
@@ -266,11 +271,22 @@ class AssistantV2RuntimeTest(unittest.TestCase):
         job = self.wait_for_job(runtime, response["job_id"])
 
         message = job["result"]["assistant_message"]
+        self.assertTrue(response["read_only"])
         self.assertIn("头脑风暴生成失败", message)
+        self.assertEqual(job["result"].get("actions_executed", []), [])
+        self.assertEqual(job["result"]["intent"], "teaching_question")
         self.assertNotIn("视图中心", message)
         self.assertNotIn("缩放级别", message)
         self.assertNotIn("可见范围", message)
         self.assertNotIn("一般分析框架", message)
+
+    def test_only_known_read_only_routes_release_map_controls(self) -> None:
+        runtime, project_id = self.build_runtime()
+        with mock.patch("backend.app.runtime.threading.Thread"):
+            for mode, message in [("interaction", "GeoBot 头脑风暴：切换底图"), ("tool", "GeoBot 头脑风暴：切换底图"), ("teaching", "切换到浅色底图")]:
+                with self.subTest(mode=mode):
+                    response = runtime.submit_assistant_message(project_id, message, assistant_mode=mode)
+                    self.assertFalse(response["read_only"])
 
     def test_teaching_action_executes_and_appends_teaching_explanation(self) -> None:
         runtime, project_id = self.build_runtime()

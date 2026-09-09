@@ -67,12 +67,12 @@ GLOBE_BINDINGS: Dict[str, Dict[str, Any]] = {
     "s5": {
         "enabled": True,
         "themes": ["density_fill", "climate_zones"],
-        "camera": {"lon": 104.0, "lat": 8.0, "altitudeMeters": 4800000.0, "pitchDeg": -48.0},
+        "camera": {"lon": 104.0, "lat": 18.0, "altitudeMeters": 8200000.0, "pitchDeg": -78.0},
     },
     "s7": {
         "enabled": True,
         "themes": ["density_3d", "hu_line"],
-        "camera": {"lon": 105.0, "lat": 9.0, "altitudeMeters": 5200000.0, "pitchDeg": -50.0},
+        "camera": {"lon": 106.0, "lat": 22.0, "altitudeMeters": 7800000.0, "pitchDeg": -80.0},
     },
 }
 

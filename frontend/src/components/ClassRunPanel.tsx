@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent } from "react";
-import { createPortal } from "react-dom";
+import type { ClassroomPresentationTarget } from "../api";
+import { ShanghaiPopulationInquiry } from "./ShanghaiPopulationInquiry";
 import type { ClassSessionRecord, LessonQuestion, LessonRecord, LessonStage, ObservationVerdict } from "../types";
 
 type Props = {
@@ -9,10 +9,12 @@ type Props = {
   currentStageId: string;
   stageEnteredAt: number | null;
   busy: boolean;
+  assistantBusy?: boolean;
   quizActive: boolean;
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onEnterStage: (stageId: string) => void;
+  onPresentScene?: (target: ClassroomPresentationTarget) => Promise<void>;
   onLaunchQuestion: (questionId: string, stageId: string) => void;
   /** 全屏投屏本题：服务端计时 + 课堂大屏同步（题目投影模式）。 */
   onProjectQuestion?: (questionId: string, stageId: string) => void;
@@ -23,7 +25,7 @@ type Props = {
   visibleCatalogLayerIds?: string[];
   onFocusEvidenceLayer?: (datasetId: string, stageDatasetIds: string[]) => void;
   onRequestPlaneView?: () => void;
-  /** 以隐藏的内部提示驱动 GeoBot，课堂对话只显示简短的头脑风暴标题。 */
+  /** 以隐藏的内部提示驱动 GeoBot，课堂对话显示完整的探究问题。 */
   onAssistantPrompt?: (prompt: string, displayMessage?: string) => void;
 };
 
@@ -35,134 +37,25 @@ function formatElapsed(seconds: number): string {
 
 const OPTION_LABELS = ["A", "B", "C", "D", "E", "F", "G", "H"];
 const EVIDENCE_LAYER_LABELS: Record<string, string> = {
-  china_climate_types: "① 气候",
-  china_terrain_steps: "② 地形",
-  china_major_rivers: "③ 河流",
-  china_vegetation_zones: "④ 植被验证",
-  china_province_gdp_per_capita: "⑤ 经济"
+  china_climate_types: "气候",
+  china_terrain_steps: "地形",
+  china_major_rivers: "河流",
+  china_vegetation_zones: "植被",
+  china_province_gdp_per_capita: "经济"
 };
 
-type KnowledgePosition = { x: number; y: number };
-
-function defaultKnowledgePosition(): KnowledgePosition {
-  if (typeof window === "undefined") {
-    return { x: 28, y: 92 };
-  }
-  return { x: Math.max(20, Math.min(72, window.innerWidth * 0.035)), y: Math.max(72, window.innerHeight * 0.1) };
-}
-
-function BasicKnowledgeOverlay({
-  title,
-  points,
-  position,
-  onPositionChange,
-  onClose
-}: {
-  title: string;
-  points: string[];
-  position: KnowledgePosition;
-  onPositionChange: (next: KnowledgePosition) => void;
-  onClose: () => void;
-}) {
-  const overlayRef = useRef<HTMLElement | null>(null);
-  const dragRef = useRef<{ pointerId: number; startX: number; startY: number; origin: KnowledgePosition } | null>(null);
-
-  function clampPosition(next: KnowledgePosition): KnowledgePosition {
-    const rect = overlayRef.current?.getBoundingClientRect();
-    const width = rect?.width || Math.min(880, Math.max(420, window.innerWidth * 0.56));
-    const height = rect?.height || Math.min(680, window.innerHeight * 0.7);
-    return {
-      x: Math.max(12, Math.min(Math.max(12, window.innerWidth - width - 12), next.x)),
-      y: Math.max(12, Math.min(Math.max(12, window.innerHeight - height - 12), next.y))
-    };
-  }
-
-  useEffect(() => {
-    const keepInViewport = () => {
-      const clamped = clampPosition(position);
-      if (clamped.x !== position.x || clamped.y !== position.y) {
-        onPositionChange(clamped);
-      }
-    };
-    keepInViewport();
-    window.addEventListener("resize", keepInViewport);
-    return () => window.removeEventListener("resize", keepInViewport);
-  }, [position.x, position.y]);
-
-  function startDrag(event: ReactPointerEvent<HTMLElement>) {
-    const clientX = Number.isFinite(event.clientX) ? event.clientX : 0;
-    const clientY = Number.isFinite(event.clientY) ? event.clientY : 0;
-    dragRef.current = {
-      pointerId: event.pointerId,
-      startX: clientX,
-      startY: clientY,
-      origin: position
-    };
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-  }
-
-  function moveDrag(event: ReactPointerEvent<HTMLElement>) {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) {
-      return;
-    }
-    const clientX = Number.isFinite(event.clientX) ? event.clientX : drag.startX;
-    const clientY = Number.isFinite(event.clientY) ? event.clientY : drag.startY;
-    onPositionChange(clampPosition({
-      x: drag.origin.x + clientX - drag.startX,
-      y: drag.origin.y + clientY - drag.startY
-    }));
-  }
-
-  function endDrag(event: ReactPointerEvent<HTMLElement>) {
-    if (dragRef.current?.pointerId === event.pointerId) {
-      event.currentTarget.releasePointerCapture?.(event.pointerId);
-      dragRef.current = null;
-    }
-  }
-
-  return createPortal(
-    <section
-      ref={overlayRef}
-      className="basic-knowledge-overlay glass-panel"
-      style={{ left: position.x, top: position.y }}
-      role="dialog"
-      aria-label={`${title}基础知识讲解`}
-      data-testid="basic-knowledge-overlay"
-    >
-      <header
-        className="basic-knowledge-overlay-header"
-        onPointerDown={startDrag}
-        onPointerMove={moveDrag}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-      >
-        <div>
-          <span>基础知识讲解</span>
-          <strong>{title}</strong>
-        </div>
-        <span className="basic-knowledge-drag-hint">拖动调整位置</span>
-        <button type="button" className="mini-control" onPointerDown={(event) => event.stopPropagation()} onClick={onClose} aria-label="关闭基础知识讲解">
-          ×
-        </button>
-      </header>
-      <ol className="basic-knowledge-points">
-        {points.map((point, index) => <li key={`${index}_${point}`}>{point}</li>)}
-      </ol>
-    </section>,
-    document.body
-  );
-}
-
 export function ClassRunPanel({
+  session,
   lesson,
   currentStageId,
   stageEnteredAt,
   busy,
+  assistantBusy = false,
   quizActive,
   collapsed,
   onToggleCollapsed,
   onEnterStage,
+  onPresentScene,
   onLaunchQuestion,
   onProjectQuestion,
   onLaunchAdhocQuestion,
@@ -182,8 +75,10 @@ export function ClassRunPanel({
   const [savedFlash, setSavedFlash] = useState(false);
   const [expandedQuestionId, setExpandedQuestionId] = useState("");
   const [oralQuestionId, setOralQuestionId] = useState("");
-  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
-  const [knowledgePosition, setKnowledgePosition] = useState<KnowledgePosition>(defaultKnowledgePosition);
+  const [inquiryOpen, setInquiryOpen] = useState(false);
+  const [presentationBusy, setPresentationBusy] = useState(false);
+  const [presentationError, setPresentationError] = useState("");
+  const presentationEpoch = useRef(0);
   const [brainstormRegion, setBrainstormRegion] = useState("");
   const [brainstormSpinning, setBrainstormSpinning] = useState(false);
   const brainstormTimerRef = useRef<number | null>(null);
@@ -207,8 +102,10 @@ export function ClassRunPanel({
   useEffect(() => {
     setExpandedQuestionId("");
     setOralQuestionId("");
-    setKnowledgeOpen(false);
-    setKnowledgePosition(defaultKnowledgePosition());
+    setInquiryOpen(false);
+    setPresentationError("");
+    setPresentationBusy(false);
+    presentationEpoch.current += 1;
     setBrainstormRegion("");
     setBrainstormSpinning(false);
     if (brainstormTimerRef.current !== null) {
@@ -216,13 +113,33 @@ export function ClassRunPanel({
       brainstormTimerRef.current = null;
     }
     resetRecord();
-  }, [currentStageId]);
+  }, [currentStageId, session.session_id]);
 
   const currentStage: LessonStage | undefined = useMemo(
     () => lesson.stages.find((stage) => stage.stage_id === currentStageId),
     [lesson, currentStageId]
   );
+  const shanghaiSupplement = currentStageId === "shanghai_intro" && lesson.title.includes("上海") && lesson.title.includes("人口");
+  const shanghaiVerification = currentStageId === "shanghai_verify" && lesson.title.includes("上海") && lesson.title.includes("人口");
+  async function openMapPresentation(target: ClassroomPresentationTarget = "stage") {
+    if (!onPresentScene || presentationBusy) return;
+    const epoch = presentationEpoch.current;
+    setPresentationBusy(true); setPresentationError("");
+    try {
+      await onPresentScene(target);
+
+    } catch (error) {
+      if (epoch === presentationEpoch.current) setPresentationError(error instanceof Error ? error.message : "地图展示失败，请重试");
+    } finally { if (epoch === presentationEpoch.current) setPresentationBusy(false); }
+  }
+
   const currentStageIndex = lesson.stages.findIndex((stage) => stage.stage_id === currentStageId);
+  const brainstorm = currentStage?.brainstorm;
+  const brainstormRegions = Array.isArray(brainstorm?.regions)
+    ? [...new Set(brainstorm.regions.filter((region) => typeof region === "string" && region.trim()).map((region) => region.trim()))]
+    : [];
+  const hasBrainstorm = Boolean(brainstorm?.prompt?.trim() && brainstormRegions.length);
+
 
   const elapsedSeconds = stageEnteredAt ? Math.max(0, (nowTick - stageEnteredAt) / 1000) : 0;
   const plannedSeconds = (currentStage?.minutes || 0) * 60;
@@ -270,14 +187,13 @@ export function ClassRunPanel({
   }
 
   function runBrainstorm() {
-    const brainstorm = currentStage?.brainstorm;
-    if (!brainstorm || !onAssistantPrompt || brainstormSpinning || busy) {
+    if (!currentStage || !brainstorm || !hasBrainstorm || !onAssistantPrompt || brainstormSpinning || busy || assistantBusy) {
       return;
     }
     setBrainstormSpinning(true);
     let tick = 0;
     brainstormTimerRef.current = window.setInterval(() => {
-      const preview = brainstorm.regions[tick % brainstorm.regions.length];
+      const preview = brainstormRegions[tick % brainstormRegions.length];
       setBrainstormRegion(preview);
       tick += 1;
       if (tick < 15) {
@@ -287,23 +203,35 @@ export function ClassRunPanel({
         window.clearInterval(brainstormTimerRef.current);
         brainstormTimerRef.current = null;
       }
-      const selected = brainstorm.regions[Math.floor(Math.random() * brainstorm.regions.length)] || preview;
+      const selected = brainstormRegions[Math.floor(Math.random() * brainstormRegions.length)] || preview;
       setBrainstormRegion(selected);
       setBrainstormSpinning(false);
+      const regionalQuestions:Record<string,string> = {
+        "青藏高原河谷":"青藏高原人口稀疏，为何部分河谷聚落集中？比较水热与地形条件，并提出检验资料。",
+        "塔里木盆地":"塔里木盆地整体干旱，为什么聚落多见于盆地边缘绿洲？如果山地来水减少，这种分布可能怎样变化？",
+        "河西走廊":"河西走廊较干旱，为什么仍能形成绿洲城市？比较水源、地形与交通条件，说明水资源约束如何影响聚落扩展。"
+      };
+      const inquiryQuestion = regionalQuestions[selected] || `以${selected}为例，${brainstorm.prompt}`;
       const prompt = [
         `GeoBot 头脑风暴：围绕“${currentStage.title}”开展随机地区探究。`,
         `随机抽中的地区是：${selected}。`,
-        `本环节可用地图资料：${[
-          ...(currentStage.scene?.templates || []),
-          ...(currentStage.scene?.catalog_layers || [])
-        ].join("、") || "当前人口专题地图"}。`,
+        "【本次探究任务】",
+        inquiryQuestion,
         brainstorm.prompt,
-        "请提出一个教师难以提前穷举、但可以用高中地理知识回答的探究问题，并直接作答。",
+        "请沿用上述完整问题，直接回答抽中地区的局地机制，不转去概述胡焕庸线。",
+        "沿用本次探究问题，提供教师参考回答；不替学生作答，不推断学生掌握情况。",
+        "【课堂参考材料】",
+        `本课：${lesson.title}；当前环节：${currentStage.title}。`,
+        `本环节候选地区：${brainstormRegions.join("、")}。只围绕抽中的地区，保持本环节的比较尺度。`,
+        `本环节讲解材料：${currentStage.script.join("；")}。`,
+        "以下是教案原题的参考材料，不是学生回答，也不能当作本次课堂观察：",
+        ...currentStage.questions.slice(0, 3).map((question) => [question.text, question.material, question.answer, question.explanation].filter(Boolean).join("\n")),
+        "【回答格式】",
         "问题必须体现区域差异、条件变化、尺度转换或反直觉比较中的至少一种；资料不足时明确说明限制，不得编造数据。",
         "只输出“头脑风暴问题”“回答”“回答总结”三部分；回答总结必须是一句话。",
         "不要输出地图中心坐标、缩放级别、可见范围、证据或观察点、给学生的问题、教师收束语。"
       ].join("\n");
-      onAssistantPrompt(prompt, `GeoBot 头脑风暴 · ${selected}`);
+      onAssistantPrompt(prompt, inquiryQuestion);
     }, 70);
   }
 
@@ -384,7 +312,7 @@ export function ClassRunPanel({
       <nav className="class-panel-stages" aria-label="课堂环节">
         {lesson.stages.map((stage, index) => {
           const active = stage.stage_id === currentStageId;
-          const done = currentStageIndex >= 0 && index < currentStageIndex;
+          const done = !active && session.events.some(event => event.type === "stage_enter" && event.stage_id === stage.stage_id);
           return (
             <button
               key={stage.stage_id}
@@ -412,18 +340,35 @@ export function ClassRunPanel({
       </nav>
 
       <div className="class-panel-current">
-        {currentStage?.script?.length ? (
-          <div className="basic-knowledge-launcher" data-testid="basic-knowledge-launcher">
+        {currentStage?.scene ? (
+          <div className="basic-knowledge-launcher" data-testid="class-map-launcher">
             <div>
-              <span className="question-detail-label">基础知识讲解</span>
-              <strong>课本知识 × 当前真实地图</strong>
-              <small>点击后放大投屏，可拖动且不会锁住地图。</small>
+              <span className="question-detail-label">课堂地图</span>
+              <strong>先看分布，再解释原因</strong>
+              <small>定位本环节区域并打开对应图层，由教师组织讲解。</small>
             </div>
-            <button type="button" className="toolbar-button compact primary" onClick={() => setKnowledgeOpen(true)}>
-              放大展示
-            </button>
+            <div className="class-presentation-actions">
+              <button type="button" className="toolbar-button compact primary" disabled={busy || presentationBusy || !onPresentScene} onClick={() => void openMapPresentation()}>
+                {presentationBusy ? "正在定位…" : "地图展示"}
+              </button>
+            </div>
           </div>
         ) : null}
+
+        {shanghaiVerification && <div className="class-local-comparison" role="group" aria-label="上海局部影像对照">
+          <span className="question-detail-label">同级缩放 · 局部影像对照</span>
+          <div>
+            <button className="toolbar-button compact" disabled={busy || presentationBusy || !onPresentScene} onClick={() => void openMapPresentation("huangpu_detail")}>黄浦局部</button>
+            <button className="toolbar-button compact" disabled={busy || presentationBusy || !onPresentScene} onClick={() => void openMapPresentation("chongming_detail")}>崇明局部</button>
+            <button className="toolbar-button compact" disabled={busy || presentationBusy || !onPresentScene} onClick={() => void openMapPresentation()}>返回全市</button>
+          </div>
+          <small>参考点周边的景观样例，不代表全区；影像年份以提供方资料为准。</small>
+        </div>}
+        {presentationError && <p role="alert">{presentationError}</p>}
+        {shanghaiSupplement && onPresentScene && <div className="shanghai-supplement-launcher">
+          <div><strong>基础讲完后 · 真题拓展</strong><small>2025 河南卷：人口分布与“年轻环”</small></div>
+          <button className="toolbar-button compact" disabled={busy || presentationBusy} onClick={() => setInquiryOpen(true)}>进入补充探究</button>
+        </div>}
 
         {currentStage?.scene?.globe?.enabled && onRequestPlaneView ? (
           <div className="class-stage-view-handoff" data-testid="stage-view-handoff">
@@ -434,14 +379,14 @@ export function ClassRunPanel({
           </div>
         ) : null}
 
-        {currentStage?.scene?.catalog_layers && currentStage.scene.catalog_layers.length > 1 && onFocusEvidenceLayer ? (
+        {currentStage?.scene?.catalog_layers && currentStage.scene.catalog_layers.filter(id => EVIDENCE_LAYER_LABELS[id]).length > 1 && onFocusEvidenceLayer ? (
           <div className="class-evidence-layer-steps" data-testid="evidence-layer-steps">
             <div className="class-evidence-layer-heading">
-              <span className="question-detail-label">证据图层步骤</span>
-              <small>逐张聚焦，避免图层堆叠</small>
+              <span className="question-detail-label">切换地图</span>
+
             </div>
             <div className="class-evidence-layer-buttons">
-              {currentStage.scene.catalog_layers.map((datasetId) => (
+              {currentStage.scene.catalog_layers.filter(id => EVIDENCE_LAYER_LABELS[id]).map((datasetId) => (
                 <button
                   key={datasetId}
                   type="button"
@@ -578,27 +523,27 @@ export function ClassRunPanel({
           </div>
         </div>
 
-        {currentStage?.brainstorm && onAssistantPrompt ? (
+        {hasBrainstorm && brainstorm && onAssistantPrompt ? (
           <div className="class-brainstorm-card" data-testid="stage-brainstorm">
             <div className="class-brainstorm-identity">
               <span className="class-brainstorm-mark" aria-hidden="true">✦</span>
               <div>
                 <span>GeoBot AI</span>
-                <strong>{currentStage.brainstorm.title || "头脑风暴"}</strong>
+                <strong>{brainstorm.title || "头脑风暴"}</strong>
               </div>
             </div>
-            <p>随机抽取一个地区，把本节知识迁移到教师难以逐一预设的真实区域情境。</p>
+            <p>从本环节的地区中抽取一个，生成追问与教师参考回答。</p>
             <div className={`brainstorm-region-wheel ${brainstormSpinning ? "spinning" : ""}`} aria-live="polite">
               <span>{brainstormRegion || "等待抽取地区"}</span>
             </div>
             <button
               type="button"
               className="toolbar-button compact primary class-brainstorm-run"
-              disabled={busy || brainstormSpinning}
+              disabled={busy || assistantBusy || brainstormSpinning}
               onClick={runBrainstorm}
               data-testid="run-brainstorm"
             >
-              {brainstormSpinning ? "GeoBot 正在转动…" : currentStage.brainstorm.button_label || "转动并生成探究"}
+              {brainstormSpinning ? "GeoBot 正在转动…" : brainstorm.button_label || "转动并生成探究"}
             </button>
           </div>
         ) : null}
@@ -656,15 +601,10 @@ export function ClassRunPanel({
           </button>
         </div>
       </footer>
-      {knowledgeOpen && currentStage?.script?.length ? (
-        <BasicKnowledgeOverlay
-          title={currentStage.title}
-          points={currentStage.script}
-          position={knowledgePosition}
-          onPositionChange={setKnowledgePosition}
-          onClose={() => setKnowledgeOpen(false)}
-        />
-      ) : null}
+      {inquiryOpen && shanghaiSupplement && onPresentScene && <ShanghaiPopulationInquiry
+        key={session.session_id + currentStageId} projectId={session.project_id}
+        onPresent={onPresentScene} assistantBusy={assistantBusy} onAssistantPrompt={onAssistantPrompt} onClose={() => setInquiryOpen(false)} />}
+
     </section>
   );
 }

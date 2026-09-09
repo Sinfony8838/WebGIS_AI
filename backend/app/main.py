@@ -36,19 +36,7 @@ LESSON_DESIGN_REQUEST_HINTS = (
 )
 
 app = FastAPI(title="WebGIS-AI Runtime", version="1.1.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=config.cors_origins(),
-    allow_methods=["*"],
-    allow_headers=[
-        "Authorization",
-        "Content-Type",
-        "X-WebGIS-AI-Token",
-        "X-WebGIS-CSRF",
-        "X-WebGIS-Bootstrap-Key",
-    ],
-    allow_credentials=True,
-)
+
 
 SESSION_COOKIE = "webgis_ai_session"
 PUBLIC_AUTH_PATHS = {
@@ -165,6 +153,22 @@ async def require_access_token(request: Request, call_next):
                 status_code=403,
             )
     return await call_next(request)
+
+
+# Wrap authentication too, so allowed browser origins can read 401/403 errors.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=config.cors_origins(),
+    allow_methods=["*"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-WebGIS-AI-Token",
+        "X-WebGIS-CSRF",
+        "X-WebGIS-Bootstrap-Key",
+    ],
+    allow_credentials=True,
+)
 
 
 def _current_auth(request: Request) -> AuthContext:
@@ -395,6 +399,7 @@ class PoiSearchRequest(BaseModel):
 class CatalogLayerRequest(BaseModel):
     project_id: str
     dataset_id: str
+    preserve_view: bool = False
 
 
 class CatalogStatisticsRequest(BaseModel):
@@ -579,6 +584,11 @@ class SessionStageRequest(BaseModel):
     stage_id: str
 
 
+class SessionPresentationRequest(BaseModel):
+    stage_id: str
+    target: str = "stage"
+
+
 class QuestionLaunchRequest(BaseModel):
     stage_id: str = ""
     question_id: str = ""
@@ -743,7 +753,7 @@ def auth_login(request: Request, payload: AuthLoginRequest) -> Response:
 @app.get("/auth/me")
 def auth_me(request: Request) -> Dict[str, Any]:
     context = _current_auth(request)
-    csrf_token = auth_service.rotate_csrf(context.session_id) if auth_service and context.session_id else ""
+    csrf_token = auth_service.csrf_for_session(context) if auth_service and context.session_id else ""
     if auth_service:
         try:
             runtime.store.assign_unowned_records(auth_service.bootstrap_owner_user_id())
@@ -1262,7 +1272,7 @@ def submit_assistant_message(
         wants_lesson_design = any(hint in assistant_message for hint in LESSON_DESIGN_REQUEST_HINTS) or (
             "教案" in assistant_message and any(token in assistant_message for token in ("共创", "设计", "生成", "备课", "规划"))
         )
-        if wants_lesson_design:
+        if wants_lesson_design and not assistant_message.lstrip().startswith("GeoBot 头脑风暴："):
             context = _current_auth(request)
             base_lesson_id = str((payload.teaching_context or {}).get("lesson_id") or "")
             if base_lesson_id:
@@ -1468,7 +1478,7 @@ def get_dataset_catalog_data(dataset_id: str) -> Dict[str, Any]:
 def add_dataset_catalog_layer(payload: CatalogLayerRequest, request: Request) -> Dict[str, Any]:
     _require_project_access(request, payload.project_id)
     try:
-        return runtime.add_catalog_dataset_layer(payload.project_id, payload.dataset_id)
+        return runtime.add_catalog_dataset_layer(payload.project_id, payload.dataset_id, preserve_view=payload.preserve_view)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (FileNotFoundError, ValueError) as exc:
@@ -2131,6 +2141,17 @@ def enter_session_stage(session_id: str, payload: SessionStageRequest, request: 
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/class-sessions/{session_id}/presentation")
+def present_session_scene(session_id: str, payload: SessionPresentationRequest, request: Request) -> Dict[str, Any]:
+    _require_session_access(request, session_id)
+    try:
+        return runtime.classroom.present_session_scene(session_id, payload.stage_id, payload.target)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/class-sessions/{session_id}/questions/launch")
 def launch_session_question(session_id: str, payload: QuestionLaunchRequest, request: Request) -> Dict[str, Any]:
     _require_session_access(request, session_id)
@@ -2179,6 +2200,15 @@ def reveal_session_question(session_id: str, request: Request) -> Dict[str, Any]
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/class-sessions/{session_id}/questions/explanation")
+def get_question_explanation(session_id: str, request: Request) -> Dict[str, Any]:
+    _require_session_access(request, session_id)
+    try:
+        return runtime.classroom.get_question_explanation(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.post("/class-sessions/{session_id}/observations")
 def add_session_observation(session_id: str, payload: ObservationRequest, request: Request) -> Dict[str, Any]:
     _require_session_access(request, session_id)
@@ -2206,6 +2236,15 @@ def log_session_event(session_id: str, payload: SessionEventRequest, request: Re
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/class-sessions/{session_id}/review-history")
+def session_review_history(session_id: str, request: Request) -> Dict[str, Any]:
+    _require_session_access(request, session_id)
+    try:
+        return runtime.classroom.session_review_history(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.post("/class-sessions/{session_id}/report")
 def generate_session_report(session_id: str, request: Request) -> Dict[str, Any]:
     _require_session_access(request, session_id)
@@ -2215,11 +2254,19 @@ def generate_session_report(session_id: str, request: Request) -> Dict[str, Any]
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+class PracticeSelectionRequest(BaseModel):
+    token: str
+    selected_ids: List[str]
+
+
 @app.post("/class-sessions/{session_id}/practice-export")
-def export_session_practice(session_id: str, request: Request) -> Dict[str, Any]:
+def export_session_practice(session_id: str, request: Request, payload: Optional[PracticeSelectionRequest] = None, background: bool = False) -> Dict[str, Any]:
     _require_session_access(request, session_id)
     try:
-        return runtime.classroom.export_session_practice(session_id)
+        selection = payload.model_dump() if payload is not None else None
+        if background:
+            return runtime.classroom.submit_session_practice(session_id, selection)
+        return runtime.classroom.export_session_practice(session_id, selection)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -2385,6 +2432,15 @@ def get_workflow(workflow_id: str, request: Request) -> Dict[str, Any]:
     _require_workflow_access(request, workflow_id)
     try:
         return runtime.get_workflow(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/workflow/{workflow_id}/cancel")
+def cancel_workflow(workflow_id: str, request: Request) -> Dict[str, Any]:
+    _require_workflow_access(request, workflow_id)
+    try:
+        return runtime.cancel_workflow(workflow_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

@@ -136,6 +136,10 @@ class Workspace:
             self._layers[alias] = layer
         return alias
 
+    def has_layer(self, alias: str) -> bool:
+        with self._lock:
+            return alias in self._layers
+
     def get_layer(self, alias_or_path: Any) -> Any:
         """Return the layer object for an alias, or the path string itself."""
         if not isinstance(alias_or_path, str):
@@ -163,8 +167,43 @@ class Workspace:
         except Exception:  # pragma: no cover
             logger.exception("failed to write status.json")
 
-    def cleanup(self) -> None:
-        """Drop in-memory layers; on-disk artifacts are retained."""
+    def cleanup(self, purge_temp: bool = True) -> None:
+        """Release everything this workflow owns inside the worker.
+
+        * in-memory layers and the ``${step.key}`` output registry are
+          dropped unconditionally;
+        * with ``purge_temp`` the per-step intermediate directories under
+          ``steps/`` are deleted deterministically. Published artifacts in
+          ``outputs/``, the workflow log and ``status.json`` are retained so
+          the frontend can still download results.
+        """
         with self._lock:
             self._layers.clear()
             self._step_outputs.clear()
+        if purge_temp:
+            self.purge_temp_dirs()
+
+    def purge_temp_dirs(self) -> int:
+        """Delete per-step temp directories. Returns how many were removed.
+
+        Only touches paths inside this workspace's own ``steps/`` folder —
+        nothing else on disk is ever removed.
+        """
+        removed = 0
+        try:
+            if not self.steps_dir.exists():
+                return 0
+            import shutil
+
+            for child in self.steps_dir.iterdir():
+                try:
+                    if child.is_dir():
+                        shutil.rmtree(child, ignore_errors=True)
+                    else:
+                        child.unlink()
+                    removed += 1
+                except Exception:  # pragma: no cover - best effort per entry
+                    logger.exception("failed to remove temp entry %s", child)
+        except Exception:  # pragma: no cover - best effort
+            logger.exception("failed to purge temp dirs for workflow %s", self.workflow_id)
+        return removed

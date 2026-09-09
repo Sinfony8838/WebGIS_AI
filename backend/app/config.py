@@ -446,6 +446,18 @@ class AppConfig:
                 ],
             },
         ]
+        # Public NASA GIBS browse imagery: dated teaching maps, not live measurements.
+        for dataset_id, title, layer_name, tile_path, max_zoom in (
+            ("nasa_nightlights_2016", "夜间灯光 · 2016", "nasa_black_marble_2016", "VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8", 8),
+            ("nasa_population_2020", "世界人口密度 · 2020", "nasa_gpw_population_2020", "GPW_Population_Density_2020/default/GoogleMapsCompatible_Level7", 7),
+        ):
+            descriptor = self._xyz_layer(layer_name, title,
+                ["https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/" + tile_path + "/{z}/{y}/{x}.png"],
+                "NASA GIBS / SEDAC GPW" if max_zoom == 7 else "NASA GIBS / VIIRS Black Marble",
+                "basemap-layer basemap-scientific", usable_in_3d=False)
+            descriptor["max_zoom"] = max_zoom
+            items.insert(-1, {"id": dataset_id, "title": title,
+                "description": "有年份的科学可视化；不等同于实时或逐户测量。", "type": "stack", "provider": "nasa_gibs", "layers": [descriptor]})
         for weather_preset in self.weather_basemap_presets(vector_urls):
             items.insert(-1, weather_preset)
         return {"default_id": self._resolved_default_basemap_id(items), "items": items}

@@ -294,35 +294,9 @@ def _coerce_int(value: Any, default: int, minimum: int, maximum: int) -> int:
 
 
 def _rank_palette(count: int) -> List[str]:
-    """Return a red-to-blue-ish palette for ranking visualisations."""
-    base = [
-        "#7f1d1d",
-        "#b91c1c",
-        "#dc2626",
-        "#ef4444",
-        "#f97316",
-        "#fb923c",
-        "#f59e0b",
-        "#eab308",
-        "#facc15",
-        "#fde68a",
-        "#bef264",
-        "#86efac",
-        "#4ade80",
-        "#22c55e",
-        "#16a34a",
-        "#14b8a6",
-        "#06b6d4",
-        "#0ea5e9",
-        "#3b82f6",
-        "#6366f1",
-    ]
-    if count <= len(base):
-        return base[:count]
-    palette = list(base)
-    while len(palette) < count:
-        palette.append(base[len(palette) % len(base)])
-    return palette
+    """Sequential blue scale: rank magnitude instead of unrelated categories."""
+    dark, light = (39, 76, 119), (183, 201, 226)
+    return ["#" + "".join(f"{round(a + (b-a) * index / max(1,count-1)):02x}" for a,b in zip(dark,light)) for index in range(count)]
 
 
 def _compute_extent(features: List[Dict[str, Any]]) -> Optional[List[float]]:

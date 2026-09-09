@@ -52,6 +52,29 @@ class AuthServiceTest(unittest.TestCase):
         self.service.logout(context.session_id, actor_user_id=context.user["user_id"])
         self.assertIsNone(self.service.authenticate(login["session_token"]))
 
+    def test_page_csrf_is_stable_session_bound_and_rotatable(self) -> None:
+        login = self.bootstrap
+        context = self.service.authenticate(login["session_token"])
+        page_token = self.service.csrf_for_session(context)
+        self.assertNotIn(page_token, {context.csrf_hash, login["session_token"], login["csrf_token"]})
+        restarted = AuthService(self.service.db_path)
+        current = restarted.authenticate(login["session_token"])
+        self.assertEqual(restarted.csrf_for_session(current), page_token)
+        self.assertTrue(restarted.verify_csrf(current, page_token))
+        self.assertTrue(restarted.verify_csrf(current, login["csrf_token"]))
+        other_login = self.service.login("admin@school.edu.cn", "Strong-Admin-2026!")
+        other = self.service.authenticate(other_login["session_token"])
+        self.assertFalse(self.service.verify_csrf(other, page_token))
+        self.assertFalse(self.service.verify_csrf(other, login["csrf_token"]))
+        for invalid in ("", "wrong", "错误令牌", context.csrf_hash, login["session_token"]):
+            self.assertFalse(self.service.verify_csrf(context, invalid))
+        self.service.rotate_csrf(context.session_id)
+        rotated = self.service.authenticate(login["session_token"])
+        self.assertFalse(self.service.verify_csrf(rotated, page_token))
+        self.assertFalse(self.service.verify_csrf(rotated, login["csrf_token"]))
+        self.service.logout(context.session_id)
+        self.assertIsNone(self.service.authenticate(login["session_token"]))
+
     def test_five_failures_lock_account_without_revealing_unknown_user(self) -> None:
         messages = []
         for _ in range(5):

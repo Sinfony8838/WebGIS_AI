@@ -72,6 +72,69 @@ def _load_env_file(env_path: Path) -> dict[str, str]:
     return result
 
 
+def _grass_last(path_value: str) -> str:
+    """Reorder a PATH value so GRASS directories come last.
+
+    The OSGeo4W ``qgis-ltr-bin.env`` file is written for the full QGIS
+    Desktop launcher and puts ``apps\\grass\\grass84\\lib``/``bin`` BEFORE
+    ``apps\\qt5\\bin``. GRASS ships its own copies of common DLLs which then
+    shadow the Qt5/qgis ones, and ``import qgis.core`` fails with
+    "DLL load failed while importing _core". The official
+    ``python-qgis-ltr.bat`` never puts GRASS on the binding loader path —
+    importing works there. Moving GRASS entries to the tail keeps them
+    reachable for GRASS-specific processing while letting the correct DLLs
+    win dependency resolution.
+    """
+    parts = [p for p in path_value.split(os.pathsep) if p]
+    head = [p for p in parts if "grass" not in p.lower()]
+    tail = [p for p in parts if "grass" in p.lower()]
+    return os.pathsep.join(head + tail)
+
+
+# DLLs that qgis_core.dll and the bindings pull in, in dependency order.
+# ``import qgis.core`` resolves them by bare name; in a shared environment
+# (PATH entries contributed by PostgreSQL, GeoDa, Git, …) an older same-name
+# copy can win, which fails the import with "DLL load failed" / error 127.
+# Pre-loading each DLL by FULL PATH from the QGIS install loads the correct
+# image first; later bare-name lookups then hit the already-loaded module.
+_PRELOAD_DIRS = ("", "apps/qgis-ltr/bin", "apps/qt5/bin", "bin")
+_PRELOAD_NAMES = (
+    "zlib.dll", "zstd.dll", "libexpat.dll", "sqlite3.dll", "spatialite.dll",
+    "iconv.dll", "liblzma.dll", "crypto-3-x64.dll", "ssl-3-x64.dll",
+    "proj_9.dll", "geos_c.dll", "geos.dll", "exiv2.dll", "spatialindex-64.dll",
+    "gdal311.dll", "pdalcpp.dll", "zip.dll",
+    "qca-qt5.dll", "qt5keychain.dll",
+    "qt5core.dll", "qt5network.dll", "qt5sql.dll", "qt5xml.dll", "qt5concurrent.dll",
+    "qt5serialport.dll", "qt5positioning.dll", "qt5printsupport.dll",
+    "qt5gui.dll", "qt5widgets.dll", "qt5svg.dll",
+    "qt5webkit.dll", "qt5webkitwidgets.dll",
+)
+
+
+def preload_qgis_runtime_dlls(root_path: Path) -> int:
+    """Best-effort full-path preload of QGIS runtime DLLs (Windows only).
+
+    Returns how many DLLs were successfully loaded. Failures are ignored:
+    anything genuinely absent will surface later as a precise loader error.
+    """
+    if os.name != "nt":
+        return 0
+    import ctypes
+
+    loaded = 0
+    for name in _PRELOAD_NAMES:
+        for sub in _PRELOAD_DIRS:
+            candidate = root_path / sub / name if sub else root_path / name
+            if candidate.exists():
+                try:
+                    ctypes.WinDLL(str(candidate))
+                    loaded += 1
+                except OSError:
+                    pass  # wrong arch or still-missing deps; try next location
+                break
+    return loaded
+
+
 def init_qgis_env(qgis_root: Optional[str] = None) -> Path:
     """Configure environment variables and ``sys.path`` for headless QGIS.
 
@@ -125,7 +188,7 @@ def init_qgis_env(qgis_root: Optional[str] = None) -> Path:
             if not value:
                 continue
             if key == "PATH":
-                os.environ["PATH"] = value + os.pathsep + os.environ.get("PATH", "")
+                os.environ["PATH"] = _grass_last(value) + os.pathsep + os.environ.get("PATH", "")
                 continue
             # The env file is authoritative for QGIS-bundled paths (PYTHONHOME,
             # QT_PLUGIN_PATH, GDAL_DATA, PROJ_DATA, …). Override anything the
@@ -178,6 +241,7 @@ def start_qgis(qgis_root: Optional[str] = None):
     """
     root = init_qgis_env(qgis_root)
     try:  # pragma: no cover - requires real QGIS
+        preload_qgis_runtime_dlls(root)
         from qgis.core import QgsApplication  # type: ignore
     except Exception as exc:  # ImportError or runtime ABI mismatch
         raise WorkflowExecutionError(
