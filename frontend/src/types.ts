@@ -1228,6 +1228,7 @@ export type SessionReportStatistics = {
     notes: Array<{ timestamp: string; stage_id: string; verdict: string; tag: string; note: string }>;
   };
   snapshot_count: number;
+  snapshots?: Array<{ artifact_id: string; timestamp: string; stage_id: string; stage_title: string; title: string; available: boolean; image_url: string }>;
   assistant_exchange_count: number;
   event_count: number;
 };

@@ -1091,7 +1091,7 @@ class ClassroomWorkflowRuntime:
             lesson = self._lesson_for_session(session)
             self.store.set_job_status(job_id, "running")
             self.store.update_job_stage(job_id, "analysis", "running", "Aggregating class events and answers.")
-            statistics = self.report_service.build_statistics(session, lesson)
+            statistics = self.report_service.build_statistics(session, lesson, artifact_resolver=self.store.get_artifact)
             self.store.update_job_stage(job_id, "analysis", "success", "Class statistics ready.")
             self.store.update_job_stage(job_id, "actions", "running", "Composing diagnosis.")
             diagnosis = self.report_service.compose_diagnosis(statistics)

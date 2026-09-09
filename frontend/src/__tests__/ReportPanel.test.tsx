@@ -132,6 +132,25 @@ describe("ReportPanel", () => {
     expect(screen.queryByText(/正确率/)).toBeNull();
   });
 
+  it("offers stage-linked map review and preserves unavailable screenshot records", async () => {
+    const base = await fetchJob("baseline");
+    vi.mocked(fetchJob).mockResolvedValueOnce({...base, result:{...base.result,
+      statistics:{...(base.result as any).statistics, snapshots:[
+        {artifact_id:"a",timestamp:"2026-09-09T10:00:00",stage_id:"s",stage_title:"看上海",title:"上海密度",available:true,image_url:"/files/outputs/project_1/map.png"},
+        {artifact_id:"b",timestamp:"",stage_id:"s",stage_title:"看上海",title:"旧截图",available:false,image_url:""}
+      ]}}} as any);
+    render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId("generate-report")).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId("generate-report"));
+    await screen.findByTestId("report-snapshots");
+    const summary = screen.getByText("上海密度").closest("details")!.querySelector("summary")!;
+    fireEvent.click(summary);
+    expect(screen.getByRole("link",{name:"查看地图原图：上海密度",hidden:true})).toHaveAttribute("href","/files/outputs/project_1/map.png");
+    expect(screen.getByAltText("上海密度")).toHaveAttribute("loading","lazy");
+    expect(screen.getByText("截图文件不可用，保留原课堂记录。")).toBeTruthy();
+    expect(screen.getByText(/不能单独证明学生已经理解/)).toBeTruthy();
+  });
+
   it("exports practice papers with student and teacher downloads", async () => {
     render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
 

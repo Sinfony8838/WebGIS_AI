@@ -328,6 +328,24 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
           ))}
           {!statistics.questions.length ? <p className="lesson-empty">本节课未记录教师提问。</p> : null}
 
+          <h3>课堂地图回看</h3>
+          <p className="report-note">按截图时的环节回看地图。截图是展示记录，不能单独证明学生已经理解。</p>
+          <div data-testid="report-snapshots">
+            {(statistics.snapshots || []).map((snapshot, index) => (
+              <details className="report-question" key={`${snapshot.artifact_id}-${index}`}>
+                <summary>{snapshot.stage_title} · {formatTime(snapshot.timestamp)}</summary>
+                <p>{snapshot.title}</p>
+                {snapshot.available && snapshot.image_url.startsWith("/files/outputs/") ? (
+                  <a href={buildAuthenticatedUrl(snapshot.image_url)} target="_blank" rel="noreferrer" aria-label={`查看地图原图：${snapshot.title}`}>
+                    <img src={buildAuthenticatedUrl(snapshot.image_url)} alt={snapshot.title} loading="lazy" style={{display:"block",maxWidth:"100%",height:"auto"}} />
+                    查看地图原图
+                  </a>
+                ) : <p className="report-note">截图文件不可用，保留原课堂记录。</p>}
+              </details>
+            ))}
+            {!statistics.snapshots?.length ? <p className="report-note">{statistics.snapshot_count ? "这份报告未附截图引用，请重新生成报告。" : "本次课堂没有截图记录。"}</p> : null}
+          </div>
+
           <h3>教师课堂观察</h3>
           <div className="report-observations">
             <p>

@@ -114,3 +114,47 @@ def test_open_responses_are_collected_without_invented_correctness(tmp_path):
         "questions": [{"question_id": "q", "response_count": 3, "correct_rate": None}]})["text"]
     assert "已采集作答" in text and "开放题" in text
     assert "未采集课堂作答" not in text
+
+
+def test_report_snapshot_references_resolve_registered_project_files(tmp_path):
+    from backend.app.models import ArtifactRecord, ClassSessionRecord, LessonRecord
+    config = AppConfig(root_dir=tmp_path)
+    service = ReportService(config)
+    folder = config.project_output_dir("p1")
+    image = folder / "地图 (1).png"
+    image.write_bytes(b"test image")
+    artifact = ArtifactRecord.create("p1", "j", "map_snapshot", "地图", str(image), {"public_url": "https://untrusted.example/"})
+    session = ClassSessionRecord.create("l", "p1", "")
+    session.events = [{"type":"snapshot", "timestamp":"2026-09-09T10:00:00", "stage_id":"s", "payload":{
+        "artifact_id":artifact.artifact_id, "title":"上海", "stage_id":"forged", "image_url":"https://untrusted.example/"}}]
+    lesson = LessonRecord.create(title="人口", stages=[{"stage_id":"s", "title":"看上海"}])
+    stats = service.build_statistics(session, lesson, lambda _: artifact)
+    reference = stats["snapshots"][0]
+    assert reference["available"] is True
+    assert reference["stage_title"] == "看上海" and reference["stage_id"] == "s"
+    assert reference["image_url"].startswith("/files/outputs/p1/")
+    assert "%28" in reference["image_url"] and "untrusted" not in str(reference)
+    assert stats["response_data_collected"] is False
+    markdown = service.render_markdown(stats, {"text":"", "generator":"rules"})
+    assert "查看地图原图" in markdown and "不能单独证明" in markdown
+    image.unlink()
+    missing = service.build_statistics(session, lesson, lambda _: artifact)
+    assert missing["snapshots"][0]["available"] is False
+    assert "截图文件不可用" in service.render_markdown(missing, {"text":""})
+
+
+def test_report_snapshots_do_not_expose_foreign_or_unregistered_artifacts(tmp_path):
+    from backend.app.models import ArtifactRecord, ClassSessionRecord
+    config = AppConfig(root_dir=tmp_path)
+    image = config.project_output_dir("p2") / "foreign.png"
+    image.write_bytes(b"test image")
+    artifact = ArtifactRecord.create("p2", "j", "map_snapshot", "私有标题", str(image))
+    session = ClassSessionRecord.create("l", "p1", "")
+    session.events = [{"type":"snapshot", "payload":{"artifact_id":artifact.artifact_id}}]
+    service = ReportService(config)
+    for resolver in (lambda _: artifact, lambda _: None):
+        reference = service.build_statistics(session, None, resolver)["snapshots"][0]
+        assert not reference["available"] and reference["image_url"] == ""
+        assert "私有标题" not in str(reference) and str(image) not in str(reference)
+    artifact.project_id = "p1"  # Still reject an out-of-project file path.
+    assert not service.build_statistics(session, None, lambda _: artifact)["snapshots"][0]["available"]

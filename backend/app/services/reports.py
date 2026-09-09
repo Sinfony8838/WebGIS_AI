@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from urllib.parse import quote
+from typing import Any, Callable, Dict, List, Optional
 
 from ..config import AppConfig
 from ..models import ClassSessionRecord, LessonRecord
@@ -36,7 +38,7 @@ class ReportService:
     # Statistics (rule-based, always available)
     # ------------------------------------------------------------------
 
-    def build_statistics(self, session: ClassSessionRecord, lesson: Optional[LessonRecord]) -> Dict[str, Any]:
+    def build_statistics(self, session: ClassSessionRecord, lesson: Optional[LessonRecord], artifact_resolver: Optional[Callable[[str], Any]] = None) -> Dict[str, Any]:
         events = list(session.events)
         stage_lookup: Dict[str, Dict[str, Any]] = {}
         question_lookup: Dict[str, Dict[str, Any]] = {}
@@ -52,7 +54,7 @@ class ReportService:
         participants = self._participants(session)
         response_data_collected = any(bool(items) for items in session.responses.values())
         snapshots = [
-            {"timestamp": event.get("timestamp", ""), **(event.get("payload") or {})}
+            self._snapshot_reference(event, session.project_id, stage_lookup, artifact_resolver)
             for event in events
             if event.get("type") == "snapshot"
         ]
@@ -88,6 +90,25 @@ class ReportService:
             "assistant_exchanges": assistant_exchanges[:10],
             "event_count": len(events),
         }
+
+    def _snapshot_reference(self, event, project_id, stage_lookup, artifact_resolver):
+        payload = event.get("payload") or {}
+        stage_id = str(event.get("stage_id") or "")
+        artifact_id = str(payload.get("artifact_id") or "")
+        result = {"artifact_id": artifact_id, "timestamp": event.get("timestamp", ""),
+                  "stage_id": stage_id, "stage_title": stage_lookup.get(stage_id, {}).get("title", "未关联环节"),
+                  "title": str(payload.get("title") or "课堂地图"), "available": False, "image_url": ""}
+        artifact = artifact_resolver(artifact_id) if artifact_resolver and artifact_id else None
+        if not artifact or artifact.project_id != project_id or artifact.artifact_type != "map_snapshot":
+            return result
+        # Resolve registered files only; never trust a URL supplied in an event.
+        path = Path(artifact.path).resolve()
+        if path.suffix.lower() != ".png" or not path.is_file():
+            return result
+        if not path.is_relative_to((self.config.outputs_dir / project_id).resolve()):
+            return result
+        result.update(available=True, image_url=quote(self.config.public_url_for_path(path), safe="/"))
+        return result
 
     def _stage_durations(
         self,
@@ -473,6 +494,16 @@ class ReportService:
             lines.append(f"- 误区标签「{tag}」：{count} 次")
         for note in observations.get("notes") or []:
             lines.append(f"- [{VERDICT_LABELS.get(note.get('verdict', ''), '记录')}] {note.get('note', '')}")
+
+        lines.extend(["", "## 课堂地图回看", "", "截图是课堂展示记录，不能单独证明学生已经理解。", ""])
+        for snapshot in statistics.get("snapshots") or []:
+            lines.append(f"- {snapshot.get('stage_title', '未关联环节')} · {snapshot.get('timestamp', '')}")
+            if snapshot.get("available") and str(snapshot.get("image_url", "")).startswith("/files/outputs/"):
+                lines.append(f"  [查看地图原图](<{snapshot['image_url']}>)")
+            else:
+                lines.append("  截图文件不可用，保留原课堂记录。")
+        if not statistics.get("snapshots"):
+            lines.append("本次课堂没有可回看的截图记录。")
 
         lines.extend(["", "## 学情诊断与建议", "", diagnosis.get("text", ""), ""])
         generator = "AI 生成（MiniMax）" if diagnosis.get("generator") == "minimax" else "规则生成（证据保护）"
