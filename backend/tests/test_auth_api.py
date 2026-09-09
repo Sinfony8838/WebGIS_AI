@@ -80,6 +80,38 @@ class AuthApiTest(unittest.TestCase):
         )
         self.assertEqual(accepted.status_code, 200, accepted.text)
 
+    def test_opening_other_tabs_preserves_existing_tab_csrf(self) -> None:
+        _user, first_token = self.bootstrap_admin()
+        origin = app_main.config.cors_origins()[0]
+        tokens = [first_token]
+        for _ in range(3):
+            me = self.client.get("/auth/me", headers={"Origin": origin})
+            self.assertEqual(me.status_code, 200)
+            tokens.append(me.json()["csrf_token"])
+        for index, token in enumerate(tokens):
+            with self.subTest(tab=index):
+                response = self.client.post("/projects", json={"name": f"tab-{index}"},
+                    headers={"X-WebGIS-CSRF": token, "Origin": origin})
+                self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(tokens[1:], [tokens[1]] * 3)
+
+    def test_auth_rejections_are_readable_only_by_allowed_origins(self) -> None:
+        _user, token = self.bootstrap_admin()
+        origin = app_main.config.cors_origins()[0]
+        blocked = self.client.post("/projects", json={"name": "blocked"}, headers={"Origin": origin})
+        self.assertEqual(blocked.status_code, 403)
+        self.assertEqual(blocked.json()["detail"]["code"], "CSRF_FAILED")
+        self.assertEqual(blocked.headers.get("access-control-allow-origin"), origin)
+        self.assertEqual(blocked.headers.get("access-control-allow-credentials"), "true")
+        evil = self.client.post("/projects", json={"name": "blocked"},
+            headers={"Origin": "https://evil.example", "X-WebGIS-CSRF": token})
+        self.assertEqual(evil.status_code, 403)
+        self.assertNotIn("access-control-allow-origin", evil.headers)
+        self.client.cookies.clear()
+        expired = self.client.get("/auth/me", headers={"Origin": origin})
+        self.assertEqual(expired.status_code, 401)
+        self.assertEqual(expired.headers.get("access-control-allow-origin"), origin)
+
     def test_teacher_cannot_access_admin_or_another_teachers_project(self) -> None:
         _admin, csrf = self.bootstrap_admin()
         admin_project = self.client.post(

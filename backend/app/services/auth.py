@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import secrets
 import sqlite3
 import string
@@ -392,10 +393,27 @@ class AuthService:
             )
         return csrf_token
 
+    def csrf_for_session(self, context: AuthContext) -> str:
+        """Recover a stable page token without rotating another tab's token.
+
+        The stored hash of the random login CSRF token is a server-only,
+        per-session HMAC key. Neither this key nor the session cookie is exposed.
+        Keeping the original login token valid also preserves existing sessions.
+        """
+        if not context.session_id or not context.csrf_hash:
+            return ""
+        return hmac.new(
+            bytes.fromhex(context.csrf_hash),
+            ("webgis-csrf-page-v1:" + context.session_id).encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
     def verify_csrf(self, context: AuthContext, supplied: str) -> bool:
-        return bool(supplied) and secrets.compare_digest(
-            context.csrf_hash,
-            token_hash(supplied),
+        if not supplied or not context.session_id or not context.csrf_hash:
+            return False
+        digest = token_hash(supplied)
+        return secrets.compare_digest(context.csrf_hash, digest) or secrets.compare_digest(
+            token_hash(self.csrf_for_session(context)), digest,
         )
 
     def logout(self, session_id: str, *, actor_user_id: str = "", ip_address: str = "") -> None:

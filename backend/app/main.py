@@ -36,19 +36,7 @@ LESSON_DESIGN_REQUEST_HINTS = (
 )
 
 app = FastAPI(title="WebGIS-AI Runtime", version="1.1.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=config.cors_origins(),
-    allow_methods=["*"],
-    allow_headers=[
-        "Authorization",
-        "Content-Type",
-        "X-WebGIS-AI-Token",
-        "X-WebGIS-CSRF",
-        "X-WebGIS-Bootstrap-Key",
-    ],
-    allow_credentials=True,
-)
+
 
 SESSION_COOKIE = "webgis_ai_session"
 PUBLIC_AUTH_PATHS = {
@@ -165,6 +153,22 @@ async def require_access_token(request: Request, call_next):
                 status_code=403,
             )
     return await call_next(request)
+
+
+# Wrap authentication too, so allowed browser origins can read 401/403 errors.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=config.cors_origins(),
+    allow_methods=["*"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-WebGIS-AI-Token",
+        "X-WebGIS-CSRF",
+        "X-WebGIS-Bootstrap-Key",
+    ],
+    allow_credentials=True,
+)
 
 
 def _current_auth(request: Request) -> AuthContext:
@@ -748,7 +752,7 @@ def auth_login(request: Request, payload: AuthLoginRequest) -> Response:
 @app.get("/auth/me")
 def auth_me(request: Request) -> Dict[str, Any]:
     context = _current_auth(request)
-    csrf_token = auth_service.rotate_csrf(context.session_id) if auth_service and context.session_id else ""
+    csrf_token = auth_service.csrf_for_session(context) if auth_service and context.session_id else ""
     if auth_service:
         try:
             runtime.store.assign_unowned_records(auth_service.bootstrap_owner_user_id())

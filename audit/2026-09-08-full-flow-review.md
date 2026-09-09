@@ -395,3 +395,14 @@ frontend/src/styles.css
 - 补充提供固定条件变化追问给现有助教：只有住宅但缺少就业是否形成年轻环，限定不编造年龄数值、不改地图/教案、不记录为学生回答。本轮未再次调用真实模型，不能把按钮接入视为生成质量已经验收；自由追问质量待办保持。题库解析以“题库参考”呈现，未独立核验官方答案发布。
 - 验证：后端 python -m pytest backend/tests -q -k 'not RealBank'：506 passed、1 deselected、23 subtests，63.86秒；排除项仍为此前未授权私有原卷。随后仅增强题目状态保留测试，定向test_population_reference_lesson.py：7 passed、5 subtests，1.31秒。最终前端npm test：46文件280测试通过10.17秒；npm run build：318模块2.30秒成功。3D/UI壳、课时会话报告流、TOP20及健康端点保持，自动测试不替代设备/学情验收。独占后端19008重启加载新接口（PID29844），认证开启，主18999/5173未动。
 - 原全流程仍有待办：多标签CSRF、同年街镇面积/边界与年龄细分统计、许可实景三维、部分自然专题数据、共创规则回退接受确认、打印分页与真实学生验证。本轮无远端推送/PR/合并，无绕过此前被拒动作；只交付已核验的课堂展示修改。
+
+
+## 多页面课堂与作业导出连续性（2026-09-09，本轮基点50f26e5）
+
+- 上一goal回合为实质进展：50f26e5已提交地图展示与上海补充；本轮从干净独占分支codex/full-flow-audit-0908、50f26e54af72da9e79d786373f79e1cd598b34ac开始。范围限backend/app/main.py、services/auth.py、tests/test_auth.py、tests/test_auth_api.py与此审计；未编辑无关文件、主检出、私有原卷或共创接受状态。
+- 首先以API测试复现两项故障：连续读取/auth/me轮换同一会话CSRF，前三个页面旧令牌POST均403；鉴权中间件提前返回的403缺少允许来源的CORS头。初次运行2测试及子测试合计5失败、1子测试通过，均与实际导出失效一致。
+- /auth/me改为返回会话稳定HMAC页面令牌，密钥来自服务端已存随机登录CSRF的SHA256哈希，消息包含用途与session_id；不暴露密钥、session cookie或引入明文令牌存储，不需数据库迁移。保留原登录令牌兼容已打开的课堂。verify_csrf仍要求有效认证会话，比较原令牌哈希或派生令牌哈希；跨会话、错误/空值、cookie本身和哈希本身均不可用。显式轮换仍作废两类旧令牌，注销/禁用/过期会话沿用原认证拒绝。不会在客户端自动重试有副作用的POST。
+- 将CORS包装放到鉴权中间件外层，使允许来源能读取401/403的真实错误信息，原允许域名列表、credentials、HttpOnly、SameSite、权限及来源检查保持。恶意来源仍403且无允许来源响应头。实现参考OWASP每会话token及HMAC绑定原则：https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html 。这不是外部安全审计或全面认证验收的替代。
+- 定向auth/api：19 passed、8 subtests，4.76秒。后端全量 python -m pytest backend/tests -q -k 'not RealBank'：509 passed、1 deselected、27 subtests，47.23秒；排除项沿用此前私有原卷授权限制。本轮没有前端源改动，不重复前端280测试/构建；最终git diff --check通过。3D/UI壳、课堂/报告流、TOP20与健康端点保留。
+- 核实原本任务进程29844命令后重启专用19008，当前PID35624/exec42359，认证仍开启，主18999/5173不变。真实IAB旧tab3全程未刷新，打开新tab4进入教案设计并确认同一教师登录、系统连接后，旧tab3地图展示POST200；再选择已结束的09:12:45课堂session_2233337db34a4f00b195bfcb564a9837并导出，practice-export POST200，UI显示学生卷/教师卷下载及基础2、探究1、题库6的来源。文件practice_student_session_2233_a9303cf6.docx和practice_teacher_session_2233_b839bb37.docx实际生成且ZIP完整性通过。没有结束09:41:03仍在运行的用户课堂，也没有新增学生观察。原空白页面启动时短暂“未连接”随后自行正常，非服务故障。
+- 多标签互相轮换CSRF导致旧页失效这一已知问题已修复并实测。新登录替换共享cookie的跨账户情形不属本次“同一会话新开页”验证，旧页会按原流程拒绝；未新增跨账户静默重试。作业打印分页、真实助教追问质量、同年街镇面积/边界与年龄统计、许可实景三维、长任务续查、课前共创确认等仍待完成，全目标不标完成。无远端推送/PR/合并，未绕过此前拒绝动作。
