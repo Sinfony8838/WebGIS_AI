@@ -31,10 +31,21 @@ class ReportShapeTests(unittest.TestCase):
         payload = report.to_dict()
         self.assertEqual(
             set(payload.keys()),
-            {"source_crs", "target_crs", "reprojected", "warnings"},
+            {
+                "source_crs",
+                "target_crs",
+                "reprojected",
+                "warnings",
+                "features_total",
+                "features_transformed",
+                "features_untouched",
+            },
         )
         self.assertEqual(payload["target_crs"], "EPSG:4326")
         self.assertEqual(payload["warnings"], [{"code": "X", "message_zh": "中文消息"}])
+        self.assertEqual(payload["features_total"], 0)
+        self.assertEqual(payload["features_transformed"], 0)
+        self.assertEqual(payload["features_untouched"], 0)
 
     def test_default_not_reprojected(self) -> None:
         self.assertFalse(crs_reprojector.ReprojectionReport(source_crs=None).reprojected)

@@ -1692,6 +1692,7 @@ export default function App({
       }
       const response = await uploadDataset(project.project_id, formData);
       subscribeToJob(response.job_id);
+      return response;
     },
     [project, subscribeToJob]
   );

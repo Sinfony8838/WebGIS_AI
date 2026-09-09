@@ -100,6 +100,50 @@ export type ArtifactRecord = {
   created_at: string;
 };
 
+export type DatasetUploadLayer = Omit<LayerRecord, "metadata"> & {
+  metadata: Record<string, unknown> & {
+    feature_count?: number;
+    source_crs?: string | null;
+    stored_crs?: string | null;
+    crs_converted?: boolean;
+  };
+};
+
+export type DatasetUploadResponse = {
+  status: string;
+  job_id: string;
+  layer: DatasetUploadLayer;
+  artifact: {
+    artifact_type: string;
+    title: string;
+    path: string;
+    metadata: Record<string, unknown>;
+  };
+  crs: {
+    source_crs?: string | null;
+    target_crs?: string;
+    reprojected?: boolean;
+    warnings?: Array<{ code: string; message_zh: string }>;
+    detection_method?: string;
+  };
+  message: string;
+  row_report?: {
+    total_rows?: number;
+    imported_rows?: number;
+    skipped_rows?: number;
+    skip_reasons?: Record<string, number>;
+    encoding?: string;
+    lat_field?: string;
+    lon_field?: string;
+  };
+  feature_report?: {
+    total_features?: number;
+    imported_features?: number;
+    skipped_features?: number;
+    skip_reasons?: Record<string, number>;
+  };
+};
+
 export type RecentAction = {
   title: string;
   detail: string;
