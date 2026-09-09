@@ -27,6 +27,42 @@ class PopulationAssistantTest(unittest.TestCase):
         config.minimax_api_key = "test-key" if with_llm else ""
         return config
 
+    def test_valley_unsupported_mechanism_is_reviewed_against_regional_sources(self):
+        client = CapturingClient()
+        engine = KnowledgeEngine(self.build_config(with_llm=True), minimax_client=client)
+        question = "GeoBot 头脑风暴：局地例外。\n随机抽中的地区是：青藏高原河谷。\n【本次探究任务】为何部分河谷聚落集中？\n【课堂参考材料】定性比较。"
+        final = "头脑风暴问题：为何部分河谷聚落集中？回答：部分宽谷海拔相对较低，谷底利于耕作，水源可利用；需比较局地地形、热量与聚落资料。回答总结：比较局地条件，不一概而论。"
+        with patch.object(client, "chat_completion", side_effect=["焚风带来稳定水源，形成冷岛中的暖区。", final]) as call:
+            result = engine.answer(question)
+        self.assertEqual(call.call_count, 2)
+        self.assertEqual(result["direct_answer"], final)
+        self.assertIn("海拔相对较低", str(call.call_args_list[0]))
+        self.assertIn("删除未经局地资料支持", str(call.call_args_list[1]))
+        self.assertTrue(any("lsz" in citation["url"] for citation in result["citations"]))
+
+    def test_valley_provider_failure_uses_labeled_regional_reference(self):
+        client=CapturingClient()
+        engine=KnowledgeEngine(self.build_config(with_llm=True),minimax_client=client)
+        prompt="GeoBot 头脑风暴：局地例外。\n随机抽中的地区是：青藏高原河谷。\n【本次探究任务】为何部分河谷聚落集中？\n【课堂参考材料】定性比较。"
+        with patch.object(client,"chat_completion",side_effect=TimeoutError()):
+            result=engine.answer(prompt)
+        self.assertFalse(result["llm_used"])
+        self.assertIn("资料参考（AI 生成未完成）",result["direct_answer"])
+        self.assertIn("部分较宽河谷",result["direct_answer"])
+        self.assertNotIn("胡焕庸线",result["direct_answer"])
+
+    def test_conceptual_lights_do_not_inherit_map_year_as_question_data(self):
+        question = "若一处港区夜间灯光很亮，能否判断其常住人口密度高？提出两种解释，并说明需要补充什么资料。"
+        client = CapturingClient("不能；港区照明可能服务生产，也可能与居民活动有关，需核对同范围常住人口和用地资料。")
+        engine = KnowledgeEngine(self.build_config(with_llm=True), minimax_client=client)
+        with patch.object(engine, "_map_context_brief", return_value="2016年灯光、2020年人口资料") as brief:
+            engine.answer(question, map_context={"teaching_context":{"phase":"in_class"}})
+        brief.assert_not_called()
+        self.assertIn("题干没有提供某年观测数据", client.calls[0]["messages"][0]["content"])
+        self.assertNotIn("当前地图状态", client.calls[0]["messages"][1]["content"])
+        self.assertFalse(engine._is_conceptual_light_question("根据图中2016年灯光与2020年人口资料比较上海"))
+        self.assertFalse(engine._is_conceptual_light_question("这张灯光图的人口分布是什么特点"))
+
     def test_structured_brainstorm_uses_selected_region_not_reference_freshness(self):
         from unittest.mock import Mock
         client = CapturingClient("头脑风暴问题：青藏高原河谷为什么可能出现局部人口集聚？\n回答：需比较水源、地形条件并用地图验证。\n回答总结：总体稀疏不排除局部集聚。")

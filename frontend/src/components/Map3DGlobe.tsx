@@ -131,6 +131,8 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
   const baseImageryLayerRef = useRef<Cesium.ImageryLayer | null>(null);
   const themeManagerRef = useRef<GlobeThemeManager | null>(null);
   const themesActiveRef = useRef(false);
+  const urbanActiveRef = useRef(false);
+  urbanActiveRef.current = Boolean(urbanSource);
   const altitudeArmedRef = useRef(true);
   const lastCameraStateRef = useRef<CameraState | null>(null);
   const rafIdRef = useRef<number | null>(null);
@@ -342,7 +344,7 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
         if (!tooltipEl) {
           return;
         }
-        if (!themesActiveRef.current) {
+        if (!themesActiveRef.current && !urbanActiveRef.current) {
           tooltipEl.style.display = "none";
           return;
         }
@@ -413,9 +415,35 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
     if (!viewer || !urbanSource) { urbanStatusRef.current?.("idle"); return; }
     let cancelled=false;
     let tileset:Cesium.Cesium3DTileset|null=null;
+    let buildings:Cesium.GeoJsonDataSource|null=null;
     const removeListeners:(()=>void)[]=[];
     urbanStatusRef.current?.("loading");
-    Cesium.Cesium3DTileset.fromUrl(urbanSource.url,{maximumScreenSpaceError:16,showCreditsOnScreen:true}).then(result=>{
+    if (urbanSource.format === "geojson") {
+      Cesium.GeoJsonDataSource.load(urbanSource.url, {clampToGround:false}).then(async result => {
+        if(cancelled || viewer.isDestroyed()) return;
+        buildings=result;
+        for(const entity of result.entities.values) {
+          if(!entity.polygon) continue;
+          const properties=entity.properties?.getValue(Cesium.JulianDate.now()) || {};
+          const height=Number(properties.height_m);
+          const basis=properties.height_basis;
+          const known=Number.isFinite(height) && height>0 && height<1000;
+          entity.polygon.height=new Cesium.ConstantProperty(0);
+          entity.polygon.extrudedHeight=new Cesium.ConstantProperty(known ? height : 0);
+          entity.polygon.material=new Cesium.ColorMaterialProperty(Cesium.Color.fromCssColorString(!known ? "#9aa9ad" : basis === "osm_height" ? "#279589" : "#6695bc"));
+          entity.polygon.outline=new Cesium.ConstantProperty(false);
+          (entity as unknown as {__themeTooltip: {title:string;lines:string[]}}).__themeTooltip={
+            title:properties.name || "建筑轮廓",
+            lines:[!known ? "高度缺失，未拉伸" : basis === "osm_height" ? `OSM 标注高度：${height} 米` : `估算高度：${height} 米（${properties.levels_tag} 层 × 3 米）`,
+              "© OpenStreetMap contributors · 非人口数据"]
+          };
+        }
+        await viewer.dataSources.add(result);
+        if(cancelled || viewer.isDestroyed()) {if(!viewer.isDestroyed()) viewer.dataSources.remove(result,true);return;}
+        urbanStatusRef.current?.("visible");
+        viewer.scene.requestRender();
+      }).catch(()=>{if(!cancelled)urbanStatusRef.current?.("error");});
+    } else Cesium.Cesium3DTileset.fromUrl(urbanSource.url,{maximumScreenSpaceError:16,showCreditsOnScreen:true}).then(result=>{
       if(cancelled || viewer.isDestroyed()) { result.destroy(); return; }
       tileset=result;
       viewer.scene.primitives.add(result);
@@ -428,6 +456,7 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
       cancelled=true;
       removeListeners.forEach(remove=>remove());
       if(tileset && !viewer.isDestroyed()) viewer.scene.primitives.remove(tileset);
+      if(buildings && !viewer.isDestroyed()) viewer.dataSources.remove(buildings,true);
     };
   },[urbanSource]);
 
@@ -437,13 +466,14 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
     if (!viewer) {
       return;
     }
-    const { url, subdomains: extractedSubdomains } = extractTokenPattern(imageryUrl);
+    const osmBuildings=urbanSource?.format === "geojson";
+    const { url, subdomains: extractedSubdomains } = extractTokenPattern(osmBuildings ? "https://tile.openstreetmap.org/{z}/{x}/{y}.png" : imageryUrl);
     const subdomains = imagerySubdomains && imagerySubdomains.length ? imagerySubdomains : extractedSubdomains;
     const provider = new Cesium.UrlTemplateImageryProvider({
       url,
       subdomains,
       maximumLevel: 18,
-      credit: new Cesium.Credit("© 高德地图", false)
+      credit: new Cesium.Credit(osmBuildings ? '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>' : "© 高德地图", true)
     });
     const nextLayer = new Cesium.ImageryLayer(provider, {});
     // Insert below the grid layer (if any) but above other layers.
@@ -452,7 +482,7 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
       viewer.imageryLayers.remove(baseImageryLayerRef.current, true);
     }
     baseImageryLayerRef.current = nextLayer;
-  }, [imageryUrl, imagerySubdomains]);
+  }, [imageryUrl, imagerySubdomains, urbanSource?.format]);
 
   // Add or remove the lat/lon graticule overlay (lines + numeric labels).
   // The grid is two coordinated pieces: a tile-based GridImageryProvider

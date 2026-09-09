@@ -743,8 +743,11 @@ class KnowledgeEngine:
                 mechanism_explanation = ""
                 teaching_points = []
                 confidence = 0.0
+                if selected_region and entry and entry.get("id") == "tibetan_valley_settlements":
+                    direct_answer = "资料参考（AI 生成未完成）：" + str(entry.get("canonical_answer", ""))
+                    retrieval_trace.append({"source":"regional_reference_fallback","status":"fallback"})
 
-        map_grounding = self._map_grounding(map_context, answer_type)
+        map_grounding = "" if brainstorm_request or self._is_conceptual_light_question(intent_question) else self._map_grounding(map_context, answer_type)
         return {
             "direct_answer": direct_answer,
             "mechanism_explanation": mechanism_explanation,
@@ -1020,7 +1023,14 @@ class KnowledgeEngine:
         if layer_evidence:
             context_parts.append("当前可见图层资料（数据说明，不是成因结论）：" + json.dumps(layer_evidence, ensure_ascii=False))
 
-        map_summary = "" if vision_summary else self._map_context_brief(map_context)
+        conceptual_light = self._is_conceptual_light_question(question)
+        if conceptual_light:
+            system_prompt += (
+                "\n本次是灯光与人口关系的概念探究。题干没有提供某年观测数据，不能把后台底图年份、"
+                "教案备注或参考资料说成用户提供的数据；不要用‘依据提供的某年数据’开头。"
+                "直接解释照明、产业活动与常住人口的区别，提出可区分假设的资料，不代入未给出的年份、数值或地图观测。\n"
+            )
+        map_summary = "" if vision_summary or conceptual_light else self._map_context_brief(map_context)
         if map_summary:
             context_parts.append(f"当前地图状态：{map_summary}")
 
@@ -1047,6 +1057,7 @@ class KnowledgeEngine:
                 additional_sources={"local_reference": entry or {}, "verified_web_context": web_context})
         if brainstorm_request and (
             len(re.sub(r"\s", "", cleaned)) > 240
+            or ("青藏高原河谷" in question and _contains_any(cleaned, ("焚风", "稳定水源", "冷岛")))
             or ("年轻环" in question and _contains_any(cleaned, ("必要条件", "缺一不可", "必须同时", "需要两个条件同时")))
         ):
             # A bounded editing pass checks a draft before classroom display;
@@ -1056,11 +1067,12 @@ class KnowledgeEngine:
                     "\n请审校下列初稿后只给出最终回答。必须纠正超出材料的必要性、充分性或必然性断言。"
                     "常见影响因素不自动构成必要条件，材料没支持的断言直接删除；不要再发明条件。"
                     "全文不超过180字，保留一个问题、一段参考回答、一句总结，不输出审校过程。"
-                    + ("区分居住地与就业地、本地岗位与可达岗位。允许跨区通勤的反例。" if "年轻环" in question else "")},
+                    + ("区分居住地与就业地、本地岗位与可达岗位。允许跨区通勤的反例。" if "年轻环" in question else "")
+                    + ("删除未经局地资料支持的焚风、稳定水源和冷岛解释。比较相对海拔、可耕谷底和可利用水源，不将所有河谷一概而论。" if "青藏高原河谷" in question else "")},
                 {"role": "user", "content": user_content + "\n\n待审校初稿：\n" + cleaned},
             ], temperature=0.0)
             cleaned = self._strip_code_fences(self._strip_think_tags(reviewed))
-            if len(re.sub(r"\s", "", cleaned)) > 280:
+            if len(re.sub(r"\s", "", cleaned)) > 450:
                 raise ValueError("课堂追问审校后仍超过展示长度")
         if vision_summary:
             cleaned = self._sanitize_image_answer_coordinates(cleaned, question)
@@ -1403,6 +1415,12 @@ class KnowledgeEngine:
         return _contains_any(lowered_question, CURRENT_MAP_HINTS) or (
             "当前" in lowered_question and _contains_any(lowered_question, ("地图", "视图", "画面", "图层", "区域", "选区"))
         )
+
+    @staticmethod
+    def _is_conceptual_light_question(question: str) -> bool:
+        task = question.split("【课堂参考材料】", 1)[0]
+        return ("灯光" in task and "人口" in task
+                and not re.search(r"(?:19|20)\d{2}|这张|当前图|根据图|依据图|读图|图中|提供.*数据|最新", task))
 
     @staticmethod
     def _population_guardrail_answer(question: str) -> str:

@@ -459,7 +459,7 @@ describe("ClassRunPanel", () => {
     expect(task).toContain("随机抽中的地区是：北京市");
     expect(materials).toContain("本环节讲解材料：");
     expect(task).not.toContain("本环节讲解材料：");
-    expect(onAssistantPrompt.mock.calls[0][1]).toBe("GeoBot 头脑风暴 · 北京市");
+    expect(onAssistantPrompt.mock.calls[0][1]).toContain("以北京市为例，");
     randomSpy.mockRestore();
   });
 
@@ -486,7 +486,7 @@ describe("ClassRunPanel", () => {
     fireEvent.click(screen.getByTestId("run-brainstorm"));
     act(() => vi.advanceTimersByTime(1100));
     const [prompt, display] = onAssistantPrompt.mock.calls[0];
-    expect(display).toBe("GeoBot 头脑风暴 · 黄浦区");
+    expect(display).toBe("以黄浦区为例，比较两区人口密度");
     expect(prompt).toContain("本环节候选地区：黄浦区、崇明区");
     expect(prompt).toContain("区级平均密度不代表街镇内部差异");
     expect(prompt).toContain(stage.questions[0].material);

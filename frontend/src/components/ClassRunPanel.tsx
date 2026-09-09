@@ -25,7 +25,7 @@ type Props = {
   visibleCatalogLayerIds?: string[];
   onFocusEvidenceLayer?: (datasetId: string, stageDatasetIds: string[]) => void;
   onRequestPlaneView?: () => void;
-  /** 以隐藏的内部提示驱动 GeoBot，课堂对话只显示简短的头脑风暴标题。 */
+  /** 以隐藏的内部提示驱动 GeoBot，课堂对话显示完整的探究问题。 */
   onAssistantPrompt?: (prompt: string, displayMessage?: string) => void;
 };
 
@@ -206,12 +206,20 @@ export function ClassRunPanel({
       const selected = brainstormRegions[Math.floor(Math.random() * brainstormRegions.length)] || preview;
       setBrainstormRegion(selected);
       setBrainstormSpinning(false);
+      const regionalQuestions:Record<string,string> = {
+        "青藏高原河谷":"青藏高原人口稀疏，为何部分河谷聚落集中？比较水热与地形条件，并提出检验资料。",
+        "塔里木盆地":"塔里木盆地整体干旱，为什么聚落多见于盆地边缘绿洲？如果山地来水减少，这种分布可能怎样变化？",
+        "河西走廊":"河西走廊较干旱，为什么仍能形成绿洲城市？比较水源、地形与交通条件，说明水资源约束如何影响聚落扩展。"
+      };
+      const inquiryQuestion = regionalQuestions[selected] || `以${selected}为例，${brainstorm.prompt}`;
       const prompt = [
         `GeoBot 头脑风暴：围绕“${currentStage.title}”开展随机地区探究。`,
         `随机抽中的地区是：${selected}。`,
         "【本次探究任务】",
+        inquiryQuestion,
         brainstorm.prompt,
-        "请生成一个与当前问题链衔接的追问，并提供教师参考回答；不替学生作答，不推断学生掌握情况。",
+        "请沿用上述完整问题，直接回答抽中地区的局地机制，不转去概述胡焕庸线。",
+        "沿用本次探究问题，提供教师参考回答；不替学生作答，不推断学生掌握情况。",
         "【课堂参考材料】",
         `本课：${lesson.title}；当前环节：${currentStage.title}。`,
         `本环节候选地区：${brainstormRegions.join("、")}。只围绕抽中的地区，保持本环节的比较尺度。`,
@@ -223,7 +231,7 @@ export function ClassRunPanel({
         "只输出“头脑风暴问题”“回答”“回答总结”三部分；回答总结必须是一句话。",
         "不要输出地图中心坐标、缩放级别、可见范围、证据或观察点、给学生的问题、教师收束语。"
       ].join("\n");
-      onAssistantPrompt(prompt, `GeoBot 头脑风暴 · ${selected}`);
+      onAssistantPrompt(prompt, inquiryQuestion);
     }, 70);
   }
 
