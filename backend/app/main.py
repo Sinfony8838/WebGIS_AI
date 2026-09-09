@@ -2436,6 +2436,15 @@ def get_workflow(workflow_id: str, request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.post("/workflow/{workflow_id}/cancel")
+def cancel_workflow(workflow_id: str, request: Request) -> Dict[str, Any]:
+    _require_workflow_access(request, workflow_id)
+    try:
+        return runtime.cancel_workflow(workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.get("/workflow/{workflow_id}/artifacts")
 def get_workflow_artifacts(workflow_id: str, request: Request) -> Dict[str, Any]:
     _require_workflow_access(request, workflow_id)

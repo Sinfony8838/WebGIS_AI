@@ -14,6 +14,7 @@ import type {
   DatasetCatalogLayerResponse,
   ConversationResponse,
   DatasetCatalogResponse,
+  DatasetUploadResponse,
   DatasetStatsResponse,
   HealthResponse,
   ImageAttachment,
@@ -502,9 +503,9 @@ export async function searchPoi(
   });
 }
 
-export async function uploadDataset(projectId: string, formData: FormData): Promise<{ job_id: string }> {
+export async function uploadDataset(projectId: string, formData: FormData): Promise<DatasetUploadResponse> {
   formData.set("project_id", projectId);
-  return requestJson<{ job_id: string }>("/datasets/upload", {
+  return requestJson<DatasetUploadResponse>("/datasets/upload", {
     method: "POST",
     body: formData
   });
