@@ -17,6 +17,8 @@ from .reports import ReportService
 from .visual_query import VisualQueryService
 
 
+_PRACTICE_WORKER_RUN_ID = secrets.token_hex(16)
+
 class ClassroomWorkflowRuntime:
     """Pre-class, in-class, after-class workflow layer.
 
@@ -26,11 +28,13 @@ class ClassroomWorkflowRuntime:
     """
 
     def __init__(self, runtime: Any):
+        self._practice_submission_lock = threading.Lock()
         self._explanation_slots = threading.BoundedSemaphore(2)
         self._explanation_requests: set[str] = set()
         self.runtime = runtime
         self.config = runtime.config
         self.store = runtime.store
+        self.store.fail_interrupted_practice_exports(_PRACTICE_WORKER_RUN_ID)
         self.visual_query_service = VisualQueryService(self.config)
         self.lesson_service = LessonService(
             self.config,
@@ -1093,6 +1097,27 @@ class ClassroomWorkflowRuntime:
         )
         threading.Thread(target=self._run_session_report_job, args=(job.job_id, session_id), daemon=True).start()
         return {"status": "accepted", "job_id": job.job_id, "session_id": session_id}
+
+    def submit_session_practice(self, session_id: str, selection: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        session = self._require_session(session_id)
+        with self._practice_submission_lock:
+            existing = self.store.session_review_jobs(session.project_id, session_id).get("practice")
+            if existing and existing["status"] in {"queued", "pending", "running"}:
+                if existing["request"].get("selection") != selection:
+                    raise ValueError("该课堂正在导出另一组选题，请等待完成后再修改。")
+                return {"status": "accepted", "job_id": existing["job_id"], "session_id": session_id}
+            job = self.store.create_job(session.project_id, "practice_export", "生成课后练习双卷",
+                                        request={"session_id": session_id, "selection": selection, "execution_mode": "in_process", "worker_run_id": _PRACTICE_WORKER_RUN_ID}, workflow_type="practice_export")
+            threading.Thread(target=self._run_session_practice_job, args=(job.job_id, session_id, selection), daemon=True).start()
+            return {"status": "accepted", "job_id": job.job_id, "session_id": session_id}
+
+    def _run_session_practice_job(self, job_id: str, session_id: str, selection: Optional[Dict[str, Any]]) -> None:
+        try:
+            session = self._require_session(session_id)
+            self.store.set_job_status(job_id, "running")
+            self.practice_export.export(session, self._lesson_for_session(session), selection, job_id=job_id)
+        except Exception as exc:
+            self.store.set_job_status(job_id, "failed", error=str(exc))
 
     def export_session_practice(self, session_id: str, selection: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """课后练习卷双卷导出（学生卷/教师卷），读取开课时刻的课时快照。"""

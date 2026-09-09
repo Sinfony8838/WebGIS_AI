@@ -66,6 +66,73 @@ class PracticeExportTestBase(unittest.TestCase):
 
 
 class PracticeExportLessonGoalsTest(PracticeExportTestBase):
+    def test_background_export_records_job_before_writing_and_reuses_active_submission(self):
+        import threading
+        import time
+        from unittest.mock import patch
+        runtime, store, project_id = self.build_runtime()
+        lesson = store.get_lesson("lesson_builtin_population_distribution")
+        lesson.plan = {"homework": {"basic": ["比较黄浦与崇明的公共服务布局条件。"]}}
+        session_id = runtime.classroom.create_class_session(lesson.lesson_id, project_id)["session"]["session_id"]
+        service = runtime.classroom.practice_export
+        entered, release = threading.Event(), threading.Event()
+        original = service._write_paper
+        def writer(*args, **kwargs):
+            entered.set()
+            if not release.wait(5):
+                raise TimeoutError("test writer timeout")
+            return original(*args, **kwargs)
+        with patch.object(service, "_write_paper", side_effect=writer):
+            accepted = runtime.classroom.submit_session_practice(session_id)
+            try:
+                self.assertTrue(entered.wait(5))
+                job = store.get_job(accepted["job_id"])
+                self.assertEqual(job.status, "running")
+                self.assertEqual(runtime.classroom.session_review_history(session_id)["practice"]["job_id"], job.job_id)
+                self.assertEqual(runtime.classroom.submit_session_practice(session_id)["job_id"], job.job_id)
+                with self.assertRaisesRegex(ValueError, "另一组选题"):
+                    runtime.classroom.submit_session_practice(session_id, {"token": "different", "selected_ids": ["other"]})
+            finally:
+                release.set()
+            deadline = time.monotonic() + 5
+            while store.get_job(accepted["job_id"]).status not in {"success", "failed"} and time.monotonic() < deadline:
+                time.sleep(0.01)
+        job = store.get_job(accepted["job_id"])
+        self.assertEqual(job.status, "success", job.error)
+        self.assertTrue(Path(job.result["student_artifact"]["path"]).is_file())
+        self.assertTrue(Path(job.result["teacher_artifact"]["path"]).is_file())
+        self.assertEqual(len([j for j in store.jobs.values() if j.job_type == "practice_export"]), 1)
+
+    def test_new_server_run_marks_only_interrupted_export_workers_failed(self):
+        runtime, store, project_id = self.build_runtime()
+        request = {"session_id": "s", "execution_mode": "in_process", "worker_run_id": "previous-run"}
+        interrupted = store.create_job(project_id, "practice_export", "old", request=request)
+        current = store.create_job(project_id, "practice_export", "current", request={**request, "worker_run_id": "current-run"})
+        complete = store.create_job(project_id, "practice_export", "done", request=request)
+        store.set_job_status(complete.job_id, "success", {"note": "keep"})
+        other = store.create_job(project_id, "class_report", "other", request=request)
+        self.assertEqual(store.fail_interrupted_practice_exports("current-run"), [interrupted.job_id])
+        self.assertEqual(store.get_job(current.job_id).status, "queued")
+        self.assertEqual(store.get_job(other.job_id).status, "queued")
+        self.assertEqual(store.get_job(complete.job_id).result, {"note": "keep"})
+        restored = RuntimeStore(store.state_file)
+        self.assertEqual(restored.get_job(interrupted.job_id).status, "failed")
+        self.assertIn("重启中断", restored.get_job(interrupted.job_id).error)
+
+    def test_paper_write_failure_is_recoverable_as_failed_job_not_a_download(self):
+        from unittest.mock import patch
+        runtime, store, project_id = self.build_runtime()
+        lesson = store.get_lesson("lesson_builtin_population_distribution")
+        lesson.plan = {"homework": {"basic": ["解释人口分布的区域差异。"]}}
+        session_id = runtime.classroom.create_class_session(lesson.lesson_id, project_id)["session"]["session_id"]
+        with patch.object(runtime.classroom.practice_export, "_write_paper", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                runtime.classroom.export_session_practice(session_id)
+        job = runtime.classroom.session_review_history(session_id)["practice"]
+        self.assertEqual(job["status"], "failed")
+        self.assertIn("disk full", job["error"])
+        self.assertNotIn("student_artifact", job.get("result") or {})
+
     def test_export_selection_rejects_stale_empty_foreign_and_unlisted_items(self):
         runtime, store, project_id = self.build_runtime()
         lesson = store.get_lesson("lesson_builtin_population_distribution")

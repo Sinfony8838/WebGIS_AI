@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../api", () => ({
+vi.mock("../api", () => { const api = {
   buildAuthenticatedUrl: (value: string) => value,
   fetchClassSessions: vi.fn().mockResolvedValue({
     status: "success",
@@ -106,7 +106,7 @@ vi.mock("../api", () => ({
       report_url: ""
     }
   })
-}));
+}; return { ...api, submitSessionPracticeExport: api.exportSessionPractice }; });
 
 import { ReportPanel } from "../components/ReportPanel";
 import { exportSessionPractice, fetchClassSessions, fetchJob, fetchSessionReviewHistory, generateSessionReport } from "../api";
@@ -390,4 +390,31 @@ it("restores the exported selection only against the same report and visible can
   await screen.findByRole("button", { name: "导出所选 1 项" });
   expect(screen.getByRole("checkbox")).toBeChecked();
   expect(exportSessionPractice).not.toHaveBeenCalled();
+});
+
+
+it("waits for a background export and recovers its two paper results", async () => {
+  const paper = await exportSessionPractice("fixture");
+  vi.mocked(exportSessionPractice).mockClear().mockResolvedValueOnce({ status: "accepted", job_id: "export_running", session_id: "session_teacher_only" } as any);
+  vi.mocked(fetchJob).mockResolvedValueOnce({ status: "success", result: paper } as any);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByTestId("export-practice")).toBeEnabled());
+  fireEvent.click(screen.getByTestId("export-practice"));
+  await screen.findByTestId("practice-student-link");
+  expect(fetchJob).toHaveBeenCalledWith("export_running");
+  expect(exportSessionPractice).toHaveBeenCalledOnce();
+});
+
+it("restores an in-progress export and retries only its GET after network loss", async () => {
+  const paper = await exportSessionPractice("fixture");
+  vi.mocked(exportSessionPractice).mockClear();
+  vi.mocked(fetchSessionReviewHistory).mockResolvedValueOnce({ session_id: "session_teacher_only", report: null, practice: { job_id: "old_export", status: "running", updated_at: "" } });
+  vi.mocked(fetchJob).mockRejectedValueOnce(new Error("连接中断")).mockResolvedValueOnce({ status: "success", result: paper } as any);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await screen.findByText("连接中断");
+  expect(screen.getByTestId("generate-report")).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "继续读取练习卷" }));
+  await screen.findByTestId("practice-teacher-link");
+  expect(exportSessionPractice).not.toHaveBeenCalled();
+  expect(vi.mocked(fetchJob).mock.calls.map(call => call[0])).toEqual(["old_export", "old_export"]);
 });

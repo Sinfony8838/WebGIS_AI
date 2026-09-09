@@ -60,7 +60,7 @@ class PracticeExportService:
     # ------------------------------------------------------------------
 
     def export(self, session: ClassSessionRecord, lesson: Optional[LessonRecord],
-               selection: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+               selection: Optional[Dict[str, Any]] = None, job_id: Optional[str] = None) -> Dict[str, Any]:
         lesson_title = str(
             (lesson.title if lesson else "") or (session.metadata or {}).get("lesson_title") or "本课"
         )
@@ -81,56 +81,63 @@ class PracticeExportService:
         if not items:
             raise ValueError("未找到可用作业内容。请检查当前项目题库、课时目标或先添加作业任务；未生成空白试卷。")
 
-        output_dir = self.config.project_output_dir(session.project_id)
-        student_path = self.config.unique_path(output_dir, f"practice_student_{session.session_id[:12]}.docx")
-        teacher_path = self.config.unique_path(output_dir, f"practice_teacher_{session.session_id[:12]}.docx")
-        self._write_paper(student_path, lesson_title, items, summary, notes, teacher=False)
-        self._write_paper(teacher_path, lesson_title, items, summary, notes, teacher=True)
+        job = self.store.get_job(job_id) if job_id else None
+        if job is None:
+            job = self.store.create_job(
+                project_id=session.project_id,
+                job_type="practice_export",
+                title=f"导出课后练习卷：{lesson_title}",
+                workflow_type="practice_export",
+                request={"session_id": session.session_id, "selection": selection},
+            )
+        self.store.set_job_status(job.job_id, "running")
+        try:
+            output_dir = self.config.project_output_dir(session.project_id)
+            student_path = self.config.unique_path(output_dir, f"practice_student_{session.session_id[:12]}.docx")
+            teacher_path = self.config.unique_path(output_dir, f"practice_teacher_{session.session_id[:12]}.docx")
+            self._write_paper(student_path, lesson_title, items, summary, notes, teacher=False)
+            self._write_paper(teacher_path, lesson_title, items, summary, notes, teacher=True)
 
-        job = self.store.create_job(
-            project_id=session.project_id,
-            job_type="practice_export",
-            title=f"导出课后练习卷：{lesson_title}",
-            workflow_type="practice_export",
-            request={"session_id": session.session_id},
-        )
-        student_artifact = self.store.register_artifact(
-            project_id=session.project_id,
-            job_id=job.job_id,
-            artifact_type="practice_paper_student",
-            title=f"{lesson_title} 课后练习卷（学生卷）",
-            path=str(student_path),
-            metadata={
-                "public_url": self.config.public_url_for_path(student_path),
+            student_artifact = self.store.register_artifact(
+                project_id=session.project_id,
+                job_id=job.job_id,
+                artifact_type="practice_paper_student",
+                title=f"{lesson_title} 课后练习卷（学生卷）",
+                path=str(student_path),
+                metadata={
+                    "public_url": self.config.public_url_for_path(student_path),
+                    "session_id": session.session_id,
+                    "format": "docx",
+                },
+            )
+            teacher_artifact = self.store.register_artifact(
+                project_id=session.project_id,
+                job_id=job.job_id,
+                artifact_type="practice_paper_teacher",
+                title=f"{lesson_title} 课后练习卷（教师卷）",
+                path=str(teacher_path),
+                metadata={
+                    "public_url": self.config.public_url_for_path(teacher_path),
+                    "session_id": session.session_id,
+                    "format": "docx",
+                },
+            )
+            result = {
+                "status": "success",
+                "job_id": job.job_id,
                 "session_id": session.session_id,
-                "format": "docx",
-            },
-        )
-        teacher_artifact = self.store.register_artifact(
-            project_id=session.project_id,
-            job_id=job.job_id,
-            artifact_type="practice_paper_teacher",
-            title=f"{lesson_title} 课后练习卷（教师卷）",
-            path=str(teacher_path),
-            metadata={
-                "public_url": self.config.public_url_for_path(teacher_path),
-                "session_id": session.session_id,
-                "format": "docx",
-            },
-        )
-        result = {
-            "status": "success",
-            "job_id": job.job_id,
-            "session_id": session.session_id,
-            "student_artifact": student_artifact.to_dict(),
-            "teacher_artifact": teacher_artifact.to_dict(),
-            "selection_summary": summary,
-            "selected_ids": [item["practice_id"] for item in items],
-            "notes": notes,
-            "selection_token": selection.get("token") if selection else None,
-        }
-        self.store.set_job_status(job.job_id, "success", result)
-        return result
+                "student_artifact": student_artifact.to_dict(),
+                "teacher_artifact": teacher_artifact.to_dict(),
+                "selection_summary": summary,
+                "selected_ids": [item["practice_id"] for item in items],
+                "notes": notes,
+                "selection_token": selection.get("token") if selection else None,
+            }
+            self.store.set_job_status(job.job_id, "success", result)
+            return result
+        except Exception as exc:
+            self.store.set_job_status(job.job_id, "failed", error=str(exc))
+            raise
 
     # ------------------------------------------------------------------
     # Selection (priority levels with honest fallback)

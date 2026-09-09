@@ -163,6 +163,15 @@ class AuthApiTest(unittest.TestCase):
             allowed_history = self.client.get(f"/class-sessions/{admin_session}/review-history")
             self.assertEqual(allowed_history.status_code, 200)
             self.assertEqual(allowed_history.json()["session_id"], admin_session)
+            accepted = {"status": "accepted", "job_id": "practice_test", "session_id": admin_session}
+            with patch.object(app_main.runtime.classroom, "submit_session_practice", return_value=accepted) as submit:
+                selection = {"token": "manifest", "selected_ids": ["q1"]}
+                queued = self.client.post(f"/class-sessions/{admin_session}/practice-export?background=true", json=selection, headers={"X-WebGIS-CSRF": csrf})
+                self.assertEqual(queued.status_code, 200, queued.text)
+                self.assertEqual(queued.json(), accepted)
+                blocked_export = teacher_client.post(f"/class-sessions/{admin_session}/practice-export?background=true", json=selection, headers={"X-WebGIS-CSRF": teacher_csrf})
+                self.assertEqual(blocked_export.status_code, 404)
+                submit.assert_called_once_with(admin_session, selection)
             self.assertEqual(
                 teacher_client.get(f"/projects/{admin_project['project_id']}").status_code,
                 404,

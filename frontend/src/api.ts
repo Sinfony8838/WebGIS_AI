@@ -1046,6 +1046,13 @@ export async function generateSessionReport(sessionId: string): Promise<{ status
   });
 }
 
+export async function submitSessionPracticeExport(sessionId: string, selection?: { token: string; selected_ids: string[] }): Promise<
+  { status: "accepted"; job_id: string; session_id: string } | SessionPracticeExportResult
+> {
+  return requestJson(`/class-sessions/${encodeURIComponent(sessionId)}/practice-export?background=true`,
+    { method: "POST", ...(selection ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(selection) } : {}) });
+}
+
 export async function exportSessionPractice(sessionId: string, selection?: { token: string; selected_ids: string[] }): Promise<SessionPracticeExportResult> {
   return requestJson<SessionPracticeExportResult>(
     `/class-sessions/${encodeURIComponent(sessionId)}/practice-export`,

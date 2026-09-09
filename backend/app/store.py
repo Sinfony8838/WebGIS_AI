@@ -683,6 +683,24 @@ class RuntimeStore:
             self._save()
             return job
 
+    def fail_interrupted_practice_exports(self, worker_run_id: str) -> List[str]:
+        """A new server run cannot retain the previous process's export threads."""
+        with self._lock:
+            interrupted = []
+            for job in self.jobs.values():
+                request = job.request or {}
+                if (job.job_type == "practice_export" and job.status in {"queued", "pending", "running"}
+                        and request.get("execution_mode") == "in_process"
+                        and request.get("worker_run_id") != worker_run_id):
+                    job.status = "failed"
+                    job.error = "服务重启中断了练习卷生成，请重新导出。"
+                    job.updated_at = utc_now()
+                    interrupted.append(job.job_id)
+            if interrupted:
+                self._save()
+                self._job_changed.notify_all()
+            return interrupted
+
     def session_review_jobs(self, project_id: str, session_id: str) -> Dict[str, Any]:
         """Return the most recently submitted report/export within one classroom."""
         with self._lock:

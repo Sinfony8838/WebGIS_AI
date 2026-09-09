@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { buildAuthenticatedUrl, exportSessionPractice, fetchClassSessions, fetchJob, fetchSessionReviewHistory, generateSessionReport } from "../api";
+import { buildAuthenticatedUrl, submitSessionPracticeExport, fetchClassSessions, fetchJob, fetchSessionReviewHistory, generateSessionReport } from "../api";
 import type { ClassSessionRecord, SessionPracticeExportResult, SessionReportResult, SessionReportStatistics } from "../types";
 
 type Props = {
@@ -39,6 +39,7 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
   const [selectedPracticeIds, setSelectedPracticeIds] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [reportJobId, setReportJobId] = useState("");
+  const [practiceJobId, setPracticeJobId] = useState("");
   const [historyState, setHistoryState] = useState<"loading" | "ready" | "error">("loading");
   const [historyAttempt, setHistoryAttempt] = useState(0);
   const [historyMessage, setHistoryMessage] = useState("");
@@ -73,6 +74,7 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
     setExportingPractice(false);
     setError("");
     setReportJobId("");
+    setPracticeJobId("");
     setHistoryMessage("");
     setHistoryState("loading");
   }
@@ -109,6 +111,27 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
     } finally { if (current()) setGenerating(false); }
   }
 
+  async function observePractice(jobId: string, sessionId: string, current: () => boolean) {
+    setExportingPractice(true);
+    setPracticeJobId(jobId);
+    try {
+      while (current()) {
+        const job = await fetchJob(jobId);
+        if (!current()) return;
+        if (["success", "completed"].includes(job.status)) {
+          const result = job.result as unknown as SessionPracticeExportResult;
+          if (result.session_id !== sessionId || !result.student_artifact || !result.teacher_artifact) throw new Error("练习卷结果不完整或不属于该课堂，请重新读取历史。");
+          setPracticeExport(result);
+          setPracticeJobId("");
+          return;
+        }
+        if (job.status === "failed") { setPracticeJobId(""); throw new Error(job.error || "练习卷生成失败"); }
+        await new Promise(resolve => window.setTimeout(resolve, 1500));
+      }
+    } catch (exc) { if (current()) setError(exc instanceof Error ? exc.message : String(exc)); }
+    finally { if (current()) setExportingPractice(false); }
+  }
+
   useEffect(() => {
     if (!selectedSessionId) return;
     let cancelled = false;
@@ -127,6 +150,9 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
         else if (["queued", "pending", "running"].includes(previous.status)) void observeReport(previous.job_id, selectedSessionId, current);
         else if (previous.status === "failed") setError(previous.error || "上次报告生成失败，可重新生成。");
       }
+      if (history.practice && ["queued", "pending", "running"].includes(history.practice.status)) {
+        void observePractice(history.practice.job_id, selectedSessionId, current);
+      } else if (history.practice?.status === "failed") setError("上次练习卷生成失败，请核对选题后重新导出。");
       const exported = history.practice?.result;
       if (exported && ["success", "completed"].includes(history.practice!.status)) {
         if (exported.session_id !== selectedSessionId) throw new Error("练习卷与所选课堂不一致。");
@@ -186,15 +212,20 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
     setError("");
     setPracticeExport(null);
     try {
-      const result = report?.practice_selection
-        ? await exportSessionPractice(sessionId, { token: report.practice_selection.token, selected_ids: selectedPracticeIds })
-        : await exportSessionPractice(sessionId);
+      if (practiceJobId) {
+        await observePractice(practiceJobId, sessionId, current);
+        return;
+      }
+      const submitted = await submitSessionPracticeExport(sessionId, report?.practice_selection
+        ? { token: report.practice_selection.token, selected_ids: selectedPracticeIds } : undefined);
       if (!current()) return;
-      if (result.session_id !== sessionId) throw new Error("练习卷与所选课堂不一致，请重新导出。");
-      setPracticeExport(result);
+      if (submitted.session_id !== sessionId) throw new Error("练习卷与所选课堂不一致，请重新读取历史。");
+      if (submitted.status === "accepted") await observePractice(submitted.job_id, sessionId, current);
+      else setPracticeExport(submitted as SessionPracticeExportResult);
     } catch (exc) {
       if (!current()) return;
       setError(exc instanceof Error ? exc.message : String(exc));
+      setHistoryState("error");
     } finally {
       if (current()) setExportingPractice(false);
     }
@@ -229,7 +260,7 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
         <button
           type="button"
           className="toolbar-button compact primary"
-          disabled={!selectedSessionId || generating || exportingPractice || historyState !== "ready"}
+          disabled={!selectedSessionId || generating || exportingPractice || Boolean(practiceJobId) || historyState !== "ready"}
           onClick={() => void generate()}
           data-testid="generate-report"
         >
@@ -238,11 +269,11 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
         <button
           type="button"
           className="toolbar-button compact"
-          disabled={!selectedSessionId || exportingPractice || generating || historyState !== "ready" || (!!report?.practice_selection && !selectedPracticeIds.length)}
+          disabled={!selectedSessionId || exportingPractice || generating || Boolean(reportJobId) || historyState !== "ready" || (!practiceJobId && !!report?.practice_selection && !selectedPracticeIds.length)}
           onClick={() => void exportPractice()}
           data-testid="export-practice"
         >
-          {exportingPractice ? "导出中…" : report?.practice_selection ? `导出所选 ${selectedPracticeIds.length} 项` : "导出练习卷"}
+          {exportingPractice ? "导出中…" : practiceJobId ? "继续读取练习卷" : report?.practice_selection ? `导出所选 ${selectedPracticeIds.length} 项` : "导出练习卷"}
         </button>
         {report?.report_url ? (
           <a
@@ -459,13 +490,13 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
             {report?.practice_selection_notes?.map((note, index) => <p className="report-note" key={index}>{note}</p>)}
             {report?.practice_selection ? <div className="report-selection-tools">
               <span>已选 {selectedPracticeIds.length} / {report.practice_selection.item_ids.length} 项</span>
-              <button className="toolbar-button compact" disabled={exportingPractice} onClick={() => { setSelectedPracticeIds(report.practice_selection!.item_ids); setPracticeExport(null); }}>全选</button>
-              <button className="toolbar-button compact" disabled={exportingPractice} onClick={() => { setSelectedPracticeIds([]); setPracticeExport(null); }}>清空选择</button>
+              <button className="toolbar-button compact" disabled={exportingPractice || Boolean(practiceJobId)} onClick={() => { setSelectedPracticeIds(report.practice_selection!.item_ids); setPracticeExport(null); }}>全选</button>
+              <button className="toolbar-button compact" disabled={exportingPractice || Boolean(practiceJobId)} onClick={() => { setSelectedPracticeIds([]); setPracticeExport(null); }}>清空选择</button>
             </div> : null}
             {practiceRecommendations.map((item) => (
               <article key={item.practice_id} className="report-question">
                 {report?.practice_selection?.item_ids.includes(item.practice_id) ? <label className="report-practice-select">
-                  <input type="checkbox" aria-label={`选入练习卷：${item.title}`} checked={selectedPracticeIds.includes(item.practice_id)} disabled={exportingPractice}
+                  <input type="checkbox" aria-label={`选入练习卷：${item.title}`} checked={selectedPracticeIds.includes(item.practice_id)} disabled={exportingPractice || Boolean(practiceJobId)}
                     onChange={event => { setSelectedPracticeIds(ids => event.target.checked ? [...ids, item.practice_id] : ids.filter(id => id !== item.practice_id)); setPracticeExport(null); }} />
                   选入练习卷
                 </label> : null}
