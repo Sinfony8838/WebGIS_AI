@@ -993,12 +993,17 @@ class ClassroomWorkflowRuntime:
         parts = [
             "你是高中地理教师，正在课堂上讲评一道题。请基于给出的参考答案、参考解析与考点，用 120—200 字给学生讲清解题思路。",
             "只能使用下方材料、参考答案与解析中的信息，不得自行补充事实；信息不足时明确说明。",
+            "教师参考解析与后台底图说明不是题干给出的观测数据。概念或假设题应直接推理；题干材料未提供具体年份或数据时，不得声称‘依据提供的某年数据’，也不得把拟补充的资料说成已经验证的结果。",
             "题目要求数值支持时，必须引用参考答案已有的计算结果及单位；不能只说高低。人口与面积的资料来源分别说明，同一年份不等于同一来源。",
             "",
             f"题干：{str(question.get('text') or '')}",
         ]
         material = str(question.get("material") or "").strip()
-        if material:
+        # Old classroom snapshots carry basemap dates in this teacher-only note.
+        # Keep genuine problem materials, but do not inject that note as student data.
+        legacy_basemap_note = ("灯光" in str(question.get("text") or "")
+                               and material.startswith("本课显示2016年夜间灯光与2020年人口资料"))
+        if material and not legacy_basemap_note:
             parts.append(f"材料：{material}")
         options = [str(item) for item in question.get("options") or []]
         if options:

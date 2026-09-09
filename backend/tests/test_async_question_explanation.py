@@ -11,6 +11,22 @@ class AsyncQuestionExplanationTest(unittest.TestCase):
         self.cw = self.runtime.classroom
         self.cw.launch_session_question(self.session_id, question_id="qb_pop_1", stage_id="s1", delivery="student")
 
+    def test_light_concept_explanation_does_not_treat_legacy_basemap_dates_as_data(self):
+        from unittest.mock import Mock
+        client=Mock()
+        client.chat_completion.return_value="思路：不能直接判断。关键点：照明可能来自生产或居住。总结：需另取人口资料验证。"
+        question={"text":"若一处港区夜间灯光很亮，能否判断其常住人口密度高？", "material":"本课显示2016年夜间灯光与2020年人口资料；港区亮区为设问情境。"}
+        with patch.object(self.runtime,"minimax_client",client):
+            self.cw._ai_explanation_with_llm(question,"生活照明与生产照明均可能；需要补充人口资料。",[])
+        prompt=client.chat_completion.call_args.args[0][1]["content"]
+        self.assertNotIn("2016",prompt)
+        self.assertNotIn("2020",prompt)
+        self.assertIn("不得声称",prompt)
+        question["material"]="2016年甲港夜间亮度值为10，乙港为20，使用同一传感器。"
+        with patch.object(self.runtime,"minimax_client",client):
+            self.cw._ai_explanation_with_llm(question,"需要区分生产与居住活动。",[])
+        self.assertIn("同一传感器",client.chat_completion.call_args.args[0][1]["content"])
+
     def wait_finished(self):
         deadline=time.monotonic()+3
         while self.cw._explanation_requests and time.monotonic()<deadline:
