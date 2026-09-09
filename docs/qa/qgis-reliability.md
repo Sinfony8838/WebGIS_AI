@@ -85,9 +85,9 @@ python scripts/qa/qgis_reliability/run_soak.py --qgis-root "D:\QGIS 3.40.10" --o
 
 ## 5. 回归验证
 
-- Python 3.12 后端全量:`python -m pytest backend/tests -q` → **494 passed**(462 既有 + 30 worker 可靠性测试 + 2 取消接口测试),9 subtests passed
+- Python 3.12 后端全量:`python -m pytest backend/tests -q` → **567 passed**(当前 main 的 535 项 + 30 worker 可靠性测试 + 2 取消接口测试),9 subtests passed
 - `git diff --check` → 干净
-- 不涉及前端改动,无需 npm test/build
+- QGIS 可靠性修改不含前端代码；合入最新 main 后仍执行 `npm test` 与 `npm run build`，结果如上。
 
 ## 6. 已知限制与后续事项
 
@@ -100,4 +100,4 @@ python scripts/qa/qgis_reliability/run_soak.py --qgis-root "D:\QGIS 3.40.10" --o
 
 复核发现并修复三处原测试未覆盖的生命周期问题：排队取消消息与步骤共用 FIFO 时实际无法抢在步骤前生效；同一 manager 关停后立即重启时，旧调度线程可能被误认为新一代调度线程；worker 进程存活但始终不发送 `worker_ready` 时会继续进入排队超时，而不是返回 `WORKER_START_FAILED`。此外，原“启动失败”测试使用不可序列化的局部函数，Windows 子进程会在测试通过后输出 `WinError 6` traceback；现改为模块级故障 worker，进程和队列句柄均确定性回收。
 
-复核后的独立验证：worker 专属测试 **30 passed**，与取消接口测试合跑 **32 passed**，无退出 traceback；全量后端 **494 passed, 9 subtests passed**；真实 QGIS 3.40.10 soak 的 10 项 verdict 全部为 true。实测冷启动 7212.7 ms，连续 30 次真实操作平均 21.4 ms，10 组交错零串结果，执行超时 62.9 ms 返回，崩溃后 2470.6 ms 恢复，取消 611.7 ms 返回，最终 worker 进程已消失。冷启动时间受本机当时负载影响，功能与隔离判定全部通过。
+复核后的独立验证：worker 专属测试 **30 passed**，与取消接口测试合跑 **32 passed**，无退出 traceback；合入数据完整性 PR 后的全量后端 **567 passed, 9 subtests passed**，前端 **256 passed / 41 files** 且生产构建通过；真实 QGIS 3.40.10 soak 的 10 项 verdict 全部为 true。实测冷启动 7212.7 ms，连续 30 次真实操作平均 21.4 ms，10 组交错零串结果，执行超时 62.9 ms 返回，崩溃后 2470.6 ms 恢复，取消 611.7 ms 返回，最终 worker 进程已消失。冷启动时间受本机当时负载影响，功能与隔离判定全部通过。
