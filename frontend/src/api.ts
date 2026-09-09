@@ -82,6 +82,10 @@ export function setUnauthorizedHandler(handler: (() => void) | null): void {
   unauthorizedHandler = handler;
 }
 
+export class ApiError extends Error {
+  constructor(message: string, public readonly status: number) { super(message); this.name = "ApiError"; }
+}
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const method = String(init?.method || "GET").toUpperCase();
   const headers = new Headers(init?.headers);
@@ -119,7 +123,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
         if (text) message = text;
       } catch { /* ignore */ }
     }
-    throw new Error(message);
+    throw new ApiError(message, response.status);
   }
   return (await response.json()) as T;
 }

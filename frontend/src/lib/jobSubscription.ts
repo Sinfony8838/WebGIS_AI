@@ -7,6 +7,9 @@ type Options = {
   fetchJob: (jobId: string, signal: AbortSignal) => Promise<JobRecord>;
   onJob: (job: JobRecord) => void;
   onRecovering: () => void;
+  projectId?: string;
+  reconcileImmediately?: boolean;
+  onUnavailable?: (error: Error) => void;
 };
 
 /** Recover observation of the same job; never resubmit an operation after a lost stream. */
@@ -36,7 +39,7 @@ export function subscribeJob(jobId: string, options: Options): JobSubscription {
   function accept(value: unknown): boolean {
     const job = value as JobRecord | null;
     if (!job || job.job_id !== jobId || typeof job.status !== "string" ||
-        typeof job.project_id !== "string" || !job.stages || !Array.isArray(job.steps)) return false;
+        typeof job.project_id !== "string" || (options.projectId !== undefined && job.project_id !== options.projectId) || !job.stages || !Array.isArray(job.steps)) return false;
     revision += 1;
     if (job.status === "completed" || job.status === "failed") close();
     options.onJob(job);
@@ -58,8 +61,12 @@ export function subscribeJob(jobId: string, options: Options): JobSubscription {
       // A stream update received during the GET is newer than its snapshot.
       if (observedRevision === revision && !accept(job)) throw new Error("Invalid job snapshot");
       failures = 0;
-    } catch {
-      if (!closed) { failures += 1; recover(); }
+    } catch (error) {
+      const status = (error as { status?: number })?.status;
+      if (!closed && options.onUnavailable && (status === 403 || status === 404)) {
+        close();
+        options.onUnavailable(error instanceof Error ? error : new Error("任务不可访问"));
+      } else if (!closed) { failures += 1; recover(); }
     } finally {
       clearTimeout(requestTimeout);
       controller = undefined;
@@ -82,6 +89,6 @@ export function subscribeJob(jobId: string, options: Options): JobSubscription {
     schedule(0);
   });
   // A silent stream can miss its terminal event without dispatching onerror.
-  schedule(15000);
+  schedule(options.reconcileImmediately ? 0 : 15000);
   return { close };
 }

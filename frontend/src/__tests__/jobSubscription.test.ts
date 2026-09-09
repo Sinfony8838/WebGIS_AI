@@ -98,3 +98,40 @@ it("ignores a late GET after a terminal SSE event and cleans up its timer", asyn
   expect(ctx.activity.busy).toBe(false);
   expect(ctx.fetchJob).toHaveBeenCalledTimes(1);
 });
+
+
+it("does not deliver results from another project when restoring a saved job", async () => {
+  const source = new Source();
+  const onJob = vi.fn();
+  const fetchJob = vi.fn().mockResolvedValueOnce(job("completed", { project_id: "other-project" })).mockResolvedValueOnce(job("completed"));
+  subscribeJob("job-1", { createSource: () => source, fetchJob, onJob, onRecovering: vi.fn(), projectId: "project-1", reconcileImmediately: true });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(onJob).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(6000);
+  expect(onJob).toHaveBeenCalledOnce();
+});
+
+it.each([403, 404])("stops observing an unavailable job after HTTP %s without reporting task completion", async (status) => {
+  const source = new Source();
+  const onJob = vi.fn();
+  const onUnavailable = vi.fn();
+  const fetchJob = vi.fn().mockRejectedValue(Object.assign(new Error("Unavailable"), { status }));
+  subscribeJob("job-1", { createSource: () => source, fetchJob, onJob, onRecovering: vi.fn(), onUnavailable, reconcileImmediately: true });
+  await vi.advanceTimersByTimeAsync(60000);
+  expect(onJob).not.toHaveBeenCalled();
+  expect(onUnavailable).toHaveBeenCalledOnce();
+  expect(fetchJob).toHaveBeenCalledOnce();
+  expect(source.close).toHaveBeenCalled();
+});
+
+it("keeps a job pending on service errors rather than treating an outage as disappearance", async () => {
+  const source = new Source();
+  const onUnavailable = vi.fn();
+  const onJob = vi.fn();
+  const fetchJob = vi.fn().mockRejectedValueOnce(Object.assign(new Error("Unavailable"), { status: 503 })).mockResolvedValueOnce(job("completed"));
+  subscribeJob("job-1", { createSource: () => source, fetchJob, onJob, onRecovering: vi.fn(), onUnavailable, reconcileImmediately: true });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(onUnavailable).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(6000);
+  expect(onJob).toHaveBeenCalledWith(expect.objectContaining({ status: "completed" }));
+});

@@ -414,3 +414,14 @@ describe("api.sendAssistantMessage", () => {
     expect(String(init?.body)).toContain('"topic":"shipping"');
   });
 });
+
+
+it("preserves HTTP status for distinguishing missing jobs from temporary service failures", async () => {
+  const { fetchJob, ApiError } = await import("../api");
+  const mock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ detail: "Job not found" }), { status: 404 }));
+  try {
+    await expect(fetchJob("missing")).rejects.toBeInstanceOf(ApiError);
+    mock.mockResolvedValue(new Response(JSON.stringify({ detail: "Service unavailable" }), { status: 503 }));
+    await expect(fetchJob("running")).rejects.toMatchObject({ status: 503 });
+  } finally { mock.mockRestore(); }
+});

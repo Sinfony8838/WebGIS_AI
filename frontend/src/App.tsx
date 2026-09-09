@@ -4,6 +4,8 @@ import { UrbanStudyPanel, type UrbanSource, type UrbanStatus } from "./component
 import { shanghaiDensityColor, densityColor, densityRadius, rankColor } from "./lib/populationVisual";
 import { MapEvidenceLegend } from "./components/MapEvidenceLegend";
 import { JobActivity } from "./lib/jobActivity";
+import { forgetPendingJob, rememberPendingJob, type PendingJob } from "./lib/pendingJobs";
+import { usePendingJobs } from "./hooks/usePendingJobs";
 import { subscribeJob, type JobSubscription } from "./lib/jobSubscription";
 import { MapToolsDock } from "./components/MapToolsDock";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -472,6 +474,8 @@ export default function App({
   const [teachingPhase, setTeachingPhase] = useState<TeachingContext["phase"]>("");
   const [copilotOpenSignal, setCopilotOpenSignal] = useState(0);
   const jobStreamsRef = useRef(new JobActivity<JobSubscription>());
+  const subscribedJobIdsRef = useRef(new Set<string>());
+  const jobScopeEpochRef = useRef(0);
   const assistantSubmittingRef = useRef(false);
   const resourceSearchRequestRef = useRef(0);
   const pendingEvidenceSnapshotRef = useRef<{ sessionId: string; stageId: string } | null>(null);
@@ -1320,12 +1324,28 @@ export default function App({
   );
 
   const subscribeToJob = useCallback(
-    (jobId: string, readOnly = false) => {
-      const submittedTab = lastSubmittedTabRef.current;
-      const submittedInputMode = lastInputModeRef.current;
+    (jobId: string, readOnly = false, recovered?: PendingJob) => {
+      if (!project || subscribedJobIdsRef.current.has(jobId)) return;
+      const projectId = project.project_id;
+      const userId = currentUser.user_id;
+      const scopeEpoch = jobScopeEpochRef.current;
+      const submittedTab = recovered?.tab || lastSubmittedTabRef.current;
+      // A recovered voice result must not start speaking during a new lesson.
+      const submittedInputMode = recovered ? "text" : lastInputModeRef.current;
+      subscribedJobIdsRef.current.add(jobId);
+      rememberPendingJob(userId, projectId, { jobId, tab: submittedTab });
       const source = subscribeJob(jobId, {
         createSource: () => new EventSource(`${getApiBase()}/jobs/${jobId}/stream`, { withCredentials: true }),
         fetchJob,
+        projectId,
+        reconcileImmediately: Boolean(recovered),
+        onUnavailable: () => {
+          if (!closeJobStream(source)) return;
+          subscribedJobIdsRef.current.delete(jobId);
+          forgetPendingJob(userId, projectId, jobId);
+          if (submittedTab === "interaction") setInteractionBusy(false);
+          pushToast("error", "无法恢复任务", "原任务不存在或当前账号无权访问，请核对课堂项目。系统没有重新提交操作。");
+        },
         onRecovering: () => pushToast("info", "正在恢复任务结果", "连接中断，正在按原任务编号续查。无需重复提交，任务完成后会显示结果。"),
         onJob: async (payload) => {
           if (!jobStreamsRef.current.has(source)) return;
@@ -1334,6 +1354,7 @@ export default function App({
             if (!closeJobStream(source)) {
               return;
             }
+            subscribedJobIdsRef.current.delete(jobId);
             const uiOnly = Boolean(payload.result?.actions_executed?.length) && payload.result!.actions_executed!.every(
               (entry) => ["switch_view_mode", "open_panel"].includes(entry.action.tool_name)
             );
@@ -1344,6 +1365,8 @@ export default function App({
                 pushToast("error", "地图状态刷新失败", error instanceof Error ? error.message : "请重试刷新地图。");
               }
             }
+            // Keep the saved ID if navigation interrupted result delivery.
+            if (scopeEpoch !== jobScopeEpochRef.current) return;
             if (!readOnly) handleAssistantUiActions(payload);
             const message = payload.result?.assistant_message || payload.result?.summary || payload.error || "";
             const nextConversationId = String(payload.result?.conversation_id || "");
@@ -1365,6 +1388,7 @@ export default function App({
               submittedTab,
               payload.result?.citations ?? payload.result?.knowledge?.citations ?? []
             );
+            forgetPendingJob(userId, projectId, jobId);
             if (submittedTab === "interaction") {
               setInteractionBusy(false);
               // 语音发起的交互回合：播报结果（可关）。新回合开始时会先 cancel。
@@ -1385,14 +1409,29 @@ export default function App({
       setBusy(true);
       setMapBusy(jobStreamsRef.current.mapBusy);
     },
-    [appendChat, closeJobStream, handleAssistantUiActions, pushToast, refreshProjectState, ttsEnabled]
+    [appendChat, closeJobStream, currentUser.user_id, handleAssistantUiActions, project, pushToast, refreshProjectState, ttsEnabled]
   );
 
   useEffect(() => {
+    setBusy(false);
+    setMapBusy(false);
+    setInteractionBusy(false);
     return () => {
+      jobScopeEpochRef.current += 1;
       jobStreamsRef.current.closeAll((source) => source.close());
+      subscribedJobIdsRef.current.clear();
     };
-  }, []);
+  }, [currentUser.user_id, project?.project_id]);
+
+  usePendingJobs(currentUser.user_id, project?.project_id || "", (pending) => {
+    // Stored client metadata cannot authorize read-only treatment. Until the
+    // server confirms completion, conservatively keep map writes locked.
+    subscribeToJob(pending.jobId, false, pending);
+    if (pending.tab === "interaction") setInteractionBusy(true);
+    setCopilotOpenSignal((value) => value + 1);
+    pushToast("info", "正在恢复未完成任务", "正在续查原任务结果，无需重复提交。");
+  });
+
 
   const submitAssistantText = useCallback(
     async (
