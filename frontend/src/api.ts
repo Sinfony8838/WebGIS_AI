@@ -1032,6 +1032,14 @@ export async function fetchSessionLive(sessionId: string): Promise<SessionLiveSt
   return requestJson<SessionLiveState>(`/class-sessions/${encodeURIComponent(sessionId)}/live`);
 }
 
+export async function fetchSessionReviewHistory(sessionId: string): Promise<{
+  session_id: string;
+  report: { job_id: string; status: string; updated_at: string; error?: string; result?: import("./types").SessionReportResult } | null;
+  practice: { job_id: string; status: string; updated_at: string; result?: SessionPracticeExportResult & { selected_ids?: string[]; selection_token?: string } } | null;
+}> {
+  return requestJson(`/class-sessions/${sessionId}/review-history`);
+}
+
 export async function generateSessionReport(sessionId: string): Promise<{ status: string; job_id: string }> {
   return requestJson<{ status: string; job_id: string }>(`/class-sessions/${encodeURIComponent(sessionId)}/report`, {
     method: "POST"

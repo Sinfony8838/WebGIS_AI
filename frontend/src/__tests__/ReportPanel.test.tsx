@@ -22,6 +22,7 @@ vi.mock("../api", () => ({
       }
     ]
   }),
+  fetchSessionReviewHistory: vi.fn().mockImplementation(async (id: string) => ({ session_id: id, report: null, practice: null })),
   generateSessionReport: vi.fn().mockResolvedValue({ job_id: "job_report" }),
   exportSessionPractice: vi.fn().mockResolvedValue({
     status: "success",
@@ -108,7 +109,7 @@ vi.mock("../api", () => ({
 }));
 
 import { ReportPanel } from "../components/ReportPanel";
-import { exportSessionPractice, fetchClassSessions, fetchJob, generateSessionReport } from "../api";
+import { exportSessionPractice, fetchClassSessions, fetchJob, fetchSessionReviewHistory, generateSessionReport } from "../api";
 
 afterEach(() => {
   cleanup();
@@ -119,7 +120,7 @@ describe("ReportPanel", () => {
   it("marks student response data as uncollected and renders teacher oral evidence", async () => {
     render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
 
-    await waitFor(() => expect(screen.getByRole("option", { name: /人口分布/ })).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId("generate-report")).toBeEnabled());
     fireEvent.click(screen.getByTestId("generate-report"));
 
     await waitFor(() => expect(screen.getByText("未采集")).toBeTruthy());
@@ -338,4 +339,55 @@ it("exports only checked candidates and disables empty selection", async () => {
   expect(screen.queryByTestId("practice-export-result")).toBeNull();
   fireEvent.click(screen.getByRole("button",{name:"全选"}));
   expect(screen.getByTestId("export-practice")).toHaveTextContent("导出所选 2 项");
+});
+
+
+it("restores an existing report and paper without generating again", async () => {
+  const reportJob = await fetchJob("fixture");
+  const paper = await exportSessionPractice("fixture");
+  vi.mocked(fetchJob).mockClear();
+  vi.mocked(exportSessionPractice).mockClear();
+  vi.mocked(fetchSessionReviewHistory).mockResolvedValueOnce({ session_id: "session_teacher_only", report: { job_id: "saved_report", status: "completed", updated_at: "2026-09-09T10:00:00Z", result: reportJob.result }, practice: { job_id: "saved_paper", status: "success", updated_at: "", result: paper } } as any);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await screen.findByText("未采集");
+  expect(screen.getByTestId("practice-student-link")).toHaveAttribute("href", "/files/outputs/practice_student.docx");
+  expect(screen.getByText(/已读取上次报告任务/)).toBeInTheDocument();
+  expect(generateSessionReport).not.toHaveBeenCalled();
+  expect(exportSessionPractice).not.toHaveBeenCalled();
+  expect(fetchJob).not.toHaveBeenCalled();
+});
+
+it("continues the original report after a transient read failure without submitting a second job", async () => {
+  const complete = await fetchJob("fixture");
+  vi.mocked(fetchJob).mockClear().mockRejectedValueOnce(new Error("网络中断")).mockResolvedValueOnce(complete);
+  vi.mocked(fetchSessionReviewHistory).mockResolvedValueOnce({ session_id: "session_teacher_only", report: { job_id: "same_report", status: "running", updated_at: "" }, practice: null });
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await screen.findByText("网络中断");
+  fireEvent.click(screen.getByRole("button", { name: "继续读取报告" }));
+  await screen.findByText("未采集");
+  expect(generateSessionReport).not.toHaveBeenCalled();
+  expect(vi.mocked(fetchJob).mock.calls.map(call => call[0])).toEqual(["same_report", "same_report"]);
+});
+
+it("requires history re-read after ambiguous report submission failure", async () => {
+  vi.mocked(generateSessionReport).mockRejectedValueOnce(new Error("连接丢失"));
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByTestId("generate-report")).toBeEnabled());
+  fireEvent.click(screen.getByTestId("generate-report"));
+  await screen.findByText("连接丢失");
+  expect(screen.getByTestId("generate-report")).toBeDisabled();
+  expect(screen.getByRole("button", { name: "重新读取复盘历史" })).toBeEnabled();
+});
+
+
+it("restores the exported selection only against the same report and visible candidates", async () => {
+  const job = await fetchJob("fixture");
+  const paper = await exportSessionPractice("fixture");
+  vi.mocked(exportSessionPractice).mockClear();
+  const result = { ...job.result, practice_selection: { token: "same", item_ids: ["population_metric_check", "hidden"] } };
+  vi.mocked(fetchSessionReviewHistory).mockResolvedValueOnce({ session_id: "session_teacher_only", report: { job_id: "r", status: "completed", updated_at: "", result }, practice: { job_id: "p", status: "success", updated_at: "", result: { ...paper, selected_ids: ["population_metric_check", "hidden"], selection_token: "same" } } } as any);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await screen.findByRole("button", { name: "导出所选 1 项" });
+  expect(screen.getByRole("checkbox")).toBeChecked();
+  expect(exportSessionPractice).not.toHaveBeenCalled();
 });

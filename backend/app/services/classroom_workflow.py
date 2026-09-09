@@ -1067,6 +1067,21 @@ class ClassroomWorkflowRuntime:
     # After-class report
     # ------------------------------------------------------------------
 
+    def session_review_history(self, session_id: str) -> Dict[str, Any]:
+        session = self._require_session(session_id)
+        history = self.store.session_review_jobs(session.project_id, session_id)
+        practice = history.get("practice")
+        if practice and practice.get("status") in {"success", "completed"}:
+            result = practice.get("result") or {}
+            # Old exports stored artifacts but not the selection summary.
+            result.setdefault("session_id", session_id)
+            result.setdefault("job_id", practice["job_id"])
+            result.setdefault("status", "success")
+            result.setdefault("selection_summary", [])
+            result.setdefault("notes", ["已恢复以前导出的练习卷；原选题清单未保存。"])
+            practice["result"] = result
+        return {"status": "success", "session_id": session_id, **history}
+
     def submit_session_report(self, session_id: str) -> Dict[str, Any]:
         session = self._require_session(session_id)
         job = self.store.create_job(

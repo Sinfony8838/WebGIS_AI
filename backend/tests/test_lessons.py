@@ -31,6 +31,28 @@ class LessonServiceTest(unittest.TestCase):
         self.addCleanup(temp_dir.cleanup)
         return runtime, store, project["project_id"]
 
+    def test_review_history_is_session_scoped_and_persisted_without_generation(self):
+        runtime, store, project_id = self.build_runtime()
+        session_id = runtime.classroom.create_class_session(BUILTIN_LESSON_ID, project_id)["session"]["session_id"]
+        old = store.create_job(project_id, "class_report", "old", request={"session_id": session_id})
+        store.set_job_status(old.job_id, "completed", {"statistics": {"session_id": session_id}})
+        latest = store.create_job(project_id, "class_report", "pending", request={"session_id": session_id})
+        store.create_job(project_id, "class_report", "other class", request={"session_id": "other"})
+        other_project = runtime.create_project()["project_id"]
+        store.create_job(other_project, "class_report", "foreign", request={"session_id": session_id})
+        legacy = store.create_job(project_id, "practice_export", "legacy paper", request={"session_id": session_id})
+        store.set_job_status(legacy.job_id, "success", {"student_artifact": {}, "teacher_artifact": {}})
+        count = len(store.jobs)
+        history = runtime.classroom.session_review_history(session_id)
+        self.assertEqual(history["report"]["job_id"], latest.job_id)
+        self.assertEqual(history["practice"]["result"]["session_id"], session_id)
+        self.assertIn("未保存", history["practice"]["result"]["notes"][0])
+        self.assertNotIn("notes", store.get_job(legacy.job_id).result)
+        self.assertEqual(len(store.jobs), count)
+        restored = RuntimeStore(store.state_file)
+        self.assertEqual(restored.session_review_jobs(project_id, session_id)["report"]["job_id"], latest.job_id)
+        self.assertEqual(restored.session_review_jobs(other_project, "unrelated"), {"report": None, "practice": None})
+
     def test_builtin_lesson_is_seeded(self) -> None:
         runtime, store, _ = self.build_runtime()
 

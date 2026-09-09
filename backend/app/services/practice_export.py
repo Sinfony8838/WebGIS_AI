@@ -118,15 +118,7 @@ class PracticeExportService:
                 "format": "docx",
             },
         )
-        self.store.set_job_status(
-            job.job_id,
-            "success",
-            {
-                "student_artifact": student_artifact.to_dict(),
-                "teacher_artifact": teacher_artifact.to_dict(),
-            },
-        )
-        return {
+        result = {
             "status": "success",
             "job_id": job.job_id,
             "session_id": session.session_id,
@@ -135,7 +127,10 @@ class PracticeExportService:
             "selection_summary": summary,
             "selected_ids": [item["practice_id"] for item in items],
             "notes": notes,
+            "selection_token": selection.get("token") if selection else None,
         }
+        self.store.set_job_status(job.job_id, "success", result)
+        return result
 
     # ------------------------------------------------------------------
     # Selection (priority levels with honest fallback)

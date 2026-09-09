@@ -157,6 +157,12 @@ class AuthApiTest(unittest.TestCase):
             )
             self.assertEqual(changed.status_code, 200, changed.text)
             self.assertEqual(teacher_client.get("/admin/users").status_code, 403)
+            history_lesson = app_main.runtime.classroom.create_lesson({"title": "权限测试", "stages": []})
+            admin_session = app_main.runtime.classroom.create_class_session(history_lesson["lesson_id"], admin_project["project_id"])["session"]["session_id"]
+            self.assertEqual(teacher_client.get(f"/class-sessions/{admin_session}/review-history").status_code, 404)
+            allowed_history = self.client.get(f"/class-sessions/{admin_session}/review-history")
+            self.assertEqual(allowed_history.status_code, 200)
+            self.assertEqual(allowed_history.json()["session_id"], admin_session)
             self.assertEqual(
                 teacher_client.get(f"/projects/{admin_project['project_id']}").status_code,
                 404,

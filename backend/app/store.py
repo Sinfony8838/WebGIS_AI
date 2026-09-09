@@ -683,6 +683,24 @@ class RuntimeStore:
             self._save()
             return job
 
+    def session_review_jobs(self, project_id: str, session_id: str) -> Dict[str, Any]:
+        """Return the most recently submitted report/export within one classroom."""
+        with self._lock:
+            project = self.projects.get(project_id)
+            latest: Dict[str, Any] = {"report": None, "practice": None}
+            if project is None:
+                return latest
+            for job_id in reversed(project.job_ids):
+                job = self.jobs.get(job_id)
+                if not job or job.project_id != project_id or job.request.get("session_id") != session_id:
+                    continue
+                kind = {"class_report": "report", "practice_export": "practice"}.get(job.job_type)
+                if kind and latest[kind] is None:
+                    latest[kind] = job.to_dict()
+                if all(latest.values()):
+                    break
+            return latest
+
     def get_job(self, job_id: str) -> Optional[JobRecord]:
         with self._lock:
             return self.jobs.get(job_id)

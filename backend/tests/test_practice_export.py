@@ -86,6 +86,10 @@ class PracticeExportLessonGoalsTest(PracticeExportTestBase):
             service.export(other, lesson, {"token": manifest["token"], "selected_ids": selected})
         result = service.export(session, lesson, {"token": manifest["token"], "selected_ids": selected})
         self.assertEqual(result["selected_ids"], selected)
+        recovered = runtime.classroom.session_review_history(session.session_id)["practice"]["result"]
+        self.assertEqual(recovered, result)
+        self.assertEqual(recovered["selection_token"], manifest["token"])
+        self.assertEqual(RuntimeStore(store.state_file).get_job(result["job_id"]).result, result)
         self.assertEqual(sum(v["count"] for v in result["selection_summary"]), 1)
         student = docx_text(result["student_artifact"]["path"])
         teacher = docx_text(result["teacher_artifact"]["path"])

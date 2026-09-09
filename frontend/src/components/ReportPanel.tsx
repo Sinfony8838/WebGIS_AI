@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { buildAuthenticatedUrl, exportSessionPractice, fetchClassSessions, fetchJob, generateSessionReport } from "../api";
+import { buildAuthenticatedUrl, exportSessionPractice, fetchClassSessions, fetchJob, fetchSessionReviewHistory, generateSessionReport } from "../api";
 import type { ClassSessionRecord, SessionPracticeExportResult, SessionReportResult, SessionReportStatistics } from "../types";
 
 type Props = {
@@ -38,6 +38,11 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
   const [exportingPractice, setExportingPractice] = useState(false);
   const [selectedPracticeIds, setSelectedPracticeIds] = useState<string[]>([]);
   const [error, setError] = useState("");
+  const [reportJobId, setReportJobId] = useState("");
+  const [historyState, setHistoryState] = useState<"loading" | "ready" | "error">("loading");
+  const [historyAttempt, setHistoryAttempt] = useState(0);
+  const [historyMessage, setHistoryMessage] = useState("");
+  const [practiceRecoveredAt, setPracticeRecoveredAt] = useState("");
 
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
   const [loadAttempt, setLoadAttempt] = useState(0);
@@ -67,7 +72,77 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
     setGenerating(false);
     setExportingPractice(false);
     setError("");
+    setReportJobId("");
+    setHistoryMessage("");
+    setHistoryState("loading");
   }
+
+  function adoptReport(result: SessionReportResult, sessionId: string) {
+    if (result.statistics?.session_id !== sessionId) throw new Error("报告与所选课堂不一致，请重新读取。");
+    const visibleIds = (result.practice_selection?.item_ids || []).filter(id => result.practice_recommendations?.some(item => item.practice_id === id));
+    setReport({ ...result, practice_recommendations: result.practice_recommendations || [], practice_selection_notes: result.practice_selection_notes || [],
+      practice_selection: result.practice_selection ? { ...result.practice_selection, item_ids: visibleIds } : undefined });
+    setSelectedPracticeIds(visibleIds);
+    return visibleIds;
+  }
+
+  async function observeReport(jobId: string, sessionId: string, current: () => boolean) {
+    setGenerating(true);
+    setReportJobId(jobId);
+    try {
+      while (current()) {
+        const job = await fetchJob(jobId);
+        if (!current()) return;
+        if (job.status === "completed") {
+          adoptReport(job.result as unknown as SessionReportResult, sessionId);
+          setReportJobId("");
+          return;
+        }
+        if (job.status === "failed") {
+          setReportJobId("");
+          throw new Error(job.error || "报告生成失败");
+        }
+        await new Promise(resolve => window.setTimeout(resolve, 1500));
+      }
+    } catch (exc) {
+      if (current()) setError(exc instanceof Error ? exc.message : String(exc));
+    } finally { if (current()) setGenerating(false); }
+  }
+
+  useEffect(() => {
+    if (!selectedSessionId) return;
+    let cancelled = false;
+    const requestScope = scope.current;
+    const current = () => !cancelled && requestScope === scope.current;
+    setHistoryState("loading");
+    setError("");
+    void fetchSessionReviewHistory(selectedSessionId).then(history => {
+      if (!current()) return;
+      if (history.session_id !== selectedSessionId) throw new Error("历史记录与所选课堂不一致。");
+      setHistoryState("ready");
+      if (history.report) {
+        const previous = history.report;
+        setHistoryMessage(`已读取上次报告任务：${formatTime(previous.updated_at)}。课堂记录变化后请重新生成。`);
+        if (previous.status === "completed" && previous.result) adoptReport(previous.result, selectedSessionId);
+        else if (["queued", "pending", "running"].includes(previous.status)) void observeReport(previous.job_id, selectedSessionId, current);
+        else if (previous.status === "failed") setError(previous.error || "上次报告生成失败，可重新生成。");
+      }
+      const exported = history.practice?.result;
+      if (exported && ["success", "completed"].includes(history.practice!.status)) {
+        if (exported.session_id !== selectedSessionId) throw new Error("练习卷与所选课堂不一致。");
+        setPracticeExport(exported);
+        setPracticeRecoveredAt(formatTime(history.practice!.updated_at));
+        const selection = history.report?.result?.practice_selection;
+        if (selection?.token && exported.selection_token === selection.token && exported.selected_ids) {
+          setSelectedPracticeIds(exported.selected_ids.filter(id => selection.item_ids.includes(id)
+            && history.report?.result?.practice_recommendations?.some(item => item.practice_id === id)));
+        }
+      }
+    }).catch(exc => {
+      if (current()) { setHistoryState("error"); setError(exc instanceof Error ? exc.message : "复盘历史读取失败"); }
+    });
+    return () => { cancelled = true; };
+  }, [selectedSessionId, historyAttempt]);
 
   async function generate() {
     if (!selectedSessionId) {
@@ -82,40 +157,16 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
     setGenerating(true);
     setError("");
     setReport(null);
+    setHistoryMessage("");
     try {
-      const { job_id } = await generateSessionReport(sessionId);
+      const jobId = reportJobId || (await generateSessionReport(sessionId)).job_id;
       if (!current()) return;
-      for (let attempt = 0; attempt < 120; attempt += 1) {
-        if (!current()) return;
-        const job = await fetchJob(job_id);
-        if (!current()) return;
-        if (job.status === "completed") {
-          const result = job.result as unknown as SessionReportResult & { status: string };
-          if (result.statistics?.session_id !== sessionId) throw new Error("报告与所选课堂不一致，请重新生成。");
-          const visiblePracticeIds = (result.practice_selection?.item_ids || []).filter(id =>
-            result.practice_recommendations?.some(item => item.practice_id === id));
-          setReport({
-            statistics: result.statistics,
-            diagnosis: result.diagnosis,
-            practice_recommendations: result.practice_recommendations || [],
-            practice_selection_notes: result.practice_selection_notes || [],
-            practice_selection: result.practice_selection ? { ...result.practice_selection, item_ids: visiblePracticeIds } : undefined,
-            report_url: result.report_url || ""
-          });
-          setSelectedPracticeIds(visiblePracticeIds);
-          setGenerating(false);
-          return;
-        }
-        if (job.status === "failed") {
-          throw new Error(job.error || "报告生成失败");
-        }
-        await new Promise((resolve) => window.setTimeout(resolve, 500));
-      }
-      throw new Error("报告生成超时");
+      await observeReport(jobId, sessionId, current);
     } catch (exc) {
       if (!current()) return;
       setError(exc instanceof Error ? exc.message : String(exc));
       setGenerating(false);
+      setHistoryState("error"); // Submission may have reached the server; re-read before resubmitting.
     }
   }
 
@@ -131,6 +182,7 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
     const requestId = ++exportRequest.current;
     const current = () => scope.current === requestScope && exportRequest.current === requestId;
     setExportingPractice(true);
+    setPracticeRecoveredAt("");
     setError("");
     setPracticeExport(null);
     try {
@@ -177,16 +229,16 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
         <button
           type="button"
           className="toolbar-button compact primary"
-          disabled={!selectedSessionId || generating || exportingPractice}
+          disabled={!selectedSessionId || generating || exportingPractice || historyState !== "ready"}
           onClick={() => void generate()}
           data-testid="generate-report"
         >
-          {generating ? "生成中…" : "生成课堂报告"}
+          {generating ? "正在读取生成进度…" : reportJobId ? "继续读取报告" : "生成课堂报告"}
         </button>
         <button
           type="button"
           className="toolbar-button compact"
-          disabled={!selectedSessionId || exportingPractice || generating || (!!report?.practice_selection && !selectedPracticeIds.length)}
+          disabled={!selectedSessionId || exportingPractice || generating || historyState !== "ready" || (!!report?.practice_selection && !selectedPracticeIds.length)}
           onClick={() => void exportPractice()}
           data-testid="export-practice"
         >
@@ -205,10 +257,14 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
         </div>
       </div>
 
+      {historyState === "loading" && selectedSessionId ? <p className="report-note" role="status">正在读取已有报告与练习卷…</p> : null}
+      {historyState === "error" ? <button className="toolbar-button compact" onClick={() => setHistoryAttempt(value => value + 1)}>重新读取复盘历史</button> : null}
+      {historyMessage ? <p className="report-note">{historyMessage}</p> : null}
       {practiceExport ? (
         <div className="report-practice-export" data-testid="practice-export-result">
+          {practiceRecoveredAt ? <p className="report-note">上次导出：{practiceRecoveredAt}</p> : null}
           <p className="report-note">
-            选题来源：
+            已生成的练习卷 · 选题来源：
             {practiceExport.selection_summary
               .filter((entry) => entry.count > 0)
               .map((entry) => `${entry.label} ×${entry.count}`)

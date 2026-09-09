@@ -2236,6 +2236,15 @@ def log_session_event(session_id: str, payload: SessionEventRequest, request: Re
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/class-sessions/{session_id}/review-history")
+def session_review_history(session_id: str, request: Request) -> Dict[str, Any]:
+    _require_session_access(request, session_id)
+    try:
+        return runtime.classroom.session_review_history(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.post("/class-sessions/{session_id}/report")
 def generate_session_report(session_id: str, request: Request) -> Dict[str, Any]:
     _require_session_access(request, session_id)
