@@ -435,6 +435,11 @@ describe("ClassRunPanel", () => {
     expect(onAssistantPrompt).toHaveBeenCalledOnce();
     expect(onAssistantPrompt.mock.calls[0][0]).toContain("随机抽中的地区是：北京市");
     expect(onAssistantPrompt.mock.calls[0][0]).toContain("只输出“头脑风暴问题”“回答”“回答总结”");
+    const [task, materials] = onAssistantPrompt.mock.calls[0][0].split("【课堂参考材料】");
+    expect(task).toContain("【本次探究任务】");
+    expect(task).toContain("随机抽中的地区是：北京市");
+    expect(materials).toContain("本环节讲解材料：");
+    expect(task).not.toContain("本环节讲解材料：");
     expect(onAssistantPrompt.mock.calls[0][1]).toBe("GeoBot 头脑风暴 · 北京市");
     randomSpy.mockRestore();
   });

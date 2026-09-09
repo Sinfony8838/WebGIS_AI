@@ -27,6 +27,67 @@ class PopulationAssistantTest(unittest.TestCase):
         config.minimax_api_key = "test-key" if with_llm else ""
         return config
 
+    def test_structured_brainstorm_uses_selected_region_not_reference_freshness(self):
+        from unittest.mock import Mock
+        client = CapturingClient("头脑风暴问题：青藏高原河谷为什么可能出现局部人口集聚？\n回答：需比较水源、地形条件并用地图验证。\n回答总结：总体稀疏不排除局部集聚。")
+        search = Mock()
+        engine = KnowledgeEngine(self.build_config(with_llm=True), minimax_client=client, resource_search=search)
+        prompt = ("GeoBot 头脑风暴：围绕胡焕庸线解释例外。\n随机抽中的地区是：青藏高原河谷。\n"
+                  "【本次探究任务】\n从所抽地区的水源、地形解释局部人口集聚。\n"
+                  "【课堂参考材料】\n1935年的历史人口比例不能冒用为今天的统计结论。教材来源请核实。\n"
+                  "【回答格式】不要输出地图中心坐标。")
+        region_entry = {"title":"青藏高原河谷", "canonical_answer":"河谷条件参考", "citations":[], "teaching_points":[]}
+        original_match = engine._match_entry
+        with patch.object(engine, "_match_entry", side_effect=lambda q: region_entry if q == "青藏高原河谷" else original_match(q)):
+            result = engine.answer(prompt, map_context={"teaching_context":{"phase":"in_class"}})
+        search.search.assert_not_called()
+        self.assertTrue(result["llm_used"])
+        self.assertIn("青藏高原河谷", result["direct_answer"])
+        self.assertNotIn("timely_verification_guardrail", str(result["retrieval_trace"]))
+        self.assertIn("河谷条件参考", str(client.calls[0]["messages"]))
+        self.assertIn("不能冒用为今天", str(client.calls[0]["messages"]))
+
+    def test_builtin_china_brainstorm_keeps_material_without_false_latest_guard(self):
+        import json
+        from unittest.mock import Mock
+        lesson = json.loads((Path(__file__).resolve().parents[1] / "app/data/builtin/lessons/population_shanghai_world_lesson.json").read_text(encoding="utf-8"))
+        stage = next(stage for stage in lesson["stages"] if "比较胡焕庸线" in stage["title"])
+        for region in stage["brainstorm"]["regions"]:
+            with self.subTest(region=region):
+                client = CapturingClient(f"头脑风暴问题：{region}的局部条件如何影响人口分布？\n回答：比较水源与地形，结论需地图验证。\n回答总结：总体与局部需分开比较。")
+                search = Mock()
+                engine = KnowledgeEngine(self.build_config(with_llm=True), minimax_client=client, resource_search=search)
+                prompt = "\n".join([
+                    f"GeoBot 头脑风暴：围绕“{stage['title']}”开展随机地区探究。",
+                    f"随机抽中的地区是：{region}。", "【本次探究任务】", stage["brainstorm"]["prompt"],
+                    "请生成一个与当前问题链衔接的追问，并提供教师参考回答；不替学生作答，不推断学生掌握情况。",
+                    "【课堂参考材料】", "；".join(stage["script"]),
+                    *["\n".join(str(question.get(key) or "") for key in ("text", "material", "answer", "explanation")) for question in stage["questions"]],
+                    "【回答格式】只输出头脑风暴问题、回答、回答总结。不要输出地图中心坐标。",
+                ])
+                result = engine.answer(prompt, map_context={"teaching_context": {"phase": "in_class"}})
+                search.search.assert_not_called()
+                self.assertTrue(result["llm_used"])
+                self.assertIn(region, result["direct_answer"])
+                self.assertNotIn("timely_verification_guardrail", str(result["retrieval_trace"]))
+                self.assertIn("不能冒用为今天", str(client.calls[0]["messages"]))
+                self.assertIn(stage["brainstorm"]["prompt"], str(client.calls[0]["messages"]))
+
+    def test_structured_brainstorm_explicit_latest_request_still_requires_evidence(self):
+        from unittest.mock import Mock
+        client = CapturingClient()
+        search = Mock()
+        search.search.return_value = {"items":[]}
+        engine = KnowledgeEngine(self.build_config(with_llm=True), minimax_client=client, resource_search=search)
+        prompt = ("GeoBot 头脑风暴：地区人口。\n随机抽中的地区是：上海。\n"
+                  "【本次探究任务】请联网查询今年最新上海人口数据。\n"
+                  "【课堂参考材料】不要求学生背诵数字。")
+        result = engine.answer(prompt, map_context={"teaching_context":{"phase":"in_class"}})
+        self.assertIn("没有取得", result["direct_answer"])
+        self.assertFalse(client.calls)
+        self.assertIn("今年最新", search.search.call_args.kwargs["query"])
+        self.assertNotIn("不要求学生", search.search.call_args.kwargs["query"])
+
     def test_brainstorm_source_notes_do_not_block_generation_but_latest_facts_do(self) -> None:
         client = CapturingClient("头脑风暴问题：区级平均值能代表各街镇吗？\n回答：不能。\n回答总结：比较须注意尺度。")
         engine = KnowledgeEngine(self.build_config(with_llm=True), minimax_client=client)

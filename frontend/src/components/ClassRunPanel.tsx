@@ -208,13 +208,16 @@ export function ClassRunPanel({
       const prompt = [
         `GeoBot 头脑风暴：围绕“${currentStage.title}”开展随机地区探究。`,
         `随机抽中的地区是：${selected}。`,
+        "【本次探究任务】",
+        brainstorm.prompt,
+        "请生成一个与当前问题链衔接的追问，并提供教师参考回答；不替学生作答，不推断学生掌握情况。",
+        "【课堂参考材料】",
         `本课：${lesson.title}；当前环节：${currentStage.title}。`,
         `本环节候选地区：${brainstormRegions.join("、")}。只围绕抽中的地区，保持本环节的比较尺度。`,
         `本环节讲解材料：${currentStage.script.join("；")}。`,
         "以下是教案原题的参考材料，不是学生回答，也不能当作本次课堂观察：",
         ...currentStage.questions.slice(0, 3).map((question) => [question.text, question.material, question.answer, question.explanation].filter(Boolean).join("\n")),
-        brainstorm.prompt,
-        "请生成一个与当前问题链衔接的追问，并提供教师参考回答；不替学生作答，不推断学生掌握情况。",
+        "【回答格式】",
         "问题必须体现区域差异、条件变化、尺度转换或反直觉比较中的至少一种；资料不足时明确说明限制，不得编造数据。",
         "只输出“头脑风暴问题”“回答”“回答总结”三部分；回答总结必须是一句话。",
         "不要输出地图中心坐标、缩放级别、可见范围、证据或观察点、给学生的问题、教师收束语。"

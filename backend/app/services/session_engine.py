@@ -574,8 +574,13 @@ class KnowledgeEngine:
         layer_evidence: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         map_context = map_context or {}
-        answer_type = "map_reading" if map_context.get("image_attachment") else self._classify(question)
         brainstorm_request = question.lstrip().startswith("GeoBot 头脑风暴：")
+        # Classroom source material can mention today's data as a warning, not a request.
+        # Keep it for generation, but classify and retrieve from the explicit task only.
+        intent_question = (question.split("【课堂参考材料】", 1)[0].strip()
+                           if brainstorm_request and "【本次探究任务】" in question and "【课堂参考材料】" in question
+                           else question)
+        answer_type = "map_reading" if map_context.get("image_attachment") else self._classify(intent_question)
         if answer_type in {"assistant_identity", "assistant_model", "assistant_capability"}:
             return self._meta_answer(answer_type)
 
@@ -583,14 +588,17 @@ class KnowledgeEngine:
         # Current-view map reading is grounded in the live map/screenshot, not
         # in a generic canned KB item. Skipping loose KB matches here prevents
         # unrelated teaching points from leaking into image interpretation.
-        references_current_map = self._references_current_map((question or "").lower())
+        references_current_map = self._references_current_map((intent_question or "").lower())
         # This argument is assembled server-side, never read from client map_context.
         layer_evidence = list(layer_evidence or []) if references_current_map and not map_context.get("image_attachment") else []
         # The first line names a classroom activity; appended source material
         # must not redirect retrieval to an incidental keyword in an option.
-        retrieval_question = question.splitlines()[0] if brainstorm_request else question
+        retrieval_question = intent_question if intent_question != question else (question.splitlines()[0] if brainstorm_request else question)
+        selected_region = re.search(r"^随机抽中的地区是：([^。\n]+)", intent_question, re.MULTILINE) if brainstorm_request else None
         matched_entry = None if answer_type == "map_reading" and references_current_map and not brainstorm_request else self._match_entry(retrieval_question)
-        retrieval_mode = self._retrieval_mode(question, answer_type, matched_entry, map_context)
+        if selected_region:
+            matched_entry = self._match_entry(selected_region.group(1)) or matched_entry
+        retrieval_mode = self._retrieval_mode(intent_question, answer_type, matched_entry, map_context)
         entry = matched_entry if retrieval_mode in {"local", "local_web"} else None
         citations = list(entry.get("citations", [])) if entry else []
         retrieval_trace: List[Dict[str, Any]] = []
@@ -623,12 +631,12 @@ class KnowledgeEngine:
         # coverage while the teacher is standing in front of the class.
         should_search_web = retrieval_mode in {"web", "local_web"}
         explicit_web = _contains_any(
-            question,
+            intent_question,
             IMAGE_WEB_RETRIEVAL_HINTS if map_context.get("image_attachment") else WEB_RETRIEVAL_HINTS,
         )
         if self.resource_search is not None and should_search_web and (teaching_phase != "in_class" or explicit_web):
             try:
-                web_results = self.resource_search.search(query=question, scope="web", limit=5)
+                web_results = self.resource_search.search(query=intent_question, scope="web", limit=5)
                 web_items = web_results.get("items", [])
                 if web_items:
                     for item in web_items[:3]:
@@ -669,7 +677,7 @@ class KnowledgeEngine:
         llm_used = False
         population_guardrail_answer = "" if brainstorm_request else self._population_guardrail_answer(question)
         verification_guardrail_answer = (
-            self._unverified_timely_answer(question, entry) if web_verification_failed and not population_guardrail_answer else ""
+            self._unverified_timely_answer(intent_question, entry) if web_verification_failed and not population_guardrail_answer else ""
         )
         deterministic_answer = population_guardrail_answer or verification_guardrail_answer
         if deterministic_answer:
