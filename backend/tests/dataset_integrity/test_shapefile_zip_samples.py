@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 import sample_factory
+from backend.app.services import datasets
 from backend.tests.dataset_integrity.helpers import upload_files
 
 
@@ -112,6 +113,17 @@ class TestShapefileAttributes:
 
 
 class TestShapefileSafety:
+    @pytest.fixture(autouse=True)
+    def _simulate_missing_pyshp(self, monkeypatch):
+        real_find_spec = datasets.importlib.util.find_spec
+
+        def find_spec(name, *args, **kwargs):
+            if name == "shapefile":
+                return None
+            return real_find_spec(name, *args, **kwargs)
+
+        monkeypatch.setattr(datasets.importlib.util, "find_spec", find_spec)
+
     def test_multi_layer_zip_rejected_as_ambiguous(self, service_env):
         _service, _store, project_id, config = service_env
         with pytest.raises(ValueError, match="多个 Shapefile") as exc_info:
@@ -134,6 +146,17 @@ class TestShapefileSafety:
         _service, _store, project_id, _config = service_env
         with pytest.raises(ValueError, match="Unsafe ZIP entry"):
             _service.import_upload(project_id, "zip_traversal.zip", sample_factory.traversal_zip())
+
+    def test_backslash_path_traversal_entry_rejected(self, service_env):
+        import io
+        import zipfile
+
+        _service, _store, project_id, _config = service_env
+        raw = io.BytesIO()
+        with zipfile.ZipFile(raw, "w") as archive:
+            archive.writestr("..\\escape.shp", b"bad")
+        with pytest.raises(ValueError, match="Unsafe ZIP entry"):
+            _service.import_upload(project_id, "zip_traversal_backslash.zip", raw.getvalue())
 
     def test_entry_count_bomb_rejected(self, service_env):
         _service, _store, project_id, _config = service_env

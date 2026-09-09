@@ -1,48 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
+import type { DatasetUploadResponse } from "../types";
 import "./UploadDialog.css";
 
-type CrsWarning = { code: string; message_zh: string };
-
-type ImportCrsReport = {
-  source_crs?: string | null;
-  target_crs?: string;
-  reprojected?: boolean;
-  warnings?: CrsWarning[];
-  detection_method?: string;
-};
-
-type RowReport = {
-  total_rows?: number;
-  imported_rows?: number;
-  skipped_rows?: number;
-  skip_reasons?: Record<string, number>;
-  encoding?: string;
-  lat_field?: string;
-  lon_field?: string;
-};
-
-type FeatureReport = {
-  total_features?: number;
-  imported_features?: number;
-  skipped_features?: number;
-  skip_reasons?: Record<string, number>;
-};
-
-type ImportSummary = {
-  layer?: {
-    name?: string;
-    metadata?: {
-      feature_count?: number;
-      source_crs?: string | null;
-      stored_crs?: string | null;
-      crs_converted?: boolean;
-    };
-  };
-  crs?: ImportCrsReport;
-  row_report?: RowReport;
-  feature_report?: FeatureReport;
-  message?: string;
-};
+type ImportSummary = Partial<DatasetUploadResponse>;
 
 type Props = {
   open: boolean;

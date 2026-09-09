@@ -857,8 +857,8 @@ class WebGISRuntime:
                 result={
                     "status": "success",
                     "workflow_type": "dataset_upload",
-                    "summary": f"已导入 {result['layer']['name']}",
-                    "assistant_message": f"数据集 {result['layer']['name']} 已进入当前课堂项目。",
+                    "summary": result["message"],
+                    "assistant_message": result["message"],
                     "artifacts": {registered_artifact.artifact_id: registered_artifact.to_dict()},
                     "layer": result["layer"],
                     "stages": self.store.get_job(job.job_id).stages,

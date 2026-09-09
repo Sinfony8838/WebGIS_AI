@@ -7,10 +7,11 @@ import io
 import json
 import math
 import re
+import stat
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from uuid import uuid4
 
@@ -497,6 +498,15 @@ class DatasetService:
     # ------------------------------------------------------------------
 
     def _build_shapefile_zip_import(self, raw_bytes: bytes, display_name: str) -> _ImportOutcome:
+        # Validate the archive with stdlib only.  Security and structural
+        # checks must still run when the optional pyshp parser is unavailable.
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw_bytes)) as archive:
+                members = self._validated_zip_members(archive)
+                self._validate_shapefile_members(members)
+        except zipfile.BadZipFile as exc:
+            raise ValueError("ZIP 文件损坏或格式无效，无法读取 Shapefile。") from exc
+
         if importlib.util.find_spec("shapefile") is None:
             # Same "stored only" fallback as before, with CRS undetected.
             report = crs_reprojector.ReprojectionReport(
@@ -851,6 +861,20 @@ class DatasetService:
         return "Mixed"
 
     def _safe_extract_zip(self, archive: zipfile.ZipFile, target_dir: Path) -> None:
+        members = self._validated_zip_members(archive)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        resolved_target = target_dir.resolve()
+        for member in members:
+            if member.is_dir():
+                continue
+            member_path = (resolved_target / member.filename).resolve()
+            try:
+                member_path.relative_to(resolved_target)
+            except ValueError as exc:
+                raise ValueError(f"Unsafe ZIP entry: {member.filename}") from exc
+            archive.extract(member, resolved_target)
+
+    def _validated_zip_members(self, archive: zipfile.ZipFile) -> List[zipfile.ZipInfo]:
         members = archive.infolist()
         if len(members) > MAX_ZIP_ENTRIES:
             raise ValueError(
@@ -862,18 +886,62 @@ class DatasetService:
                 f"ZIP 解压后总大小超过安全上限"
                 f"（{total_uncompressed // (1024 * 1024)} MB > {MAX_ZIP_UNCOMPRESSED_BYTES // (1024 * 1024)} MB），已拒绝解压。"
             )
-        target_dir.mkdir(parents=True, exist_ok=True)
-        resolved_target = target_dir.resolve()
+        seen_targets: set[str] = set()
         for member in members:
             if member.file_size > MAX_SINGLE_ENTRY_BYTES:
                 raise ValueError(
                     f"ZIP 条目解压后过大（{member.filename}），已拒绝解压。"
                 )
-            member_path = (resolved_target / member.filename).resolve()
-            try:
-                member_path.relative_to(resolved_target)
-            except ValueError as exc:
-                raise ValueError(f"Unsafe ZIP entry: {member.filename}") from exc
-            if member.is_dir():
-                continue
-            archive.extract(member, resolved_target)
+            normalized_name = member.filename.replace("\\", "/")
+            normalized_path = PurePosixPath(normalized_name)
+            if (
+                not normalized_name
+                or "\x00" in normalized_name
+                or normalized_name.startswith(("/", "//"))
+                or ":" in normalized_name
+                or re.match(r"^[A-Za-z]:", normalized_name)
+                or ".." in normalized_path.parts
+            ):
+                raise ValueError(f"Unsafe ZIP entry: {member.filename}")
+            unix_mode = (member.external_attr >> 16) & 0o170000
+            if unix_mode == stat.S_IFLNK:
+                raise ValueError(f"Unsafe ZIP entry: {member.filename}")
+            target_key = "/".join(part.casefold() for part in normalized_path.parts)
+            if not member.is_dir() and target_key in seen_targets:
+                raise ValueError(f"ZIP 包含重复路径：{member.filename}")
+            seen_targets.add(target_key)
+        return members
+
+    def _validate_shapefile_members(self, members: List[zipfile.ZipInfo]) -> None:
+        paths = [
+            PurePosixPath(member.filename.replace("\\", "/"))
+            for member in members
+            if not member.is_dir()
+        ]
+        visible_paths = [
+            path
+            for path in paths
+            if not any(part.startswith("__MACOSX") or part.startswith(".") for part in path.parts)
+        ]
+        shp_paths = [path for path in visible_paths if path.suffix.casefold() == ".shp"]
+        if not shp_paths:
+            raise ValueError(
+                "ZIP 中未找到 .shp 文件。请确认压缩包含完整的 Shapefile（.shp/.shx/.dbf，可选 .prj）。"
+            )
+        if len(shp_paths) > 1:
+            names = "、".join(path.name for path in shp_paths[:8])
+            raise ValueError(
+                f"ZIP 中包含多个 Shapefile（{names}），无法确定要导入哪一个。"
+                "请每次只打包一个图层（同名 .shp/.shx/.dbf 文件集）。"
+            )
+        layer_stem = str(shp_paths[0].with_suffix("")).casefold()
+        available = {
+            (str(path.with_suffix("")).casefold(), path.suffix.casefold())
+            for path in visible_paths
+        }
+        missing = [ext for ext in (".shx", ".dbf") if (layer_stem, ext) not in available]
+        if missing:
+            raise ValueError(
+                f"Shapefile 缺少配套文件：{'、'.join(missing)}。"
+                "请重新打包同名 .shp/.shx/.dbf（以及可选 .prj）后上传。"
+            )
