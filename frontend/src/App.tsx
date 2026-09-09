@@ -29,7 +29,8 @@ import { getDistance, getLength } from "ol/sphere";
 import { Circle as CircleStyle, Fill, RegularShape, Stroke, Style, Text } from "ol/style";
 import { easeOut } from "ol/easing";
 import { getCenter } from "ol/extent";
-import { resolveCanvasDrawSize } from "./mapScreenshot";
+import { captureMapSnapshot } from "./mapScreenshot";
+import { collectLegendRows, composeSnapshotDocument, mergeSnapshotInk, plainAttribution, type SnapshotDocument } from "./lib/snapshotDocument";
 import {
   addCatalogDatasetLayer,
   activateLessonResourceSet,
@@ -245,72 +246,6 @@ function currentExtentFromMap(map: Map): [number, number, number, number] {
   return transformExtent(extent, "EPSG:3857", "EPSG:4326") as [number, number, number, number];
 }
 
-export function captureMapSnapshot(map: Map): Promise<string> {
-  return new Promise((resolve) => {
-    map.once("rendercomplete", () => {
-      const size = map.getSize();
-      if (!size) {
-        resolve("");
-        return;
-      }
-      const canvas = document.createElement("canvas");
-      canvas.width = size[0];
-      canvas.height = size[1];
-      const context = canvas.getContext("2d");
-      if (!context) {
-        resolve("");
-        return;
-      }
-
-      const canvases = Array.from(map.getViewport().querySelectorAll<HTMLCanvasElement>(".ol-layer canvas, canvas.ol-layer"));
-      canvases.forEach((sourceCanvas) => {
-        if (!sourceCanvas.width || !sourceCanvas.height) {
-          return;
-        }
-        const parent = sourceCanvas.parentElement as HTMLElement | null;
-        const opacity = Number(parent?.style.opacity || "1");
-        context.globalAlpha = Number.isFinite(opacity) ? opacity : 1;
-        const transform = sourceCanvas.style.transform;
-        let transformValues: number[] | null = null;
-        if (transform) {
-          const values = transform
-            .replace("matrix(", "")
-            .replace(")", "")
-            .split(",")
-            .map((value) => Number(value.trim()));
-          if (values.length === 6) {
-            transformValues = values;
-            context.setTransform(values[0], values[1], values[2], values[3], values[4], values[5]);
-          } else {
-            context.setTransform(1, 0, 0, 1, 0, 0);
-          }
-        } else {
-          context.setTransform(1, 0, 0, 1, 0, 0);
-        }
-        const drawSize = resolveCanvasDrawSize(sourceCanvas, transformValues);
-        context.drawImage(
-          sourceCanvas,
-          0,
-          0,
-          sourceCanvas.width,
-          sourceCanvas.height,
-          0,
-          0,
-          drawSize.width,
-          drawSize.height
-        );
-      });
-
-      context.setTransform(1, 0, 0, 1, 0, 0);
-      try {
-        resolve(canvas.toDataURL("image/png"));
-      } catch {
-        resolve("");
-      }
-    });
-    map.renderSync();
-  });
-}
 
 function cropSnapshot(dataUrl: string, selection: ScreenshotSelection): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -539,6 +474,11 @@ export default function App({
   const assistantSubmittingRef = useRef(false);
   const resourceSearchRequestRef = useRef(0);
   const pendingEvidenceSnapshotRef = useRef<{ sessionId: string; stageId: string } | null>(null);
+  const screenshotDocumentRef = useRef<{ projectId: string; document: SnapshotDocument; evidence: {sessionId:string;stageId:string} | null } | null>(null);
+  const screenshotCaptureBusyRef = useRef(false);
+  const screenshotSavingRef = useRef(false);
+  const [screenshotSaving, setScreenshotSaving] = useState(false);
+
 
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [project, setProject] = useState<(ProjectRecord & { status: string }) | null>(null);
@@ -1550,38 +1490,60 @@ export default function App({
     [project, subscribeToJob]
   );
 
+  const snapshotViewRef = useRef({projectId: project?.project_id, basemap: layerState?.base_map, mode: viewMode});
+  snapshotViewRef.current = {projectId: project?.project_id, basemap: layerState?.base_map, mode: viewMode};
+
   const handleStartScreenshot = useCallback(async (): Promise<boolean> => {
-    if (!project) {
+    if (!project || screenshotCaptureBusyRef.current || screenshotSavingRef.current || screenshotSource) return false;
+    screenshotCaptureBusyRef.current = true;
+    const capturedProjectId = project.project_id;
+    const evidence = pendingEvidenceSnapshotRef.current ? {...pendingEvidenceSnapshotRef.current} : null;
+    const stageId = teachingContextRef.current?.stage_id;
+    const freezeDetails = () => {
+      const latest = snapshotViewRef.current;
+      if (latest.projectId !== capturedProjectId || latest.mode !== viewMode) throw new Error("地图已切换，请重新截图。");
+      if (teachingContextRef.current?.stage_id !== stageId) throw new Error("课堂环节已变化，请重新截图。");
+      brushRef.current?.exportImage();
+      const basemap = latest.basemap;
+      const fallback = viewMode === "globe" && !basemap?.layers.some(layer => layer.kind === "xyz" && layer.usable_in_3d !== false && layer.urls.length);
+      screenshotDocumentRef.current = { projectId: capturedProjectId, evidence, document: {
+        title: document.querySelector(".class-stage-item.active .stage-item-title")?.textContent || "课堂地图",
+        capturedAt: new Date().toLocaleString("zh-CN"),
+        basemap: fallback ? "高德参考底图（三维）" : basemap?.title || "当前底图",
+        attribution: fallback ? "© 高德地图" : [...new Set((basemap?.layers || []).map(layer => plainAttribution(layer.attribution || "")).filter(Boolean))].join("；"),
+        rows: collectLegendRows(document.querySelector(".map-legend-content"))
+      }};
+    };
+    try {
+      const rect = viewMode === "globe" ? globeRef.current?.getCanvasRect() || null : mapElementRef.current?.getBoundingClientRect() || null;
+      if (!rect || rect.width < 24 || rect.height < 24) throw new Error("当前地图区域尺寸无效。");
+      let imageDataUrl = "";
+      if (viewMode === "globe") {
+        imageDataUrl = globeRef.current?.captureImage() || "";
+        freezeDetails();
+        if (imageDataUrl) imageDataUrl = await mergeSnapshotInk(imageDataUrl, rect, document.querySelector<HTMLCanvasElement>('[data-testid="map-brush-overlay"]'));
+      } else if (mapRef.current) imageDataUrl = await captureMapSnapshot(mapRef.current, freezeDetails);
+      if (!imageDataUrl) throw new Error("当前地图画面尚未加载完成或无法读取，请稍后重试。");
+      setScreenshotSource(imageDataUrl);
+      setScreenshotBounds({left:rect.left,top:rect.top,width:rect.width,height:rect.height});
+      return true;
+    } catch (error) {
+      screenshotDocumentRef.current = null;
+      pushToast("error", "截图失败", error instanceof Error ? error.message : "当前地图无法读取。");
       return false;
-    }
-    const imageDataUrl = viewMode === "globe" ? globeRef.current?.captureImage() || "" : mapRef.current ? await captureMapSnapshot(mapRef.current) : "";
-    const rect = viewMode === "globe"
-      ? globeRef.current?.getCanvasRect() || null
-      : mapElementRef.current
-        ? (() => {
-            const value = mapElementRef.current!.getBoundingClientRect();
-            return { left: value.left, top: value.top, width: value.width, height: value.height };
-          })()
-        : null;
-    if (!imageDataUrl) {
-      pushToast("error", "截图失败", "当前地图画面暂时无法读取，请稍后重试。");
-      return false;
-    }
-    if (!rect || rect.width < 24 || rect.height < 24) {
-      pushToast("error", "截图失败", "当前地图区域尺寸无效。");
-      return false;
-    }
-    setScreenshotSource(imageDataUrl);
-    setScreenshotBounds(rect);
-    return true;
-  }, [project, pushToast, viewMode]);
+    } finally { screenshotCaptureBusyRef.current = false; }
+  }, [project, pushToast, viewMode, layerState?.base_map, screenshotSource]);
 
   const handleCompleteScreenshot = useCallback(async (selection: ScreenshotSelection) => {
-    if (!project || !screenshotSource) return;
+    const frozen = screenshotDocumentRef.current;
+    if (!project || !screenshotSource || !frozen || screenshotSavingRef.current) return;
+    screenshotSavingRef.current = true; setScreenshotSaving(true);
     try {
+      if (project.project_id !== frozen.projectId) throw new Error("项目已切换，请重新截图。");
       const cropped = await cropSnapshot(screenshotSource, selection);
-      const saved = await exportSnapshot(project.project_id, `地图截图 ${new Date().toLocaleString("zh-CN")}`, cropped, "地图区域框选截图");
-      const evidence = pendingEvidenceSnapshotRef.current;
+      const composed = await composeSnapshotDocument(cropped, frozen.document, selection.width);
+      const saved = await exportSnapshot(frozen.projectId, `地图截图 ${frozen.document.capturedAt}`, composed, "地图区域框选截图，附截图时图例、年份、来源与课堂笔迹");
+      const evidence = frozen.evidence;
       let evidenceRecorded = true;
       if (evidence) {
         try {
@@ -1605,6 +1567,8 @@ export default function App({
       pushToast("error", "截图失败", error instanceof Error ? error.message : "截图保存失败。");
     } finally {
       pendingEvidenceSnapshotRef.current = null;
+      screenshotDocumentRef.current = null;
+      screenshotSavingRef.current = false; setScreenshotSaving(false);
       setScreenshotSource("");
       setScreenshotBounds(null);
     }
@@ -3886,9 +3850,12 @@ export default function App({
       {screenshotSource && screenshotBounds ? (
         <ScreenshotSelector
           bounds={screenshotBounds}
+          preview={screenshotSource}
+          busy={screenshotSaving}
           onComplete={(selection) => void handleCompleteScreenshot(selection)}
           onCancel={() => {
             pendingEvidenceSnapshotRef.current = null;
+            screenshotDocumentRef.current = null;
             setScreenshotSource("");
             setScreenshotBounds(null);
           }}
