@@ -1249,6 +1249,7 @@ export type SessionReportResult = {
   diagnosis: { text: string; generator: string };
   practice_recommendations: ReportPracticeRecommendation[];
   practice_selection_notes?: string[];
+  practice_selection?: { token: string; item_ids: string[] };
   report_url: string;
 };
 

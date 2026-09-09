@@ -238,8 +238,8 @@ it("clears completed report and paper links immediately on session change withou
   render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
   await waitFor(() => expect(screen.getByTestId("generate-report")).toBeEnabled());
   fireEvent.click(screen.getByTestId("generate-report"));
-  fireEvent.click(screen.getByTestId("export-practice"));
   await waitFor(() => expect(screen.getByTestId("report-diagnosis")).toBeTruthy());
+  fireEvent.click(screen.getByTestId("export-practice"));
   await waitFor(() => expect(screen.getByTestId("practice-student-link")).toBeTruthy());
   fireEvent.change(screen.getByRole("combobox"), {target:{value:"session_second"}});
   expect(screen.queryByTestId("report-diagnosis")).toBeNull();
@@ -315,4 +315,27 @@ it("previews bank material, images, options and the honest selection basis", asy
   expect(screen.getByText("（1）说明原因")).toBeTruthy();
   expect(screen.getByAltText("2025 河南 题图 1")).toHaveAttribute("src","/files/uploads/bank/map.png");
   expect(screen.getByText(/不代表学生答错/)).toBeTruthy();
+});
+
+
+it("exports only checked candidates and disables empty selection", async () => {
+  const base = await fetchJob("baseline");
+  const make = (id: string, title: string) => ({practice_id:id,title,level:"课后巩固",prompt:title,answer_points:[],suggested_minutes:null,evidence_basis:"目标匹配"});
+  vi.mocked(fetchJob).mockResolvedValueOnce({...base, result:{...base.result,
+    practice_recommendations:[make("q1","上海人口"),make("q2","世界人口")],
+    practice_selection:{token:"candidate-token",item_ids:["q1","q2","not-visible"]}}} as any);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByTestId("generate-report")).not.toBeDisabled());
+  fireEvent.click(screen.getByTestId("generate-report"));
+  const world = await screen.findByRole("checkbox",{name:"选入练习卷：世界人口"});
+  fireEvent.click(world);
+  expect(screen.getByTestId("export-practice")).toHaveTextContent("导出所选 1 项");
+  fireEvent.click(screen.getByTestId("export-practice"));
+  await waitFor(() => expect(exportSessionPractice).toHaveBeenCalledWith("session_teacher_only",{token:"candidate-token",selected_ids:["q1"]}));
+  await screen.findByTestId("practice-export-result");
+  fireEvent.click(screen.getByRole("button",{name:"清空选择"}));
+  expect(screen.getByTestId("export-practice")).toBeDisabled();
+  expect(screen.queryByTestId("practice-export-result")).toBeNull();
+  fireEvent.click(screen.getByRole("button",{name:"全选"}));
+  expect(screen.getByTestId("export-practice")).toHaveTextContent("导出所选 2 项");
 });

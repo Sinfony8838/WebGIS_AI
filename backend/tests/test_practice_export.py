@@ -66,6 +66,37 @@ class PracticeExportTestBase(unittest.TestCase):
 
 
 class PracticeExportLessonGoalsTest(PracticeExportTestBase):
+    def test_export_selection_rejects_stale_empty_foreign_and_unlisted_items(self):
+        runtime, store, project_id = self.build_runtime()
+        lesson = store.get_lesson("lesson_builtin_population_distribution")
+        lesson.plan = {"homework": {"basic": ["比较人口密度与人口总量。", "分析地形与人口分布。"]}}
+        session = store.get_class_session(runtime.classroom.create_class_session(lesson.lesson_id, project_id)["session"]["session_id"])
+        service = runtime.classroom.practice_export
+        items, _, _ = service.collect_items(session, lesson)
+        manifest = service.selection_manifest(session, items)
+        selected = [manifest["item_ids"][0]]
+        for selection in ({"token": manifest["token"], "selected_ids": []},
+                          {"token": "stale", "selected_ids": selected},
+                          {"token": manifest["token"], "selected_ids": ["foreign"]},
+                          {"token": manifest["token"], "selected_ids": selected * 2}):
+            with self.assertRaises(ValueError):
+                service.export(session, lesson, selection)
+        other = store.get_class_session(runtime.classroom.create_class_session(lesson.lesson_id, project_id)["session"]["session_id"])
+        with self.assertRaisesRegex(ValueError, "已变化"):
+            service.export(other, lesson, {"token": manifest["token"], "selected_ids": selected})
+        result = service.export(session, lesson, {"token": manifest["token"], "selected_ids": selected})
+        self.assertEqual(result["selected_ids"], selected)
+        self.assertEqual(sum(v["count"] for v in result["selection_summary"]), 1)
+        student = docx_text(result["student_artifact"]["path"])
+        teacher = docx_text(result["teacher_artifact"]["path"])
+        self.assertIn(items[0]["text"], student)
+        self.assertNotIn(items[1]["text"], student)
+        self.assertNotIn(items[1]["text"], teacher)
+        lesson.plan["homework"]["basic"][0] += "（修订）"
+        with self.assertRaisesRegex(ValueError, "已变化"):
+            service.export(session, lesson, {"token": manifest["token"], "selected_ids": selected})
+
+
     def test_report_bank_preview_matches_paper_and_keeps_material(self):
         runtime, store, project_id = self.build_runtime()
         lesson = store.get_lesson("lesson_builtin_population_distribution")
@@ -78,7 +109,7 @@ class PracticeExportLessonGoalsTest(PracticeExportTestBase):
             "year": "2025", "region": "河南", "bank_id": "bank-a", "explanation": "参考解析",
         }]}
         service.question_bank = bank
-        recommendations, notes = service.report_bank_recommendations(session, lesson)
+        recommendations, notes, manifest = service.report_bank_recommendations(session, lesson)
         items, _, _ = service.collect_items(session, lesson)
         self.assertEqual([r["question"]["question_id"] for r in recommendations],
                          [i["question"]["question_id"] for i in items if i["origin"] == "bank_core"])
@@ -368,6 +399,8 @@ class PracticeExportDualPaperTest(PracticeExportTestBase):
         items += [{"kind": "question", "origin": "bank_core", "question": {**question, "text": f"读图问题{i}"}}
                   for i in (1, 2)]
         service = self.runtime.classroom.practice_export
+        for index, item in enumerate(items):
+            item["practice_id"] = f"fixture_{index}"
         service.collect_items = Mock(return_value=(items, [], []))
         export = self.export()
         for kind in ("student", "teacher"):

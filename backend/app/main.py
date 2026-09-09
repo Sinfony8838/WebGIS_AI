@@ -2245,11 +2245,16 @@ def generate_session_report(session_id: str, request: Request) -> Dict[str, Any]
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+class PracticeSelectionRequest(BaseModel):
+    token: str
+    selected_ids: List[str]
+
+
 @app.post("/class-sessions/{session_id}/practice-export")
-def export_session_practice(session_id: str, request: Request) -> Dict[str, Any]:
+def export_session_practice(session_id: str, request: Request, payload: Optional[PracticeSelectionRequest] = None) -> Dict[str, Any]:
     _require_session_access(request, session_id)
     try:
-        return runtime.classroom.export_session_practice(session_id)
+        return runtime.classroom.export_session_practice(session_id, payload.model_dump() if payload is not None else None)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

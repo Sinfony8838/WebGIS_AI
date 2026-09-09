@@ -2772,3 +2772,7 @@
 .report-practice-material { white-space: pre-wrap; }
 
 .report-practice-list summary { cursor: pointer; line-height: 1.65; }
+
+.report-selection-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.report-practice-select { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 8px; }
+.report-practice-select input { width: 16px; height: 16px; margin: 0; }

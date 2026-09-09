@@ -36,6 +36,7 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
   const [generating, setGenerating] = useState(false);
   const [practiceExport, setPracticeExport] = useState<SessionPracticeExportResult | null>(null);
   const [exportingPractice, setExportingPractice] = useState(false);
+  const [selectedPracticeIds, setSelectedPracticeIds] = useState<string[]>([]);
   const [error, setError] = useState("");
 
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
@@ -61,6 +62,7 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
     scope.current += 1;
     setSelectedSessionId(sessionId);
     setReport(null);
+    setSelectedPracticeIds([]);
     setPracticeExport(null);
     setGenerating(false);
     setExportingPractice(false);
@@ -75,6 +77,8 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
     const requestScope = scope.current;
     const requestId = ++reportRequest.current;
     const current = () => scope.current === requestScope && reportRequest.current === requestId;
+    setPracticeExport(null);
+    setSelectedPracticeIds([]);
     setGenerating(true);
     setError("");
     setReport(null);
@@ -88,13 +92,17 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
         if (job.status === "completed") {
           const result = job.result as unknown as SessionReportResult & { status: string };
           if (result.statistics?.session_id !== sessionId) throw new Error("报告与所选课堂不一致，请重新生成。");
+          const visiblePracticeIds = (result.practice_selection?.item_ids || []).filter(id =>
+            result.practice_recommendations?.some(item => item.practice_id === id));
           setReport({
             statistics: result.statistics,
             diagnosis: result.diagnosis,
             practice_recommendations: result.practice_recommendations || [],
             practice_selection_notes: result.practice_selection_notes || [],
+            practice_selection: result.practice_selection ? { ...result.practice_selection, item_ids: visiblePracticeIds } : undefined,
             report_url: result.report_url || ""
           });
+          setSelectedPracticeIds(visiblePracticeIds);
           setGenerating(false);
           return;
         }
@@ -126,7 +134,9 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
     setError("");
     setPracticeExport(null);
     try {
-      const result = await exportSessionPractice(sessionId);
+      const result = report?.practice_selection
+        ? await exportSessionPractice(sessionId, { token: report.practice_selection.token, selected_ids: selectedPracticeIds })
+        : await exportSessionPractice(sessionId);
       if (!current()) return;
       if (result.session_id !== sessionId) throw new Error("练习卷与所选课堂不一致，请重新导出。");
       setPracticeExport(result);
@@ -167,7 +177,7 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
         <button
           type="button"
           className="toolbar-button compact primary"
-          disabled={!selectedSessionId || generating}
+          disabled={!selectedSessionId || generating || exportingPractice}
           onClick={() => void generate()}
           data-testid="generate-report"
         >
@@ -176,11 +186,11 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
         <button
           type="button"
           className="toolbar-button compact"
-          disabled={!selectedSessionId || exportingPractice}
+          disabled={!selectedSessionId || exportingPractice || generating || (!!report?.practice_selection && !selectedPracticeIds.length)}
           onClick={() => void exportPractice()}
           data-testid="export-practice"
         >
-          {exportingPractice ? "导出中…" : "导出练习卷"}
+          {exportingPractice ? "导出中…" : report?.practice_selection ? `导出所选 ${selectedPracticeIds.length} 项` : "导出练习卷"}
         </button>
         {report?.report_url ? (
           <a
@@ -391,8 +401,18 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
           </h3>
           <div className="report-practice-list" data-testid="report-practice-list">
             {report?.practice_selection_notes?.map((note, index) => <p className="report-note" key={index}>{note}</p>)}
+            {report?.practice_selection ? <div className="report-selection-tools">
+              <span>已选 {selectedPracticeIds.length} / {report.practice_selection.item_ids.length} 项</span>
+              <button className="toolbar-button compact" disabled={exportingPractice} onClick={() => { setSelectedPracticeIds(report.practice_selection!.item_ids); setPracticeExport(null); }}>全选</button>
+              <button className="toolbar-button compact" disabled={exportingPractice} onClick={() => { setSelectedPracticeIds([]); setPracticeExport(null); }}>清空选择</button>
+            </div> : null}
             {practiceRecommendations.map((item) => (
               <article key={item.practice_id} className="report-question">
+                {report?.practice_selection?.item_ids.includes(item.practice_id) ? <label className="report-practice-select">
+                  <input type="checkbox" aria-label={`选入练习卷：${item.title}`} checked={selectedPracticeIds.includes(item.practice_id)} disabled={exportingPractice}
+                    onChange={event => { setSelectedPracticeIds(ids => event.target.checked ? [...ids, item.practice_id] : ids.filter(id => id !== item.practice_id)); setPracticeExport(null); }} />
+                  选入练习卷
+                </label> : null}
                 <p className="report-question-text">
                   [{item.level}] {item.title}{item.suggested_minutes ? ` · 建议 ${item.suggested_minutes} 分钟` : ""}
                 </p>

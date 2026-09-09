@@ -1034,10 +1034,10 @@ export async function generateSessionReport(sessionId: string): Promise<{ status
   });
 }
 
-export async function exportSessionPractice(sessionId: string): Promise<SessionPracticeExportResult> {
+export async function exportSessionPractice(sessionId: string, selection?: { token: string; selected_ids: string[] }): Promise<SessionPracticeExportResult> {
   return requestJson<SessionPracticeExportResult>(
     `/class-sessions/${encodeURIComponent(sessionId)}/practice-export`,
-    { method: "POST" }
+    { method: "POST", ...(selection ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(selection) } : {}) }
   );
 }
 

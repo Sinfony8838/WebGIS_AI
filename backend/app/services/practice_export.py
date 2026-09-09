@@ -17,6 +17,8 @@ answers cannot leak into it.
 from __future__ import annotations
 
 import re
+import hashlib
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -57,11 +59,25 @@ class PracticeExportService:
     # Export entry (mirrors lesson_design.export_docx: job + artifacts)
     # ------------------------------------------------------------------
 
-    def export(self, session: ClassSessionRecord, lesson: Optional[LessonRecord]) -> Dict[str, Any]:
+    def export(self, session: ClassSessionRecord, lesson: Optional[LessonRecord],
+               selection: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         lesson_title = str(
             (lesson.title if lesson else "") or (session.metadata or {}).get("lesson_title") or "本课"
         )
         items, summary, notes = self.collect_items(session, lesson)
+        if selection is not None:
+            manifest = self.selection_manifest(session, items)
+            selected = selection.get("selected_ids")
+            if not isinstance(selected, list) or not selected or any(not isinstance(v, str) for v in selected):
+                raise ValueError("请至少勾选一道题目或一项作业；未生成空白试卷。")
+            if selection.get("token") != manifest["token"]:
+                raise ValueError("候选内容或课堂记录已变化，请重新生成报告并确认选题。")
+            if len(set(selected)) != len(selected) or not set(selected).issubset(manifest["item_ids"]):
+                raise ValueError("选题包含重复或不可用内容，请重新确认。")
+            items = [item for item in items if item["practice_id"] in selected]
+            summary = self._selection_summary(items)
+            notes.append(f"本卷包含教师勾选的 {len(items)} 项作业与题目。")
+
         if not items:
             raise ValueError("未找到可用作业内容。请检查当前项目题库、课时目标或先添加作业任务；未生成空白试卷。")
 
@@ -117,6 +133,7 @@ class PracticeExportService:
             "student_artifact": student_artifact.to_dict(),
             "teacher_artifact": teacher_artifact.to_dict(),
             "selection_summary": summary,
+            "selected_ids": [item["practice_id"] for item in items],
             "notes": notes,
         }
 
@@ -144,10 +161,11 @@ class PracticeExportService:
         # ① 教案指定的课后作业（homework basic/inquiry 文本任务）
         homework = plan.get("homework") if isinstance(plan.get("homework"), dict) else {}
         for origin in ("lesson_homework_basic", "lesson_homework_inquiry"):
-            for text in homework.get("basic" if origin == "lesson_homework_basic" else "inquiry") or []:
+            for index, text in enumerate(homework.get("basic" if origin == "lesson_homework_basic" else "inquiry") or [], start=1):
                 text = str(text).strip()
                 if text:
                     items.append({"kind": "task", "origin": origin, "text": text,
+                                  "practice_id": f"{origin}_{index}",
                                   "teacher_guidance": homework_guidance(homework, text)})
 
         # ② 教师课堂标注的部分掌握/误区：先回炉原题，再按误区标签与知识点检索变式题
@@ -205,7 +223,7 @@ class PracticeExportService:
 
     def report_bank_recommendations(
         self, session: ClassSessionRecord, lesson: Optional[LessonRecord]
-    ) -> Tuple[List[Dict[str, Any]], List[str]]:
+    ) -> Tuple[List[Dict[str, Any]], List[str], Dict[str, Any]]:
         items, _, notes = self.collect_items(session, lesson)
         result = []
         for item in items:
@@ -230,7 +248,14 @@ class PracticeExportService:
                 "evidence_basis": basis, "question": q,
             })
         notes.append("题库候选与练习卷使用同一套本地选题规则；教案、题库或课堂记录变化后请重新生成复盘。")
-        return result, notes
+        return result, notes, self.selection_manifest(session, items)
+
+    @staticmethod
+    def selection_manifest(session: ClassSessionRecord, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+        payload = json.dumps({"session_id": session.session_id, "project_id": session.project_id, "items": items},
+                             sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        return {"token": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+                "item_ids": [item["practice_id"] for item in items]}
 
     @staticmethod
     def _lesson_question_index(lesson: Optional[LessonRecord]) -> Dict[str, Dict[str, Any]]:
@@ -334,6 +359,7 @@ class PracticeExportService:
         entry["correct_rate"] = self._correct_rate(snapshot, session.responses.get(question_id) or [])
         return {
             "kind": "question",
+            "practice_id": f"{'bank' if origin in {'bank_core', 'observation_variant'} else 'class_question'}_{question_id}",
             "origin": origin,
             "question": snapshot,
             "stage_title": stage_title,
