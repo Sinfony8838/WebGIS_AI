@@ -27,10 +27,12 @@ from __future__ import annotations
 
 import logging
 import os
+import queue as queue_module
 import time
 import traceback
+from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Dict, Set
+from typing import Any, Dict, Optional
 
 
 def _make_logger() -> logging.Logger:
@@ -54,7 +56,32 @@ def _emit_ready(output_queue: Any) -> None:
     _safe_put(output_queue, {"type": "worker_ready", "timestamp": time.time()})
 
 
-def worker_loop(input_queue: Any, output_queue: Any, qgis_root: str, workflows_root: str) -> None:
+def _drain_cancellations(cancel_queue: Any, cancelled: "OrderedDict[str, None]") -> None:
+    if cancel_queue is None:
+        return
+    while True:
+        try:
+            message = cancel_queue.get_nowait()
+        except queue_module.Empty:
+            break
+        except (EOFError, OSError):
+            break
+        if isinstance(message, dict) and message.get("type") == "cancel_step":
+            request_id = str(message.get("request_id") or "")
+            if request_id:
+                cancelled[request_id] = None
+                cancelled.move_to_end(request_id)
+                if len(cancelled) > 4096:
+                    cancelled.popitem(last=False)
+
+
+def worker_loop(
+    input_queue: Any,
+    output_queue: Any,
+    qgis_root: str,
+    workflows_root: str,
+    cancel_queue: Optional[Any] = None,
+) -> None:
     """Main loop. Runs forever until receiving ``{"type": "shutdown"}``."""
     logger = _make_logger()
     logger.info("Worker starting (pid=%s)", os.getpid())
@@ -94,7 +121,7 @@ def worker_loop(input_queue: Any, output_queue: Any, qgis_root: str, workflows_r
     from .validation import validate_step_outputs
 
     workspaces: Dict[str, Workspace] = {}
-    cancelled: Set[str] = set()
+    cancelled: "OrderedDict[str, None]" = OrderedDict()
 
     _emit_ready(output_queue)
     if qgis_init_error:
@@ -104,10 +131,14 @@ def worker_loop(input_queue: Any, output_queue: Any, qgis_root: str, workflows_r
         })
 
     while True:
+        _drain_cancellations(cancel_queue, cancelled)
         try:
             message = input_queue.get()
         except (EOFError, KeyboardInterrupt):
             break
+        # A cancellation may arrive while the worker is blocked waiting for
+        # input. Drain the priority queue again before handling the request.
+        _drain_cancellations(cancel_queue, cancelled)
 
         if not isinstance(message, dict):
             continue
@@ -122,7 +153,7 @@ def worker_loop(input_queue: Any, output_queue: Any, qgis_root: str, workflows_r
         if msg_type == "cancel_step":
             request_id = str(message.get("request_id") or "")
             if request_id:
-                cancelled.add(request_id)
+                cancelled[request_id] = None
             continue
 
         if msg_type == "run_step":
@@ -136,7 +167,7 @@ def worker_loop(input_queue: Any, output_queue: Any, qgis_root: str, workflows_r
             # Acknowledge start (manager measures exec time from here) —
             # unless the request was cancelled while queued.
             if request_id and request_id in cancelled:
-                cancelled.discard(request_id)
+                cancelled.pop(request_id, None)
                 _safe_put(output_queue, {
                     "type": "step_cancelled",
                     "request_id": request_id,
@@ -261,10 +292,16 @@ def worker_loop(input_queue: Any, output_queue: Any, qgis_root: str, workflows_r
     logger.info("Worker exiting (pid=%s)", os.getpid())
 
 
-def run_worker(input_queue: Any, output_queue: Any, qgis_root: str, workflows_root: str) -> None:
+def run_worker(
+    input_queue: Any,
+    output_queue: Any,
+    qgis_root: str,
+    workflows_root: str,
+    cancel_queue: Optional[Any] = None,
+) -> None:
     """multiprocessing target. Catches all exceptions to avoid silent crashes."""
     try:
-        worker_loop(input_queue, output_queue, qgis_root, workflows_root)
+        worker_loop(input_queue, output_queue, qgis_root, workflows_root, cancel_queue)
     except Exception as exc:  # noqa: BLE001
         try:
             output_queue.put({

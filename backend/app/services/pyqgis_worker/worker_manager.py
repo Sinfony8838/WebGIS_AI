@@ -38,7 +38,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 logger = logging.getLogger(__name__)
@@ -137,9 +137,11 @@ class PyQgisWorkerManager:
         self._worker_target = worker_target
 
         self._lock = threading.RLock()
+        self._lifecycle_lock = threading.RLock()
         self._process: Optional[mp.Process] = None
         self._input_queue: Optional[Any] = None
         self._output_queue: Optional[Any] = None
+        self._cancel_queue: Optional[Any] = None
         self._init_warning: Optional[Dict[str, Any]] = None
 
         self._generation = 0
@@ -147,10 +149,11 @@ class PyQgisWorkerManager:
         self._ready = threading.Event()
         self._pending: Dict[str, _PendingRequest] = {}
         self._dispatcher: Optional[threading.Thread] = None
+        self._dispatcher_generation = 0
         self._dispatcher_stop = threading.Event()
         # Control-plane replies (pong, config acks, workflow_released, …).
         self._control_cond = threading.Condition()
-        self._control_log: Dict[str, Any] = []
+        self._control_log: List[Dict[str, Any]] = []
         # Set after an execution timeout: the worker may still be stuck in a
         # step nobody waits for any more. New requests fast-fail instead of
         # silently queueing behind it until the window elapses (or an orphan
@@ -178,23 +181,24 @@ class PyQgisWorkerManager:
             return self._generation
 
     def ensure_started(self) -> None:
-        with self._lock:
-            # A crashed generation must never serve new requests, even while
-            # the dying process is still technically alive.
-            if self._restart_needed:
-                self._restart_needed = False
-                self._cleanup_locked()
-            if self._process is not None and self._process.is_alive():
-                self._ensure_dispatcher_locked()
-                need_wait = not self._ready.is_set()
-            else:
-                # Stale or dead process? clean up first
-                if self._process is not None:
+        with self._lifecycle_lock:
+            with self._lock:
+                # A crashed generation must never serve new requests, even while
+                # the dying process is still technically alive.
+                if self._restart_needed:
+                    self._restart_needed = False
                     self._cleanup_locked()
-                self._start_worker_locked()
-                need_wait = True
-        if need_wait:
-            self._wait_ready()
+                if self._process is not None and self._process.is_alive():
+                    self._ensure_dispatcher_locked()
+                    need_wait = not self._ready.is_set()
+                else:
+                    # Stale or dead process? clean up first
+                    if self._process is not None:
+                        self._cleanup_locked()
+                    self._start_worker_locked()
+                    need_wait = True
+            if need_wait:
+                self._wait_ready()
 
     def _start_worker_locked(self) -> None:
         ctx = mp.get_context("spawn")  # spawn keeps Windows imports clean
@@ -214,6 +218,7 @@ class PyQgisWorkerManager:
                 )
         self._input_queue = ctx.Queue()
         self._output_queue = ctx.Queue()
+        self._cancel_queue = ctx.Queue()
         self._generation += 1
         self._ready.clear()
         self._dispatcher_stop.clear()
@@ -227,23 +232,31 @@ class PyQgisWorkerManager:
 
         process = ctx.Process(
             target=target,
-            args=(self._input_queue, self._output_queue, self.qgis_root, str(self.workflows_root)),
+            args=(
+                self._input_queue,
+                self._output_queue,
+                self.qgis_root,
+                str(self.workflows_root),
+                self._cancel_queue,
+            ),
             name="PyQgisWorker",
             daemon=True,
         )
+        # Register the handle before start so a partially spawned process can
+        # still be terminated if pickling or Windows handle setup fails.
+        self._process = process
         try:
             process.start()
         except Exception as exc:
             self._cleanup_locked()
             raise RuntimeError(f"failed to spawn PyQGIS worker process: {exc}") from exc
-        self._process = process
         self._init_warning = None
         logger.info(
             "PyQGIS worker process spawned pid=%s generation=%s", process.pid, self._generation
         )
 
     def _wait_ready(self) -> None:
-        """Wait for ``worker_ready``; raise on early death, warn on silence."""
+        """Wait for ``worker_ready``; raise on early death or silence."""
         deadline = time.time() + self.startup_timeout
         while time.time() < deadline:
             if self._ready.wait(0.2):
@@ -255,13 +268,29 @@ class PyQgisWorkerManager:
                     message = str(warning.get("message") or message)
                 raise RuntimeError(message)
         logger.warning("PyQGIS worker did not signal readiness in %.1fs", self.startup_timeout)
+        with self._lock:
+            self._restart_needed = True
+        raise RuntimeError(
+            f"worker did not signal readiness within {self.startup_timeout:.1f}s"
+        )
 
     def _ensure_dispatcher_locked(self) -> None:
-        if self._dispatcher is not None and self._dispatcher.is_alive():
+        if (
+            self._dispatcher is not None
+            and self._dispatcher.is_alive()
+            and self._dispatcher_generation == self._generation
+        ):
+            return
+        output_queue = self._output_queue
+        if output_queue is None:
             return
         self._dispatcher_stop.clear()
+        self._dispatcher_generation = self._generation
         self._dispatcher = threading.Thread(
-            target=self._dispatch_loop, name="PyQgisWorkerDispatcher", daemon=True
+            target=self._dispatch_loop,
+            args=(output_queue, self._generation),
+            name=f"PyQgisWorkerDispatcher-{self._generation}",
+            daemon=True,
         )
         self._dispatcher.start()
 
@@ -270,48 +299,74 @@ class PyQgisWorkerManager:
         return dict(self._init_warning) if self._init_warning else None
 
     def shutdown(self, timeout: float = 5.0) -> None:
-        with self._lock:
-            process = self._process
-            input_queue = self._input_queue
-            self._dispatcher_stop.set()
-            if process is not None and process.is_alive() and input_queue is not None:
-                try:
-                    input_queue.put({"type": "shutdown"})
-                except Exception:  # pragma: no cover
-                    pass
+        with self._lifecycle_lock:
+            with self._lock:
+                process = self._process
+                input_queue = self._input_queue
+                dispatcher = self._dispatcher
+                self._dispatcher_stop.set()
+                self._fail_all_pending_locked("WORKER_CRASHED", "worker shut down by manager")
+                if process is not None and process.is_alive() and input_queue is not None:
+                    try:
+                        input_queue.put({"type": "shutdown"})
+                    except Exception:  # pragma: no cover
+                        pass
             if process is not None:
                 process.join(timeout)
-            self._cleanup_locked()
-            self._fail_all_pending_locked("WORKER_CRASHED", "worker shut down by manager")
+            with self._lock:
+                self._cleanup_locked()
+            if dispatcher is not None and dispatcher is not threading.current_thread():
+                dispatcher.join(min(timeout, 1.0))
+            with self._lock:
+                if self._dispatcher is dispatcher:
+                    self._dispatcher = None
+                    self._dispatcher_generation = 0
 
     def _cleanup_locked(self) -> None:
         process = self._process
+        queues = (self._input_queue, self._output_queue, self._cancel_queue)
         self._process = None
         self._input_queue = None
         self._output_queue = None
+        self._cancel_queue = None
         self._ready.clear()
-        if process is not None and process.is_alive():
-            # Only ever terminate our OWN child handle — never any other
-            # Python/QGIS process on the machine.
+        if process is not None:
             try:
-                process.terminate()
-                process.join(2.0)
-            except Exception:  # pragma: no cover
+                alive = process.is_alive()
+            except (AssertionError, ValueError):
+                alive = False
+            if alive:
+                # Only ever terminate our OWN child handle — never any other
+                # Python/QGIS process on the machine.
+                try:
+                    process.terminate()
+                    process.join(2.0)
+                except Exception:  # pragma: no cover
+                    pass
+            elif process.pid is not None:
+                try:
+                    process.join(0)
+                except Exception:  # pragma: no cover
+                    pass
+        for worker_queue in queues:
+            if worker_queue is None:
+                continue
+            try:
+                worker_queue.cancel_join_thread()
+                worker_queue.close()
+            except Exception:  # pragma: no cover - already closed/broken
                 pass
 
     # ------------------------------------------------------------------
     # Dispatcher: sole reader of the shared output queue
     # ------------------------------------------------------------------
 
-    def _dispatch_loop(self) -> None:
-        while not self._dispatcher_stop.is_set():
-            output_queue = self._output_queue
-            if output_queue is None:
-                break
+    def _dispatch_loop(self, output_queue: Any, generation: int) -> None:
+        while not self._dispatcher_stop.is_set() and generation == self._generation:
             try:
                 msg = output_queue.get(timeout=0.25)
             except queue_module.Empty:
-                self._check_worker_death()
+                self._check_worker_death(generation)
                 continue
             except Exception:  # queue closed / handle invalidated
                 break
@@ -322,8 +377,10 @@ class PyQgisWorkerManager:
             except Exception:  # pragma: no cover - routing must never kill the loop
                 logger.exception("dispatcher failed to route message: %r", msg)
 
-    def _check_worker_death(self) -> None:
+    def _check_worker_death(self, generation: int) -> None:
         with self._lock:
+            if generation != self._generation:
+                return
             if not self._pending:
                 return
             process = self._process
@@ -675,11 +732,11 @@ class PyQgisWorkerManager:
     def _send_worker_cancel(self, request_id: str, workflow_id: str) -> None:
         """Best-effort: ask the worker to skip the request if still queued."""
         with self._lock:
-            input_queue = self._input_queue
-        if input_queue is None:
+            cancel_queue = self._cancel_queue
+        if cancel_queue is None:
             return
         try:
-            input_queue.put({
+            cancel_queue.put({
                 "type": "cancel_step",
                 "request_id": request_id,
                 "workflow_id": workflow_id,

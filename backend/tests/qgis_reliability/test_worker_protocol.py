@@ -33,6 +33,7 @@ class WorkerHarness:
     def __init__(self, workflows_root: Path, dispatch_fn=None) -> None:
         self.input_q: "queue_module.Queue[Dict[str, Any]]" = queue_module.Queue()
         self.output_q: "queue_module.Queue[Dict[str, Any]]" = queue_module.Queue()
+        self.cancel_q: "queue_module.Queue[Dict[str, Any]]" = queue_module.Queue()
         self.workflows_root = workflows_root
         self.messages: List[Dict[str, Any]] = []
         self._release = threading.Event()
@@ -52,7 +53,7 @@ class WorkerHarness:
             p.start()
         self._thread = threading.Thread(
             target=worker_main.worker_loop,
-            args=(self.input_q, self.output_q, "", str(workflows_root)),
+            args=(self.input_q, self.output_q, "", str(workflows_root), self.cancel_q),
             daemon=True,
         )
         self._thread.start()
@@ -65,6 +66,9 @@ class WorkerHarness:
 
     def send(self, msg: Dict[str, Any]) -> None:
         self.input_q.put(msg)
+
+    def cancel(self, request_id: str) -> None:
+        self.cancel_q.put({"type": "cancel_step", "request_id": request_id})
 
     def next_message(self, timeout: float = 10.0) -> Optional[Dict[str, Any]]:
         try:
@@ -153,7 +157,7 @@ class WorkerProtocolTests(unittest.TestCase):
         h = self.start()
         # Cancel the request BEFORE its run_step is dequeued (artificial
         # ordering, but pins the defensive worker-side branch).
-        h.send({"type": "cancel_step", "request_id": "req-x"})
+        h.cancel("req-x")
         h.send({
             "type": "run_step",
             "request_id": "req-x",

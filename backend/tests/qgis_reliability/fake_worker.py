@@ -29,19 +29,45 @@ target by qualified name.
 from __future__ import annotations
 
 import os
+import queue as queue_module
 import time
+from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Dict, Set
+from typing import Any, Dict, Optional
 
 
-def run_fake_worker(input_queue: Any, output_queue: Any, qgis_root: str, workflows_root: str) -> None:  # noqa: C901
+def run_fake_worker(
+    input_queue: Any,
+    output_queue: Any,
+    qgis_root: str,
+    workflows_root: str,
+    cancel_queue: Optional[Any] = None,
+) -> None:  # noqa: C901
     workflows_dir = Path(workflows_root)
     workflows_dir.mkdir(parents=True, exist_ok=True)
 
     output_queue.put({"type": "worker_ready", "timestamp": time.time()})
 
     rules: Dict[str, Any] = {}
-    cancelled: Set[str] = set()
+    cancelled: "OrderedDict[str, None]" = OrderedDict()
+
+    def drain_cancellations() -> None:
+        if cancel_queue is None:
+            return
+        while True:
+            try:
+                cancel = cancel_queue.get_nowait()
+            except queue_module.Empty:
+                break
+            except (EOFError, OSError):
+                break
+            if isinstance(cancel, dict) and cancel.get("type") == "cancel_step":
+                request_id = str(cancel.get("request_id") or "")
+                if request_id:
+                    cancelled[request_id] = None
+                    cancelled.move_to_end(request_id)
+                    if len(cancelled) > 4096:
+                        cancelled.popitem(last=False)
 
     def emit(msg: Dict[str, Any]) -> None:
         output_queue.put(msg)
@@ -49,7 +75,9 @@ def run_fake_worker(input_queue: Any, output_queue: Any, qgis_root: str, workflo
             output_queue.put(dict(msg))
 
     while True:
+        drain_cancellations()
         message = input_queue.get()
+        drain_cancellations()
         if not isinstance(message, dict):
             continue
         msg_type = message.get("type")
@@ -71,7 +99,7 @@ def run_fake_worker(input_queue: Any, output_queue: Any, qgis_root: str, workflo
         if msg_type == "cancel_step":
             request_id = str(message.get("request_id") or "")
             if request_id:
-                cancelled.add(request_id)
+                cancelled[request_id] = None
             continue
 
         if msg_type == "release_workflow":
@@ -96,7 +124,7 @@ def run_fake_worker(input_queue: Any, output_queue: Any, qgis_root: str, workflo
         op = str(step.get("op") or "")
 
         if request_id and request_id in cancelled:
-            cancelled.discard(request_id)
+            cancelled.pop(request_id, None)
             output_queue.put({
                 "type": "step_cancelled",
                 "request_id": request_id,

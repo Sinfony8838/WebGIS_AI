@@ -30,6 +30,14 @@ from .helpers import (
 )
 
 
+def _failing_worker(*_args) -> None:
+    raise SystemExit(1)
+
+
+def _silent_worker(*_args) -> None:
+    time.sleep(10)
+
+
 class TimeoutTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = make_tmp_dir()
@@ -270,11 +278,13 @@ class CancelTests(unittest.TestCase):
         t1.join(30)
         t0.join(30)
         result = outcomes["q"]
-        # The manager cancels queued requests immediately; the worker-side
-        # FIFO means the skip-ack is best-effort (the request was already
-        # settled manager-side), so STEP_CANCELLED is the stable contract.
+        # The manager settles the caller immediately and the dedicated cancel
+        # queue lets the worker discard the queued operation before execution.
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["error"]["code"], "STEP_CANCELLED")
+        time.sleep(0.3)
+        marker = self.tmp / "wf_q1" / "steps" / "quick" / "marker.txt"
+        self.assertFalse(marker.exists(), "a queued cancelled request must not execute")
 
     def test_cancel_workflow_api(self) -> None:
         manager = self._new_manager()
@@ -326,16 +336,25 @@ class LifecycleTests(unittest.TestCase):
         manager.shutdown()  # must not raise
         self.assertFalse(manager.is_alive())
 
+    def test_same_manager_can_restart_after_shutdown(self) -> None:
+        manager = make_manager(self.tmp)
+        first = manager.run_step("wf_restart", step("first"))
+        assert_success(first, "wf_restart", "first")
+        first_pid = manager._process.pid
+        manager.shutdown()
+
+        second = manager.run_step("wf_restart", step("second"))
+        assert_success(second, "wf_restart", "second")
+        self.assertNotEqual(manager._process.pid, first_pid)
+        manager.shutdown()
+
     def test_startup_failure_returns_start_failed(self) -> None:
         from backend.app.services.pyqgis_worker import PyQgisWorkerManager
-
-        def broken_worker(*_args):  # dies immediately, no protocol
-            raise SystemExit(1)
 
         manager = PyQgisWorkerManager(
             workflows_root=self.tmp,
             startup_timeout=6.0,
-            worker_target=broken_worker,
+            worker_target=_failing_worker,
         )
         result = manager.run_step("wf_boot", step("s1"))
         self.assertEqual(result["status"], "error")
@@ -344,6 +363,21 @@ class LifecycleTests(unittest.TestCase):
             {"WORKER_START_FAILED", "WORKER_CRASHED"},
         )
         manager.shutdown()
+
+    def test_startup_silence_returns_start_failed_and_cleans_up(self) -> None:
+        from backend.app.services.pyqgis_worker import PyQgisWorkerManager
+
+        manager = PyQgisWorkerManager(
+            workflows_root=self.tmp,
+            startup_timeout=0.4,
+            worker_target=_silent_worker,
+        )
+        started = time.time()
+        result = manager.run_step("wf_silent", step("s1"))
+        self.assertEqual(result["error"]["code"], "WORKER_START_FAILED")
+        self.assertLess(time.time() - started, 2.0)
+        manager.shutdown(timeout=0.2)
+        self.assertFalse(manager.is_alive())
 
     def test_release_purges_step_temp_dirs_via_fake_worker(self) -> None:
         manager = make_manager(self.tmp)

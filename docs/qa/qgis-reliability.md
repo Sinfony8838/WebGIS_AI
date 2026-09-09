@@ -29,12 +29,12 @@
 - 新增错误码(`errors.py`):`WORKER_START_FAILED`、`WORKER_STUCK`、`WORKER_RESTARTED`、`STEP_QUEUED_TIMEOUT`、`STEP_EXEC_TIMEOUT`、`STEP_CANCELLED`、`OUTPUT_INVALID`。
 - 产物校验(`validation.py`):成功步骤发布的路径产物必须存在、非空、可重新打开(GeoJSON 需通过 JSON 解析;PNG/GPKG/TIFF 校验魔数);**合法空结果**(如 filter_features 零命中,`feature_count: 0` + 有效空 FeatureCollection)明确成功,不误报失败。
 - 确定性资源释放:`release_workflow` 清内存图层/步骤注册表并删除该工作流自有的 `steps/` 临时目录(`outputs/` 发布产物、日志、status.json 保留);引用了已释放/已丢失内存图层的后续请求得到准确的 `WORKER_RESTARTED` 报错。
-- 取消:`run_step(..., cancel_event=...)`、`cancel_request(id)`、`cancel_workflow(id)`、executor 级 `cancel_workflow(id)`;取消立即唤醒等待者(`STEP_CANCELLED`),迟到结果被隔离。HTTP 端点接线属共享文件(main.py),未在本任务修改。
+- 取消:`run_step(..., cancel_event=...)`、`cancel_request(id)`、`cancel_workflow(id)`、executor 级 `cancel_workflow(id)`;取消立即唤醒等待者(`STEP_CANCELLED`),独立取消队列会在 worker 执行下一个排队步骤前优先处理取消,迟到结果被隔离。HTTP 端点接线属共享文件(main.py),未在本任务修改。
 - 真实 QGIS 兼容修复(`bootstrap.py`):OSGeo4W `qgis-ltr-bin.env` 把 GRASS84 目录排在 Qt5 之前,且共享机器 PATH 混入的其他软件会遮蔽同名 DLL,导致 `import qgis.core` 报 "DLL load failed"。现按依赖顺序**全路径预加载** QGIS 运行时 DLL 并把 GRASS 目录移到 PATH 尾部(保留 GRASS 可用性)。
 
 ## 3. fake worker 测试结果(无 QGIS 依赖,协议级)
 
-`backend/tests/qgis_reliability/`,28 项全部通过(fake worker 与真实 worker 同协议,可注入延迟/硬崩溃/软崩溃/重复/孤儿消息):
+`backend/tests/qgis_reliability/`,30 项全部通过(fake worker 与真实 worker 同协议,可注入延迟/硬崩溃/软崩溃/重复/孤儿消息):
 
 - 相同 step_id 4 工作流并发 ×6 轮:零串结果、零串目录
 - 10 组 ×2 工作流相同步骤名交错:全部成功,输出归各自工作流
@@ -44,8 +44,8 @@
 - 硬/软崩溃:准确 `WORKER_CRASHED` + 自动重试一次成功;含引用步骤不盲目重试
 - 排队中崩溃的其他工作流请求:失败后自动重试成功
 - 取消(执行中/排队中/按工作流)均 `STEP_CANCELLED`;取消后重跑成功
-- 连续 4 轮启动/关闭:每次新 pid、无泄漏、shutdown 幂等
-- 启动失败 → `WORKER_START_FAILED`
+- 连续 4 轮启动/关闭:每次新 pid、无泄漏、shutdown 幂等;同一个 manager 关闭后可重新启动
+- 启动进程立即失败或存活但不发 ready → `WORKER_START_FAILED`
 - worker 协议级:ack/result 回显 request_id;取消跳过;产物缺失/截断 → `OUTPUT_INVALID`;合法空结果成功;release 清 `steps/` 保 `outputs/`
 
 ## 4. 真实 QGIS 实测结果(soak)
@@ -85,7 +85,7 @@ python scripts/qa/qgis_reliability/run_soak.py --qgis-root "D:\QGIS 3.40.10" --o
 
 ## 5. 回归验证
 
-- Python 3.12 后端全量:`python -m pytest backend/tests -q` → **490 passed**(462 既有 + 28 本任务新增),9 subtests passed
+- Python 3.12 后端全量:`python -m pytest backend/tests -q` → **492 passed**(462 既有 + 30 本任务新增),9 subtests passed
 - `git diff --check` → 干净
 - 不涉及前端改动,无需 npm test/build
 
@@ -95,3 +95,9 @@ python scripts/qa/qgis_reliability/run_soak.py --qgis-root "D:\QGIS 3.40.10" --o
 2. 执行超时后 worker 可能仍卡在原步骤:后续请求快速失败(`WORKER_STUCK`)直到 worker 产出孤儿结果证明恢复;不会误用旧结果,但可用性受损——需要时可在 main.py 暴露管理端点强制重启 worker。
 3. 崩溃后自动重试仅一次,且只对参数完全自包含(无 `${}` 引用、无内存别名)的步骤;多步工作流崩溃后需整体重跑(有明确错误指引)。
 4. DLL 预加载清单针对 OSGeo4W 3.40 LTR 布局;其他 QGIS 版本若缺 DLL 会得到原有的精确报错而非静默失败。
+
+## 7. 2026-09-09 Codex 接手复核
+
+复核发现并修复三处原测试未覆盖的生命周期问题：排队取消消息与步骤共用 FIFO 时实际无法抢在步骤前生效；同一 manager 关停后立即重启时，旧调度线程可能被误认为新一代调度线程；worker 进程存活但始终不发送 `worker_ready` 时会继续进入排队超时，而不是返回 `WORKER_START_FAILED`。此外，原“启动失败”测试使用不可序列化的局部函数，Windows 子进程会在测试通过后输出 `WinError 6` traceback；现改为模块级故障 worker，进程和队列句柄均确定性回收。
+
+复核后的独立验证：专属测试 **30 passed**，无退出 traceback；全量后端 **492 passed, 9 subtests passed**；真实 QGIS 3.40.10 soak 的 10 项 verdict 全部为 true。实测冷启动 7212.7 ms，连续 30 次真实操作平均 21.4 ms，10 组交错零串结果，执行超时 62.9 ms 返回，崩溃后 2470.6 ms 恢复，取消 611.7 ms 返回，最终 worker 进程已消失。冷启动时间受本机当时负载影响，功能与隔离判定全部通过。
