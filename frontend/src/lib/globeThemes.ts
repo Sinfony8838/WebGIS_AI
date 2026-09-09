@@ -1,3 +1,5 @@
+import Polygon from "ol/geom/Polygon";
+import { selectVisibleLabels, type LabelBox } from "./labelLayout";
 /**
  * Thematic 3D layers for the Cesium digital globe.
  *
@@ -7,7 +9,7 @@
  *   - population_columns  省级人口柱体（高度=人口，颜色=密度）
  *   - density_fill        人口密度分级设色（贴地面）
  *   - density_3d          人口密度高度映射（拉伸棱柱）
- *   - hu_line             胡焕庸线（发光墙体 + 两侧注记）
+ *   - hu_line             胡焕庸线（参考连线 + 两侧注记）
  *   - climate_zones       中国气候类型区划（着色面 + 注记）
  *   - migration_flows     人口迁徙弧线（发光弧 + 动态光点）
  *
@@ -16,6 +18,7 @@
  * so toggling themes has zero impact on runtime.json size.
  */
 import * as Cesium from "cesium";
+import { DENSITY_SCALE } from "./populationVisual";
 import { fetchCatalogDatasetData } from "../api";
 import type { GeoJsonFeature, GeoJsonFeatureCollection } from "../types";
 
@@ -54,15 +57,10 @@ export type ThemeTooltip = { title: string; lines: string[] };
 // ── Classification ──────────────────────────────────────────────────
 
 /** Density class breaks in persons/km², matched to textbook conventions. */
-const DENSITY_CLASSES: { max: number; color: string; label: string }[] = [
-  { max: 10, color: "#f5f7c4", label: "<10 人/km²" },
-  { max: 100, color: "#fed976", label: "10–100 人/km²" },
-  { max: 400, color: "#fd8d3c", label: "100–400 人/km²" },
-  { max: 800, color: "#e31a1c", label: "400–800 人/km²" },
-  { max: Infinity, color: "#800026", label: "≥800 人/km²" }
-];
+const DENSITY_CLASSES = DENSITY_SCALE.map(item => ({...item, label: `${item.label} 人/km²`}));
 
 function densityClass(density: number): { color: string; label: string } {
+  if(!Number.isFinite(density)||density<0) return {color:"#dbe1e6",label:"缺失数据"};
   for (const cls of DENSITY_CLASSES) {
     if (density < cls.max) {
       return cls;
@@ -121,34 +119,14 @@ function stringProp(props: Record<string, unknown> | null, key: string): string 
 
 type LonLat = [number, number];
 
-/** Best-effort label anchor: vertex average of the largest outer ring. */
+/** Keep labels and columns inside the largest land polygon, including concave regions. */
 function featureAnchor(feature: GeoJsonFeature): LonLat | null {
-  const geometry = feature.geometry;
-  if (!geometry) return null;
-  const rings: number[][][] = [];
-  if (geometry.type === "Polygon") {
-    const coords = geometry.coordinates as number[][][];
-    if (coords?.[0]) rings.push(coords[0]);
-  } else if (geometry.type === "MultiPolygon") {
-    for (const poly of (geometry.coordinates as number[][][][]) || []) {
-      if (poly?.[0]) rings.push(poly[0]);
-    }
-  } else if (geometry.type === "Point") {
-    const point = geometry.coordinates as number[];
-    return [point[0], point[1]];
-  }
-  if (!rings.length) return null;
-  let best = rings[0];
-  for (const ring of rings) {
-    if (ring.length > best.length) best = ring;
-  }
-  let lon = 0;
-  let lat = 0;
-  for (const vertex of best) {
-    lon += vertex[0];
-    lat += vertex[1];
-  }
-  return [lon / best.length, lat / best.length];
+  const geometry=feature.geometry;
+  if(!geometry) return null;
+  if(geometry.type === "Point") return (geometry.coordinates as number[]).slice(0,2) as LonLat;
+  const coordinates=geometry.type === "Polygon" ? [geometry.coordinates as number[][][]] : geometry.type === "MultiPolygon" ? geometry.coordinates as number[][][][] : [];
+  const polygons=coordinates.map(coords=>new Polygon(coords)).sort((a,b)=>b.getArea()-a.getArea());
+  return polygons[0] ? polygons[0].getInteriorPoint().getCoordinates().slice(0,2) as LonLat : null;
 }
 
 /** Sample an arch between two lon/lat points with a sine height profile. */
@@ -192,11 +170,11 @@ export function getEntityTooltip(picked: unknown): ThemeTooltip | null {
 
 // ── Theme builders ──────────────────────────────────────────────────
 
-type ThemeHandle = { dataSources: Cesium.DataSource[] };
+type ThemeHandle = { dataSources: Cesium.DataSource[]; labels?: Cesium.Entity[] };
 
-const LABEL_FONT = "13px 'Inter', 'Noto Sans SC', sans-serif";
-const LABEL_FILL = Cesium.Color.fromCssColorString("rgba(235, 245, 255, 0.96)");
-const LABEL_OUTLINE = Cesium.Color.fromCssColorString("rgba(6, 20, 38, 0.92)");
+const LABEL_FONT = "500 15px 'Microsoft YaHei UI', sans-serif";
+const LABEL_FILL = Cesium.Color.fromCssColorString("#18343f");
+const LABEL_OUTLINE = Cesium.Color.WHITE;
 
 function makeLabel(text: string, options: Partial<Cesium.LabelGraphics.ConstructorOptions> = {}) {
   return new Cesium.LabelGraphics({
@@ -208,7 +186,10 @@ function makeLabel(text: string, options: Partial<Cesium.LabelGraphics.Construct
     style: Cesium.LabelStyle.FILL_AND_OUTLINE,
     horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
     verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-    scaleByDistance: new Cesium.NearFarScalar(1_500_000, 1.05, 22_000_000, 0.55),
+    showBackground: true,
+    backgroundColor: Cesium.Color.WHITE.withAlpha(.94),
+    backgroundPadding: new Cesium.Cartesian2(7, 5),
+    pixelOffset: new Cesium.Cartesian2(0, -8),
     disableDepthTestDistance: Number.POSITIVE_INFINITY,
     ...options
   });
@@ -228,15 +209,16 @@ async function buildPopulationColumns(): Promise<ThemeHandle> {
     .sort((a, b) => b - a);
   const labelThreshold = ranked[Math.min(9, ranked.length - 1)] ?? 0;
 
-  for (const feature of data.features) {
+  const labels: Cesium.Entity[] = [];
+  for (const feature of [...data.features].sort((a,b) => numberProp(b.properties,"population") - numberProp(a.properties,"population"))) {
     const props = feature.properties;
     const population = numberProp(props, "population");
     const density = numberProp(props, "density");
-    const center = (props?.center as number[] | undefined) ?? featureAnchor(feature) ?? null;
+    const center = featureAnchor(feature) ?? (props?.center as number[] | undefined) ?? null;
     if (!center || !Number.isFinite(population)) continue;
     const [lon, lat] = center;
     const length = Math.max((population / maxPopulation) * 780_000, 12_000);
-    const cls = densityClass(Number.isFinite(density) ? density : 0);
+    const cls = densityClass(density);
     const color = Cesium.Color.fromCssColorString(cls.color).withAlpha(0.92);
     const name = stringProp(props, "short_name") || stringProp(props, "name");
 
@@ -259,16 +241,17 @@ async function buildPopulationColumns(): Promise<ThemeHandle> {
       const label = source.entities.add({
         position: Cesium.Cartesian3.fromDegrees(lon, lat, length + 40_000),
         label: makeLabel(`${name} ${formatPopulation(population)}`, {
-          font: "12px 'Inter', 'Noto Sans SC', sans-serif"
+          font: "500 14px 'Microsoft YaHei UI', sans-serif"
         })
       });
+      labels.push(label);
       setTooltip(label, {
         title: name,
         lines: [`常住人口：${formatPopulation(population)}`, `人口密度：${formatDensity(density)}`]
       });
     }
   }
-  return { dataSources: [source] };
+  return { dataSources: [source], labels };
 }
 
 /** 人口密度分级设色（extruded=false）或高度映射（extruded=true）。 */
@@ -287,7 +270,7 @@ async function buildDensityPolygons(extruded: boolean): Promise<ThemeHandle> {
     const name = String(
       entity.properties?.short_name?.getValue?.() || entity.properties?.name?.getValue?.() || ""
     );
-    const cls = densityClass(Number.isFinite(density) ? density : 0);
+    const cls = densityClass(density);
     entity.polygon.material = new Cesium.ColorMaterialProperty(
       Cesium.Color.fromCssColorString(cls.color).withAlpha(extruded ? 0.85 : 0.78)
     );
@@ -312,7 +295,7 @@ async function buildDensityPolygons(extruded: boolean): Promise<ThemeHandle> {
   return { dataSources: [source] };
 }
 
-/** 胡焕庸线：发光地表线 + 半透明墙体 + 端点/半壁注记。 */
+/** 胡焕庸线：地表参考连线与端点注记。 */
 async function buildHuLine(): Promise<ThemeHandle> {
   const { data } = await fetchCatalogDatasetData("hu_huanyong_line");
   const line = data.features.find((f) => f.geometry?.type === "LineString");
@@ -333,57 +316,42 @@ async function buildHuLine(): Promise<ThemeHandle> {
     lats.push(from[1] + (to[1] - from[1]) * t);
   }
   const groundPositions = lons.map((lon, i) => Cesium.Cartesian3.fromDegrees(lon, lats[i], 4_000));
-  const flatDegrees: number[] = [];
-  lons.forEach((lon, i) => flatDegrees.push(lon, lats[i]));
 
   const glowLine = source.entities.add({
     polyline: {
       positions: groundPositions,
       width: 5,
-      material: new Cesium.PolylineGlowMaterialProperty({
-        glowPower: 0.24,
-        color: Cesium.Color.fromCssColorString("#ff8a80")
-      })
-    }
-  });
-  const wall = source.entities.add({
-    wall: {
-      positions: Cesium.Cartesian3.fromDegreesArray(flatDegrees),
-      maximumHeights: lons.map(() => 320_000),
-      minimumHeights: lons.map(() => 0),
-      material: Cesium.Color.fromCssColorString("#ff5252").withAlpha(0.24),
-      outline: false
+      material: new Cesium.PolylineOutlineMaterialProperty({ color:Cesium.Color.fromCssColorString("#07575f"), outlineColor:Cesium.Color.WHITE, outlineWidth:1.5 })
     }
   });
   const tooltip: ThemeTooltip = {
     title: "胡焕庸线（黑河—腾冲）",
-    lines: ["1935 年由胡焕庸提出", "东南半壁：约43%国土 · 约94%人口", "西北半壁：约57%国土 · 约6%人口"]
+    lines: ["1935 年由胡焕庸提出", "1935 年口径：东南侧约36%国土、96%人口", "地名参考坐标连线，非测绘边界；依据见地图图例"]
   };
   setTooltip(glowLine, tooltip);
-  setTooltip(wall, tooltip);
 
   source.entities.add({
-    position: Cesium.Cartesian3.fromDegrees(from[0], from[1], 340_000),
+    position: Cesium.Cartesian3.fromDegrees(from[0], from[1], 8_000),
     label: makeLabel("黑河")
   });
   source.entities.add({
-    position: Cesium.Cartesian3.fromDegrees(to[0], to[1], 340_000),
+    position: Cesium.Cartesian3.fromDegrees(to[0], to[1], 8_000),
     label: makeLabel("腾冲")
   });
   const midLon = (from[0] + to[0]) / 2;
   const midLat = (from[1] + to[1]) / 2;
   source.entities.add({
     position: Cesium.Cartesian3.fromDegrees(midLon + 7.5, midLat - 4, 60_000),
-    label: makeLabel("东南半壁\n约43%国土 · 约94%人口", {
-      font: "12px 'Inter', 'Noto Sans SC', sans-serif",
-      fillColor: Cesium.Color.fromCssColorString("rgba(255, 214, 170, 0.98)")
+    label: makeLabel("东南侧 · 总体较密", {
+      font: "500 14px 'Microsoft YaHei UI', sans-serif",
+      fillColor: LABEL_FILL
     })
   });
   source.entities.add({
     position: Cesium.Cartesian3.fromDegrees(midLon - 8.5, midLat + 4.5, 60_000),
-    label: makeLabel("西北半壁\n约57%国土 · 约6%人口", {
-      font: "12px 'Inter', 'Noto Sans SC', sans-serif",
-      fillColor: Cesium.Color.fromCssColorString("rgba(178, 219, 255, 0.98)")
+    label: makeLabel("西北侧 · 总体较疏", {
+      font: "500 14px 'Microsoft YaHei UI', sans-serif",
+      fillColor: LABEL_FILL
     })
   });
   return { dataSources: [source] };
@@ -424,7 +392,7 @@ async function buildClimateZones(): Promise<ThemeHandle> {
     source.entities.add(
       new Cesium.Entity({
         position: Cesium.Cartesian3.fromDegrees(anchor[0], anchor[1], 30_000),
-        label: makeLabel(name, { font: "12px 'Inter', 'Noto Sans SC', sans-serif" })
+        label: makeLabel(name, { font: "500 14px 'Microsoft YaHei UI', sans-serif" })
       })
     );
   }
@@ -491,7 +459,7 @@ async function buildMigrationFlows(): Promise<ThemeHandle> {
     source.entities.add({
       position: labelAnchor,
       label: makeLabel(`${name || `${origin}→${destination}`} · ${migrants}万人`, {
-        font: "12px 'Inter', 'Noto Sans SC', sans-serif"
+        font: "500 14px 'Microsoft YaHei UI', sans-serif"
       })
     });
   });
@@ -538,7 +506,7 @@ export const GLOBE_THEMES: GlobeThemeDef[] = [
     name: "胡焕庸线",
     description: "黑河—腾冲人口地理分界线及两侧对比",
     legendTitle: "胡焕庸线（1935）",
-    legendNote: "东南半壁约43%国土承载约94%人口"
+    legendNote: "黑河—腾冲参考连线；1935 年东南侧约36%国土、96%人口。不同年份口径不可混用。"
   },
   {
     id: "climate_zones",
@@ -581,9 +549,9 @@ export const GLOBE_SCENE_PRESETS: GlobeScenePreset[] = [
     id: "population_columns",
     name: "立体人口柱体",
     icon: "🏙️",
-    description: "省级人口柱体三维对比，胡焕庸线辅助分界",
-    themes: ["population_columns", "hu_line"],
-    camera: { lon: 104, lat: 8, altitudeMeters: 4_800_000, pitchDeg: -48 }
+    description: "柱高比较人口总量，颜色比较密度；悬停查看各省数值",
+    themes: ["population_columns"],
+    camera: { lon: 106, lat: 34, altitudeMeters: 6_800_000, pitchDeg: -55 }
   },
   {
     id: "density_terrain",
@@ -591,7 +559,7 @@ export const GLOBE_SCENE_PRESETS: GlobeScenePreset[] = [
     icon: "⛰️",
     description: "人口密度高度映射，东部隆起如山脉",
     themes: ["density_3d", "hu_line"],
-    camera: { lon: 105, lat: 9, altitudeMeters: 5_200_000, pitchDeg: -50 }
+    camera: { lon: 104, lat: 30, altitudeMeters: 8_600_000, pitchDeg: -78 }
   },
   {
     id: "migration",
@@ -599,7 +567,7 @@ export const GLOBE_SCENE_PRESETS: GlobeScenePreset[] = [
     icon: "🔀",
     description: "区域间迁徙弧线动画，理解人口流动方向",
     themes: ["migration_flows", "density_fill"],
-    camera: { lon: 108, lat: 12, altitudeMeters: 5_600_000, pitchDeg: -52 }
+    camera: { lon: 106, lat: 31, altitudeMeters: 7_800_000, pitchDeg: -80 }
   },
   {
     id: "climate_pop",
@@ -625,10 +593,36 @@ export class GlobeThemeManager {
   private wanted = new Set<GlobeThemeId>();
   private destroyed = false;
   private onError?: (themeId: GlobeThemeId, message: string) => void;
+  private removeLabelLayout: () => void;
+  private measure = document.createElement("canvas").getContext("2d");
 
   constructor(viewer: Cesium.Viewer, onError?: (themeId: GlobeThemeId, message: string) => void) {
     this.viewer = viewer;
     this.onError = onError;
+    this.removeLabelLayout = viewer.scene.preRender.addEventListener(() => this.layoutLabels());
+  }
+
+  private layoutLabels(): void {
+    const labels = [...this.handles.values()].flatMap(handle => handle.labels || []);
+    if (!labels.length || !this.measure) return;
+    const scene = this.viewer.scene, time = this.viewer.clock.currentTime;
+    const boxes: LabelBox[] = [];
+    const occluder = new Cesium.Occluder(new Cesium.BoundingSphere(Cesium.Cartesian3.ZERO, scene.globe.ellipsoid.minimumRadius), scene.camera.positionWC);
+    for (const entity of labels) {
+      const position = entity.position?.getValue(time);
+      if (!position || !occluder.isPointVisible(position)) continue;
+      const point = Cesium.SceneTransforms.worldToWindowCoordinates(scene, position);
+      if (!point) continue;
+      const label = entity.label!;
+      this.measure.font = label.font?.getValue(time) || LABEL_FONT;
+      const width = this.measure.measureText(label.text?.getValue(time) || "").width + 18;
+      boxes.push({id:entity.id, left:point.x-width/2, top:point.y-39, width, height:31});
+    }
+    const visible = selectVisibleLabels(boxes, scene.canvas.clientWidth, scene.canvas.clientHeight);
+    for (const entity of labels) {
+      const show = visible.has(entity.id);
+      if (entity.label!.show?.getValue(time) !== show) entity.label!.show = new Cesium.ConstantProperty(show);
+    }
   }
 
   syncThemes(ids: string[]): void {
@@ -671,6 +665,7 @@ export class GlobeThemeManager {
 
   destroy(): void {
     this.destroyed = true;
+    this.removeLabelLayout();
     this.wanted.clear();
     for (const handle of this.handles.values()) {
       this.disposeHandle(handle);

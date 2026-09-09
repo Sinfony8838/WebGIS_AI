@@ -33,6 +33,7 @@ export function UserMenu({
         <button
           type="button"
           className="user-menu-trigger"
+          aria-label={`账号菜单：${user.nickname || user.email} ${user.role === "admin" ? "管理员" : "教师"}`}
           aria-haspopup="menu"
           aria-expanded={open}
           onClick={() => setOpen((value) => !value)}

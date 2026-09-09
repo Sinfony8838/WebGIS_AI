@@ -1,3 +1,13 @@
+import Polygon from "ol/geom/Polygon";
+import MultiPolygon from "ol/geom/MultiPolygon";
+import { UrbanStudyPanel, type UrbanSource, type UrbanStatus } from "./components/UrbanStudyPanel";
+import { shanghaiAgeColor, shanghaiDensityColor, densityColor, densityRadius, rankColor } from "./lib/populationVisual";
+import { MapEvidenceLegend } from "./components/MapEvidenceLegend";
+import { JobActivity } from "./lib/jobActivity";
+import { forgetPendingJob, rememberPendingJob, type PendingJob } from "./lib/pendingJobs";
+import { usePendingJobs } from "./hooks/usePendingJobs";
+import { subscribeJob, type JobSubscription } from "./lib/jobSubscription";
+import { MapToolsDock } from "./components/MapToolsDock";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "ol/ol.css";
 import Feature from "ol/Feature";
@@ -21,7 +31,9 @@ import { getDistance, getLength } from "ol/sphere";
 import { Circle as CircleStyle, Fill, RegularShape, Stroke, Style, Text } from "ol/style";
 import { easeOut } from "ol/easing";
 import { getCenter } from "ol/extent";
-import { resolveCanvasDrawSize } from "./mapScreenshot";
+import { captureMapSnapshot } from "./mapScreenshot";
+import { observePlaneView } from "./lib/planeViewState";
+import { collectLegendRows, composeSnapshotDocument, mergeSnapshotInk, plainAttribution, type SnapshotDocument } from "./lib/snapshotDocument";
 import {
   addCatalogDatasetLayer,
   activateLessonResourceSet,
@@ -31,7 +43,7 @@ import {
   createProject,
   exportSnapshot,
   fetchDatasetCatalog,
-  fetchCurrentUser,
+  fetchJob,
   fetchLessonResources,
   fetchHealth,
   fetchKbManifest,
@@ -91,7 +103,7 @@ import { VisualMapPanel } from "./components/VisualMapPanel";
 import { WorkflowDock } from "./components/WorkflowDock";
 import { UserMenu } from "./components/UserMenu";
 import { PptViewer } from "./components/PptViewer";
-import { BrushOverlay, type BrushOverlayHandle, type BrushSettings } from "./components/BrushOverlay";
+import { type BrushOverlayHandle, type BrushSettings } from "./components/BrushOverlay";
 import { BrushToolbar } from "./components/BrushToolbar";
 import {
   DOUBLE_CLICK_LANDING_ALTITUDE,
@@ -101,6 +113,8 @@ import {
 } from "./lib/altitudeZoom";
 import { parsePptxFile, releaseSlideObjectUrls } from "./lib/pptxRenderer";
 import { decideLessonGlobeScene } from "./lib/lessonGlobeScene";
+import { MapBrushOverlay } from "./components/MapBrushOverlay";
+import type { MapInkProjection } from "./lib/mapInk";
 import type { ViewMode } from "./lib/viewMode";
 import type {
   AssistantInputMode,
@@ -111,6 +125,7 @@ import type {
   ArtifactRecord,
   AuthUser,
   ChatMessage,
+  CitationRecord,
   DatasetCatalogItem,
   DatasetStatsResponse,
   ExecutedAction,
@@ -234,72 +249,6 @@ function currentExtentFromMap(map: Map): [number, number, number, number] {
   return transformExtent(extent, "EPSG:3857", "EPSG:4326") as [number, number, number, number];
 }
 
-export function captureMapSnapshot(map: Map): Promise<string> {
-  return new Promise((resolve) => {
-    map.once("rendercomplete", () => {
-      const size = map.getSize();
-      if (!size) {
-        resolve("");
-        return;
-      }
-      const canvas = document.createElement("canvas");
-      canvas.width = size[0];
-      canvas.height = size[1];
-      const context = canvas.getContext("2d");
-      if (!context) {
-        resolve("");
-        return;
-      }
-
-      const canvases = Array.from(map.getViewport().querySelectorAll<HTMLCanvasElement>(".ol-layer canvas, canvas.ol-layer"));
-      canvases.forEach((sourceCanvas) => {
-        if (!sourceCanvas.width || !sourceCanvas.height) {
-          return;
-        }
-        const parent = sourceCanvas.parentElement as HTMLElement | null;
-        const opacity = Number(parent?.style.opacity || "1");
-        context.globalAlpha = Number.isFinite(opacity) ? opacity : 1;
-        const transform = sourceCanvas.style.transform;
-        let transformValues: number[] | null = null;
-        if (transform) {
-          const values = transform
-            .replace("matrix(", "")
-            .replace(")", "")
-            .split(",")
-            .map((value) => Number(value.trim()));
-          if (values.length === 6) {
-            transformValues = values;
-            context.setTransform(values[0], values[1], values[2], values[3], values[4], values[5]);
-          } else {
-            context.setTransform(1, 0, 0, 1, 0, 0);
-          }
-        } else {
-          context.setTransform(1, 0, 0, 1, 0, 0);
-        }
-        const drawSize = resolveCanvasDrawSize(sourceCanvas, transformValues);
-        context.drawImage(
-          sourceCanvas,
-          0,
-          0,
-          sourceCanvas.width,
-          sourceCanvas.height,
-          0,
-          0,
-          drawSize.width,
-          drawSize.height
-        );
-      });
-
-      context.setTransform(1, 0, 0, 1, 0, 0);
-      try {
-        resolve(canvas.toDataURL("image/png"));
-      } catch {
-        resolve("");
-      }
-    });
-    map.renderSync();
-  });
-}
 
 function cropSnapshot(dataUrl: string, selection: ScreenshotSelection): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -415,16 +364,36 @@ function emptyKnowledgeItem(): KnowledgeBaseItem {
   };
 }
 
-function layerStyle(record: LayerRecord) {
+function layerStyle(record: LayerRecord, showFit = false) {
+  const visualization = record.metadata?.visualization as { items?: unknown[] } | undefined;
+  const rankCount = (Array.isArray(visualization?.items) ? visualization.items.length : 0)
+    || (Array.isArray(record.data.features) ? record.data.features.length : 0) || 20;
   return (feature: { getGeometry: () => { getType: () => string } | undefined; get: (key: string) => unknown }) => {
     const geometryType = feature.getGeometry()?.getType() || record.geometry_type;
-    const fillColor = String(record.style.fillColor || feature.get("__fillColor") || "#47a3ff");
-    const fillOpacity = Number(record.style.fillOpacity || feature.get("__fillOpacity") || 0.22);
-    const strokeColor = String(record.style.strokeColor || feature.get("__strokeColor") || "#e7edf5");
-    const strokeWidth = Number(record.style.strokeWidth || feature.get("__strokeWidth") || 2);
-    const radius = Number(record.style.radius || feature.get("__radius") || 7);
+    if (record.layer_id === "generated_hu_line" && feature.get("line_type") === "dynamic" && !showFit) return undefined;
+    const densityTemplate = ["builtin_population_regions", "builtin_population_density"].includes(record.layer_id);
+    const ranked = Boolean(record.metadata?.visualization) && Number(feature.get("rank")) > 0;
+    let fillColor = String(record.style.fillColor || feature.get("__fillColor") || "#47a3ff");
+    let fillOpacity = Number(record.style.fillOpacity || feature.get("__fillOpacity") || 0.22);
+    let strokeColor = String(record.style.strokeColor || feature.get("__strokeColor") || "#e7edf5");
+    let strokeWidth = Number(record.style.strokeWidth || feature.get("__strokeWidth") || 2);
+    let radius = Number(record.style.radius || feature.get("__radius") || 7);
+    if (densityTemplate) {
+      fillColor = densityColor(feature.get("density")); fillOpacity = .88; strokeColor = "#ffffff"; strokeWidth = .9;
+      radius = densityRadius(feature.get("density"));
+    }
+    if (record.metadata?.catalog_id === "shanghai_population_density") {
+      fillColor = shanghaiDensityColor(feature.get("density"));
+      fillOpacity = 0.98; strokeColor = "#4b7776"; strokeWidth = 0.9;
+    }
+    if (record.metadata?.catalog_id === "shanghai_age_60_plus_2020") {
+      fillColor = shanghaiAgeColor(feature.get("age_60_plus_pct"));
+      fillOpacity = 0.98; strokeColor = "#ffffff"; strokeWidth = 1;
+    }
+    if (ranked) { fillColor = rankColor(Number(feature.get("rank")), rankCount); fillOpacity = .94; strokeColor = "#ffffff"; strokeWidth = 1.4; }
+    if (record.layer_id === "generated_hu_line") { strokeColor = feature.get("line_type") === "dynamic" ? "#d88a26" : "#07575f"; strokeWidth = feature.get("line_type") === "dynamic" ? 2 : 3; }
     const labelField = String(record.style.labelField || "name");
-    const labelValue = String(feature.get(labelField) || feature.get("name") || "");
+    const labelValue = feature.get("__hideLabel") === true ? "" : String(feature.get(labelField) || feature.get("name") || "");
     const catalogId = String(record.metadata?.catalog_id || "");
     const coverage = String(record.metadata?.coverage || "").toLowerCase();
     const templateId = String(record.metadata?.template_id || "");
@@ -444,23 +413,25 @@ function layerStyle(record: LayerRecord) {
       stroke: new Stroke({
         color: strokeColor,
         width: strokeWidth,
-        lineDash: (feature.get("__lineDash") as number[] | undefined) || undefined
+        lineDash: record.layer_id === "generated_hu_line" ? feature.get("line_type") === "dynamic" ? [7, 5] : undefined : (feature.get("__lineDash") as number[] | undefined) || undefined
       }),
       image: geometryType.includes("Point")
         ? new CircleStyle({
+            declutterMode: densityTemplate ? "none" : undefined,
             radius,
             fill: new Fill({ color: withOpacity(fillColor, Math.min(fillOpacity + 0.36, 0.9)) }),
             stroke: new Stroke({ color: strokeColor, width: 1.2 })
           })
         : undefined,
-      text: labelValue && !provinceLevelLayer
+      text: labelValue && (!provinceLevelLayer || geometryType.includes("Point"))
         ? new Text({
             text: labelValue,
-            font: "600 11px 'Microsoft YaHei UI', 'Segoe UI', sans-serif",
-            fill: new Fill({ color: "#f7fafc" }),
-            backgroundFill: new Fill({ color: "rgba(18, 25, 35, 0.68)" }),
+            font: "500 12px 'Microsoft YaHei UI', 'Segoe UI', sans-serif",
+            fill: new Fill({ color: "#18343f" }),
+            stroke: new Stroke({ color: "#ffffff", width: 3 }),
+            backgroundFill: new Fill({ color: "rgba(255,255,255,.9)" }),
             padding: [3, 4, 3, 4],
-            offsetY: geometryType.includes("Point") ? -16 : 0
+            offsetY: geometryType.includes("Point") ? -(radius + 12) : 0
           })
         : undefined
     });
@@ -506,11 +477,17 @@ export default function App({
   // 同步一份 phase 到 state：助教面板头部的阶段徽标与能力芯片排序需要触发渲染。
   const [teachingPhase, setTeachingPhase] = useState<TeachingContext["phase"]>("");
   const [copilotOpenSignal, setCopilotOpenSignal] = useState(0);
-  const activeJobStreamsRef = useRef(0);
-  const jobStreamsRef = useRef<Set<EventSource>>(new Set());
+  const jobStreamsRef = useRef(new JobActivity<JobSubscription>());
+  const subscribedJobIdsRef = useRef(new Set<string>());
+  const jobScopeEpochRef = useRef(0);
   const assistantSubmittingRef = useRef(false);
   const resourceSearchRequestRef = useRef(0);
   const pendingEvidenceSnapshotRef = useRef<{ sessionId: string; stageId: string } | null>(null);
+  const screenshotDocumentRef = useRef<{ projectId: string; document: SnapshotDocument; evidence: {sessionId:string;stageId:string} | null } | null>(null);
+  const screenshotCaptureBusyRef = useRef(false);
+  const screenshotSavingRef = useRef(false);
+  const [screenshotSaving, setScreenshotSaving] = useState(false);
+
 
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [project, setProject] = useState<(ProjectRecord & { status: string }) | null>(null);
@@ -573,11 +550,15 @@ export default function App({
   // Boot into the 3D globe view; users land on the digital earth first
   // and can drill in to the 2D map either by zooming, double-clicking, or
   // toggling the header button.
+  const [urbanActive, setUrbanActive] = useState(false);
+  const [urbanSource, setUrbanSource] = useState<UrbanSource|null>(null);
+  const [urbanStatus, setUrbanStatus] = useState<UrbanStatus>("idle");
   const [viewMode, setViewMode] = useState<ViewMode>("globe");
   const [showGraticule, setShowGraticule] = useState(false);
   const [globeCamera, setGlobeCamera] = useState<CameraState | null>(null);
   // Active 3D thematic teaching layers (population columns, Hu line, …).
   const [globeThemeIds, setGlobeThemeIds] = useState<string[]>([]);
+  const [showTeachingFit, setShowTeachingFit] = useState(false);
   // Mirror of the OpenLayers view center/zoom so the bottom status bar
   // stays live while the user pans / zooms the 2D map.
   const [planeViewState, setPlaneViewState] = useState<{
@@ -586,6 +567,28 @@ export default function App({
     zoom: number;
   } | null>(null);
   const globeRef = useRef<Map3DGlobeHandle | null>(null);
+  const mapInkProjection = useMemo<MapInkProjection>(() => ({
+    toWorld: (client) => {
+      if (viewMode === "globe") return globeRef.current?.inkToWorld(client) || null;
+      const map=mapRef.current; if(!map) return null;
+      const rect=map.getViewport().getBoundingClientRect(), size=map.getSize();
+      if(!size || !rect.width || !rect.height) return null;
+      const coordinate=map.getCoordinateFromPixel([(client[0]-rect.left)*size[0]/rect.width,(client[1]-rect.top)*size[1]/rect.height]);
+      return coordinate ? toLonLat(coordinate) as [number,number] : null;
+    },
+    toClient: (world) => {
+      if (viewMode === "globe") return globeRef.current?.inkToClient(world) || null;
+      const map=mapRef.current; if(!map) return null;
+      const rect=map.getViewport().getBoundingClientRect(), size=map.getSize();
+      const pixel=map.getPixelFromCoordinate(fromLonLat(world));
+      return pixel && size && size[0] && size[1] ? [rect.left+pixel[0]*rect.width/size[0],rect.top+pixel[1]*rect.height/size[1]] : null;
+    },
+    subscribe: (render) => {
+      if(viewMode === "globe") return globeRef.current?.subscribeInkRender(render);
+      const map=mapRef.current; if(!map) return undefined;
+      map.on("postrender",render); return () => { map.un("postrender",render); };
+    }
+  }), [viewMode]);
   const planeAutoArmedRef = useRef(true);
   // Timestamp until which plane→globe auto transitions are suppressed. Set
   // before programmatic view changes (layer-load fit, teaching-map fly) so a
@@ -609,6 +612,7 @@ export default function App({
   const [databaseCategory, setDatabaseCategory] = useState<DatabaseCategory>("all");
   const [layerManagerOpen, setLayerManagerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [mapBusy, setMapBusy] = useState(false);
   const [workflowDockOpen, setWorkflowDockOpen] = useState<boolean>(false);
   const [searchCardOpen, setSearchCardOpen] = useState(false);
   const [statsCardOpen, setStatsCardOpen] = useState(false);
@@ -779,7 +783,8 @@ export default function App({
       actionsExecuted?: ExecutedAction[] | null,
       imageAttachment?: ImageAttachment | null,
       planner?: string | null,
-      targetTab?: AssistantTab
+      targetTab?: AssistantTab,
+      citations?: CitationRecord[]
     ) => {
       if (!text.trim() && !imageAttachment) {
         return;
@@ -792,7 +797,8 @@ export default function App({
         intent: intent ?? undefined,
         actions_executed: actionsExecuted ?? undefined,
         image_attachment: imageAttachment ?? undefined,
-        planner: planner ?? undefined
+        planner: planner ?? undefined,
+        citations: citations?.map((item) => ({ ...item }))
       };
       if (targetTab === "interaction") {
         setInteractionChatLog((previous) => [...previous, message]);
@@ -1264,13 +1270,11 @@ export default function App({
       [focusedRegion, focusedRegionMaterials, layerState, project, searchAreaGeometry, selectedFeatureText]
     );
 
-  const closeJobStream = useCallback((source: EventSource): boolean => {
+  const closeJobStream = useCallback((source: JobSubscription): boolean => {
     const wasTracked = jobStreamsRef.current.delete(source);
     source.close();
-    if (wasTracked) {
-      activeJobStreamsRef.current = Math.max(0, activeJobStreamsRef.current - 1);
-    }
-    setBusy(activeJobStreamsRef.current > 0);
+    setBusy(jobStreamsRef.current.busy);
+    setMapBusy(jobStreamsRef.current.mapBusy);
     return wasTracked;
   }, []);
 
@@ -1324,91 +1328,114 @@ export default function App({
   );
 
   const subscribeToJob = useCallback(
-    (jobId: string) => {
-      const source = new EventSource(`${getApiBase()}/jobs/${jobId}/stream`, {
-        withCredentials: true
-      });
-      jobStreamsRef.current.add(source);
-      activeJobStreamsRef.current += 1;
-      setBusy(true);
-      source.addEventListener("job", async (event) => {
-        let payload: JobRecord;
-        try {
-          payload = JSON.parse((event as MessageEvent).data) as JobRecord;
-        } catch {
-          if (closeJobStream(source)) {
-            pushToast("error", "任务流异常", "任务流返回了无法解析的数据。");
-          }
-          return;
-        }
-        setCurrentJob(payload);
-        if (payload.status === "completed" || payload.status === "failed") {
-          if (!closeJobStream(source)) {
-            return;
-          }
-          const uiOnly = Boolean(payload.result?.actions_executed?.length) && payload.result!.actions_executed!.every(
-            (entry) => ["switch_view_mode", "open_panel"].includes(entry.action.tool_name)
-          );
-          if (!uiOnly) {
-            try {
-              await refreshProjectState(payload.project_id);
-            } catch (error) {
-              pushToast("error", "地图状态刷新失败", error instanceof Error ? error.message : "请重试刷新地图。");
+    (jobId: string, readOnly = false, recovered?: PendingJob) => {
+      if (!project || subscribedJobIdsRef.current.has(jobId)) return;
+      const projectId = project.project_id;
+      const userId = currentUser.user_id;
+      const scopeEpoch = jobScopeEpochRef.current;
+      const submittedTab = recovered?.tab || lastSubmittedTabRef.current;
+      // A recovered voice result must not start speaking during a new lesson.
+      const submittedInputMode = recovered ? "text" : lastInputModeRef.current;
+      subscribedJobIdsRef.current.add(jobId);
+      rememberPendingJob(userId, projectId, { jobId, tab: submittedTab });
+      const source = subscribeJob(jobId, {
+        createSource: () => new EventSource(`${getApiBase()}/jobs/${jobId}/stream`, { withCredentials: true }),
+        fetchJob,
+        projectId,
+        reconcileImmediately: Boolean(recovered),
+        onUnavailable: () => {
+          if (!closeJobStream(source)) return;
+          subscribedJobIdsRef.current.delete(jobId);
+          forgetPendingJob(userId, projectId, jobId);
+          if (submittedTab === "interaction") setInteractionBusy(false);
+          pushToast("error", "无法恢复任务", "原任务不存在或当前账号无权访问，请核对课堂项目。系统没有重新提交操作。");
+        },
+        onRecovering: () => pushToast("info", "正在恢复任务结果", "连接中断，正在按原任务编号续查。无需重复提交，任务完成后会显示结果。"),
+        onJob: async (payload) => {
+          if (!jobStreamsRef.current.has(source)) return;
+          setCurrentJob(payload);
+          if (payload.status === "completed" || payload.status === "failed") {
+            if (!closeJobStream(source)) {
+              return;
             }
-          }
-          handleAssistantUiActions(payload);
-          const message = payload.result?.assistant_message || payload.result?.summary || payload.error || "";
-          const nextConversationId = String(payload.result?.conversation_id || "");
-          const submittedTab = lastSubmittedTabRef.current;
-          if (nextConversationId) {
+            subscribedJobIdsRef.current.delete(jobId);
+            const uiOnly = Boolean(payload.result?.actions_executed?.length) && payload.result!.actions_executed!.every(
+              (entry) => ["switch_view_mode", "open_panel"].includes(entry.action.tool_name)
+            );
+            if (!readOnly && !uiOnly) {
+              try {
+                await refreshProjectState(payload.project_id);
+              } catch (error) {
+                pushToast("error", "地图状态刷新失败", error instanceof Error ? error.message : "请重试刷新地图。");
+              }
+            }
+            // Keep the saved ID if navigation interrupted result delivery.
+            if (scopeEpoch !== jobScopeEpochRef.current) return;
+            if (!readOnly) handleAssistantUiActions(payload);
+            const message = payload.result?.assistant_message || payload.result?.summary || payload.error || "";
+            const nextConversationId = String(payload.result?.conversation_id || "");
+            if (nextConversationId) {
+              if (submittedTab === "interaction") {
+                setInteractionConversationId(nextConversationId);
+              } else {
+                setConversationId(nextConversationId);
+              }
+            }
+            appendChat(
+              payload.status === "failed" ? "system" : "assistant",
+              message,
+              payload.result?.teaching_contract,
+              payload.result?.intent,
+              payload.result?.actions_executed,
+              undefined,
+              payload.result?.planner,
+              submittedTab,
+              payload.result?.citations ?? payload.result?.knowledge?.citations ?? []
+            );
+            forgetPendingJob(userId, projectId, jobId);
             if (submittedTab === "interaction") {
-              setInteractionConversationId(nextConversationId);
-            } else {
-              setConversationId(nextConversationId);
+              setInteractionBusy(false);
+              // 语音发起的交互回合：播报结果（可关）。新回合开始时会先 cancel。
+              if (payload.status === "completed" && ttsEnabled && submittedInputMode === "voice" && message) {
+                speak(message);
+              }
             }
-          }
-          appendChat(
-            payload.status === "failed" ? "system" : "assistant",
-            message,
-            payload.result?.teaching_contract,
-            payload.result?.intent,
-            payload.result?.actions_executed,
-            undefined,
-            payload.result?.planner,
-            submittedTab
-          );
-          if (submittedTab === "interaction") {
-            setInteractionBusy(false);
-            // 语音发起的交互回合：播报结果（可关）。新回合开始时会先 cancel。
-            if (payload.status === "completed" && ttsEnabled && lastInputModeRef.current === "voice" && message) {
-              speak(message);
+            const isAssistantAnswer = Boolean(payload.result?.assistant_message || payload.result?.conversation_id);
+            if (payload.status === "failed") {
+              pushToast("error", "任务失败", payload.error || message);
+            } else if (!isAssistantAnswer) {
+              pushToast("success", "任务完成", payload.result?.summary || message);
             }
-          }
-          const isAssistantAnswer = Boolean(payload.result?.assistant_message || payload.result?.conversation_id);
-          if (payload.status === "failed") {
-            pushToast("error", "任务失败", payload.error || message);
-          } else if (!isAssistantAnswer) {
-            pushToast("success", "任务完成", payload.result?.summary || message);
           }
         }
       });
-      source.addEventListener("error", () => {
-        if (closeJobStream(source)) {
-          pushToast("error", "任务流断开", "事件流提前关闭，请重试当前操作。");
-          void fetchCurrentUser().catch(() => undefined);
-        }
-      });
+      jobStreamsRef.current.add(source, readOnly);
+      setBusy(true);
+      setMapBusy(jobStreamsRef.current.mapBusy);
     },
-    [appendChat, closeJobStream, handleAssistantUiActions, pushToast, refreshProjectState, ttsEnabled]
+    [appendChat, closeJobStream, currentUser.user_id, handleAssistantUiActions, project, pushToast, refreshProjectState, ttsEnabled]
   );
 
   useEffect(() => {
+    setBusy(false);
+    setMapBusy(false);
+    setInteractionBusy(false);
     return () => {
-      jobStreamsRef.current.forEach((source) => source.close());
-      jobStreamsRef.current.clear();
-      activeJobStreamsRef.current = 0;
+      jobScopeEpochRef.current += 1;
+      jobStreamsRef.current.closeAll((source) => source.close());
+      subscribedJobIdsRef.current.clear();
     };
-  }, []);
+  }, [currentUser.user_id, project?.project_id]);
+
+  usePendingJobs(currentUser.user_id, project?.project_id || "", (pending) => {
+    // Stored client metadata cannot authorize read-only treatment. Until the
+    // server confirms completion, conservatively keep map writes locked.
+    subscribeToJob(pending.jobId, false, pending);
+    if (pending.tab === "interaction") setInteractionBusy(true);
+    setCopilotOpenSignal((value) => value + 1);
+    pushToast("info", "正在恢复未完成任务", "正在续查原任务结果，无需重复提交。");
+  });
+
 
   const submitAssistantText = useCallback(
     async (
@@ -1423,7 +1450,7 @@ export default function App({
         return false;
       }
       const effectiveMessage = message.trim() || (imageAttachment ? "请识别并分析这张图片中的地理信息。" : "");
-      if (!effectiveMessage || assistantSubmittingRef.current) return false;
+      if (!effectiveMessage || assistantSubmittingRef.current || jobStreamsRef.current.busy) return false;
       assistantSubmittingRef.current = true;
       // 智能交互 Tab 走 interaction 模式（独立会话、直达工具规划）；
       // 教学助手 Tab 保持 teaching 模式与既有行为完全一致。
@@ -1466,7 +1493,7 @@ export default function App({
           const designId = String((response.lesson_design as { design_id?: string }).design_id || "");
           openLessonDesignWorkspace(designId);
         }
-        subscribeToJob(response.job_id);
+        subscribeToJob(response.job_id, response.read_only === true);
         return true;
       } catch (error) {
         pushToast("error", "助教消息发送失败", error instanceof Error ? error.message : "请检查网络后重试，输入内容已保留。");
@@ -1507,38 +1534,60 @@ export default function App({
     [project, subscribeToJob]
   );
 
+  const snapshotViewRef = useRef({projectId: project?.project_id, basemap: layerState?.base_map, mode: viewMode});
+  snapshotViewRef.current = {projectId: project?.project_id, basemap: layerState?.base_map, mode: viewMode};
+
   const handleStartScreenshot = useCallback(async (): Promise<boolean> => {
-    if (!project) {
+    if (!project || screenshotCaptureBusyRef.current || screenshotSavingRef.current || screenshotSource) return false;
+    screenshotCaptureBusyRef.current = true;
+    const capturedProjectId = project.project_id;
+    const evidence = pendingEvidenceSnapshotRef.current ? {...pendingEvidenceSnapshotRef.current} : null;
+    const stageId = teachingContextRef.current?.stage_id;
+    const freezeDetails = () => {
+      const latest = snapshotViewRef.current;
+      if (latest.projectId !== capturedProjectId || latest.mode !== viewMode) throw new Error("地图已切换，请重新截图。");
+      if (teachingContextRef.current?.stage_id !== stageId) throw new Error("课堂环节已变化，请重新截图。");
+      brushRef.current?.exportImage();
+      const basemap = latest.basemap;
+      const fallback = viewMode === "globe" && !basemap?.layers.some(layer => layer.kind === "xyz" && layer.usable_in_3d !== false && layer.urls.length);
+      screenshotDocumentRef.current = { projectId: capturedProjectId, evidence, document: {
+        title: document.querySelector(".class-stage-item.active .stage-item-title")?.textContent || "课堂地图",
+        capturedAt: new Date().toLocaleString("zh-CN"),
+        basemap: fallback ? "高德参考底图（三维）" : basemap?.title || "当前底图",
+        attribution: fallback ? "© 高德地图" : [...new Set((basemap?.layers || []).map(layer => plainAttribution(layer.attribution || "")).filter(Boolean))].join("；"),
+        rows: collectLegendRows(document.querySelector(".map-legend-content"))
+      }};
+    };
+    try {
+      const rect = viewMode === "globe" ? globeRef.current?.getCanvasRect() || null : mapElementRef.current?.getBoundingClientRect() || null;
+      if (!rect || rect.width < 24 || rect.height < 24) throw new Error("当前地图区域尺寸无效。");
+      let imageDataUrl = "";
+      if (viewMode === "globe") {
+        imageDataUrl = globeRef.current?.captureImage() || "";
+        freezeDetails();
+        if (imageDataUrl) imageDataUrl = await mergeSnapshotInk(imageDataUrl, rect, document.querySelector<HTMLCanvasElement>('[data-testid="map-brush-overlay"]'));
+      } else if (mapRef.current) imageDataUrl = await captureMapSnapshot(mapRef.current, freezeDetails);
+      if (!imageDataUrl) throw new Error("当前地图画面尚未加载完成或无法读取，请稍后重试。");
+      setScreenshotSource(imageDataUrl);
+      setScreenshotBounds({left:rect.left,top:rect.top,width:rect.width,height:rect.height});
+      return true;
+    } catch (error) {
+      screenshotDocumentRef.current = null;
+      pushToast("error", "截图失败", error instanceof Error ? error.message : "当前地图无法读取。");
       return false;
-    }
-    const imageDataUrl = viewMode === "globe" ? globeRef.current?.captureImage() || "" : mapRef.current ? await captureMapSnapshot(mapRef.current) : "";
-    const rect = viewMode === "globe"
-      ? globeRef.current?.getCanvasRect() || null
-      : mapElementRef.current
-        ? (() => {
-            const value = mapElementRef.current!.getBoundingClientRect();
-            return { left: value.left, top: value.top, width: value.width, height: value.height };
-          })()
-        : null;
-    if (!imageDataUrl) {
-      pushToast("error", "截图失败", "当前地图画面暂时无法读取，请稍后重试。");
-      return false;
-    }
-    if (!rect || rect.width < 24 || rect.height < 24) {
-      pushToast("error", "截图失败", "当前地图区域尺寸无效。");
-      return false;
-    }
-    setScreenshotSource(imageDataUrl);
-    setScreenshotBounds(rect);
-    return true;
-  }, [project, pushToast, viewMode]);
+    } finally { screenshotCaptureBusyRef.current = false; }
+  }, [project, pushToast, viewMode, layerState?.base_map, screenshotSource]);
 
   const handleCompleteScreenshot = useCallback(async (selection: ScreenshotSelection) => {
-    if (!project || !screenshotSource) return;
+    const frozen = screenshotDocumentRef.current;
+    if (!project || !screenshotSource || !frozen || screenshotSavingRef.current) return;
+    screenshotSavingRef.current = true; setScreenshotSaving(true);
     try {
+      if (project.project_id !== frozen.projectId) throw new Error("项目已切换，请重新截图。");
       const cropped = await cropSnapshot(screenshotSource, selection);
-      const saved = await exportSnapshot(project.project_id, `地图截图 ${new Date().toLocaleString("zh-CN")}`, cropped, "地图区域框选截图");
-      const evidence = pendingEvidenceSnapshotRef.current;
+      const composed = await composeSnapshotDocument(cropped, frozen.document, selection.width);
+      const saved = await exportSnapshot(frozen.projectId, `地图截图 ${frozen.document.capturedAt}`, composed, "地图区域框选截图，附截图时图例、年份、来源与课堂笔迹");
+      const evidence = frozen.evidence;
       let evidenceRecorded = true;
       if (evidence) {
         try {
@@ -1562,6 +1611,8 @@ export default function App({
       pushToast("error", "截图失败", error instanceof Error ? error.message : "截图保存失败。");
     } finally {
       pendingEvidenceSnapshotRef.current = null;
+      screenshotDocumentRef.current = null;
+      screenshotSavingRef.current = false; setScreenshotSaving(false);
       setScreenshotSource("");
       setScreenshotBounds(null);
     }
@@ -1851,7 +1902,7 @@ export default function App({
       );
       try {
         if (visible && !existing) {
-          const response = await addCatalogDatasetLayer(project.project_id, datasetId);
+          const response = await addCatalogDatasetLayer(project.project_id, datasetId, datasetId === "china_precipitation_400mm");
           setViewMode("plane");
           pushToast("success", "专题图层已加载", response.layer.name || datasetId);
         } else if (existing) {
@@ -2208,7 +2259,7 @@ export default function App({
       return candidate.urls[0];
     }
     // Sane fallback when no project / basemap yet
-    return "https://webrd0{s}.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}";
+    return "https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={x}&y={y}&z={z}";
   }, [layerState?.base_map]);
 
   const transitionToPlane = useCallback(
@@ -2366,12 +2417,11 @@ export default function App({
         lessonGlobePinnedRef.current = false;
         lessonGlobeRestoreRef.current = null;
         setGlobeThemeIds([]);
-        transitionToPlane({
-          lon: globeCamera?.lon ?? 104,
-          lat: globeCamera?.lat ?? 35,
-          zoom: globeCamera ? altitudeToZoom(globeCamera.altitudeMeters) : 4,
-          reason: "manual"
-        });
+        // The scene refresh supplies its own center/zoom. A delayed camera
+        // transition would overwrite Shanghai with the previous globe center.
+        mapRef.current?.getView().cancelAnimations();
+        lastAppliedViewRef.current = "";
+        setViewMode("plane");
         return;
       }
 
@@ -2439,55 +2489,6 @@ export default function App({
     document.addEventListener("click", close, { once: true });
     return () => document.removeEventListener("click", close);
   }, [searchDropdownOpen]);
-
-  // Auto plane → globe: watch the OL view's resolution and pop back to 3D
-  // when the user zooms far enough out. Also mirror view state into
-  // `planeViewState` so the bottom status bar updates live.
-  useEffect(() => {
-    if (viewMode !== "plane") {
-      return undefined;
-    }
-    const map = mapRef.current;
-    if (!map) {
-      return undefined;
-    }
-    const view = map.getView();
-    const sync = () => {
-      const center = view.getCenter();
-      const zoom = view.getZoom();
-      if (center && typeof zoom === "number") {
-        const ll = toLonLat(center) as [number, number];
-        setPlaneViewState({ lon: ll[0], lat: ll[1], zoom });
-      }
-    };
-    const checkThreshold = () => {
-      if (!planeAutoArmedRef.current) {
-        return;
-      }
-      if (Date.now() < programmaticViewGuardUntilRef.current) {
-        return;
-      }
-      const zoom = view.getZoom();
-      if (typeof zoom === "number" && zoom < PLANE_TO_GLOBE_ZOOM_THRESHOLD) {
-        planeAutoArmedRef.current = false;
-        const center = view.getCenter();
-        const ll = center ? (toLonLat(center) as [number, number]) : [104, 35];
-        transitionToGlobe({ lon: ll[0], lat: ll[1], zoom, reason: "zoom" });
-        window.setTimeout(() => {
-          planeAutoArmedRef.current = true;
-        }, 1500);
-      }
-    };
-    sync();
-    view.on("change:center", sync);
-    view.on("change:resolution", sync);
-    view.on("change:resolution", checkThreshold);
-    return () => {
-      view.un("change:center", sync);
-      view.un("change:resolution", sync);
-      view.un("change:resolution", checkThreshold);
-    };
-  }, [transitionToGlobe, viewMode]);
 
   useEffect(() => {
     interactionModeRef.current = interactionMode;
@@ -2765,6 +2766,7 @@ export default function App({
     measureSourceRef.current = measureSource;
     annotationSourceRef.current = annotationSource;
     mapRef.current = map;
+    const stopTrackingView = observePlaneView(map.getView(), setPlaneViewState);
     map.on("singleclick", handleClick);
 
     return () => {
@@ -2779,6 +2781,7 @@ export default function App({
       window.clearTimeout(delayedResize);
       resizeObserver.disconnect();
       map.un("singleclick", handleClick);
+      stopTrackingView();
       map.setTarget(undefined);
       basemapLayersRef.current = [];
         businessLayerCacheRef.current.clear();
@@ -2791,6 +2794,41 @@ export default function App({
       mapRef.current = null;
     };
   }, []);
+
+  // Auto plane → globe: watch the OL view's resolution and pop back to 3D
+  // when the user zooms far enough out. Status tracking belongs to map creation.
+  useEffect(() => {
+    if (viewMode !== "plane") {
+      return undefined;
+    }
+    const map = mapRef.current;
+    if (!map) {
+      return undefined;
+    }
+    const view = map.getView();
+    const checkThreshold = () => {
+      if (!planeAutoArmedRef.current) {
+        return;
+      }
+      if (Date.now() < programmaticViewGuardUntilRef.current) {
+        return;
+      }
+      const zoom = view.getZoom();
+      if (typeof zoom === "number" && zoom < PLANE_TO_GLOBE_ZOOM_THRESHOLD) {
+        planeAutoArmedRef.current = false;
+        const center = view.getCenter();
+        const ll = center ? (toLonLat(center) as [number, number]) : [104, 35];
+        transitionToGlobe({ lon: ll[0], lat: ll[1], zoom, reason: "zoom" });
+        window.setTimeout(() => {
+          planeAutoArmedRef.current = true;
+        }, 1500);
+      }
+    };
+    view.on("change:resolution", checkThreshold);
+    return () => {
+      view.un("change:resolution", checkThreshold);
+    };
+  }, [transitionToGlobe, viewMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2899,6 +2937,7 @@ export default function App({
         const source = new XYZ({
           ...(descriptor.urls.length > 1 ? { urls: descriptor.urls } : { url: descriptor.urls[0] }),
           attributions: descriptor.attribution || undefined,
+          maxZoom: descriptor.max_zoom ?? 18,
           crossOrigin: descriptor.cross_origin || "anonymous"
         });
         listenerKeys.push(
@@ -2970,6 +3009,14 @@ export default function App({
     const format = new GeoJSON();
     const cache = businessLayerCacheRef.current;
     const seen = new Set<string>();
+    // Province symbols use an interior point of the largest land polygon, not a capital or an offshore centroid.
+    const provinceAnchors = new globalThis.Map<string,number[]>();
+    const regions = layerState.items.find(item=>item.layer_id === "builtin_population_regions");
+    if(regions) format.readFeatures(regions.data,{dataProjection:"EPSG:4326",featureProjection:"EPSG:3857"}).forEach(feature=>{
+      const geometry=feature.getGeometry();
+      const polygon=geometry instanceof MultiPolygon ? geometry.getPolygons().sort((a,b)=>b.getArea()-a.getArea())[0] : geometry instanceof Polygon ? geometry : null;
+      if(polygon) { const coordinate=polygon.getInteriorPoint().getCoordinates().slice(0,2); for(const key of ["name","short_name"]) if(feature.get(key)) provinceAnchors.set(String(feature.get(key)),coordinate); }
+    });
 
     layerState.items.forEach((record) => {
       const isRaster = record.kind === "raster";
@@ -2981,8 +3028,8 @@ export default function App({
       seen.add(record.layer_id);
       const signature = isRaster
         ? `raster|${assetUrl}|${JSON.stringify(bounds)}`
-        : `vector|${record.data_rev ?? 0}`;
-      const styleKey = JSON.stringify(record.style || {});
+        : `vector|${record.data_rev ?? 0}|${record.layer_id === "builtin_population_density" ? regions?.data_rev ?? "none" : ""}`;
+      const styleKey = JSON.stringify([record.style || {}, showTeachingFit]);
 
       let entry = cache.get(record.layer_id);
       if (entry && entry.signature !== signature) {
@@ -3009,6 +3056,10 @@ export default function App({
             dataProjection: "EPSG:4326",
             featureProjection: "EPSG:3857"
           });
+          if(record.layer_id === "builtin_population_density") features.forEach(feature=>{
+            const anchor=provinceAnchors.get(String(feature.get("name")));
+            if(anchor) feature.setGeometry(new Point(anchor));
+          });
           const vectorLayer = new VectorLayer({
             source: new VectorSource({ features }),
             visible: record.visible,
@@ -3016,7 +3067,7 @@ export default function App({
             zIndex: record.z_index,
             // 标注抽稀：重叠的要素标签自动隐藏，省级/世界尺度不再一片叠字。
             declutter: true,
-            style: layerStyle(record)
+            style: layerStyle(record, showTeachingFit)
           });
           vectorLayerByIdRef.current.set(record.layer_id, vectorLayer);
           olLayer = vectorLayer;
@@ -3031,7 +3082,7 @@ export default function App({
       olLayer.setOpacity(record.opacity);
       olLayer.setZIndex(record.z_index);
       if (!isRaster && entry.styleKey !== styleKey) {
-        (olLayer as VectorLayer<any>).setStyle(layerStyle(record));
+        (olLayer as VectorLayer<any>).setStyle(layerStyle(record, showTeachingFit));
         entry.styleKey = styleKey;
       }
     });
@@ -3061,7 +3112,7 @@ export default function App({
       map.updateSize();
       map.renderSync();
     });
-  }, [layerState]);
+  }, [layerState, showTeachingFit]);
 
   useEffect(() => {
     if (!mapRef.current || !searchAreaSourceRef.current) {
@@ -3367,7 +3418,9 @@ export default function App({
           pushToast("error", "三维专题图层加载失败", `${themeId}: ${message}`);
         }}
         onCameraChange={setGlobeCamera}
-        onAltitudeThreshold={handleGlobeAltitudeThreshold}
+        onAltitudeThreshold={urbanActive ? undefined : handleGlobeAltitudeThreshold}
+        urbanSource={urbanActive ? urbanSource : null}
+        onUrbanStatus={setUrbanStatus}
         onDoubleClickGlobe={handleGlobeDoubleClick}
         onUserInteraction={() => {
           if (lessonGlobePinnedRef.current) {
@@ -3382,7 +3435,16 @@ export default function App({
           setViewMode("plane");
         }}
       />
-      <BrushOverlay
+      {viewMode === "globe" && layerState?.base_map.layers.length && !layerState.base_map.layers.some(layer => layer.kind === "xyz" && layer.usable_in_3d !== false && layer.urls.length) ? (
+        <div className="map-basemap-notice" role="status">
+          当前底图仅支持二维，三维显示高德参考底图。
+          <button type="button" onClick={() => handleViewModeToggle("plane")}>返回 2D 查看专题图</button>
+        </div>
+      ) : null}
+      <MapEvidenceLegend basemapId={activeBasemapId} layers={layerState?.items || []} globe={viewMode === "globe"} themeIds={globeThemeIds} showFit={showTeachingFit} onShowFit={setShowTeachingFit} busy={mapBusy} onTogglePrecipitation={value => handleToggleTextbookMap("china_precipitation_400mm", value)} />
+      <MapBrushOverlay
+        projection={mapInkProjection}
+        scope={project?.project_id || ""}
         ref={brushRef}
         active={interactionMode === "brush"}
         settings={brushSettings}
@@ -3446,6 +3508,78 @@ export default function App({
           </div>
         </div>
 
+        <div className="header-actions">
+          <BasemapMenu
+            items={basemapItems}
+            activeId={activeBasemapId}
+            disabled={!project}
+            onSelect={async (basemapId) => {
+              if (!project) {
+                return;
+              }
+              await switchBasemap(project.project_id, basemapId);
+              await refreshProjectState(project.project_id);
+              const title = basemapItems.find((item) => item.id === basemapId)?.title || "底图";
+              pushToast("success", "底图已切换", `当前底图：${title}`);
+            }}
+          />
+          <button
+            type="button"
+            className={`toolbar-button ${workflowDockOpen ? "active" : ""}`}
+            onClick={() => setWorkflowDockOpen((value) => !value)}
+            data-testid="toolbar-workflow-toggle"
+          >
+            GIS 分析工作流
+          </button>
+          <button
+            type="button"
+            className={`toolbar-button ${databaseViewerOpen ? "active" : ""}`}
+            onClick={() => setDatabaseViewerOpen(true)}
+          >
+            数据库
+          </button>
+          <button
+            type="button"
+            className="toolbar-button"
+            disabled={pptLoading}
+            onClick={() => {
+              const input = document.createElement("input");
+              input.type = "file";
+              input.accept = ".pptx";
+              input.onchange = () => {
+                const file = input.files?.[0];
+                if (file) void handleRenderedPptImport(file);
+              };
+              input.click();
+            }}
+          >
+            {pptLoading ? "解析中…" : "导入 PPT"}
+          </button>
+          <button type="button" className="toolbar-button" onClick={() => void handleStartScreenshot()}>
+            截图
+          </button>
+          {initError ? (
+            <button
+              type="button"
+              className="toolbar-button active"
+              onClick={() => {
+                setProject(null);
+                setLayerState(null);
+                setOutputs([]);
+                setCurrentJob(null);
+                setConversationId("");
+                setSearchResults([]);
+                setSearchSummary("");
+                setKbItems([]);
+                setKbTotal(0);
+                setKbEditingItem(null);
+                setInitAttempt((value) => value + 1);
+              }}
+            >
+              重试连接
+            </button>
+          ) : null}
+        </div>
         <div className="header-search">
           <label className="header-search-label" htmlFor="poi-keyword">POI 检索</label>
           <div className="header-search-row">
@@ -3512,87 +3646,6 @@ export default function App({
           </div>
         </div>
 
-        <div className="header-actions">
-          <BasemapMenu
-            items={basemapItems}
-            activeId={activeBasemapId}
-            disabled={!project}
-            onSelect={async (basemapId) => {
-              if (!project) {
-                return;
-              }
-              await switchBasemap(project.project_id, basemapId);
-              await refreshProjectState(project.project_id);
-              const title = basemapItems.find((item) => item.id === basemapId)?.title || "底图";
-              pushToast("success", "底图已切换", `当前底图：${title}`);
-            }}
-          />
-          <button
-            type="button"
-            className={`toolbar-button ${workflowDockOpen ? "active" : ""}`}
-            onClick={() => setWorkflowDockOpen((value) => !value)}
-            data-testid="toolbar-workflow-toggle"
-          >
-            GIS 分析工作流
-          </button>
-          <button
-            type="button"
-            className={`toolbar-button ${databaseViewerOpen ? "active" : ""}`}
-            onClick={() => setDatabaseViewerOpen(true)}
-          >
-            数据库
-          </button>
-          <button
-            type="button"
-            className="toolbar-button"
-            disabled={pptLoading}
-            onClick={() => {
-              const input = document.createElement("input");
-              input.type = "file";
-              input.accept = ".pptx";
-              input.onchange = () => {
-                const file = input.files?.[0];
-                if (file) void handleRenderedPptImport(file);
-              };
-              input.click();
-            }}
-          >
-            {pptLoading ? "解析中…" : "导入 PPT"}
-          </button>
-          <button type="button" className="toolbar-button" onClick={() => void handleStartScreenshot()}>
-            截图
-          </button>
-          <button
-            type="button"
-            className={`toolbar-button${layerManagerOpen ? " active" : ""}`}
-            onClick={() => setLayerManagerOpen((value) => !value)}
-            data-testid="layer-manager-toggle"
-            title="查看、显隐、定位、删除或添加业务图层（重置视角请使用左侧地图工具）"
-          >
-            图层管理
-          </button>
-          {initError ? (
-            <button
-              type="button"
-              className="toolbar-button active"
-              onClick={() => {
-                setProject(null);
-                setLayerState(null);
-                setOutputs([]);
-                setCurrentJob(null);
-                setConversationId("");
-                setSearchResults([]);
-                setSearchSummary("");
-                setKbItems([]);
-                setKbTotal(0);
-                setKbEditingItem(null);
-                setInitAttempt((value) => value + 1);
-              }}
-            >
-              重试连接
-            </button>
-          ) : null}
-        </div>
       </header>
 
       <main className="workspace-shell">
@@ -3611,14 +3664,16 @@ export default function App({
 
         <section className="map-workspace" aria-hidden="true" />
 
-        <aside className="right-rail">
+        <MapToolsDock>
           <MapToolRail
+            layersOpen={layerManagerOpen}
+            onToggleLayers={() => setLayerManagerOpen((value) => !value)}
             mode={interactionMode}
             viewMode={viewMode}
             hasSearchArea={Boolean(searchAreaGeometry)}
             hasMeasurements={measurementCount > 0}
             hasAnnotations={annotationCount > 0}
-            busy={busy}
+            busy={mapBusy}
             showGraticule={showGraticule}
             onChangeMode={setInteractionMode}
             onChangeViewMode={handleViewModeToggle}
@@ -3634,7 +3689,7 @@ export default function App({
               if (viewMode === "globe") {
                 const cam = globeCamera;
                 if (cam) {
-                  globeRef.current?.flyTo(cam.lon, cam.lat, Math.max(cam.altitudeMeters * 0.55, 300_000), 0.5);
+                  globeRef.current?.flyTo(cam.lon, cam.lat, Math.max(cam.altitudeMeters * 0.55, urbanActive ? 100 : 300_000), 0.5);
                 }
                 return;
               }
@@ -3667,6 +3722,7 @@ export default function App({
             onChangeThemes={(ids) => {
               lessonGlobePinnedRef.current = false;
               lessonGlobeRestoreRef.current = null;
+              setUrbanActive(false);
               setGlobeThemeIds(ids);
               // 开启 3D 主题时经统一过渡切到地球（带相机同步），而非硬切。
               if (ids.length && viewMode === "plane") {
@@ -3677,18 +3733,15 @@ export default function App({
               lessonGlobePinnedRef.current = false;
               lessonGlobeRestoreRef.current = null;
               setViewMode("globe");
+              setUrbanActive(false);
               setGlobeThemeIds(preset.themes);
-              globeRef.current?.flyTo(
-                preset.camera.lon,
-                preset.camera.lat,
-                preset.camera.altitudeMeters,
-                1.6,
-                preset.camera.pitchDeg
+              globeRef.current?.lookAtLocation(
+                preset.camera.lon, preset.camera.lat, preset.camera.altitudeMeters, preset.camera.pitchDeg
               );
             }}
             textbookItems={textbookMapItems}
             textbookActiveIds={textbookActiveIds}
-            busy={busy}
+            busy={mapBusy}
             catalogError={datasetCatalogError}
             onRetryCatalog={() => {
               setDatasetCatalogError(false);
@@ -3712,7 +3765,11 @@ export default function App({
             }}
           />
 
-        </aside>
+          <UrbanStudyPanel active={urbanActive} source={urbanSource} status={urbanStatus}
+            onVisit={stop => { lessonGlobePinnedRef.current=false; lessonGlobeRestoreRef.current=null; setUrbanActive(true); setViewMode("globe"); setGlobeThemeIds([]); globeRef.current?.lookAtLocation(stop.lon,stop.lat,stop.range); }}
+            onSource={setUrbanSource}
+            onExit={() => {setUrbanActive(false);setUrbanSource(null);globeRef.current?.resetView();}} />
+        </MapToolsDock>
         </main>
 
         <aside
@@ -3826,9 +3883,12 @@ export default function App({
       {screenshotSource && screenshotBounds ? (
         <ScreenshotSelector
           bounds={screenshotBounds}
+          preview={screenshotSource}
+          busy={screenshotSaving}
           onComplete={(selection) => void handleCompleteScreenshot(selection)}
           onCancel={() => {
             pendingEvidenceSnapshotRef.current = null;
+            screenshotDocumentRef.current = null;
             setScreenshotSource("");
             setScreenshotBounds(null);
           }}
@@ -3838,10 +3898,11 @@ export default function App({
         <LessonWorkflowShell
           project={project}
           assistantJob={currentJob}
+          assistantBusy={busy}
           layerState={layerState}
-          busy={busy}
+          busy={mapBusy}
           openSignal={lessonWorkflowOpenSignal}
-          onOpenDesignWorkspace={() => openLessonDesignWorkspace()}
+          onOpenDesignWorkspace={openLessonDesignWorkspace}
           rehearsalSignal={rehearsalTarget.signal}
           rehearsalLessonId={rehearsalTarget.lessonId}
           onRefresh={() => (project ? refreshProjectState(project.project_id) : undefined)}
@@ -3893,7 +3954,7 @@ export default function App({
           materials={materialViewerItems}
           onClose={() => setMaterialViewerOpen(false)}
         />
-        <UploadDialog open={uploadOpen} busy={busy} onClose={() => setUploadOpen(false)} onSubmit={handleUploadDataset} />
+        <UploadDialog open={uploadOpen} busy={mapBusy} onClose={() => setUploadOpen(false)} onSubmit={handleUploadDataset} />
         <WorkflowDock
           projectId={project?.project_id || ""}
           assistantJob={currentJob}
@@ -3908,7 +3969,7 @@ export default function App({
           open={layerManagerOpen}
           onClose={() => setLayerManagerOpen(false)}
           layers={layerState?.items || []}
-          busy={busy}
+          busy={mapBusy}
           onToggleLayer={(layerId, visible) => void handleLayerManagerToggle(layerId, visible)}
           onFocusLayer={(layerId) => void handleLayerManagerFocus(layerId)}
           onDeleteLayer={(layerId) => void handleLayerManagerDelete(layerId)}

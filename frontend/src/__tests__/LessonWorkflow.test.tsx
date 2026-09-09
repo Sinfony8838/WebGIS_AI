@@ -255,10 +255,27 @@ describe("ClassRunPanel", () => {
     return props;
   }
 
+  it("allows map presentation and stage changes during an answer but prevents another brainstorm", async () => {
+    const onPresentScene = vi.fn().mockResolvedValue(undefined);
+    const props = renderPanel({ assistantBusy: true, onAssistantPrompt: vi.fn(), onPresentScene });
+    expect(screen.getByTestId("run-brainstorm")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "地图展示" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "地图展示" }));
+    await waitFor(() => expect(onPresentScene).toHaveBeenCalledWith("stage"));
+    fireEvent.click(screen.getByTestId("stage-chip-s2"));
+    expect(props.onEnterStage).toHaveBeenCalledWith("s2");
+    expect(props.onAssistantPrompt).not.toHaveBeenCalled();
+  });
+
   it("switches stage via the vertical stage list", () => {
     const props = renderPanel();
     fireEvent.click(screen.getByTestId("stage-chip-s2"));
     expect(props.onEnterStage).toHaveBeenCalledWith("s2");
+  });
+
+  it("does not mark skipped stages as completed", () => {
+    renderPanel({ currentStageId: "s2" });
+    expect(screen.getByTestId("stage-chip-s1").className).not.toContain("done");
   });
 
   it("presents choice questions orally without exposing teacher answers", () => {
@@ -343,20 +360,46 @@ describe("ClassRunPanel", () => {
     expect(screen.queryByText("先找图例、年份和空间差异。")).toBeNull();
   });
 
-  it("opens student-facing textbook knowledge in a movable enlarged overlay", () => {
-    renderPanel();
-    expect(screen.queryByText("先看地图")).toBeNull();
-    fireEvent.click(within(screen.getByTestId("basic-knowledge-launcher")).getByText("放大展示"));
-    const overlay = screen.getByTestId("basic-knowledge-overlay");
-    expect(overlay.textContent).toContain("基础知识讲解");
-    expect(overlay.textContent).toContain("先看地图");
-    const header = overlay.querySelector(".basic-knowledge-overlay-header") as HTMLElement;
-    fireEvent.pointerDown(header, { pointerId: 1, clientX: 100, clientY: 100 });
-    fireEvent.pointerMove(header, { pointerId: 1, clientX: 180, clientY: 150 });
-    fireEvent.pointerUp(header, { pointerId: 1, clientX: 180, clientY: 150 });
-    expect(overlay.getAttribute("style")).toContain("left:");
-    fireEvent.click(screen.getByLabelText("关闭基础知识讲解"));
+  it("applies the map without opening a lecture overlay and reports failures", async () => {
+    const onPresentScene = vi.fn().mockRejectedValueOnce(new Error("场景已变化")).mockResolvedValueOnce(undefined);
+    renderPanel({ onPresentScene });
+    fireEvent.click(screen.getByRole("button", { name: "地图展示" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("场景已变化");
     expect(screen.queryByTestId("basic-knowledge-overlay")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "地图展示" }));
+    await waitFor(() => expect(onPresentScene).toHaveBeenCalledTimes(2));
+    expect(screen.queryByTestId("basic-knowledge-overlay")).toBeNull();
+    expect(screen.queryByText("讲解文字")).toBeNull();
+    expect(onPresentScene).toHaveBeenLastCalledWith("stage");
+  });
+
+  it("offers local imagery only in Shanghai verification and keeps projection content clear", async () => {
+    const lesson = makeLesson(); lesson.title = "人口分布：从上海看中国与世界";
+    lesson.stages[0].stage_id = "shanghai_verify";
+    const onPresentScene = vi.fn().mockResolvedValue(undefined);
+    renderPanel({ lesson, currentStageId: "shanghai_verify", onPresentScene });
+    fireEvent.click(screen.getByRole("button", { name: "黄浦局部" }));
+    await waitFor(() => expect(onPresentScene).toHaveBeenLastCalledWith("huangpu_detail"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "崇明局部" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "崇明局部" }));
+    await waitFor(() => expect(onPresentScene).toHaveBeenLastCalledWith("chongming_detail"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "返回全市" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "返回全市" }));
+    await waitFor(() => expect(onPresentScene).toHaveBeenLastCalledWith("stage"));
+    expect(screen.queryByTestId("basic-knowledge-overlay")).toBeNull();
+    cleanup();
+    renderPanel({ lesson, currentStageId: "s2", onPresentScene });
+    expect(screen.queryByRole("group", { name: "上海局部影像对照" })).toBeNull();
+  });
+
+  it("offers the Shanghai extension only after the Shanghai introductory basics", () => {
+    const item = makeLesson(); item.title = "人口分布：从上海看中国与世界";
+    item.stages[0].stage_id = "shanghai_intro";
+    const props = renderPanel({ lesson: item, currentStageId: "shanghai_intro", onPresentScene: vi.fn() });
+    expect(screen.getByRole("button", { name: "进入补充探究" })).toBeInTheDocument();
+    cleanup();
+    renderPanel({ ...props, currentStageId: "s2" });
+    expect(screen.queryByRole("button", { name: "进入补充探究" })).toBeNull();
   });
 
   it("focuses one evidence layer at a time from the stage guide", () => {
@@ -370,7 +413,7 @@ describe("ClassRunPanel", () => {
     });
 
     const steps = screen.getByTestId("evidence-layer-steps");
-    expect(within(steps).getByText("① 气候").className).toContain("active");
+    expect(within(steps).getByText("气候").className).toContain("active");
     fireEvent.click(within(steps).getByTestId("evidence-layer-china_terrain_steps"));
     expect(onFocusEvidenceLayer).toHaveBeenCalledWith("china_terrain_steps", [
       "china_climate_types",
@@ -411,8 +454,55 @@ describe("ClassRunPanel", () => {
     expect(onAssistantPrompt).toHaveBeenCalledOnce();
     expect(onAssistantPrompt.mock.calls[0][0]).toContain("随机抽中的地区是：北京市");
     expect(onAssistantPrompt.mock.calls[0][0]).toContain("只输出“头脑风暴问题”“回答”“回答总结”");
-    expect(onAssistantPrompt.mock.calls[0][1]).toBe("GeoBot 头脑风暴 · 北京市");
+    const [task, materials] = onAssistantPrompt.mock.calls[0][0].split("【课堂参考材料】");
+    expect(task).toContain("【本次探究任务】");
+    expect(task).toContain("随机抽中的地区是：北京市");
+    expect(materials).toContain("本环节讲解材料：");
+    expect(task).not.toContain("本环节讲解材料：");
+    expect(onAssistantPrompt.mock.calls[0][1]).toContain("以北京市为例，");
     randomSpy.mockRestore();
+  });
+
+  it.each([{}, { prompt: "比较", regions: [] }, { prompt: "比较", regions: "上海" }, { prompt: " ", regions: ["黄浦区"] }])("hides incomplete brainstorm configuration %j", (value) => {
+    const lesson = makeLesson();
+    lesson.stages[0].brainstorm = value as unknown as NonNullable<typeof lesson.stages[0]["brainstorm"]>;
+    renderPanel({ lesson, onAssistantPrompt: vi.fn() });
+    expect(screen.queryByTestId("stage-brainstorm")).toBeNull();
+  });
+
+  it("grounds Shanghai inquiry in the current questions and never dispatches a stale activity", () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const lesson = makeLesson();
+    lesson.title = "从上海看中国与世界";
+    const stage = lesson.stages[0];
+    stage.title = "比较黄浦与崇明";
+    stage.script = ["区级平均密度不代表街镇内部差异"];
+    stage.brainstorm = { title: "上海比较", prompt: "比较两区人口密度", regions: ["黄浦区", "崇明区"], button_label: "生成追问" };
+    stage.questions[0].material = "2020年黄浦662030人；面积20.46平方千米。来源：https://tjj.sh.gov.cn/tjnj/2021tjnj/C0202.htm";
+    stage.questions[0].answer = "约32357人/平方千米";
+    const onAssistantPrompt = vi.fn();
+    const props = renderPanel({ lesson, onAssistantPrompt });
+    fireEvent.click(screen.getByTestId("run-brainstorm"));
+    act(() => vi.advanceTimersByTime(1100));
+    const [prompt, display] = onAssistantPrompt.mock.calls[0];
+    expect(display).toBe("以黄浦区为例，比较两区人口密度");
+    expect(prompt).toContain("本环节候选地区：黄浦区、崇明区");
+    expect(prompt).toContain("区级平均密度不代表街镇内部差异");
+    expect(prompt).toContain(stage.questions[0].material);
+    expect(prompt).toContain("32357人/平方千米");
+    expect(prompt).toContain("不是学生回答");
+    expect(prompt).not.toContain("population_distribution");
+    cleanup();
+    const view = render(<ClassRunPanel {...props} />);
+    fireEvent.click(screen.getByTestId("run-brainstorm"));
+    view.rerender(<ClassRunPanel {...props} currentStageId="s2" />);
+    act(() => vi.advanceTimersByTime(1100));
+    expect(onAssistantPrompt).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId("run-brainstorm"));
+    view.rerender(<ClassRunPanel {...props} currentStageId="s2" session={{ ...props.session, session_id: "new_session" }} />);
+    act(() => vi.advanceTimersByTime(1100));
+    expect(onAssistantPrompt).toHaveBeenCalledTimes(1);
   });
 
   it("hides the brainstorm activity when no dispatcher is available", () => {

@@ -836,6 +836,7 @@ class QuestionBankService:
         qtype: str = "",
         exclude_ids: Optional[Sequence[str]] = None,
         limit: int = DEFAULT_RESULT_SIZE,
+        use_llm: bool = True,
     ) -> Dict[str, Any]:
         objectives = [str(item).strip() for item in objectives or [] if str(item).strip()]
         query_text = " ".join(part for part in [topic.strip(), knowledge.strip(), *objectives] if part)
@@ -862,7 +863,8 @@ class QuestionBankService:
             }
 
         pool = candidates[:CANDIDATE_POOL_SIZE]
-        ranked, reasons, generator = self._rerank(query_text, pool, limit)
+        ranked, reasons, generator = (self._rerank(query_text, pool, limit)
+                                      if use_llm else (pool[:limit], {}, "rules"))
         items = []
         for question in ranked:
             item = dict(question)
@@ -1125,9 +1127,16 @@ class QuestionBankService:
             return grouped
         placeholders = ",".join("?" for _ in question_ids)
         rows = connection.execute(
-            f"SELECT * FROM images WHERE question_id IN ({placeholders}) ORDER BY order_idx",
+            f"""SELECT i.*, q.question_id AS target_question_id
+                FROM questions q JOIN images i ON i.bank_id = q.bank_id AND (
+                    i.question_id = q.question_id OR (
+                        (i.question_id IS NULL OR i.question_id = '')
+                        AND i.anchor = 'group' AND i.group_key = q.group_key
+                    )
+                )
+                WHERE q.question_id IN ({placeholders}) ORDER BY i.order_idx, i.image_id""",
             question_ids,
         ).fetchall()
         for row in rows:
-            grouped.setdefault(str(row["question_id"]), []).append(self._image_payload(row))
+            grouped.setdefault(str(row["target_question_id"]), []).append(self._image_payload(row))
         return grouped

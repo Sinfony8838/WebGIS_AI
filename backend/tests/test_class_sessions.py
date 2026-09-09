@@ -156,11 +156,24 @@ class ClassSessionTest(unittest.TestCase):
         self.assertIn("课堂作答数据：未采集", markdown)
         self.assertIn("教师口头呈现", markdown)
         self.assertIn("未采集课堂作答数据", diagnosis["text"])
-        self.assertEqual(len(practice), 3)
-        self.assertEqual(practice[0]["title"], "人口总量与人口密度辨析")
+        self.assertEqual(len(practice), 1)
+        self.assertIn(statistics["questions"][0]["text"], practice[0]["prompt"])
         self.assertIn("没有足够证据判定全班共性误区", practice[0]["evidence_basis"])
         self.assertIn("课后推荐练习巩固", markdown)
-        self.assertIn("不计入40分钟正式课时", markdown)
+        self.assertIn("不计入课堂教学用时", markdown)
+
+    def test_report_homework_uses_opening_snapshot_after_lesson_edit(self) -> None:
+        runtime, store, project_id = self.build_runtime()
+        lesson = store.get_lesson(BUILTIN_LESSON_ID)
+        lesson.plan["homework"] = {"basic": ["开课时的作业：比较上海两区人口密度。"]}
+        session_id = self.start_session(runtime, project_id)["session"]["session_id"]
+        lesson.plan["homework"]["basic"][0] = "课后新改的其他任务。"
+        session = store.get_class_session(session_id)
+        snapshot = runtime.classroom._lesson_for_session(session)
+        stats = runtime.classroom.report_service.build_statistics(session, snapshot)
+        result = runtime.classroom.report_service.build_practice_recommendations(stats, snapshot)
+        self.assertEqual(result[0]["prompt"], "开课时的作业：比较上海两区人口密度。")
+        self.assertNotIn("课后新改", str(result))
 
     def test_teacher_only_report_never_uses_llm_to_infer_student_performance(self) -> None:
         class HallucinatingClient:
@@ -241,7 +254,7 @@ class ClassSessionTest(unittest.TestCase):
         # 无 LLM 环境走规则诊断
         self.assertEqual(job["result"]["diagnosis"]["generator"], "rules")
         self.assertIn("学情诊断", job["result"]["diagnosis"]["text"])
-        self.assertEqual(len(job["result"]["practice_recommendations"]), 3)
+        self.assertEqual(len(job["result"]["practice_recommendations"]), 1)
 
         report_artifacts = [item for item in store.list_outputs(project_id) if item["artifact_type"] == "class_report"]
         self.assertEqual(len(report_artifacts), 1)

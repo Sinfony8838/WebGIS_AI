@@ -17,6 +17,8 @@ from .reports import ReportService
 from .visual_query import VisualQueryService
 
 
+_PRACTICE_WORKER_RUN_ID = secrets.token_hex(16)
+
 class ClassroomWorkflowRuntime:
     """Pre-class, in-class, after-class workflow layer.
 
@@ -26,9 +28,13 @@ class ClassroomWorkflowRuntime:
     """
 
     def __init__(self, runtime: Any):
+        self._practice_submission_lock = threading.Lock()
+        self._explanation_slots = threading.BoundedSemaphore(2)
+        self._explanation_requests: set[str] = set()
         self.runtime = runtime
         self.config = runtime.config
         self.store = runtime.store
+        self.store.fail_interrupted_practice_exports(_PRACTICE_WORKER_RUN_ID)
         self.visual_query_service = VisualQueryService(self.config)
         self.lesson_service = LessonService(
             self.config,
@@ -149,7 +155,10 @@ class ClassroomWorkflowRuntime:
 
     def get_lesson_design(self, design_id: str) -> Dict[str, Any]:
         design = self.lesson_design.get(design_id)
-        return {"status": "success", **design.to_dict(), **self.lesson_design.session_view(design), "capabilities": self.lesson_design.capability_catalog()}
+        # Validate exactly this read snapshot. Checking does not create a turn or revision.
+        report = self.lesson_design.validate_plan(design.draft, design.source_refs)
+        return {"status": "success", **design.to_dict(), **self.lesson_design.session_view(design),
+                "capabilities": self.lesson_design.capability_catalog(), "rehearsal_report": report}
 
     def turn_lesson_design(self, design_id: str, message: str, expected_revision: Optional[int] = None, step: str = "") -> Dict[str, Any]:
         return self.lesson_design.turn(design_id, message, expected_revision, step)
@@ -507,6 +516,60 @@ class ClassroomWorkflowRuntime:
                 self.store.add_recent_action(session.project_id, "End class", "Class session ended.", status="success")
         return {"status": "success", "session": session.to_dict()}
 
+    def present_session_scene(self, session_id: str, stage_id: str, target: str = "stage") -> Dict[str, Any]:
+        """Reframe the current snapshot without re-entering it or resetting question timers."""
+        from copy import deepcopy
+        session = self._require_session(session_id)
+        if session.status != "running" or session.current_stage_id != stage_id:
+            raise ValueError("课堂环节已变化，请重新打开地图展示")
+        lesson = self._lesson_for_session(session)
+        stage = lesson.find_stage(stage_id) if lesson else None
+        if not stage:
+            raise KeyError("Unknown stage")
+        presentation = deepcopy(stage)
+        local_targets = {"huangpu_detail": "310101", "chongming_detail": "310151"}
+        if target in local_targets:
+            if stage_id != "shanghai_verify" or not ("上海" in lesson.title and "人口" in lesson.title):
+                raise ValueError("局部影像对照仅用于上海地图验证环节")
+            reference_path = self.config.builtin_dir / "one_map/shanghai/shanghai_population_density.geojson"
+            try:
+                reference = json.loads(reference_path.read_text(encoding="utf-8"))
+                feature = next(item for item in reference["features"]
+                               if item["properties"].get("region_code") == local_targets[target])
+                center = feature["properties"]["center"]
+                if len(center) != 2 or not (120 < float(center[0]) < 123 and 30 < float(center[1]) < 33):
+                    raise ValueError("Invalid local reference point")
+            except (OSError, ValueError, KeyError, TypeError, StopIteration) as exc:
+                raise ValueError("上海局部定位资料不可用，请使用全市地图手动定位") from exc
+            # Same zoom, with no old fit extent or opaque statistical polygons.
+            # These are map reference points, not representative district samples.
+            presentation["scene"].update({"basemap_id": "amap_imagery", "templates": [],
+                "catalog_layers": [], "catalog_layer_focus": "", "annotations": [], "visual_query": None,
+                "view": {"center": list(center), "zoom": 13}})
+        elif target != "stage":
+            if target not in {"shanghai_density", "shanghai_age", "lujiazui", "zhujiajiao"}:
+                raise ValueError("Unknown presentation target")
+            if not ("上海" in lesson.title and "人口" in lesson.title and stage_id in {"shanghai_intro", "concept", "shanghai_inquiry", "shanghai_verify"}):
+                raise ValueError("此展示仅用于上海人口分布环节")
+            density_stage = lesson.find_stage("shanghai_intro")
+            if not density_stage:
+                raise ValueError("课时缺少上海密度场景")
+            presentation["scene"] = deepcopy(density_stage["scene"])
+            if target == "shanghai_age":
+                # Different indicators must replace one another, not blend their fills.
+                self.runtime.one_map_catalog_service.resolve_item_path(
+                    self.runtime.one_map_catalog_service.get_item("shanghai_age_60_plus_2020"))
+                presentation["scene"].update({"templates": [], "catalog_layers": ["shanghai_age_60_plus_2020"],
+                    "catalog_layer_focus": "shanghai_age_60_plus_2020", "annotations": [], "visual_query": None})
+            elif target != "shanghai_density":
+                center = [121.505, 31.237] if target == "lujiazui" else [121.054, 31.11]
+                presentation["scene"].update({"basemap_id": "amap_imagery", "templates": [], "catalog_layers": [],
+                    "catalog_layer_focus": "", "annotations": [], "visual_query": None,
+                    "view": {"center": center, "zoom": 14, "extent": [center[0]-.018, center[1]-.012, center[0]+.018, center[1]+.012]}})
+        presentation["scene"] = {**presentation.get("scene", {}), "globe": {"enabled": False}}
+        result = self.lesson_service.apply_stage_scene_data(session.project_id, presentation, lesson_id=session.lesson_id)
+        return {"status": "success", "target": target, "scene": result}
+
     def enter_session_stage(self, session_id: str, stage_id: str) -> Dict[str, Any]:
         session = self._require_session(session_id)
         if session.status != "running":
@@ -536,7 +599,7 @@ class ClassroomWorkflowRuntime:
                 stage_id=stage_id,
                 payload={"stage_title": scene_result.get("stage_title", "")},
             )
-        return {"status": "success", "session_id": session_id, "stage": stage, "scene": scene_result}
+        return {"status": "success", "session_id": session_id, "session": self._require_session(session_id).to_dict(), "stage": stage, "scene": scene_result}
 
     def launch_session_question(
         self,
@@ -773,42 +836,106 @@ class ClassroomWorkflowRuntime:
         return {"status": "success", "timer": view, "server_now": now}
 
     def reveal_session_question(self, session_id: str) -> Dict[str, Any]:
-        """揭示投屏题目答案：停止计时并记录实际用时/超时/来源，答案只回给教师端。"""
-        session = self._require_session(session_id)
-        if session.status != "running":
-            raise ValueError("Class session has already ended")
-        active = dict(session.active_question or {})
-        if not active.get("question_id"):
-            raise ValueError("No active question to reveal")
-        timer = self._normalize_timer(active.get("timer")) or self._init_question_timer(active)
-        now = self._utc_now()
-        if timer.get("revealed"):
-            # 幂等：刷新后重复请求不再生成新事件，也不重复生成讲解。
-            return self._reveal_payload(active, timer, now)
-
-        actual = self._timer_elapsed(timer)
-        timer["status"] = "revealed"
-        timer["revealed"] = True
-        timer["revealed_at"] = now
-        timer["actual_seconds"] = actual
-        timer["overtime_seconds"] = max(0, actual - int(timer["suggested_seconds"]))
-        timer["ai_explanation"] = self._compose_ai_explanation(active)
-        active["timer"] = timer
+        """Persist the reveal immediately; model commentary runs independently."""
         with self.store.batch():
+            session = self._require_session(session_id)
+            if session.status != "running":
+                raise ValueError("Class session has already ended")
+            active = dict(session.active_question or {})
+            if not active.get("question_id"):
+                raise ValueError("No active question to reveal")
+            timer = self._normalize_timer(active.get("timer")) or self._init_question_timer(active)
+            now = self._utc_now()
+            if timer.get("revealed"):
+                # Repeated reveal is idempotent; only an interrupted worker can retry.
+                if timer.get("ai_explanation_status") == "pending" and timer.get("ai_request_id") not in self._explanation_requests:
+                    timer["ai_explanation_status"] = "interrupted"
+                if timer.get("ai_explanation_status") == "interrupted":
+                    self._prepare_question_explanation(session_id, active, timer)
+                return self._reveal_payload(active, timer, now)
+
+            actual = self._timer_elapsed(timer)
+            timer.update(status="revealed", revealed=True, revealed_at=now,
+                         actual_seconds=actual, overtime_seconds=max(0, actual - int(timer["suggested_seconds"])))
+            active["timer"] = timer
             self.store.set_active_question(session_id, active)
             self.store.append_session_event(
-                session_id,
-                "question_revealed",
-                stage_id=str(active.get("stage_id") or ""),
-                payload={
-                    "question_id": str(active["question_id"]),
-                    "suggested_seconds": int(timer["suggested_seconds"]),
-                    "actual_seconds": actual,
-                    "overtime_seconds": int(timer["overtime_seconds"]),
-                    "source": str(timer.get("question_source") or ""),
-                },
+                session_id, "question_revealed", stage_id=str(active.get("stage_id") or ""),
+                payload={"question_id": str(active["question_id"]), "suggested_seconds": int(timer["suggested_seconds"]),
+                         "actual_seconds": actual, "overtime_seconds": int(timer["overtime_seconds"]),
+                         "source": str(timer.get("question_source") or "")},
             )
-        return self._reveal_payload(active, timer, now)
+            self._prepare_question_explanation(session_id, active, timer)
+            return self._reveal_payload(active, timer, now)
+
+    def _prepare_question_explanation(self, session_id: str, active: Dict[str, Any], timer: Dict[str, Any]) -> None:
+        # Caller holds store.batch: reservation, persistence and request identity
+        # are atomic with reveal/close/relaunch. No model call runs under this lock.
+        use_model = self.config.minimax_enabled() and self.runtime.minimax_client is not None
+        if not use_model or not self._explanation_slots.acquire(blocking=False):
+            answer = str(active.get("answer") or "")
+            index, options = active.get("answer_index"), active.get("options") or []
+            if not answer and isinstance(index, int) and 0 <= index < len(options):
+                answer = f"正确选项：{chr(65 + index)}. {options[index]}"
+            timer["ai_explanation"] = self._rule_explanation(
+                active, answer, [str(v) for v in active.get("knowledge_points") or []])
+            timer["ai_explanation_status"] = "ready"
+            timer["ai_explanation_note"] = "AI讲解繁忙，先显示现有材料整理的要点。" if use_model else ""
+            active["timer"] = timer
+            self.store.set_active_question(session_id, active)
+            return
+        request_id = secrets.token_hex(12)
+        timer.update(ai_explanation=None, ai_explanation_status="pending", ai_request_id=request_id,
+                     ai_explanation_note="正在整理讲解，参考答案已可使用。")
+        active["timer"] = timer
+        self.store.set_active_question(session_id, active)
+        self._explanation_requests.add(request_id)
+        thread = threading.Thread(target=self._complete_question_explanation,
+                                  args=(session_id, dict(active), request_id), daemon=True,
+                                  name="classroom-explanation")
+        try:
+            thread.start()
+        except RuntimeError:
+            self._explanation_requests.discard(request_id)
+            self._explanation_slots.release()
+            timer["ai_explanation_status"] = "interrupted"
+            self.store.set_active_question(session_id, active)
+
+    def _complete_question_explanation(self, session_id: str, question: Dict[str, Any], request_id: str) -> None:
+        try:
+            result = self._compose_ai_explanation(question)
+            with self.store.batch():
+                session = self.store.get_class_session(session_id)
+                current = dict(session.active_question or {}) if session else {}
+                timer = self._normalize_timer(current.get("timer"))
+                if (not session or session.status != "running"
+                        or current.get("question_id") != question.get("question_id")
+                        or timer.get("ai_request_id") != request_id or not timer.get("revealed")):
+                    return
+                timer.update(ai_explanation=result, ai_explanation_status="ready",
+                             ai_explanation_note="" if result.get("generator") == "minimax" else "AI暂未可用，显示现有材料整理的要点。")
+                current["timer"] = timer
+                self.store.set_active_question(session_id, current)
+        except Exception:
+            # The status endpoint turns an orphaned pending request into an
+            # explicit retry state; never propagate a worker failure to reveal.
+            pass
+        finally:
+            with self.store.batch():
+                self._explanation_requests.discard(request_id)
+            self._explanation_slots.release()
+
+    def get_question_explanation(self, session_id: str) -> Dict[str, Any]:
+        with self.store.batch():
+            session = self._require_session(session_id)
+            active = dict(session.active_question or {})
+            timer = self._normalize_timer(active.get("timer"))
+            if timer.get("ai_explanation_status") == "pending" and timer.get("ai_request_id") not in self._explanation_requests:
+                timer.update(ai_explanation_status="interrupted", ai_explanation_note="讲解任务已中断，可重试；参考答案不受影响。")
+                active["timer"] = timer
+                self.store.set_active_question(session_id, active)
+            return {"status": "success", "question_id": active.get("question_id", ""),
+                    "timer": self._timer_view(timer) if timer else None, "server_now": self._utc_now()}
 
     def _reveal_payload(
         self, active: Dict[str, Any], timer: Dict[str, Any], now: str
@@ -864,13 +991,19 @@ class ClassroomWorkflowRuntime:
         if client is None:
             raise RuntimeError("LLM client unavailable")
         parts = [
-            "你是高中地理教师，正在课堂上讲评一道题。请基于给出的官方答案、官方解析与考点，用 120—200 字给学生讲清解题思路。",
-            "只能使用下方信息，不得补充教材之外的新事实；信息不足时明确说明。",
+            "你是高中地理教师，正在课堂上讲评一道题。请基于给出的参考答案、参考解析与考点，用 120—200 字给学生讲清解题思路。",
+            "只能使用下方材料、参考答案与解析中的信息，不得自行补充事实；信息不足时明确说明。",
+            "教师参考解析与后台底图说明不是题干给出的观测数据。概念或假设题应直接推理；题干材料未提供具体年份或数据时，不得声称‘依据提供的某年数据’，也不得把拟补充的资料说成已经验证的结果。",
+            "题目要求数值支持时，必须引用参考答案已有的计算结果及单位；不能只说高低。人口与面积的资料来源分别说明，同一年份不等于同一来源。",
             "",
             f"题干：{str(question.get('text') or '')}",
         ]
         material = str(question.get("material") or "").strip()
-        if material:
+        # Old classroom snapshots carry basemap dates in this teacher-only note.
+        # Keep genuine problem materials, but do not inject that note as student data.
+        legacy_basemap_note = ("灯光" in str(question.get("text") or "")
+                               and material.startswith("本课显示2016年夜间灯光与2020年人口资料"))
+        if material and not legacy_basemap_note:
             parts.append(f"材料：{material}")
         options = [str(item) for item in question.get("options") or []]
         if options:
@@ -880,8 +1013,8 @@ class ClassroomWorkflowRuntime:
                 parts.append(f"小题 {sub.get('index')}：{sub.get('text')} → {sub.get('answer')}")
         parts.extend(
             [
-                f"官方答案：{official_answer or '（无）'}",
-                f"官方解析：{str(question.get('explanation') or '').strip() or '（无）'}",
+                f"参考答案：{official_answer or '（无）'}",
+                f"参考解析：{str(question.get('explanation') or '').strip() or '（无）'}",
                 f"考点：{'、'.join(knowledge) if knowledge else '（无）'}",
                 "",
                 "输出分三段，段首分别为「思路」「关键点」「一句话总结」。",
@@ -899,7 +1032,7 @@ class ClassroomWorkflowRuntime:
     ) -> Dict[str, Any]:
         lines = ["【讲解要点】"]
         if official_answer:
-            lines.append(f"官方答案：{official_answer}")
+            lines.append(f"参考答案：{official_answer}")
         explanation = str(question.get("explanation") or "").strip()
         if explanation:
             lines.append(f"官方解析：{explanation}")
@@ -968,6 +1101,21 @@ class ClassroomWorkflowRuntime:
     # After-class report
     # ------------------------------------------------------------------
 
+    def session_review_history(self, session_id: str) -> Dict[str, Any]:
+        session = self._require_session(session_id)
+        history = self.store.session_review_jobs(session.project_id, session_id)
+        practice = history.get("practice")
+        if practice and practice.get("status") in {"success", "completed"}:
+            result = practice.get("result") or {}
+            # Old exports stored artifacts but not the selection summary.
+            result.setdefault("session_id", session_id)
+            result.setdefault("job_id", practice["job_id"])
+            result.setdefault("status", "success")
+            result.setdefault("selection_summary", [])
+            result.setdefault("notes", ["已恢复以前导出的练习卷；原选题清单未保存。"])
+            practice["result"] = result
+        return {"status": "success", "session_id": session_id, **history}
+
     def submit_session_report(self, session_id: str) -> Dict[str, Any]:
         session = self._require_session(session_id)
         job = self.store.create_job(
@@ -980,11 +1128,32 @@ class ClassroomWorkflowRuntime:
         threading.Thread(target=self._run_session_report_job, args=(job.job_id, session_id), daemon=True).start()
         return {"status": "accepted", "job_id": job.job_id, "session_id": session_id}
 
-    def export_session_practice(self, session_id: str) -> Dict[str, Any]:
+    def submit_session_practice(self, session_id: str, selection: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        session = self._require_session(session_id)
+        with self._practice_submission_lock:
+            existing = self.store.session_review_jobs(session.project_id, session_id).get("practice")
+            if existing and existing["status"] in {"queued", "pending", "running"}:
+                if existing["request"].get("selection") != selection:
+                    raise ValueError("该课堂正在导出另一组选题，请等待完成后再修改。")
+                return {"status": "accepted", "job_id": existing["job_id"], "session_id": session_id}
+            job = self.store.create_job(session.project_id, "practice_export", "生成课后练习双卷",
+                                        request={"session_id": session_id, "selection": selection, "execution_mode": "in_process", "worker_run_id": _PRACTICE_WORKER_RUN_ID}, workflow_type="practice_export")
+            threading.Thread(target=self._run_session_practice_job, args=(job.job_id, session_id, selection), daemon=True).start()
+            return {"status": "accepted", "job_id": job.job_id, "session_id": session_id}
+
+    def _run_session_practice_job(self, job_id: str, session_id: str, selection: Optional[Dict[str, Any]]) -> None:
+        try:
+            session = self._require_session(session_id)
+            self.store.set_job_status(job_id, "running")
+            self.practice_export.export(session, self._lesson_for_session(session), selection, job_id=job_id)
+        except Exception as exc:
+            self.store.set_job_status(job_id, "failed", error=str(exc))
+
+    def export_session_practice(self, session_id: str, selection: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """课后练习卷双卷导出（学生卷/教师卷），读取开课时刻的课时快照。"""
         session = self._require_session(session_id)
         lesson = self._lesson_for_session(session)
-        return self.practice_export.export(session, lesson)
+        return self.practice_export.export(session, lesson, selection)
 
     def _run_session_report_job(self, job_id: str, session_id: str) -> None:
         try:
@@ -992,11 +1161,13 @@ class ClassroomWorkflowRuntime:
             lesson = self._lesson_for_session(session)
             self.store.set_job_status(job_id, "running")
             self.store.update_job_stage(job_id, "analysis", "running", "Aggregating class events and answers.")
-            statistics = self.report_service.build_statistics(session, lesson)
+            statistics = self.report_service.build_statistics(session, lesson, artifact_resolver=self.store.get_artifact)
             self.store.update_job_stage(job_id, "analysis", "success", "Class statistics ready.")
             self.store.update_job_stage(job_id, "actions", "running", "Composing diagnosis.")
             diagnosis = self.report_service.compose_diagnosis(statistics)
             practice_recommendations = self.report_service.build_practice_recommendations(statistics, lesson)
+            bank_recommendations, practice_notes, practice_selection = self.practice_export.report_bank_recommendations(session, lesson)
+            practice_recommendations.extend(bank_recommendations)
             diagnosis_label = "minimax" if diagnosis.get("generator") == "minimax" else "rules"
             self.store.update_job_stage(job_id, "actions", "success", f"Diagnosis generated by {diagnosis_label}.")
             self.store.update_job_stage(job_id, "map", "skipped", "Report generation does not change the map.")
@@ -1012,6 +1183,8 @@ class ClassroomWorkflowRuntime:
                         "statistics": statistics,
                         "diagnosis": diagnosis,
                         "practice_recommendations": practice_recommendations,
+                        "practice_selection_notes": practice_notes,
+                        "practice_selection": practice_selection,
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -1047,6 +1220,8 @@ class ClassroomWorkflowRuntime:
                     "statistics": statistics,
                     "diagnosis": diagnosis,
                     "practice_recommendations": practice_recommendations,
+                    "practice_selection_notes": practice_notes,
+                    "practice_selection": practice_selection,
                     "report_url": markdown_artifact.metadata.get("public_url", ""),
                     "stages": self.store.get_job(job_id).stages,
                 },

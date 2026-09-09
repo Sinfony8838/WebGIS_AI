@@ -8,6 +8,8 @@ const apiMocks = vi.hoisted(() => ({
   fetchLesson: vi.fn(),
   fetchClassSessions: vi.fn().mockResolvedValue({ status: "success", items: [] }),
   applyLessonScene: vi.fn(),
+  createClassSession: vi.fn(),
+  enterSessionStage: vi.fn(),
   captureLessonScene: vi.fn(),
   fetchPopulationSources: vi.fn(),
   fetchPopulationSourceVersions: vi.fn(),
@@ -166,4 +168,31 @@ it("adopts assistant classroom results without starting a second class", async (
   rerender(<LessonWorkflowShell {...props} assistantJob={job("end", "end_class_session", { class_session: { ...session, status: "ended" } })} />);
   await waitFor(() => expect(onTeachingContextChange).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "post_class" })));
   expect(screen.getByLabelText("关闭复盘面板")).toBeInTheDocument();
+  fireEvent.click(screen.getByTestId("class-mode-toggle"));
+  expect(screen.queryByText("结束上课")).not.toBeInTheDocument();
+  expect(screen.getByText("开始上课")).toBeInTheDocument();
+});
+
+it("enters the first stage using the new session ID and adopts recorded events", async () => {
+  const item = lesson();
+  apiMocks.fetchLessons.mockResolvedValue({ status: "success", items: [item] });
+  apiMocks.fetchClassSessions.mockResolvedValue({ status: "success", items: [] });
+  apiMocks.fetchPopulationSources.mockResolvedValue({ items: [] });
+  apiMocks.fetchPopulationSourceVersions.mockResolvedValue({ versions: [] });
+  const revised = structuredClone(item);
+  revised.stages[0].questions = [{ question_id: "new_q", type: "open", text: "新版：上海公共服务如何布局？", options: [], answer_index: null, expected_points: [], misconceptions: [] }];
+  const session = { session_id: "new_session", project_id: "project_1", lesson_id: item.lesson_id, status: "running", current_stage_id: "", started_at: new Date().toISOString(), metadata: { lesson_snapshot: revised }, events: [], responses: {}, active_question: {} };
+  const entered = { ...session, current_stage_id: "s4", events: [{ event_id: "event_1", type: "stage_enter", stage_id: "s4", timestamp: new Date().toISOString(), payload: {} }] };
+  apiMocks.createClassSession.mockResolvedValue({ session });
+  apiMocks.enterSessionStage.mockResolvedValue({ session: entered, scene: item.stages[0].scene });
+  const onTeachingContextChange = vi.fn();
+  const onApplyGlobeScene = vi.fn();
+  render(<LessonWorkflowShell project={{ project_id: "project_1" } as never} layerState={null} openSignal={1} onRefresh={vi.fn()} onTeachingContextChange={onTeachingContextChange} onApplyGlobeScene={onApplyGlobeScene} />);
+  await waitFor(() => expect(screen.getByTestId("start-class")).toBeEnabled());
+  fireEvent.click(screen.getByTestId("start-class"));
+  await waitFor(() => expect(apiMocks.enterSessionStage).toHaveBeenCalledWith("new_session", "s4"));
+  expect(apiMocks.applyLessonScene).not.toHaveBeenCalled();
+  await waitFor(() => expect(onTeachingContextChange).toHaveBeenLastCalledWith(expect.objectContaining({ session_id: "new_session", stage_id: "s4", phase: "in_class" })));
+  expect(onApplyGlobeScene).toHaveBeenCalledWith(item.stages[0].scene.globe);
+  expect(screen.getByText("新版：上海公共服务如何布局？")).toBeInTheDocument();
 });

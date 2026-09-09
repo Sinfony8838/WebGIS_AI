@@ -1,13 +1,13 @@
 # One Map Missing Data Requirements
 
-Last updated: 2026-07-27
+Last updated: 2026-09-09
 
 | Data | Target format | Recommended source | Missing reason | Manual required | Status |
 | --- | --- | --- | --- | --- | --- |
 | ~~中国城市人口数据~~ | ~~CSV/GeoJSON~~ | ~~第七次全国人口普查~~ | ~~已从 人口课程数据 补入~~ | - | **filled** |
 | ~~中国省级 GDP 数据~~ | ~~GeoJSON~~ | ~~全球分省人均GDP 1990-2022~~ | ~~已从 人口课程数据 补入~~ | - | **filled** |
 | ~~中国地级市 GDP 数据~~ | ~~GeoJSON~~ | ~~立方数据学社 1990-2023~~ | ~~已从 人口课程数据 补入~~ | - | **filled** |
-| 中国年降水量数据 | GeoJSON/COG/TIF | WorldClim v2.1 precipitation zonal stats | large raster; not bundled in first pass | no | open |
+| 中国年降水量数据 | GeoJSON/COG/TIF | DWD / GPCC V2025，1991—2020，0.25° | 已补400毫米等值线及方法、许可；完整降水面图/数值查询尚未接入 | no | partial：china_precipitation_400mm |
 | 中国 1 月/7 月平均气温数据 | GeoJSON/COG/TIF | WorldClim v2.1 monthly tavg zonal stats | large raster; not bundled in first pass | no | open |
 | 中国主要交通线数据 | GeoJSON | OSM/official railway-road network | license/source choice needs confirmation | no | open |
 | 世界年降水量数据 | GeoJSON/COG/TIF | WorldClim v2.1 precipitation by country | large raster; generate by zonal_stats when cached | no | open |
@@ -41,3 +41,15 @@ Last updated: 2026-07-27
 | 中国省级人均 GDP（31 省含边界） | `polyg_adm1_gdp_perCapita_1990_2022.gpkg` | `china_province_gdp_per_capita` |
 | 中国地级市人均 GDP（375 城含边界） | `1990-2023年我国地级市人均GDP数据.shp` | `china_city_gdp_per_capita` |
 | 中国气候类型分布（9 类省级） | `中国气候类型分布.zip` | `china_climate_types` |
+
+## 2026-09-09 降水对照补充
+
+已联网核验并补入 GPCC 400毫米年降水量对照线，详见 [数据方法与复现](climate/china_precipitation_400mm.md)。WorldClim 2.1 官方禁止未经许可再分发，故未将其资料打包；改用 DWD 明确允许 CC BY 4.0 署名复用的 GPCC 数据。400毫米对照线不等于完整自然专题资料已补齐，未把其他气温、地形或三维数据标为完成。
+
+
+## 2026-09-09 上海年龄结构补充
+
+- **已补齐区级图**：`shanghai_age_60_plus_2020`，16区，2020七普60岁及以上常住人口占比。数据来自[上海统计年鉴2025表2.12](https://tjj.sh.gov.cn/tjnj/2025tjnj/C0212.htm)，年鉴年份不等于数据年份。课堂补充中可与人口密度互斥切换。
+- **街镇级年龄资料仍为部分可得**：[程家桥街道七普公报](https://www.shcn.gov.cn/col7474/20211206/1121365.html)公开2020年常住人口28849人、60岁及以上7134人（公布占比24.7%）、65岁及以上5125人（17.8%）。这是单街道资料，未外推到全市，也未作为年轻环边界。
+- **尚缺完整同口径街镇年龄和历史边界**：已找到[上海人口普查年鉴下载目录](https://tjj.sh.gov.cn/tjnj/rktjnj2020e.htm)及[长宁区普查数据目录](https://www.shcn.gov.cn/col7860/index.html)，仍需逐表核验覆盖、统计对象和对应边界，不能仅凭目录宣称全市街镇资料齐备。
+- 区级几何沿用已有上海密度图。未新增街镇面积、年轻环拟合边界、迁移量或授权实景三维数据；这些缺口继续保留。

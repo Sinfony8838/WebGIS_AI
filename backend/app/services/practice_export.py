@@ -16,11 +16,15 @@ answers cannot leak into it.
 
 from __future__ import annotations
 
+import re
+import hashlib
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..models import ClassSessionRecord, LessonRecord
 from .question_bank import QuestionBankService
+from .lesson_homework import homework_guidance
 
 ORIGIN_LABELS = {
     "lesson_homework_basic": "教案课后作业（基础）",
@@ -55,66 +59,85 @@ class PracticeExportService:
     # Export entry (mirrors lesson_design.export_docx: job + artifacts)
     # ------------------------------------------------------------------
 
-    def export(self, session: ClassSessionRecord, lesson: Optional[LessonRecord]) -> Dict[str, Any]:
+    def export(self, session: ClassSessionRecord, lesson: Optional[LessonRecord],
+               selection: Optional[Dict[str, Any]] = None, job_id: Optional[str] = None) -> Dict[str, Any]:
         lesson_title = str(
             (lesson.title if lesson else "") or (session.metadata or {}).get("lesson_title") or "本课"
         )
         items, summary, notes = self.collect_items(session, lesson)
+        if selection is not None:
+            manifest = self.selection_manifest(session, items)
+            selected = selection.get("selected_ids")
+            if not isinstance(selected, list) or not selected or any(not isinstance(v, str) for v in selected):
+                raise ValueError("请至少勾选一道题目或一项作业；未生成空白试卷。")
+            if selection.get("token") != manifest["token"]:
+                raise ValueError("候选内容或课堂记录已变化，请重新生成报告并确认选题。")
+            if len(set(selected)) != len(selected) or not set(selected).issubset(manifest["item_ids"]):
+                raise ValueError("选题包含重复或不可用内容，请重新确认。")
+            items = [item for item in items if item["practice_id"] in selected]
+            summary = self._selection_summary(items)
+            notes.append(f"本卷包含教师勾选的 {len(items)} 项作业与题目。")
 
-        output_dir = self.config.project_output_dir(session.project_id)
-        student_path = self.config.unique_path(output_dir, f"practice_student_{session.session_id[:12]}.docx")
-        teacher_path = self.config.unique_path(output_dir, f"practice_teacher_{session.session_id[:12]}.docx")
-        self._write_paper(student_path, lesson_title, items, summary, notes, teacher=False)
-        self._write_paper(teacher_path, lesson_title, items, summary, notes, teacher=True)
+        if not items:
+            raise ValueError("未找到可用作业内容。请检查当前项目题库、课时目标或先添加作业任务；未生成空白试卷。")
 
-        job = self.store.create_job(
-            project_id=session.project_id,
-            job_type="practice_export",
-            title=f"导出课后练习卷：{lesson_title}",
-            workflow_type="practice_export",
-            request={"session_id": session.session_id},
-        )
-        student_artifact = self.store.register_artifact(
-            project_id=session.project_id,
-            job_id=job.job_id,
-            artifact_type="practice_paper_student",
-            title=f"{lesson_title} 课后练习卷（学生卷）",
-            path=str(student_path),
-            metadata={
-                "public_url": self.config.public_url_for_path(student_path),
+        job = self.store.get_job(job_id) if job_id else None
+        if job is None:
+            job = self.store.create_job(
+                project_id=session.project_id,
+                job_type="practice_export",
+                title=f"导出课后练习卷：{lesson_title}",
+                workflow_type="practice_export",
+                request={"session_id": session.session_id, "selection": selection},
+            )
+        self.store.set_job_status(job.job_id, "running")
+        try:
+            output_dir = self.config.project_output_dir(session.project_id)
+            student_path = self.config.unique_path(output_dir, f"practice_student_{session.session_id[:12]}.docx")
+            teacher_path = self.config.unique_path(output_dir, f"practice_teacher_{session.session_id[:12]}.docx")
+            self._write_paper(student_path, lesson_title, items, summary, notes, teacher=False)
+            self._write_paper(teacher_path, lesson_title, items, summary, notes, teacher=True)
+
+            student_artifact = self.store.register_artifact(
+                project_id=session.project_id,
+                job_id=job.job_id,
+                artifact_type="practice_paper_student",
+                title=f"{lesson_title} 课后练习卷（学生卷）",
+                path=str(student_path),
+                metadata={
+                    "public_url": self.config.public_url_for_path(student_path),
+                    "session_id": session.session_id,
+                    "format": "docx",
+                },
+            )
+            teacher_artifact = self.store.register_artifact(
+                project_id=session.project_id,
+                job_id=job.job_id,
+                artifact_type="practice_paper_teacher",
+                title=f"{lesson_title} 课后练习卷（教师卷）",
+                path=str(teacher_path),
+                metadata={
+                    "public_url": self.config.public_url_for_path(teacher_path),
+                    "session_id": session.session_id,
+                    "format": "docx",
+                },
+            )
+            result = {
+                "status": "success",
+                "job_id": job.job_id,
                 "session_id": session.session_id,
-                "format": "docx",
-            },
-        )
-        teacher_artifact = self.store.register_artifact(
-            project_id=session.project_id,
-            job_id=job.job_id,
-            artifact_type="practice_paper_teacher",
-            title=f"{lesson_title} 课后练习卷（教师卷）",
-            path=str(teacher_path),
-            metadata={
-                "public_url": self.config.public_url_for_path(teacher_path),
-                "session_id": session.session_id,
-                "format": "docx",
-            },
-        )
-        self.store.set_job_status(
-            job.job_id,
-            "success",
-            {
                 "student_artifact": student_artifact.to_dict(),
                 "teacher_artifact": teacher_artifact.to_dict(),
-            },
-        )
-        return {
-            "status": "success",
-            "job_id": job.job_id,
-            "session_id": session.session_id,
-            "student_artifact": student_artifact.to_dict(),
-            "teacher_artifact": teacher_artifact.to_dict(),
-            "selection_summary": summary,
-            "notes": notes,
-        }
+                "selection_summary": summary,
+                "selected_ids": [item["practice_id"] for item in items],
+                "notes": notes,
+                "selection_token": selection.get("token") if selection else None,
+            }
+            self.store.set_job_status(job.job_id, "success", result)
+            return result
+        except Exception as exc:
+            self.store.set_job_status(job.job_id, "failed", error=str(exc))
+            raise
 
     # ------------------------------------------------------------------
     # Selection (priority levels with honest fallback)
@@ -123,21 +146,29 @@ class PracticeExportService:
     def collect_items(
         self, session: ClassSessionRecord, lesson: Optional[LessonRecord]
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
-        plan = (lesson.plan if lesson is not None else {}) or {}
+        plan = dict((lesson.plan if lesson is not None else {}) or {})
+        # Built-in/legacy lessons may store goals at the top level, without a plan.
+        if lesson is not None:
+            plan["title"] = plan.get("title") or lesson.title
+            plan["topic"] = plan.get("topic") or lesson.title
+            plan["objectives"] = plan.get("objectives") or list(lesson.objectives or [])
         lesson_questions = self._lesson_question_index(lesson)
         evidence = self._classroom_evidence(session)
         observations = self._practice_observations(session)
 
         items: List[Dict[str, Any]] = []
         included_ids: set = set()
+        skipped: List[str] = []
 
         # ① 教案指定的课后作业（homework basic/inquiry 文本任务）
         homework = plan.get("homework") if isinstance(plan.get("homework"), dict) else {}
         for origin in ("lesson_homework_basic", "lesson_homework_inquiry"):
-            for text in homework.get("basic" if origin == "lesson_homework_basic" else "inquiry") or []:
+            for index, text in enumerate(homework.get("basic" if origin == "lesson_homework_basic" else "inquiry") or [], start=1):
                 text = str(text).strip()
                 if text:
-                    items.append({"kind": "task", "origin": origin, "text": text})
+                    items.append({"kind": "task", "origin": origin, "text": text,
+                                  "practice_id": f"{origin}_{index}",
+                                  "teacher_guidance": homework_guidance(homework, text)})
 
         # ② 教师课堂标注的部分掌握/误区：先回炉原题，再按误区标签与知识点检索变式题
         variant_queries: List[str] = []
@@ -163,8 +194,8 @@ class PracticeExportService:
                 variant_queries.append(observation["tag"])
 
         for snapshot in self._search_bank(
-            session, plan, knowledge_queries=variant_queries[:VARIANT_TAG_LIMIT], limit=VARIANT_LIMIT,
-            exclude_ids=included_ids,
+            session, plan, knowledge_queries=variant_queries[:VARIANT_TAG_LIMIT], limit=VARIANT_LIMIT if variant_queries else 0,
+            exclude_ids=included_ids, skipped=skipped,
         ):
             included_ids.add(snapshot["question_id"])
             items.append(
@@ -176,7 +207,7 @@ class PracticeExportService:
 
         # ③ 围绕课时核心目标从题库检索强关联题
         for snapshot in self._search_bank(
-            session, plan, knowledge_queries=[], limit=CORE_LIMIT, exclude_ids=included_ids
+            session, plan, knowledge_queries=[], limit=CORE_LIMIT, exclude_ids=included_ids, skipped=skipped
         ):
             included_ids.add(snapshot["question_id"])
             items.append(
@@ -187,8 +218,46 @@ class PracticeExportService:
             )
 
         summary = self._selection_summary(items)
-        notes = self._selection_notes(items, lesson)
+        notes = self._selection_notes(items, lesson, session)
+        if skipped:
+            notes.append("自动选题已跳过：" + "；".join(dict.fromkeys(skipped)) + "。未为凑题数补入不完整题目。")
         return items, summary, notes
+
+    def report_bank_recommendations(
+        self, session: ClassSessionRecord, lesson: Optional[LessonRecord]
+    ) -> Tuple[List[Dict[str, Any]], List[str], Dict[str, Any]]:
+        items, _, notes = self.collect_items(session, lesson)
+        result = []
+        for item in items:
+            if item["origin"] not in {"bank_core", "observation_variant"}:
+                continue
+            q = item["question"]
+            source = " · ".join(dict.fromkeys(str(q.get(k) or "").strip()
+                                  for k in ("year", "region", "source_paper") if q.get(k)))
+            answer = q.get("answer") or q.get("answer_letter") or ""
+            points = [str(value) for value in (answer, q.get("explanation")) if value]
+            for sub in q.get("sub_questions") or []:
+                details = "；".join(str(value) for value in (sub.get("answer"), sub.get("explanation")) if value)
+                if details:
+                    points.append(f"({sub['index']}) {details}")
+            basis = ("依据教师速记对应考点检索，需核对具体观察；不代表全班存在同一误区。"
+                     if item["origin"] == "observation_variant" else
+                     "按本次教案主题与目标进行本地题库匹配；作为巩固候选，不代表学生答错。")
+            result.append({
+                "practice_id": "bank_" + q["question_id"], "level": ORIGIN_LEVELS[item["origin"]],
+                "title": source or "题库巩固题", "suggested_minutes": None,
+                "prompt": q["text"] or q["task_text"], "answer_points": points,
+                "evidence_basis": basis, "question": q,
+            })
+        notes.append("题库候选与练习卷使用同一套本地选题规则；教案、题库或课堂记录变化后请重新生成复盘。")
+        return result, notes, self.selection_manifest(session, items)
+
+    @staticmethod
+    def selection_manifest(session: ClassSessionRecord, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+        payload = json.dumps({"session_id": session.session_id, "project_id": session.project_id, "items": items},
+                             sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        return {"token": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+                "item_ids": [item["practice_id"] for item in items]}
 
     @staticmethod
     def _lesson_question_index(lesson: Optional[LessonRecord]) -> Dict[str, Dict[str, Any]]:
@@ -292,6 +361,7 @@ class PracticeExportService:
         entry["correct_rate"] = self._correct_rate(snapshot, session.responses.get(question_id) or [])
         return {
             "kind": "question",
+            "practice_id": f"{'bank' if origin in {'bank_core', 'observation_variant'} else 'class_question'}_{question_id}",
             "origin": origin,
             "question": snapshot,
             "stage_title": stage_title,
@@ -319,10 +389,13 @@ class PracticeExportService:
         knowledge_queries: List[str],
         limit: int,
         exclude_ids: set,
+        skipped: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         if self.question_bank is None or limit <= 0:
             return []
         topic = str(plan.get("topic") or plan.get("title") or "")
+        if "人口分布" in topic:
+            topic = "人口分布"
         core = (plan.get("core_questions") or {}) if isinstance(plan.get("core_questions"), dict) else {}
         core_question = str(core.get("core") or "")
         objectives = [str(item) for item in plan.get("objectives") or [] if str(item).strip()]
@@ -330,7 +403,9 @@ class PracticeExportService:
         excluded = set(exclude_ids)
         queries = list(knowledge_queries)
         if not queries:
-            queries.append(" ".join(part for part in (topic, core_question) if part))
+            # Long prose diluted the topic score and rejected even direct matches.
+            # Objectives are already passed separately to the bank ranker.
+            queries.append(topic or core_question)
         for query in queries:
             if not query.strip() or len(found) >= limit:
                 continue
@@ -341,16 +416,34 @@ class PracticeExportService:
                     knowledge=query,
                     objectives=objectives,
                     exclude_ids=sorted(excluded),
-                    limit=max(1, limit - len(found)),
+                    limit=10,
+                    use_llm=False,  # Report preview and paper use the same reproducible local ranking.
                 )
-            except Exception:
-                continue
+            except Exception as exc:
+                raise ValueError("题库检索失败，请重试；未将失败当作无题库或生成空卷。") from exc
             for item in result.get("items") or []:
                 if not isinstance(item, dict):
                     continue
                 snapshot = QuestionBankService.normalize_snapshot_question(item)
                 question_id = snapshot["question_id"]
                 if not question_id or question_id in excluded:
+                    continue
+                reason = ""
+                stem = snapshot["text"] + " " + snapshot["task_text"]
+                if not snapshot.get("answer_complete"):
+                    reason = "答案不完整"
+                elif item.get("auto_selectable") is False:
+                    reason = "关联度不足"
+                elif "人口分布" in topic and not re.search(r"人口|人类.{0,5}居住|聚落", stem):
+                    reason = "题干未直接考查人口分布"
+                elif re.search(r"图示|图中|下图|如图|图为|读图", stem + snapshot["material"]) and not snapshot["images"]:
+                    reason = "读图题缺少题图"
+                elif any(self._resolve_image_path(image["url"]) is None for image in snapshot["images"]):
+                    reason = "题图文件不可用"
+                if reason:
+                    if skipped is not None:
+                        skipped.append(reason)
+                    excluded.add(question_id)
                     continue
                 snapshot["selection_reason"] = str(item.get("selection_reason") or "")
                 found.append(snapshot)
@@ -370,14 +463,15 @@ class PracticeExportService:
         ]
 
     @staticmethod
-    def _selection_notes(items: List[Dict[str, Any]], lesson: Optional[LessonRecord]) -> List[str]:
+    def _selection_notes(items: List[Dict[str, Any]], lesson: Optional[LessonRecord], session: ClassSessionRecord) -> List[str]:
         notes: List[str] = []
-        if lesson is not None and str((lesson.metadata or {}).get("lesson_version") or "").strip():
-            notes.append(f"选题依据开课时刻的课时快照（版本 {lesson.metadata.get('lesson_version')}）。")
+        snapshot = (session.metadata or {}).get("lesson_snapshot")
+        if isinstance(snapshot, dict) and snapshot.get("lesson_id") == session.lesson_id:
+            notes.append("选题依据开课时保存的教案；未使用课后修改替换课堂内容。")
         else:
-            notes.append("选题依据当前课时内容生成。")
+            notes.append("本会话缺少开课教案快照，选题使用关联教案；布置前请核对课后修改。")
         if not any(item["kind"] == "question" for item in items):
-            notes.append("本卷暂无可用题目：未导入题库或课堂记录中没有可回炉的题目，仅包含教案课后作业任务。")
+            notes.append("没有选到符合当前目标且材料完整的题库题，也没有可回炉的课堂题；本卷仅包含教案作业任务。")
         return notes
 
     # ------------------------------------------------------------------
@@ -396,74 +490,160 @@ class PracticeExportService:
         from docx import Document
         from docx.enum.text import WD_ALIGN_PARAGRAPH
         from docx.oxml.ns import qn
-        from docx.shared import Inches, Pt
+        from docx.shared import Inches, Pt, RGBColor
 
         doc = Document()
         section = doc.sections[0]
         section.top_margin = section.bottom_margin = Inches(0.7)
         section.left_margin = section.right_margin = Inches(0.8)
-        normal = doc.styles["Normal"]
-        normal.font.name = "宋体"
-        normal._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
-        normal.font.size = Pt(10.5)
-        doc.core_properties.title = f"{lesson_title} 课后练习卷（{'教师卷' if teacher else '学生卷'}）"
+        for style_name, size in (("Normal", 11), ("Title", 16), ("Heading 2", 12)):
+            style = doc.styles[style_name]
+            style.font.name = "宋体"
+            style._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "宋体")
+            style.font.size = Pt(size)
+            style.font.color.rgb = RGBColor(0, 0, 0)
+            for border in style._element.xpath("./w:pPr/w:pBdr"):
+                border.getparent().remove(border)
+        normal = doc.styles["Normal"].paragraph_format
+        normal.space_after = Pt(6)
+        normal.line_spacing = 1.15
+        normal.widow_control = True
+        edition = "教师卷" if teacher else "学生卷"
+        doc.core_properties.title = f"{lesson_title} 课后练习卷 {edition}"
         doc.core_properties.author = "WebGIS-AI"
-
-        title = doc.add_paragraph()
+        title = doc.add_paragraph(doc.core_properties.title, style="Title")
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run = title.add_run(doc.core_properties.title)
-        run.bold = True
-        run.font.size = Pt(15)
+        title.paragraph_format.keep_with_next = True
+        for border in title._p.xpath("./w:pPr/w:pBdr"):
+            border.getparent().remove(border)
         subtitle = doc.add_paragraph()
         subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        subtitle.add_run(
-            "含官方答案、解析与课堂实测，仅供教师使用。" if teacher else "本卷不含答案与解析。"
-        )
+        subtitle.add_run("含参考答案、教案评分参考与已采集的课堂记录，仅供教师使用。" if teacher else
+                         "班级 __________  姓名 __________  日期 __________")
+        self._add_page_number(section.footer.paragraphs[0], edition)
 
-        heading_style = "Heading 2" if "Heading 2" in [style.name for style in doc.styles] else None
-        doc.add_paragraph("一、选题说明", style=heading_style)
-        for entry in summary:
-            unit = "项" if entry["origin"].startswith("lesson_homework") else "题"
-            doc.add_paragraph(f"{entry['label']}：{entry['count']} {unit}", style="List Bullet")
-        doc.add_paragraph(
-            "题目按“教案课后作业 → 课堂观察巩固/误区变式 → 核心目标巩固”的顺序编排；"
-            "来源在每题旁如实标注。",
-            style="List Bullet",
-        )
         if teacher:
-            doc.add_paragraph(
-                "教师卷中的课堂实测仅统计本次课堂的真实计时与作答记录；"
-                "未开放作答或无作答记录的题目如实标注“未收集到作答数据”，不填写猜测的正确率。",
-                style="List Bullet",
-            )
-        for note in notes:
-            doc.add_paragraph(note, style="List Bullet")
-
-        doc.add_paragraph("二、练习内容", style=heading_style)
+            doc.add_paragraph("选题说明", style="Heading 2")
+            for entry in summary:
+                unit = "项" if entry["origin"].startswith("lesson_homework") else "题"
+                doc.add_paragraph(f"{entry['label']}：{entry['count']} {unit}", style="List Bullet")
+            doc.add_paragraph("参考答案和解析来自题库或课时原题，未另行核验为官方发布版本。")
+            doc.add_paragraph("课堂实测只统计本次已采集的记录；无作答记录时标注未收集，不推测正确率。")
+            for note in notes:
+                doc.add_paragraph(note, style="List Bullet")
+        else:
+            doc.add_paragraph("选择题填写选项；综合题写出读图依据与推理过程。拓展题选做，图示可另附。")
+        doc.add_paragraph("练习内容", style="Heading 2")
         if not items:
             doc.add_paragraph("本次课堂没有可导出的课后练习内容。")
 
-        for number, item in enumerate(items, start=1):
+        shared_until = -1
+        for index, item in enumerate(items):
+            number = index + 1
             if item["kind"] == "task":
+                start = len(doc.paragraphs)
                 paragraph = doc.add_paragraph()
-                paragraph.add_run(f"{number}. 【{ORIGIN_LEVELS[item['origin']]}｜{ORIGIN_LABELS[item['origin']]}】").bold = True
+                paragraph.add_run(f"{number}. 【{ORIGIN_LEVELS[item['origin']]}】").bold = True
                 paragraph.add_run(str(item["text"]))
+                if not teacher:
+                    self._answer_space(doc, 12 if item["origin"] == "lesson_homework_inquiry" else 6)
+                self._keep_block(doc.paragraphs[start:])
                 continue
-            self._add_question(doc, number, item, teacher)
+            key = self._shared_material_key(item)
+            if index > shared_until and key:
+                end = index
+                while end + 1 < len(items) and self._shared_material_key(items[end + 1]) == key:
+                    end += 1
+                if end > index:
+                    shared_until = end
+                    start = len(doc.paragraphs)
+                    doc.add_paragraph(f"第 {number}—{end + 1} 题共用材料", style="Heading 2")
+                    self._add_material(doc, item["question"], teacher)
+                    self._keep_block(doc.paragraphs[start:], continue_next=True)
+            self._add_question(doc, number, item, teacher, shared_material=index <= shared_until)
+        if teacher:
+            heading = doc.add_paragraph("参考答案与讲评", style="Heading 2")
+            heading.paragraph_format.page_break_before = True
+            for number, item in enumerate(items, 1):
+                if item["kind"] == "task":
+                    start = len(doc.paragraphs)
+                    doc.add_paragraph(f"第 {number} 题 教师评分参考", style="Heading 2")
+                    for point in item.get("teacher_guidance", {}).get("answer_points", []):
+                        doc.add_paragraph("教师评分参考：" + point)
+                    if len(doc.paragraphs) == start + 1:
+                        doc.add_paragraph("本项未提供评分参考，请教师结合教学目标评阅。")
+                    self._keep_block(doc.paragraphs[start:])
+                else:
+                    self._add_reference(doc, number, item)
         doc.save(path)
 
-    def _add_question(self, doc: Any, number: int, item: Dict[str, Any], teacher: bool) -> None:
-        question = item["question"]
-        header = doc.add_paragraph()
-        header_run = header.add_run(f"{number}. 【{ORIGIN_LEVELS[item['origin']]}｜{ORIGIN_LABELS[item['origin']]}】")
-        header_run.bold = True
-        if item.get("stage_title"):
-            header.add_run(f"（课堂环节：{item['stage_title']}）")
+    @staticmethod
+    def _keep_block(paragraphs: List[Any], continue_next: bool = False) -> None:
+        for index, paragraph in enumerate(paragraphs):
+            paragraph.paragraph_format.keep_together = True
+            paragraph.paragraph_format.keep_with_next = continue_next or index < len(paragraphs) - 1
 
+    @staticmethod
+    def _answer_space(doc: Any, lines: int) -> None:
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        from docx.shared import Pt
+        for _ in range(lines):
+            paragraph = doc.add_paragraph(" ")
+            paragraph.paragraph_format.line_spacing = Pt(20)
+            paragraph.paragraph_format.space_after = Pt(4)
+            borders = OxmlElement("w:pBdr")
+            for side in ("bottom", "between"):
+                border = OxmlElement(f"w:{side}")
+                for key, value in (("val", "single"), ("sz", "4"), ("color", "D9D9D9")):
+                    border.set(qn(f"w:{key}"), value)
+                borders.append(border)
+            paragraph._p.get_or_add_pPr().append(borders)
+
+    @staticmethod
+    def _add_page_number(paragraph: Any, edition: str) -> None:
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        paragraph.add_run(f"{edition}  第 ")
+        field = OxmlElement("w:fldSimple")
+        field.set(qn("w:instr"), "PAGE")
+        paragraph._p.append(field)
+        paragraph.add_run(" 页")
+
+    @staticmethod
+    def _shared_material_key(item: Dict[str, Any]) -> Optional[Tuple[Any, ...]]:
+        if item.get("kind") != "question":
+            return None
+        question = item["question"]
+        material = str(question.get("material") or "").strip()
+        images = question.get("images") or []
+        if not material or any(image.get("anchor", "group") != "group" for image in images):
+            return None
+        return (question.get("bank_id"), question.get("group_key"), material,
+                tuple(image.get("url") for image in images))
+
+    def _add_material(self, doc: Any, question: Dict[str, Any], teacher: bool) -> None:
         material = str(question.get("material") or "").strip()
         if material:
             doc.add_paragraph(f"材料：{material}")
         self._add_images(doc, question, teacher)
+
+    def _add_question(self, doc: Any, number: int, item: Dict[str, Any], teacher: bool, shared_material: bool = False) -> None:
+        question = item["question"]
+        body_start = len(doc.paragraphs)
+        header = doc.add_paragraph()
+        header_run = header.add_run(f"{number}. 【{ORIGIN_LEVELS[item['origin']]}】")
+        header_run.bold = True
+        if item.get("stage_title"):
+            header.add_run(f"（课堂环节：{item['stage_title']}）")
+
+        if not shared_material:
+            self._add_material(doc, question, teacher)
+        exam_source = " ".join(str(question.get(key) or "").strip() for key in ("year", "region")).strip()
+        if exam_source:
+            header.add_run(f"  {exam_source} 题库选题")
         task_text = str(question.get("task_text") or "").strip()
         if task_text:
             doc.add_paragraph(task_text)
@@ -482,19 +662,28 @@ class PracticeExportService:
 
         # 学生卷到此为止：以下内容只在教师卷生成，学生卷绝不读取答案字段。
         if not teacher:
+            if question.get("options"):
+                doc.add_paragraph("作答：________")
+            else:
+                self._answer_space(doc, 5)
+            self._keep_block(doc.paragraphs[body_start:])
             return
+        self._keep_block(doc.paragraphs[body_start:])
 
+    def _add_reference(self, doc: Any, number: int, item: Dict[str, Any]) -> None:
+        question = item["question"]
+        reference_start = len(doc.paragraphs)
         reference = doc.add_paragraph()
-        reference_run = reference.add_run("【教师参考】")
+        reference_run = reference.add_run(f"第 {number} 题 教师参考")
         reference_run.bold = True
 
         official_answer = self._official_answer_text(question)
-        self._labelled_line(doc, "官方答案", official_answer)
+        self._labelled_line(doc, "参考答案", official_answer)
         explanation = str(question.get("explanation") or "").strip()
         if explanation:
-            self._labelled_line(doc, "官方解析", explanation)
+            self._labelled_line(doc, "参考解析", explanation)
         else:
-            self._labelled_line(doc, "官方解析", "本题未提供官方解析")
+            self._labelled_line(doc, "参考解析", "本题未提供参考解析")
         sub_answers = self._sub_answer_lines(question)
         for line in sub_answers:
             doc.add_paragraph(line, style="List Bullet")
@@ -507,6 +696,7 @@ class PracticeExportService:
         if item.get("selection_reason"):
             source_line += f"（检索依据：{item['selection_reason']}）"
         self._labelled_line(doc, "来源", source_line)
+        self._keep_block(doc.paragraphs[reference_start:])
 
     @staticmethod
     def _option_text(option_index: int, option: Any) -> str:
@@ -531,7 +721,7 @@ class PracticeExportService:
         options = question.get("options") or []
         if isinstance(answer_index, int) and 0 <= answer_index < len(options):
             return f"正确选项：{chr(65 + answer_index)}. {options[answer_index]}"
-        return "本题未提供官方答案"
+        return "本题未提供参考答案"
 
     @staticmethod
     def _sub_answer_lines(question: Dict[str, Any]) -> List[str]:

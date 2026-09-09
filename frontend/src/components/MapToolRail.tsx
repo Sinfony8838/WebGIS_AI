@@ -22,6 +22,8 @@ type Props = {
   onToggleGraticule: () => void;
   /** Reset the active 2D/3D view to the default Asia-centric scene. */
   onResetView: () => void;
+  onToggleLayers?: () => void;
+  layersOpen?: boolean;
 };
 
 type ToolDescriptor = {
@@ -186,7 +188,9 @@ export function MapToolRail({
   onZoomOut,
   onClear,
   onToggleGraticule,
-  onResetView
+  onResetView,
+  onToggleLayers,
+  layersOpen = false
 }: Props) {
   const canClear = hasSearchArea || hasMeasurements || hasAnnotations || mode !== "browse";
   const isGlobe = viewMode === "globe";
@@ -203,6 +207,12 @@ export function MapToolRail({
       <div className="tool-rail-mode-row">
         <MapModeToggle mode={viewMode} busy={busy} onChange={onChangeViewMode} />
       </div>
+
+      {onToggleLayers && <button type="button" className={`tool-rail-button tool-rail-layers ${layersOpen ? "active" : ""}`}
+        aria-pressed={layersOpen} onClick={onToggleLayers} data-testid="layer-manager-toggle" title="查看、显隐和管理地图图层">
+        <span className="tool-rail-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><path d="m12 3 9 5-9 5-9-5 9-5Zm-9 9 9 5 9-5M3 16l9 5 9-5" {...STROKE_PROPS} /></svg></span>
+        <span className="tool-rail-label">图层管理</span>
+      </button>}
 
       <div className="tool-rail-divider" aria-hidden="true" />
 

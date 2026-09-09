@@ -1,3 +1,4 @@
+import { ThinkingIndicator } from "./ThinkingIndicator";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   bindLessonDesignQuestion,
@@ -80,6 +81,14 @@ function formatQuestion(q: LessonQuestion): string {
   return `${prefix}${q.text || q.task_text || ""}${optionLine}`;
 }
 
+type DesignRehearsalReport = {
+  ready: boolean;
+  errors?: string[];
+  warnings?: string[];
+  total_minutes?: number;
+  duration_minutes?: number;
+};
+
 export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose, onFinalized, onEnterRehearsal }: Props) {
   const [design, setDesign] = useState<LessonDesignSession | null>(null);
   const [planItems, setPlanItems] = useState<DesignPlanItem[]>([]);
@@ -90,6 +99,9 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [focusStep, setFocusStep] = useState("");
+  const [checkedPlan, setCheckedPlan] = useState<{ designId: string; revision: number; report: DesignRehearsalReport } | null>(null);
+  const checkRequest = useRef(0);
+  useEffect(() => () => { checkRequest.current += 1; }, [projectId, initialDesignId]);
   const [banks, setBanks] = useState<QuestionBankSummary[]>([]);
   const [importBusy, setImportBusy] = useState(false);
   const [importNote, setImportNote] = useState("");
@@ -171,6 +183,27 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
     return "todo";
   }
 
+  async function runPlanCheck() {
+    if (!design || busy) return;
+    const request = ++checkRequest.current;
+    setBusy(true);
+    setError("");
+    setCheckedPlan(null);
+    try {
+      const latest: LessonDesignSession & { rehearsal_report?: DesignRehearsalReport } = await fetchLessonDesign(design.design_id);
+      if (request !== checkRequest.current) return;
+      if (!latest.rehearsal_report || typeof latest.rehearsal_report.ready !== "boolean") {
+        throw new Error("当前后端未返回预演报告，请更新后端后重试。");
+      }
+      applySession(latest);
+      setCheckedPlan({ designId: latest.design_id, revision: latest.revision, report: latest.rehearsal_report });
+    } catch (exc) {
+      if (request === checkRequest.current) setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      if (request === checkRequest.current) setBusy(false);
+    }
+  }
+
   async function runTurn(text: string, step = "") {
     if (!design || !text.trim() || busy) return;
     setMessages((previous) => [...previous, { role: "teacher", text }]);
@@ -194,7 +227,10 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
       setMessages((previous) => [...previous, { role: "assistant", text: result.assistant_message }]);
       setInput("");
       if (result.rehearsal_report) {
-        const report = result.rehearsal_report as { ready?: boolean };
+        const report = result.rehearsal_report as DesignRehearsalReport;
+        if (typeof report.ready === "boolean") {
+          setCheckedPlan({ designId: design.design_id, revision: result.revision, report });
+        }
         setMessages((previous) => [
           ...previous,
           { role: "assistant", text: `预演检查：${report.ready ? "结构已通过" : "仍有需要补充的内容"}。` }
@@ -488,7 +524,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
             ) : null}
           </header>
           <div className="ldw-mid-scroll" data-testid="ldw-plan">
-            {viewStep === "rehearsal" ? <RehearsalCard design={design} onRun={() => void runTurn("请运行完整预演检查", "rehearsal")} busy={busy} /> : null}
+            {viewStep === "rehearsal" ? <RehearsalCard design={design} report={checkedPlan?.designId === design?.design_id && checkedPlan?.revision === design?.revision ? checkedPlan?.report : null} onRun={() => void runPlanCheck()} busy={busy} /> : null}
             {viewSections.map((sectionId) => renderSectionEditor(sectionId))}
             {viewStep === "question_matching" ? (
               <QuestionMatchingCard
@@ -587,6 +623,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
             ))}
             <div ref={chatEndRef} />
           </div>
+          {busy ? <ThinkingIndicator label={`正在处理${STEPS.find(([key]) => key === viewStep)?.[1] || "教案"}…`} testId="lesson-design-thinking" /> : null}
           {error ? <p className="lesson-design-error" data-testid="ldw-error">{error}</p> : null}
           <div className="ldw-composer">
             <textarea
@@ -683,7 +720,7 @@ function SectionBody({
                     <p>{formatQuestion(question)}</p>
                     <button
                       type="button"
-                      className="mini-control"
+                      className="ldw-remove-question"
                       disabled={busy}
                       onClick={() => onRemoveQuestion(stage.stage_id, question.question_id)}
                       aria-label="移除题目"
@@ -927,46 +964,34 @@ function parseStages(text: string, draft: { stages?: Array<Record<string, any>> 
 // ----------------------------------------------------------------------
 // 预演检查卡片
 // ----------------------------------------------------------------------
-function RehearsalCard({ design, onRun, busy }: { design: LessonDesignSession | null; onRun: () => void; busy: boolean }) {
-  const [report, setReport] = useState<{ ready?: boolean; errors?: string[]; warnings?: string[]; total_minutes?: number } | null>(null);
-  const revision = design?.revision || 0;
-  useEffect(() => {
-    setReport(null);
-  }, [revision]);
+function RehearsalCard({ design, report, onRun, busy }: {
+  design: LessonDesignSession | null;
+  report: DesignRehearsalReport | null | undefined;
+  onRun: () => void;
+  busy: boolean;
+}) {
   return (
     <div className="ldw-card ldw-rehearsal" data-testid="ldw-rehearsal">
       <div className="ldw-card-head">
         <strong>预演检查</strong>
-        <button type="button" className="toolbar-button compact" disabled={busy || !design} onClick={() => void runReport()}>
+        <button type="button" className="toolbar-button compact" disabled={busy || !design} onClick={onRun}>
           重新检查
         </button>
       </div>
-      <p className="ldw-hint">
-        检查环节时间是否与课时完全一致、目标是否有活动支撑、问题链是否递进、题目答案与题图是否完备。
-      </p>
+      <p className="ldw-hint">检查课时、目标活动对应、题目完整性与地图能力引用。结构检查不代表知识事实、资料来源和教学效果已核实。</p>
       {report ? (
-        <div className={`ldw-report ${report.ready ? "ok" : "bad"}`}>
-          <strong>{report.ready ? "结构已通过，可进入确认发布" : "仍有需要补充的内容"}</strong>
+        <div className={`ldw-report ${report.ready ? "ok" : "bad"}`} role="status">
+          <strong>{report.ready ? "结构检查通过，仍需教师核对内容并确认章节" : "仍有需要补充的内容"}</strong>
+          {report.total_minutes !== undefined ? <small>环节合计 {report.total_minutes} 分钟 / 计划 {report.duration_minutes ?? "—"} 分钟</small> : null}
           {report.errors?.length ? <small className="ldw-report-errors">必须处理：{report.errors.join("；")}</small> : null}
           {report.warnings?.length ? <small>建议关注：{report.warnings.join("；")}</small> : null}
         </div>
-      ) : null}
+      ) : <p className="ldw-hint">尚未检查当前草稿，请运行预演。</p>}
       <button type="button" className="toolbar-button compact primary" disabled={busy || !design} onClick={onRun} data-testid="ldw-run-rehearsal">
-        运行完整预演
+        {busy ? "正在检查…" : "运行完整预演"}
       </button>
     </div>
   );
-
-  async function runReport() {
-    if (!design) return;
-    try {
-      const result = await turnLessonDesign(design.design_id, "请运行完整预演检查", design.revision, "rehearsal");
-      const next = result.rehearsal_report as { ready?: boolean; errors?: string[]; warnings?: string[] } | null;
-      setReport(next || null);
-    } catch {
-      setReport(null);
-    }
-  }
 }
 
 // ----------------------------------------------------------------------

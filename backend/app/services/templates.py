@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..config import AppConfig
-from ..geo import generate_dynamic_hu_line
+from ..geo import HU_LINE_METHODS, generate_dynamic_hu_line
 from ..models import LayerRecord
 from ..store import RuntimeStore
 
@@ -173,17 +173,12 @@ class TemplateService:
 
     def _build_population_distribution(self, project_id: str) -> Dict[str, Any]:
         collection = self._load_province_collection()
-        values = [
-            float(feature["properties"].get("population") or 0)
-            for feature in collection["features"]
-            if float(feature["properties"].get("population") or 0) > 0
-        ]
-        thresholds = _quantile_thresholds(values, 5)
-        palette = ["#fff0d9", "#ffd08a", "#f6a04d", "#dc6a2c", "#a73b1d"]
+        thresholds = [10, 100, 400, 800]
+        palette = ["#e8f4f2", "#b6ddd7", "#68b7ad", "#288b87", "#07575f"]
         for feature in collection["features"]:
-            value = float(feature["properties"].get("population") or 0)
-            if value <= 0:
-                feature["properties"]["__fillColor"] = "#e6e9ee"
+            value = float(feature["properties"].get("density") or 0)
+            if feature["properties"].get("density") is None or value < 0:
+                feature["properties"]["__fillColor"] = "#dbe1e6"
                 feature["properties"]["__fillOpacity"] = 0.35
                 feature["properties"]["__strokeColor"] = "#8a93a3"
                 feature["properties"]["__strokeWidth"] = 0.8
@@ -193,8 +188,8 @@ class TemplateService:
                 if value >= threshold:
                     level = index
             feature["properties"]["__fillColor"] = palette[min(level, len(palette) - 1)]
-            feature["properties"]["__fillOpacity"] = 0.72
-            feature["properties"]["__strokeColor"] = "#432818"
+            feature["properties"]["__fillOpacity"] = 0.88
+            feature["properties"]["__strokeColor"] = "#ffffff"
             feature["properties"]["__strokeWidth"] = 1.0
 
         layer = LayerRecord.create(
@@ -204,29 +199,30 @@ class TemplateService:
             source="builtin",
             geometry_type="Polygon",
             data=collection,
-            metadata={"feature_count": len(collection["features"]), "template_id": "population_distribution"},
-            style={"labelField": "short_name", "strokeColor": "#432818"},
+            metadata={"feature_count": len(collection["features"]), "template_id": "population_distribution", "metric": "density", "unit": "人/km²", "source_year": "2020/2021", "classification": "fixed_breaks", "breaks": thresholds, "palette": palette},
+            style={"labelField": "short_name", "strokeColor": "#ffffff"},
             z_index=30,
         )
         return {
-            "summary": "已切换到人口分布模板（省级真实边界，七普人口分级设色）。",
-            "assistant_message": "人口分布模板已加载，基于省级行政区真实边界与 2020 年人口数据，可直接观察东密西疏的梯度差异。",
+            "summary": "已切换到人口分布模板（省级真实边界，人口密度固定分级设色）。",
+            "assistant_message": "人口分布模板已加载，按人口密度（人/km²）着色，采用省级行政区边界与七普及港澳台配套统计（2020/2021），可直接观察东密西疏的梯度差异。",
             "layers": [layer],
             "view": {"center": [104.0, 35.0], "zoom": 4, "extent": [78.0, 18.0, 132.0, 50.5]},
             "enabled_templates": ["population_distribution"],
         }
 
     def _build_population_density(self, project_id: str) -> Dict[str, Any]:
+        from shapely.geometry import shape
         provinces = self._load_province_collection()
         features = []
-        densities: List[float] = []
         for feature in provinces["features"]:
             properties = feature["properties"]
-            center = properties.get("center")
+            region = shape(feature["geometry"])
+            point = region.representative_point()
+            center = [point.x, point.y]
             density = float(properties.get("density") or 0)
             if not center or density <= 0:
                 continue
-            densities.append(density)
             features.append(
                 {
                     "type": "Feature",
@@ -238,14 +234,12 @@ class TemplateService:
                     "geometry": {"type": "Point", "coordinates": [float(center[0]), float(center[1])]},
                 }
             )
-        maximum = max(densities) if densities else 1.0
         for feature in features:
             density = float(feature["properties"]["density"])
-            ratio = (density / maximum) ** 0.5
-            feature["properties"]["__radius"] = round(5 + ratio * 20, 2)
-            feature["properties"]["__fillColor"] = "#1d4ed8"
-            feature["properties"]["__fillOpacity"] = round(0.25 + ratio * 0.5, 2)
-            feature["properties"]["__strokeColor"] = "#dbeafe"
+            feature["properties"]["__radius"] = round(max(4, min(24, density ** 0.5 * .55)), 2)
+            feature["properties"]["__fillColor"] = next((color for boundary, color in zip([10, 100, 400, 800, float("inf")], ["#e8f4f2", "#b6ddd7", "#68b7ad", "#288b87", "#07575f"]) if density < boundary), "#07575f")
+            feature["properties"]["__fillOpacity"] = 0.88
+            feature["properties"]["__strokeColor"] = "#ffffff"
         collection = {"type": "FeatureCollection", "features": features}
 
         layer = LayerRecord.create(
@@ -256,13 +250,13 @@ class TemplateService:
             geometry_type="Point",
             data=collection,
             metadata={"feature_count": len(features), "template_id": "population_density"},
-            style={"labelField": "name", "radius": 10, "fillColor": "#1d4ed8"},
+            style={"labelField": "name"},
             opacity=0.9,
             z_index=34,
         )
         return {
             "summary": "已切换到人口密度模板（省级真实密度，点状符号分级）。",
-            "assistant_message": "人口密度模板已加载。圆点越大表示该省人口密度越高，数据来自 2020 年七普。",
+            "assistant_message": "人口密度模板已加载。圆点越大表示省级平均人口密度越高，点位为省域内部代表点，不代表城市位置；数据采用七普及港澳台配套统计（2020/2021）。",
             "layers": [layer],
             "view": {"center": [104.0, 35.0], "zoom": 4, "extent": [78.0, 18.0, 132.0, 50.5]},
             "enabled_templates": ["population_density"],
@@ -333,15 +327,20 @@ class TemplateService:
             data=dynamic_payload["features"],
             metadata={
                 "template_id": "hu_line_comparison",
+                **HU_LINE_METHODS,
                 "classic_share": round(dynamic_payload["classic_share"], 4),
                 "dynamic_share": round(dynamic_payload["dynamic_share"], 4),
+                "method": "fixed_direction_parallel_shift", "target_share": 0.94,
+                "source_year": "2020", "sample_count": len(weighted_points),
+                "limitations": "行政区人口整体归于几何中心一侧，非栅格切分；预设94%目标，不能证明分界线移动。",
+                "reference_url": "https://www.geog.com.cn/CN/abstract/article/0375-5444/37311",
             },
             style={"labelField": "name"},
             z_index=50,
         )
         return {
             "summary": "已叠加胡焕庸线对比模板，可直接讲解人口空间格局分界。",
-            "assistant_message": "胡焕庸线对比模板已加载。经典线与动态拟合线都保留了东南密集、西北稀疏的人口格局特征。",
+            "assistant_message": "胡焕庸线对比模板已加载。经典黑河—腾冲线是参考线；另一条线是在2020年地级行政区中心点人口数据上，按预设94%目标平移得到的教学拟合，不能解释为新的胡焕庸线。",
             "layers": [layer],
             "view": {"center": [104.0, 35.0], "zoom": 4, "extent": [78.0, 18.0, 132.0, 50.5]},
             "enabled_templates": ["hu_line_comparison"],

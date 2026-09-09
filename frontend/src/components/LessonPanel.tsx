@@ -30,6 +30,7 @@ type Props = {
   onChangePopulationSourceVersion?: (version: string) => void;
   onResolvePrepChangeSet?: (decision: "apply" | "reject", acceptedStageIds: string[]) => void;
   onStartClass: () => void;
+  onDesignFromLesson?: (lesson: LessonRecord) => void;
   /** 进入该课时的模拟测试（试讲 → 通过后发布为新版本）。 */
   onStartRehearsal?: (lesson: LessonRecord) => void;
   onClose: () => void;
@@ -82,6 +83,7 @@ export function LessonPanel({
   onChangePopulationSourceVersion,
   onResolvePrepChangeSet,
   onStartClass,
+  onDesignFromLesson,
   onStartRehearsal,
   onClose
 }: Props) {
@@ -193,6 +195,13 @@ export function LessonPanel({
             data-testid="population-prep-toggle"
           >
             人口专题智能备课
+          </button>
+        ) : null}
+        {onDesignFromLesson && activeLesson ? (
+          <button type="button" className="toolbar-button compact" disabled={busy}
+            title="以此课的环节、地图和题目建立或继续独立草稿，原课时保持不变"
+            onClick={() => onDesignFromLesson(activeLesson)} data-testid="design-from-lesson">
+            基于此课共创
           </button>
         ) : null}
         {onStartRehearsal && activeLesson ? (

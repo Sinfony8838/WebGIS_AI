@@ -69,12 +69,12 @@ vi.mock("../components/LessonWorkflowShell", () => ({
   LessonWorkflowShell: () => null
 }));
 
-// BrushOverlay is always mounted by App and needs a canvas 2D context; it is
+// MapBrushOverlay is always mounted by App and needs a canvas 2D context; it is
 // irrelevant to the account dock, so stub it. All brush ref usage in App
 // goes through optional chaining, so a null ref is safe.
-vi.mock("../components/BrushOverlay", async () => {
+vi.mock("../components/MapBrushOverlay", async () => {
   const { forwardRef } = await import("react");
-  return { BrushOverlay: forwardRef(() => null) };
+  return { MapBrushOverlay: forwardRef(() => null) };
 });
 
 // Let the init effect fail fast at fetchHealth so no project / layer state is

@@ -1,3 +1,4 @@
+import { rankColor } from "../lib/populationVisual";
 import { useEffect, useMemo, useState } from "react";
 import type { LayerRecord } from "../types";
 
@@ -52,7 +53,7 @@ function resolveItems(layer: LayerRecord | null): VisualizationItem[] {
   }
   const visualization = (layer.metadata || {}).visualization as Visualization | undefined;
   if (visualization && Array.isArray(visualization.items) && visualization.items.length > 0) {
-    return visualization.items.slice().sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
+    return visualization.items.slice().sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0)).map((item,index) => ({...item, fill_color:rankColor(index+1,visualization.items!.length)}));
   }
   const features = Array.isArray((layer.data as { features?: unknown[] }).features)
     ? ((layer.data as { features: Array<Record<string, unknown>> }).features)
@@ -66,7 +67,7 @@ function resolveItems(layer: LayerRecord | null): VisualizationItem[] {
         province: String(properties.province ?? ""),
         value: Number(properties.value ?? properties.population_2020 ?? 0),
         unit: String(properties.unit ?? "人"),
-        fill_color: String(properties.__fillColor ?? ""),
+        fill_color: rankColor(Number(properties.rank ?? index + 1), features.length),
       } satisfies VisualizationItem;
     })
     .sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));

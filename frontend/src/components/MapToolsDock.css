@@ -1,0 +1,8 @@
+.map-tools-dock { align-items: stretch; align-self: start; }
+.map-tools-dock-content { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.map-tools-dock-content[hidden] { display: none !important; }
+.map-tools-dock-toggle { display: flex; align-items: center; justify-content: center; gap: 5px; width: 100%; min-height: 34px; padding: 6px 8px; border: 1px solid var(--panel-border, #8ec8ee40); border-radius: 10px; color: var(--text-main, #d4e8f6); background: var(--surface, #10283a); font-family: inherit; font-size: 11px; cursor: pointer; white-space: nowrap; pointer-events: auto; }
+.map-tools-dock-toggle:hover { color: var(--accent, #7cdbc9); border-color: currentColor; }
+.map-tools-dock-toggle:focus-visible { outline: 2px solid var(--accent, #7cdbc9); outline-offset: 3px; }
+.map-tools-dock.is-collapsed { justify-self: end; width: 60px; }
+.map-tools-dock.is-collapsed .map-tools-dock-toggle { min-height: 40px; }

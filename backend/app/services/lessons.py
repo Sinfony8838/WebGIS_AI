@@ -154,7 +154,8 @@ def normalize_brainstorm(raw: Any) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
     prompt = str(raw.get("prompt") or "").strip()
-    regions = [str(item).strip() for item in raw.get("regions") or [] if str(item).strip()]
+    raw_regions = raw.get("regions")
+    regions = list(dict.fromkeys(item.strip() for item in raw_regions if isinstance(item, str) and item.strip())) if isinstance(raw_regions, list) else []
     if not prompt or not regions:
         return {}
     return {
@@ -228,6 +229,7 @@ class LessonService:
                 for lesson in lessons
                 if lesson.source == "builtin" or lesson.owner_user_id == owner_user_id
             ]
+        lessons.sort(key=lambda lesson: not bool(lesson.metadata.get("recommended")))
         return {"status": "success", "items": [lesson.to_dict() for lesson in lessons]}
 
     def get_lesson(self, lesson_id: str) -> LessonRecord:
@@ -397,6 +399,10 @@ class LessonService:
         scene_catalog_ids = {str(item) for item in scene.get("catalog_layers") or []}
         for layer in list(project.layers):
             layer_id = layer.layer_id
+            # Assistant annotations and POIs belong to the previous map discussion. Keep
+            # their data, but hide them unless this scene explicitly requests them.
+            if layer_id in {"assistant_annotations", "poi_search_results"} and layer.visible:
+                self.store.patch_layer(project_id, layer_id, {"visible": False})
             if layer_id.startswith("visual_query_"):
                 self.store.remove_layer(project_id, layer_id)
                 continue
