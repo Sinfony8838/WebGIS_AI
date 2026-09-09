@@ -11,8 +11,16 @@ recognizer's built-in endpoint detection (VAD-style silence splitting).
 
 Everything degrades gracefully: when sherpa-onnx is not installed or the
 model files have not been downloaded (``scripts/download_voice_models.py``),
-``available()`` reports False and the frontend falls back to Web Speech or
-text input. No existing test needs the models.
+``status()`` reports a precise ``state`` and the frontend falls back to Web
+Speech or text input. No existing test needs the models.
+
+Readiness states (``status()["state"]``):
+    disabled      voice ASR turned off by configuration
+    not_installed dependency missing, or no model file present at all
+    incomplete    some model files present but missing/undersized members
+    load_failed   model files exist but the recognizer failed to load
+    initializing  background warm-up currently loading the recognizer
+    ready         recognizer loaded (or loadable) and usable right now
 """
 from __future__ import annotations
 
@@ -21,6 +29,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..config import AppConfig
+from .voice_model_paths import (
+    MODEL_FILES,
+    PARAFORMER_SUBDIR,
+    files_complete,
+    missing_files,
+    resolve_model_dir,
+    undersized_files,
+)
 
 try:  # heavy optional dependency; absence must not break the backend
     import numpy as _numpy
@@ -28,12 +44,6 @@ try:  # heavy optional dependency; absence must not break the backend
 except Exception:  # pragma: no cover - depends on local environment
     _numpy = None
     _sherpa_onnx = None
-
-MODEL_DIR_NAME = "voice-models"
-PARAFORMER_SUBDIR = "sherpa-onnx-streaming-paraformer-bilingual-zh-en"
-# The release ships fp32 and int8 variants; int8 is the right size/speed
-# trade-off for a teacher laptop CPU.
-MODEL_FILES = ("encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt")
 
 
 class VoiceAsrEngine:
@@ -49,37 +59,107 @@ class VoiceAsrEngine:
         self._recognizer: Any = None
         self._lock = threading.Lock()
         self._init_error = ""
+        self._warming = False
 
     # ------------------------------------------------------------------
     # Availability
     # ------------------------------------------------------------------
 
     def model_dir(self) -> Path:
-        return self.config.data_dir / MODEL_DIR_NAME / PARAFORMER_SUBDIR
+        """Resolve via the shared rule (env override → complete legacy dir →
+        stable per-user dir) so every worktree sees the same installation."""
+        override = self.config.voice_model_dir or None
+        stable_root = self.config.voice_model_stable_root or None
+        return resolve_model_dir(
+            legacy_data_dir=self.config.data_dir,
+            override=Path(override) if override else None,
+            stable_root=Path(stable_root) if stable_root else None,
+        )
 
-    def available(self) -> bool:
+    def _files_ready(self) -> bool:
         if not self.config.voice_asr_enabled or _sherpa_onnx is None or _numpy is None:
             return False
-        model_dir = self.model_dir()
-        return all((model_dir / name).is_file() for name in MODEL_FILES)
+        return files_complete(self.model_dir())
+
+    def available(self) -> bool:
+        """True when a streaming session can be created right now."""
+        return self._files_ready() and not self._init_error
 
     def status(self) -> Dict[str, Any]:
-        reason = ""
         if not self.config.voice_asr_enabled:
-            reason = "disabled_by_config"
+            state = "disabled"
         elif _sherpa_onnx is None or _numpy is None:
-            reason = "sherpa_onnx_not_installed"
-        elif not self.available():
-            reason = "models_not_downloaded"
+            state = "not_installed"
+        elif self._init_error:
+            state = "load_failed"
+        elif self._warming:
+            state = "initializing"
+        elif self._recognizer is not None:
+            state = "ready"
+        else:
+            model_dir = self.model_dir()
+            missing = missing_files(model_dir)
+            if missing:
+                # Distinguish "nothing downloaded at all" from "partial
+                # download" so operators know whether to run the script once
+                # or to repair a broken install.
+                state = "incomplete" if len(missing) < len(MODEL_FILES) else "not_installed"
+            elif undersized_files(model_dir):
+                state = "incomplete"
+            else:
+                # Files complete, recognizer not loaded yet: lazy load on the
+                # next session. Report ready (legacy contract); a load failure
+                # surfaces as load_failed once attempted.
+                state = "ready"
+
+        reason = ""
+        if state == "disabled":
+            reason = "disabled_by_config"
+        elif state == "not_installed":
+            reason = "sherpa_onnx_not_installed" if (_sherpa_onnx is None or _numpy is None) else "models_not_downloaded"
+        elif state == "incomplete":
+            reason = "models_incomplete"
+        elif state == "load_failed":
+            reason = self._init_error
+
         return {
-            "available": self.available() and not self._init_error,
-            "reason": reason or self._init_error,
-            "model": PARAFORMER_SUBDIR if self.available() else "",
+            "available": self.available(),
+            "state": state,
+            "reason": reason,
+            "model": PARAFORMER_SUBDIR if self._files_ready() else "",
+            "model_dir": str(self.model_dir()),
         }
 
     # ------------------------------------------------------------------
     # Recognizer lifecycle
     # ------------------------------------------------------------------
+
+    def warm_up(self) -> None:
+        """Start loading the recognizer in a daemon thread (idempotent).
+
+        Called once at runtime startup so the first browser connection does
+        not pay the multi-second ONNX session cost, and so /health can report
+        ``initializing`` instead of silently accepting a slow first session.
+        """
+        if not self.config.voice_asr_enabled or self._recognizer is not None or self._warming:
+            return
+        if _sherpa_onnx is None or _numpy is None:
+            return
+        self._warming = True
+
+        def _load() -> None:
+            try:
+                self._ensure_recognizer()
+            except Exception:
+                pass  # _init_error already recorded by _ensure_recognizer
+            finally:
+                self._warming = False
+
+        threading.Thread(target=_load, name="voice-asr-warmup", daemon=True).start()
+
+    def warm_up_sync(self) -> None:
+        """Blocking variant used by the deployment check script."""
+        self._ensure_recognizer()
 
     def _ensure_recognizer(self) -> Any:
         if self._recognizer is not None:
@@ -90,9 +170,12 @@ class VoiceAsrEngine:
             if _sherpa_onnx is None or _numpy is None:
                 raise RuntimeError("sherpa-onnx is not installed")
             model_dir = self.model_dir()
-            missing = [name for name in MODEL_FILES if not (model_dir / name).is_file()]
+            missing = missing_files(model_dir)
             if missing:
                 raise RuntimeError("voice ASR models missing: " + ", ".join(missing))
+            undersized = undersized_files(model_dir)
+            if undersized:
+                raise RuntimeError("voice ASR models incomplete (undersized files): " + ", ".join(undersized))
             try:
                 self._recognizer = _sherpa_onnx.OnlineRecognizer.from_paraformer(
                     tokens=str(model_dir / "tokens.txt"),

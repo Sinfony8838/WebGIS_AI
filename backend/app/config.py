@@ -219,6 +219,14 @@ class AppConfig:
     voice_asr_enabled: bool = field(
         default_factory=lambda: os.getenv("WEBGIS_AI_VOICE_ASR_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
     )
+    # Local voice-model storage. Both values stay out of Git (machine paths);
+    # resolution order lives in services/voice_model_paths.py and is shared
+    # with scripts/download_voice_models.py so a model downloaded once is
+    # found from every worktree. ``voice_model_dir`` pins the model root
+    # directly; ``voice_model_stable_root`` overrides only the per-user
+    # fallback root (mainly for hermetic tests).
+    voice_model_dir: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_VOICE_MODEL_DIR", "").strip())
+    voice_model_stable_root: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_VOICE_MODEL_STABLE_ROOT", "").strip())
     # Cross-cutting agent-harness policy.  Keep operational limits in
     # configuration rather than prompt prose so they are deterministic,
     # inspectable, and testable.

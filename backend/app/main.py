@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import secrets
 import time
@@ -1365,6 +1366,21 @@ def _websocket_authorized(websocket: "WebSocket") -> bool:
     return auth_service.authenticate(websocket.cookies.get(SESSION_COOKIE, "")) is not None
 
 
+async def _reject_voice_stream(websocket: "WebSocket", state: str, detail: str, code: int = 4403) -> None:
+    """Accept, explain why the stream cannot start, then close.
+
+    The JSON event arrives before the close so the frontend can show the
+    actionable reason (model missing / load failed / permission) instead of a
+    bare close code.
+    """
+    await websocket.accept()
+    try:
+        await websocket.send_text(json.dumps({"type": "error", "reason": state, "detail": detail}, ensure_ascii=False))
+    except Exception:  # client already gone
+        pass
+    await websocket.close(code=code)
+
+
 @app.websocket("/assistant/voice/stream")
 async def assistant_voice_stream(websocket: "WebSocket") -> None:
     # Not authorized: close with 4401 so the frontend can fall back to
@@ -1373,11 +1389,24 @@ async def assistant_voice_stream(websocket: "WebSocket") -> None:
         await websocket.close(code=4401)
         return
     engine = runtime.voice_asr
-    if not engine.available():
-        await websocket.close(code=4403)
+    status = engine.status()
+    if not status["available"] and status.get("state") == "initializing":
+        # The recognizer is warming up in the background; wait briefly so a
+        # browser that connects right after backend start still gets audio.
+        for _ in range(100):  # up to ~10s
+            await asyncio.sleep(0.1)
+            status = engine.status()
+            if status["available"] or status.get("state") != "initializing":
+                break
+    if not status["available"]:
+        await _reject_voice_stream(websocket, str(status.get("state") or "unavailable"), str(status.get("reason") or ""))
         return
     await websocket.accept()
-    session = engine.create_session()
+    try:
+        session = engine.create_session()
+    except Exception as exc:  # lazy recognizer load failed between checks
+        await _reject_voice_stream(websocket, "load_failed", str(exc))
+        return
     try:
         while True:
             message = await websocket.receive()

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent as ReactDragEvent, PointerEvent as ReactPointerEvent } from "react";
 import { getSpeechRecognitionConstructor, getSpeechRecognitionErrorMessage, type BrowserSpeechRecognition } from "../speechRecognition";
-import { audioWorkletSupported, createVoiceStream, type VoiceStreamHandle } from "../voiceStream";
-import { describeScreenRejection, screenTranscript } from "../voiceGate";
-import { isSpeaking } from "../speechSynthesis";
+import { audioWorkletSupported } from "../voiceStream";
+import { cancelSpeech } from "../speechSynthesis";
+import { UNAVAILABLE_MESSAGES, VoiceSessionController, type VoiceSessionSettings, type VoiceSessionSnapshot } from "../voiceSession";
 import { getApiBase } from "../api";
 import type { AssistantTab, ChatMessage, ImageAttachment, JobRecord } from "../types";
 import { TeachingPet } from "./TeachingPet";
@@ -55,6 +55,10 @@ type Props = {
   onTtsToggle?: (enabled: boolean) => void;
   /** 后端本地 ASR（sherpa-onnx WS 流）是否可用（来自 /health 的 voice_asr）。 */
   voiceStreamAvailable?: boolean;
+  /** /health 的 voice_asr.state（ready/initializing/incomplete/...），用于精确的不可用原因。 */
+  voiceAsrState?: string;
+  /** /health 的 voice_asr.reason，补充不可用说明。 */
+  voiceAsrReason?: string;
   /** 常开聆听状态与实时转写上报（驱动全屏光晕层）。 */
   onListeningChange?: (listening: boolean) => void;
   onPartialTranscript?: (text: string) => void;
@@ -365,6 +369,47 @@ function initialVoiceText(supported: boolean): string {
   return supported ? VOICE_IDLE_TEXT : VOICE_UNSUPPORTED_TEXT;
 }
 
+// ===== 智能交互默认聆听：本地持久化设置 =====
+const AUTO_LISTEN_STORAGE_KEY = "webgis.voice.autoListen";
+const WAKE_ONLY_STORAGE_KEY = "webgis.voice.wakeOnly";
+
+function readVoiceSetting(key: string, fallback: boolean): boolean {
+  if (typeof window === "undefined") {
+    return fallback;
+  }
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw === null ? fallback : raw === "1";
+  } catch {
+    return fallback;
+  }
+}
+
+function writeVoiceSetting(key: string, value: boolean): void {
+  try {
+    window.localStorage.setItem(key, value ? "1" : "0");
+  } catch {
+    /* storage unavailable: settings stay session-only */
+  }
+}
+
+/** Map /health voice_asr state/reason to the precise unavailable message. */
+function voiceAsrUnavailableText(state: string, reason: string): string {
+  if (state === "initializing") {
+    return "本地语音识别正在加载模型，请稍候…";
+  }
+  if (state === "not_installed" || state === "incomplete") {
+    return "本地语音识别模型未安装或不完整。请在服务端运行 scripts/download_voice_models.py 并重启后端，或改用文字输入。";
+  }
+  if (state === "load_failed") {
+    return `本地语音识别模型加载失败${reason ? `：${reason}` : ""}。请检查服务端日志，或改用文字输入。`;
+  }
+  if (state === "disabled") {
+    return "本地语音识别已在服务端配置中关闭，可改用浏览器识别或文字输入。";
+  }
+  return UNAVAILABLE_MESSAGES.asr_unavailable;
+}
+
 export function CopilotWidget({
   chatLog,
   currentJob,
@@ -391,6 +436,8 @@ export function CopilotWidget({
   ttsEnabled = true,
   onTtsToggle = () => undefined,
   voiceStreamAvailable = false,
+  voiceAsrState = "",
+  voiceAsrReason = "",
   onListeningChange = () => undefined,
   onPartialTranscript = () => undefined,
   onCapturedCommand = () => undefined
@@ -431,14 +478,19 @@ export function CopilotWidget({
   const manualVoiceStopRef = useRef(false);
   const voiceTranscriptRef = useRef("");
   const voiceErrorRef = useRef(false);
-  // 智能交互语音：本地 ASR WebSocket 流（优先）与常开聆听状态。
-  const voiceStreamRef = useRef<VoiceStreamHandle | null>(null);
-  const [alwaysOn, setAlwaysOn] = useState(false);
-  const [alwaysOnActive, setAlwaysOnActive] = useState(false);
+  // 智能交互语音：统一生命周期控制器（唯一采音会话）+ 持久化设置。
+  const voiceSessionRef = useRef<VoiceSessionController | null>(null);
+  const [voiceSession, setVoiceSession] = useState<VoiceSessionSnapshot>({
+    phase: "idle",
+    detail: "",
+    partial: "",
+    ignoredCount: 0
+  });
+  const [voiceSettings, setVoiceSettings] = useState<VoiceSessionSettings>(() => ({
+    autoListenOnEnter: readVoiceSetting(AUTO_LISTEN_STORAGE_KEY, true),
+    requireWakeWord: readVoiceSetting(WAKE_ONLY_STORAGE_KEY, false)
+  }));
   const [partialPreview, setPartialPreview] = useState("");
-  const [ignoredCount, setIgnoredCount] = useState(0);
-  const [visibilityTick, setVisibilityTick] = useState(0);
-  const [pushToTalkStream, setPushToTalkStream] = useState(false);
   const voiceSource: "local" | "browser" | "none" = useMemo(() => {
     if (voiceStreamAvailable && audioWorkletSupported()) {
       return "local";
@@ -447,6 +499,10 @@ export function CopilotWidget({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voiceStreamAvailable, speechSupported]);
   const interactionActive = assistantTab === "interaction";
+  // Voice-session callbacks are read through a ref so the controller (created
+  // once) always calls the latest props without being recreated.
+  const voiceCallbacksRef = useRef({ onVoiceSubmit, onVoiceNotice, onListeningChange, onPartialTranscript, onCapturedCommand });
+  voiceCallbacksRef.current = { onVoiceSubmit, onVoiceNotice, onListeningChange, onPartialTranscript, onCapturedCommand };
 
   const dragStateRef = useRef<
     | {
@@ -470,7 +526,31 @@ export function CopilotWidget({
   }, [openSignal]);
 
   const jobStages = useMemo(() => (currentJob ? Object.entries(currentJob.stages) : []), [currentJob]);
-  const isListening = voiceStatus === "listening" || pushToTalkStream;
+  const isListening = voiceStatus === "listening" || voiceSession.phase === "listening";
+  // 智能交互状态行：等待授权 / 正在连接 / 正在聆听 / 已识别 / 正在执行 /
+  // 正在播报 / 已暂停 / 识别不可用 —— 只有真实采音时才显示「正在聆听」。
+  const sessionStatusText = (() => {
+    switch (voiceSession.phase) {
+      case "awaiting_permission":
+        return "等待麦克风授权：请在浏览器弹窗中选择允许。";
+      case "connecting":
+        return voiceSession.detail || "正在连接本地语音识别…";
+      case "listening":
+        return voiceSettings.requireWakeWord ? "正在聆听：请说“小智，+指令”。" : "正在聆听：直接说出指令即可。";
+      case "captured":
+        return `已识别：${voiceSession.detail}`;
+      case "executing":
+        return "正在执行指令…";
+      case "speaking":
+        return "正在播报回复…";
+      case "paused":
+        return voiceSession.detail || "已暂停聆听，点击麦克风恢复。";
+      case "unavailable":
+        return voiceSession.detail || UNAVAILABLE_MESSAGES.asr_unavailable;
+      default:
+        return "进入即自动聆听：直接说出指令，例如“切换到三维地球”。";
+    }
+  })();
   const citations = currentJob?.result?.citations || currentJob?.result?.knowledge?.citations || [];
   const plannedActions = currentJob?.result?.actions_planned || [];
   const confirmationId = String(currentJob?.result?.confirmation_id || "");
@@ -522,12 +602,84 @@ export function CopilotWidget({
     lastSeenMessages.current = chatLog.length;
   }, [chatLog.length, minimized]);
 
+  // ===== 智能交互语音会话：创建一次，全部输入经 ref 桥接 =====
+  useEffect(() => {
+    const controller = new VoiceSessionController({
+      apiBase: getApiBase,
+      audioWorkletSupported,
+      callbacks: {
+        onSnapshot: (snapshot) => setVoiceSession(snapshot),
+        onSubmitCommand: (command) => voiceCallbacksRef.current.onVoiceSubmit(command),
+        onPartial: (text) => {
+          setPartialPreview(text);
+          voiceCallbacksRef.current.onPartialTranscript(text);
+        },
+        onListeningChange: (listening) => voiceCallbacksRef.current.onListeningChange(listening),
+        onCapturedCommand: (command) => voiceCallbacksRef.current.onCapturedCommand(command),
+        onNotice: (tone, title, detail) => voiceCallbacksRef.current.onVoiceNotice(tone, title, detail)
+      }
+    });
+    voiceSessionRef.current = controller;
+    return () => {
+      controller.dispose();
+      voiceSessionRef.current = null;
+    };
+  }, []);
+
+  // 进入智能交互自动开始聆听（本地识别就绪时）；离开即停。
+  // voiceSource 只是展示层的路线选择：本地不可用时控制器停在「识别不可用」，
+  // 浏览器识别作为备用路线照常可用。
+  useEffect(() => {
+    const controller = voiceSessionRef.current;
+    if (!controller) {
+      return;
+    }
+    if (interactionActive) {
+      controller.setSettings(voiceSettings);
+      controller.enterInteraction();
+    } else {
+      controller.exitInteraction();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [interactionActive]);
+
+  useEffect(() => {
+    voiceSessionRef.current?.setSettings(voiceSettings);
+  }, [voiceSettings]);
+
+  useEffect(() => {
+    voiceSessionRef.current?.setBusy(busy);
+  }, [busy]);
+
+  // /health 轮询结果 → 识别可用性（不触发采音，只更新状态与原因）。
+  useEffect(() => {
+    if (voiceStreamAvailable) {
+      voiceSessionRef.current?.setAsrAvailability(true);
+    } else {
+      voiceSessionRef.current?.setAsrAvailability(false, voiceAsrUnavailableText(voiceAsrState, voiceAsrReason));
+    }
+  }, [voiceStreamAvailable, voiceAsrState, voiceAsrReason]);
+
+  // 页面隐藏 / 窗口失焦暂停采音；恢复由控制器遵循设置与手动暂停。
+  useEffect(() => {
+    const controller = () => voiceSessionRef.current;
+    const onVisibility = () => controller()?.setDocumentHidden(document.hidden);
+    const onBlur = () => controller()?.setWindowFocused(false);
+    const onFocus = () => controller()?.setWindowFocused(true);
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, []);
+
   useEffect(() => {
     return () => {
       recognitionRef.current?.stop();
       recognitionRef.current = null;
-      voiceStreamRef.current?.abort();
-      voiceStreamRef.current = null;
     };
   }, []);
 
@@ -539,16 +691,6 @@ export function CopilotWidget({
       manualVoiceStopRef.current = true;
       setVoiceStatusText("当前有任务在执行，语音输入已停止。");
       recognitionRef.current.stop();
-    }
-    if (pushToTalkStream) {
-      const stream = voiceStreamRef.current;
-      voiceStreamRef.current = null;
-      setPushToTalkStream(false);
-      void stream?.stop().then((pending) => {
-        if (pending) {
-          submitVoiceTranscript(pending, false);
-        }
-      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busy]);
@@ -698,174 +840,30 @@ export function CopilotWidget({
     recognitionRef.current.stop();
   }
 
-  function abortLocalStream() {
-    voiceStreamRef.current?.abort();
-    voiceStreamRef.current = null;
-    setPushToTalkStream(false);
-    setPartialPreview("");
-  }
-
-  /**
-   * 提交一段最终转写。requireWake=true（常开聆听）时必须过「小智」唤醒词
-   * 门控；push-to-talk（按钮即唤醒）直接提交，但仍剥掉可能说出的唤醒词。
-   */
-  function submitVoiceTranscript(transcript: string, requireWake: boolean) {
-    const clean = transcript.trim();
-    if (!clean) {
-      return;
-    }
-    const gate = screenTranscript(clean);
-    if (requireWake && !gate.accepted) {
-      setIgnoredCount((count) => count + 1);
-      setVoiceStatusText(describeScreenRejection(gate.reason));
-      setPartialPreview("");
-      onPartialTranscript("");
-      return;
-    }
-    const command = gate.accepted ? gate.command : clean;
-    setLastTranscript(command);
-    setPartialPreview("");
-    onPartialTranscript("");
-    onCapturedCommand(command);
-    setVoiceStatusText(`已捕获指令：${command}`);
-    onVoiceSubmit(command);
-  }
-
-  /** 常开聆听管理：智能暂停与恢复（busy/TTS/切Tab/失焦自动暂停）。 */
-  useEffect(() => {
-    if (!alwaysOn || !interactionActive || busy || voiceSource !== "local" || document.hidden) {
-      if (voiceStreamRef.current) {
-        voiceStreamRef.current.abort();
-        voiceStreamRef.current = null;
-      }
-      setAlwaysOnActive(false);
-      onListeningChange(false);
-      return;
-    }
-    let cancelled = false;
-    let handle: VoiceStreamHandle | null = null;
-    // TTS 播报期间等待播完再恢复，避免麦克风听到系统自己的播报。
-    (async () => {
-      for (let attempt = 0; attempt < 40 && isSpeaking() && !cancelled; attempt += 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 500));
-      }
-      if (cancelled) {
+  // 底部麦克风（智能交互）：
+  // - 本地识别 = 「暂停聆听／恢复聆听」统一开关（识别不可用时变为重试）；
+  // - 浏览器识别 = 「说一条指令」单次输入（需要联网的浏览器服务）。
+  function handleMicClick() {
+    if (voiceSource === "local") {
+      const controller = voiceSessionRef.current;
+      if (!controller) {
         return;
       }
-      try {
-        handle = await createVoiceStream(getApiBase(), {
-          onPartial: (text) => {
-            setPartialPreview(text);
-            onPartialTranscript(text);
-          },
-          onFinal: (text) => submitVoiceTranscript(text, true),
-          onError: (detail) => {
-            onVoiceNotice("error", "常开聆听中断", detail);
-            setAlwaysOn(false);
-          }
-        });
-        if (cancelled) {
-          handle.abort();
-          return;
-        }
-        voiceStreamRef.current = handle;
-        setAlwaysOnActive(true);
-        onListeningChange(true);
-        setVoiceStatusText("常开聆听中：说“小智，+ 指令”即可操控系统。");
-      } catch (error) {
-        if (!cancelled) {
-          onVoiceNotice("error", "常开聆听启动失败", error instanceof Error ? error.message : "无法连接本地语音识别服务。");
-          setAlwaysOn(false);
-        }
+      if (voiceSession.phase === "unavailable") {
+        controller.retry();
+        return;
       }
-    })();
-    return () => {
-      cancelled = true;
-      handle?.abort();
-      if (voiceStreamRef.current) {
-        voiceStreamRef.current.abort();
-        voiceStreamRef.current = null;
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [alwaysOn, interactionActive, busy, voiceSource, visibilityTick]);
-
-  // 页面失焦/回到前台时重触发常开流的暂停与恢复。
-  useEffect(() => {
-    const handleVisibility = () => setVisibilityTick((tick) => tick + 1);
-    document.addEventListener("visibilitychange", handleVisibility);
-    return () => document.removeEventListener("visibilitychange", handleVisibility);
-  }, []);
-
-  // 离开智能交互 Tab：停掉一切进行中的语音输入。
-  useEffect(() => {
-    if (!interactionActive) {
-      if (recognitionRef.current) {
-        stopVoiceRecognition(true);
-      }
-      abortLocalStream();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [interactionActive]);
-
-  function handleVoiceToggle() {
-    if (pushToTalkStream) {
-      setVoiceStatusText("语音输入已停止。");
-      const stream = voiceStreamRef.current;
-      voiceStreamRef.current = null;
-      setPushToTalkStream(false);
-      setVoiceStatus("idle");
-      setPartialPreview("");
-      void stream?.stop().then((pending) => {
-        if (pending) {
-          submitVoiceTranscript(pending, false);
-        }
-      });
-      return;
-    }
-    if (isListening) {
-      setVoiceStatusText("语音输入已停止。");
-      stopVoiceRecognition(true);
+      controller.togglePaused();
       return;
     }
     if (busy) {
       return;
     }
+    startOneShotRecognition();
+  }
 
-    if (voiceSource === "local") {
-      setPartialPreview("");
-      setIgnoredCount(0);
-      createVoiceStream(getApiBase(), {
-        onPartial: (text) => {
-          setPartialPreview(text);
-          onPartialTranscript(text);
-        },
-        onFinal: (text) => {
-          const stream = voiceStreamRef.current;
-          voiceStreamRef.current = null;
-          setPushToTalkStream(false);
-          void stream?.abort();
-          submitVoiceTranscript(text, false);
-        },
-        onError: (detail) => {
-          setPushToTalkStream(false);
-          setVoiceStatusText(detail);
-          onVoiceNotice("error", "语音输入失败", detail);
-        }
-      })
-        .then((handle) => {
-          voiceStreamRef.current = handle;
-          setPushToTalkStream(true);
-          setVoiceStatus("listening");
-          setVoiceStatusText("正在聆听指令，请开始说话。");
-        })
-        .catch((error) => {
-          setVoiceStatusText("本地语音识别连接失败，可改用文字指令。");
-          onVoiceNotice("error", "语音识别失败", error instanceof Error ? error.message : "本地语音识别服务连接失败。");
-        });
-      return;
-    }
-
+  /** 浏览器 Web Speech 单次识别（备用路线，可能使用外部服务）。 */
+  function startOneShotRecognition() {
     const RecognitionConstructor = getSpeechRecognitionConstructor();
     if (!RecognitionConstructor) {
       setVoiceStatus("unsupported");
@@ -919,7 +917,7 @@ export function CopilotWidget({
 
       if (transcript) {
         setLastTranscript(transcript);
-        setVoiceStatusText("语音识别完成，已提交课堂指令。");
+        setVoiceStatusText("语音识别完成，已提交指令。");
         onVoiceSubmit(transcript);
         return;
       }
@@ -932,7 +930,7 @@ export function CopilotWidget({
         return;
       }
 
-      const detail = "没有识别到有效语音，请点击麦克风后直接说出课堂指令。";
+      const detail = "没有识别到有效语音，请点击「说一条指令」后直接说出指令。";
       setVoiceStatusText(detail);
       onVoiceNotice("error", "没有识别到语音", detail);
     };
@@ -940,7 +938,7 @@ export function CopilotWidget({
     try {
       recognitionRef.current = recognition;
       setVoiceStatus("listening");
-      setVoiceStatusText("正在聆听课堂指令，请开始说话。");
+      setVoiceStatusText("正在聆听一条指令，请开始说话。");
       recognition.start();
     } catch (error) {
       recognitionRef.current = null;
@@ -1080,11 +1078,17 @@ export function CopilotWidget({
               className="mini-control copilot-tts-toggle"
               data-testid="copilot-tts-toggle"
               aria-pressed={ttsEnabled}
-              aria-label={ttsEnabled ? "关闭语音播报" : "开启语音播报"}
-              title={ttsEnabled ? "语音播报：开" : "语音播报：关"}
-              onClick={() => onTtsToggle(!ttsEnabled)}
+              aria-label={ttsEnabled ? "关闭回复播报" : "开启回复播报"}
+              title={ttsEnabled ? "回复播报：开（关闭后立即停止当前播报）" : "回复播报：关"}
+              onClick={() => {
+                onTtsToggle(!ttsEnabled);
+                // 关闭播报：立即停止正在播放的语音；识别不受影响。
+                if (ttsEnabled) {
+                  cancelSpeech();
+                }
+              }}
             >
-              {ttsEnabled ? "🔊" : "🔇"}
+              {ttsEnabled ? "🔊 回复播报：开" : "🔇 回复播报：关"}
             </button>
           ) : null}
           <button
@@ -1433,32 +1437,67 @@ export function CopilotWidget({
                   <>
                     <button
                       type="button"
-                      className={`copilot-voice-button ${isListening || alwaysOnActive ? "listening" : ""}`}
-                      aria-label={isListening ? "停止语音控制" : "开始语音控制"}
-                      title={isListening ? "停止语音" : voiceSource !== "none" ? "语音输入" : "当前浏览器不支持语音"}
-                      onClick={handleVoiceToggle}
-                      disabled={busy || (voiceSource === "none" && !isListening)}
+                      className={`copilot-voice-button ${voiceSession.phase === "listening" ? "listening" : ""} ${voiceSession.phase === "paused" ? "paused" : ""}`}
+                      aria-label={
+                        voiceSource === "local"
+                          ? voiceSession.phase === "paused" || voiceSession.phase === "unavailable"
+                            ? "恢复语音聆听"
+                            : "暂停语音聆听"
+                          : "说一条指令"
+                      }
+                      title={
+                        voiceSource === "local"
+                          ? voiceSession.phase === "paused"
+                            ? "恢复聆听"
+                            : voiceSession.phase === "unavailable"
+                              ? "重试语音聆听"
+                              : "暂停聆听"
+                          : "说一条指令（浏览器识别）"
+                      }
+                      onClick={handleMicClick}
+                      disabled={voiceSource === "none"}
                       data-testid="copilot-mic-button"
                     >
-                      <MicrophoneIcon active={isListening} />
-                      <span className="copilot-voice-label">{isListening ? "停止语音" : "麦克风"}</span>
+                      <MicrophoneIcon active={voiceSession.phase === "listening" || voiceStatus === "listening"} />
+                      <span className="copilot-voice-label">
+                        {voiceSource === "local"
+                          ? voiceSession.phase === "paused"
+                            ? "恢复聆听"
+                            : voiceSession.phase === "unavailable"
+                              ? "重试聆听"
+                              : "暂停聆听"
+                          : "说一条指令"}
+                      </span>
                     </button>
                     {voiceSource === "local" ? (
-                      <button
-                        type="button"
-                        className={`copilot-voice-button always-on ${alwaysOn ? "on" : ""}`}
-                        aria-pressed={alwaysOn}
-                        aria-label={alwaysOn ? "关闭常开聆听" : "开启常开聆听"}
-                        title={alwaysOn ? "常开聆听：开（说“小智，+指令”）" : "开启常开聆听（需唤醒词“小智”）"}
-                        onClick={() => {
-                          setIgnoredCount(0);
-                          setAlwaysOn((on) => !on);
-                        }}
-                        disabled={busy}
-                        data-testid="copilot-always-on-button"
-                      >
-                        <span className="copilot-voice-label">{alwaysOn ? (alwaysOnActive ? "聆听中" : "恢复中") : "常开"}</span>
-                      </button>
+                      <div className="copilot-voice-settings" data-testid="copilot-voice-settings">
+                        <label className="copilot-voice-setting">
+                          <input
+                            type="checkbox"
+                            checked={voiceSettings.autoListenOnEnter}
+                            onChange={(event) => {
+                              const next = { ...voiceSettings, autoListenOnEnter: event.target.checked };
+                              writeVoiceSetting(AUTO_LISTEN_STORAGE_KEY, next.autoListenOnEnter);
+                              setVoiceSettings(next);
+                            }}
+                            data-testid="copilot-auto-listen-toggle"
+                          />
+                          进入时自动聆听
+                        </label>
+                        <label className="copilot-voice-setting" title="开启后需说「小智，+指令」才会执行（嘈杂课堂推荐）">
+                          <input
+                            type="checkbox"
+                            checked={voiceSettings.requireWakeWord}
+                            onChange={(event) => {
+                              const next = { ...voiceSettings, requireWakeWord: event.target.checked };
+                              writeVoiceSetting(WAKE_ONLY_STORAGE_KEY, next.requireWakeWord);
+                              setVoiceSettings(next);
+                            }}
+                            data-testid="copilot-wake-only-toggle"
+                          />
+                          仅唤醒后执行
+                        </label>
+                      </div>
                     ) : null}
                   </>
                 ) : null}
@@ -1478,10 +1517,36 @@ export function CopilotWidget({
               实时识别：{partialPreview}
             </p>
           ) : null}
-          {interactionActive && voiceStatusText ? (
+          {interactionActive && (voiceSource === "local" || (voiceSession.phase === "unavailable" && voiceStatus !== "listening")) ? (
+            <p
+              className={`copilot-voice-status ${voiceSession.phase === "listening" ? "listening" : voiceSession.phase === "unavailable" ? "unsupported" : voiceStatus}`}
+              role="status"
+              data-testid="copilot-voice-status"
+            >
+              {sessionStatusText}
+              {voiceSession.ignoredCount > 0 ? (
+                <span className="copilot-ignored-count">（已忽略 {voiceSession.ignoredCount} 段环境声音）</span>
+              ) : null}
+              {voiceSession.phase === "unavailable" ? (
+                <button
+                  type="button"
+                  className="copilot-voice-retry"
+                  data-testid="copilot-voice-retry"
+                  onClick={() => voiceSessionRef.current?.retry()}
+                >
+                  重试
+                </button>
+              ) : null}
+            </p>
+          ) : null}
+          {interactionActive && voiceStatus === "unsupported" ? (
+            <p className="copilot-voice-status unsupported" role="status" data-testid="copilot-voice-unsupported">
+              {voiceStatusText}
+            </p>
+          ) : null}
+          {interactionActive && voiceStatusText && voiceStatus !== "unsupported" ? (
             <p className={`copilot-voice-status ${voiceStatus}`} role="status" data-testid="copilot-voice-status">
               {voiceStatusText}
-              {ignoredCount > 0 ? <span className="copilot-ignored-count">（已忽略 {ignoredCount} 段环境声音）</span> : null}
             </p>
           ) : null}
           {!interactionActive && voiceStatusText ? (

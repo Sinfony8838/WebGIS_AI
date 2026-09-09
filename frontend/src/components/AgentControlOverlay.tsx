@@ -81,7 +81,7 @@ export function AgentControlOverlay({
     : state === "captured"
       ? `“${capturedCommand}”`
       : state === "listening"
-        ? partialTranscript || "说出“小智 + 指令”"
+        ? partialTranscript || "直接说出课堂指令"
         : "";
 
   return (

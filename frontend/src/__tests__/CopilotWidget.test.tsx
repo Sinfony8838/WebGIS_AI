@@ -56,32 +56,41 @@ function renderWidget(overrides: Partial<ComponentProps<typeof CopilotWidget>> =
   const onVoiceNotice = vi.fn();
   const onQuickPrompt = vi.fn();
 
-  render(
-    <CopilotWidget
-      busy={false}
-      currentJob={null}
-      chatLog={[
-        {
-          role: "assistant",
-          text: "课堂助教已准备就绪。",
-          timestamp: "1"
-        }
-      ]}
-      inputValue="搜索当前区域内港口"
-      onInputChange={onInputChange}
-      onSubmit={onSubmit}
-      onConfirm={onConfirm}
-      onVoiceSubmit={onVoiceSubmit}
-      onVoiceNotice={onVoiceNotice}
-      onQuickPrompt={onQuickPrompt}
-      {...overrides}
-    />
-  );
+  const props = {
+    busy: false,
+    currentJob: null,
+    chatLog: [
+      {
+        role: "assistant" as const,
+        text: "课堂助教已准备就绪。",
+        timestamp: "1"
+      }
+    ],
+    inputValue: "搜索当前区域内港口",
+    onInputChange,
+    onSubmit,
+    onConfirm,
+    onVoiceSubmit,
+    onVoiceNotice,
+    onQuickPrompt,
+    ...overrides
+  };
+
+  const view = render(<CopilotWidget {...props} />);
 
   // The widget defaults to minimized; expand so tests can exercise the panel.
   fireEvent.click(screen.getByLabelText("展开智能助教"));
 
-  return { onSubmit, onInputChange, onConfirm, onVoiceSubmit, onVoiceNotice, onQuickPrompt };
+  return {
+    onSubmit,
+    onInputChange,
+    onConfirm,
+    onVoiceSubmit,
+    onVoiceNotice,
+    onQuickPrompt,
+    rerender: (next: Partial<ComponentProps<typeof CopilotWidget>>) =>
+      view.rerender(<CopilotWidget {...props} {...next} />)
+  };
 }
 
 describe("CopilotWidget", () => {
@@ -98,19 +107,24 @@ describe("CopilotWidget", () => {
     vi.restoreAllMocks();
   });
 
-  it("flushes the local transcript before closing on manual stop", async () => {
+  it("pausing a mid-utterance session aborts without flushing a partial command", async () => {
     const abort = vi.fn();
-    const stop = vi.fn(async () => abort.mock.calls.length ? null : "切换到三维地球");
+    const stop = vi.fn(async () => "切换到三维");
     vi.spyOn(voiceStream, "audioWorkletSupported").mockReturnValue(true);
-    vi.spyOn(voiceStream, "createVoiceStream").mockResolvedValue({ abort, stop, state: () => "open" });
+    const createVoiceStream = vi.spyOn(voiceStream, "createVoiceStream").mockImplementation(async (_apiBase, events) => {
+      events.onOpen?.();
+      return { abort, stop, state: () => "open" as const };
+    });
     const { onVoiceSubmit } = renderWidget({ voiceStreamAvailable: true, assistantTab: "interaction" });
-    fireEvent.click(screen.getByRole("button", { name: "开始语音控制" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "停止语音控制" })).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "停止语音控制" }));
-    await waitFor(() => expect(onVoiceSubmit).toHaveBeenCalledWith("切换到三维地球"));
-    expect(stop).toHaveBeenCalledOnce();
-    expect(abort).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "开始语音控制" })).toBeInTheDocument();
+    await waitFor(() => expect(createVoiceStream).toHaveBeenCalledOnce());
+    expect(screen.getByRole("button", { name: "暂停语音聆听" })).toBeInTheDocument();
+
+    // 手动暂停 = 立即停采音，且绝不能把半句话 flush 成指令提交。
+    fireEvent.click(screen.getByRole("button", { name: "暂停语音聆听" }));
+    expect(abort).toHaveBeenCalledOnce();
+    expect(stop).not.toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(onVoiceSubmit).not.toHaveBeenCalled();
   });
 
   it("renders messages, submits input, and can minimize", () => {
@@ -299,11 +313,113 @@ describe("CopilotWidget", () => {
     expect(trace).toHaveTextContent("✓");
   });
 
-  it("submits the final transcript after clicking the microphone", async () => {
+  it("auto-starts listening when entering the interaction tab (default on)", async () => {
+    const abort = vi.fn();
+    const createVoiceStream = vi
+      .spyOn(voiceStream, "createVoiceStream")
+      .mockImplementation(async (_apiBase, events) => {
+        events.onOpen?.();
+        return { abort, stop: vi.fn(async () => null), state: () => "open" as const };
+      });
+    vi.spyOn(voiceStream, "audioWorkletSupported").mockReturnValue(true);
+
+    const { onVoiceSubmit } = renderWidget({ assistantTab: "interaction", voiceStreamAvailable: true });
+
+    // 无需任何点击：进入交互即建立采音会话并进入聆听态。
+    await waitFor(() => expect(createVoiceStream).toHaveBeenCalledOnce());
+    expect(await screen.findByText("正在聆听：直接说出指令即可。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "暂停语音聆听" })).toBeInTheDocument();
+    expect(onVoiceSubmit).not.toHaveBeenCalled();
+  });
+
+  it("pauses and resumes listening from the mic button without submitting", async () => {
+    const abort = vi.fn();
+    const stop = vi.fn(async () => null);
+    const createVoiceStream = vi
+      .spyOn(voiceStream, "createVoiceStream")
+      .mockImplementation(async (_apiBase, events) => {
+        events.onOpen?.();
+        return { abort, stop, state: () => "open" as const };
+      });
+    vi.spyOn(voiceStream, "audioWorkletSupported").mockReturnValue(true);
+
+    const { onVoiceSubmit, rerender } = renderWidget({ assistantTab: "interaction", voiceStreamAvailable: true });
+    await waitFor(() => expect(createVoiceStream).toHaveBeenCalledOnce());
+
+    // 暂停聆听：采音立即释放，不做 flush 提交。
+    fireEvent.click(screen.getByRole("button", { name: "暂停语音聆听" }));
+    expect(abort).toHaveBeenCalledOnce();
+    expect(stop).not.toHaveBeenCalled();
+    expect(await screen.findByText("已暂停聆听，点击麦克风恢复。")).toBeInTheDocument();
+    expect(onVoiceSubmit).not.toHaveBeenCalled();
+
+    // 重渲染 / 健康刷新不会擅自重新打开。
+    createVoiceStream.mockClear();
+    rerender({ assistantTab: "interaction", voiceStreamAvailable: true });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(createVoiceStream).not.toHaveBeenCalled();
+    expect(screen.getByText("已暂停聆听，点击麦克风恢复。")).toBeInTheDocument();
+
+    // 恢复聆听：重建会话。
+    fireEvent.click(screen.getByRole("button", { name: "恢复语音聆听" }));
+    await waitFor(() => expect(createVoiceStream).toHaveBeenCalledOnce());
+  });
+
+  it("keeps listening usable after busy finishes (resume without clicks)", async () => {
+    const abort = vi.fn();
+    const createVoiceStream = vi
+      .spyOn(voiceStream, "createVoiceStream")
+      .mockImplementation(async (_apiBase, events) => {
+        events.onOpen?.();
+        return { abort, stop: vi.fn(async () => null), state: () => "open" as const };
+      });
+    vi.spyOn(voiceStream, "audioWorkletSupported").mockReturnValue(true);
+
+    const { rerender } = renderWidget({ assistantTab: "interaction", voiceStreamAvailable: true });
+    await waitFor(() => expect(createVoiceStream).toHaveBeenCalledOnce());
+
+    // 执行指令期间停止采音，防止系统听到自己。
+    rerender({ assistantTab: "interaction", voiceStreamAvailable: true, busy: true });
+    await waitFor(() => expect(abort).toHaveBeenCalledOnce());
+    expect(screen.getByText("正在执行指令…")).toBeInTheDocument();
+
+    // 执行结束后自动恢复聆听（短延迟防自听）。
+    createVoiceStream.mockClear();
+    rerender({ assistantTab: "interaction", voiceStreamAvailable: true, busy: false });
+    await waitFor(() => expect(createVoiceStream).toHaveBeenCalledOnce(), { timeout: 3000 });
+    expect(await screen.findByText("正在聆听：直接说出指令即可。")).toBeInTheDocument();
+  });
+
+  it("renders the settings row with auto-listen default on and wake-only default off", () => {
+    vi.spyOn(voiceStream, "audioWorkletSupported").mockReturnValue(true);
+    renderWidget({ assistantTab: "interaction", voiceStreamAvailable: true });
+
+    const autoListen = screen.getByTestId("copilot-auto-listen-toggle") as HTMLInputElement;
+    const wakeOnly = screen.getByTestId("copilot-wake-only-toggle") as HTMLInputElement;
+    expect(autoListen.checked).toBe(true);
+    expect(wakeOnly.checked).toBe(false);
+    expect(screen.queryByTestId("copilot-always-on-button")).toBeNull();
+  });
+
+  it("shows an actionable unavailable state with retry when the ASR backend is not ready", async () => {
+    vi.spyOn(voiceStream, "audioWorkletSupported").mockReturnValue(true);
+    renderWidget({
+      assistantTab: "interaction",
+      voiceStreamAvailable: false,
+      voiceAsrState: "not_installed"
+    });
+
+    expect(await screen.findByText(/模型未安装或不完整/)).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("copilot-voice-retry"));
+    // 重试后仍不可用（健康状态未变），但界面提供明确的恢复入口。
+    expect(screen.getByTestId("copilot-voice-retry")).toBeInTheDocument();
+  });
+
+  it("submits the final transcript after clicking the microphone (browser fallback)", async () => {
     const { onVoiceSubmit } = renderWidget({ assistantTab: "interaction" });
 
-    fireEvent.click(screen.getByLabelText("开始语音控制"));
-    expect(screen.getByText("正在聆听课堂指令，请开始说话。")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("说一条指令"));
+    expect(screen.getByText("正在聆听一条指令，请开始说话。")).toBeInTheDocument();
 
     MockSpeechRecognition.lastInstance?.emitTranscript("我们把目光转向上海区域");
 
@@ -315,12 +431,12 @@ describe("CopilotWidget", () => {
 
   it("hides the microphone on the teaching tab and shows it on the interaction tab", () => {
     renderWidget();
-    expect(screen.queryByLabelText("开始语音控制")).toBeNull();
+    expect(screen.queryByLabelText("说一条指令")).toBeNull();
 
     cleanup();
     window.localStorage.clear();
     renderWidget({ assistantTab: "interaction" });
-    expect(screen.getByLabelText("开始语音控制")).toBeInTheDocument();
+    expect(screen.getByLabelText("说一条指令")).toBeInTheDocument();
   });
 
   it("shows unsupported status when the browser does not provide speech recognition", () => {
@@ -329,18 +445,19 @@ describe("CopilotWidget", () => {
     renderWidget({ assistantTab: "interaction" });
 
     expect(screen.getByText("当前浏览器不支持语音控制，请使用桌面版 Chrome 或 Edge。")).toBeInTheDocument();
-    expect(screen.getByLabelText("开始语音控制")).toBeDisabled();
+    expect(screen.getByTestId("copilot-mic-button")).toBeDisabled();
   });
 
-  it("keeps the microphone disabled while a job is running", () => {
+  it("ignores mic clicks while a job is running on the browser route", () => {
     renderWidget({ assistantTab: "interaction", busy: true });
-    expect(screen.getByLabelText("开始语音控制")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("copilot-mic-button"));
+    expect(MockSpeechRecognition.lastInstance).toBeNull();
   });
 
   it("reports microphone permission errors through the notice callback", async () => {
     const { onVoiceNotice, onVoiceSubmit } = renderWidget({ assistantTab: "interaction" });
 
-    fireEvent.click(screen.getByLabelText("开始语音控制"));
+    fireEvent.click(screen.getByLabelText("说一条指令"));
     MockSpeechRecognition.lastInstance?.emitError("not-allowed");
 
     await waitFor(() => {
@@ -356,14 +473,14 @@ describe("CopilotWidget", () => {
   it("reports empty recognition sessions", async () => {
     const { onVoiceNotice, onVoiceSubmit } = renderWidget({ assistantTab: "interaction" });
 
-    fireEvent.click(screen.getByLabelText("开始语音控制"));
+    fireEvent.click(screen.getByLabelText("说一条指令"));
     MockSpeechRecognition.lastInstance?.emitEndWithoutResult();
 
     await waitFor(() => {
       expect(onVoiceNotice).toHaveBeenCalledWith(
         "error",
         "没有识别到语音",
-        "没有识别到有效语音，请点击麦克风后直接说出课堂指令。"
+        "没有识别到有效语音，请点击「说一条指令」后直接说出指令。"
       );
     });
     expect(onVoiceSubmit).not.toHaveBeenCalled();

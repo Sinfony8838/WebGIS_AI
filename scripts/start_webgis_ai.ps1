@@ -97,7 +97,7 @@ function Ensure-BackendDeps {
         [bool]$AllowInstall
     )
 
-    $requiredModules = @("fastapi", "uvicorn", "multipart", "pptx", "fitz", "docx", "pyproj", "shapely", "argon2")
+    $requiredModules = @("fastapi", "uvicorn", "multipart", "pptx", "fitz", "docx", "pyproj", "shapely", "argon2", "sherpa_onnx", "numpy")
     $missing = @()
     foreach ($module in $requiredModules) {
         if (-not (Test-PythonModule -PythonExe $PythonExe -ModuleName $module)) {
@@ -365,6 +365,19 @@ Write-Step "Using Node: $nodeExe"
 
 Ensure-BackendDeps -RepoRoot $repoRoot -PythonExe $pythonExe -AllowInstall:$InstallIfMissing
 Ensure-FrontendDeps -RepoRoot $repoRoot -NodeExe $nodeExe -NpmCli $npmCli -AllowInstall:$InstallIfMissing
+
+# Voice ASR readiness (non-fatal): report whether the local recognizer is
+# really usable — files complete AND a real model load — so the classroom
+# never discovers a missing model mid-lesson.
+Write-Step "Checking voice ASR readiness (model files + real load)."
+& $pythonExe (Join-Path $repoRoot "scripts\download_voice_models.py") --check
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "WARNING: local voice recognition is NOT ready (see above)." -ForegroundColor Yellow
+    Write-Host "The UI will fall back to browser speech recognition or text input." -ForegroundColor Yellow
+    Write-Host "Fix with: & '$pythonExe' '$repoRoot\scripts\download_voice_models.py'" -ForegroundColor Yellow
+    Write-Host ""
+}
 
 $backendUrl = "http://127.0.0.1:18999"
 $frontendUrl = "http://127.0.0.1:5173"

@@ -667,7 +667,13 @@ class AssistantService:
 
         # A keyword match cannot resolve negation, conditions or multiple
         # instructions. Let the existing planner see the complete request.
-        complex_request = bool(re.search(r"然后|接着|同时|并且|并|再|如果|否则|而是|只|(?:和|及|、).*(?:底图|图层|地图|面板)", normalized))
+        complex_request = bool(re.search(r"然后|接着|同时|并且|并|再|如果|假如|要是|否则|而是|只|(?:和|及|、).*(?:底图|图层|地图|面板)", normalized))
+        # Quoted speech / reported commands / hedging ("刚才说切换到三维",
+        # "好像可以切换") must never hit the keyword fast path — the mention
+        # of a command is not a command. Route them to the LLM planner which
+        # sees full semantics instead.
+        if re.search(r"刚才|刚刚|上次|他说|她说|他们|好像|似乎|可能|也许|大概|比如|例如|举个例子", normalized):
+            complex_request = True
         negation = r"不要|(?<!分)别|不用|无需|不必|不能|不许|禁止"
         negated = bool(re.search(negation, normalized))
         if negated:
