@@ -13,7 +13,15 @@ it("loads the project question, hides answers, locates scenes and restores befor
   expect(api.fetchQuestionBanks).toHaveBeenCalledWith("test_project");
   expect(screen.queryByText("独立的教师参考解析")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "2 · 地图与年龄结构" }));
+  fireEvent.click(await screen.findByText("原题空间示意与统计尺度"));
   expect(await screen.findByRole("img", { name: /按题干绘制/ })).toBeInTheDocument();
+  expect(onPresent).toHaveBeenLastCalledWith("shanghai_density");
+  fireEvent.click(screen.getByRole("button", { name: "60岁及以上人口占比" }));
+  expect(await screen.findByText(/各区60岁及以上常住人口占比/)).toBeVisible();
+  expect(onPresent).toHaveBeenLastCalledWith("shanghai_age");
+  expect(screen.getByRole("button", { name: "60岁及以上人口占比" })).toHaveAttribute("aria-pressed", "true");
+  fireEvent.click(screen.getByRole("button", { name: "人口密度" }));
+  expect(await screen.findByText(/各区平均人口密度/)).toBeVisible();
   expect(onPresent).toHaveBeenLastCalledWith("shanghai_density");
   fireEvent.click(screen.getByRole("button", { name: "3 · 景观对照" }));
   expect(await screen.findByAltText("陆家嘴 · 高层商务景观")).toBeInTheDocument();

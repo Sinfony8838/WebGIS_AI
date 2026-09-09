@@ -25,6 +25,19 @@ describe("map snapshot source sheet", () => {
     expect(frozen.filter(row => row.kind === "text").map(row => row.text).join(" ")).toBe(texts);
   });
 
+  it("includes the age indicator and official table URL when the legend is folded", () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    const age = { layer_id: "age", visible: true, metadata: { catalog_id: "shanghai_age_60_plus_2020" } } as LayerRecord;
+    const { container } = render(<MapEvidenceLegend globe={false} themeIds={[]} showFit={false} onShowFit={vi.fn()} layers={[age]} />);
+    const rows = collectLegendRows(container.querySelector(".map-legend-content"));
+    const value = JSON.stringify(rows);
+    expect(value).toContain("60岁及以上人口占比");
+    expect(value).toContain("≥35%");
+    expect(value).toContain("2020 七普");
+    expect(value).toContain("https://tjj.sh.gov.cn/tjnj/2025tjnj/C0212.htm");
+    expect(value).not.toContain("人/km²");
+  });
+
   it("wraps long source URLs and Chinese text without losing characters", () => {
     const measure = { measureText: (value:string) => ({ width: Array.from(value).length * 10 }) as TextMetrics };
     const value = "人口密度：上海🌏 https://example.org/data/source?year=2020";

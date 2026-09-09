@@ -1385,7 +1385,7 @@ export async function fetchQuestionExplanation(sessionId: string): Promise<{ que
   return requestJson(`/class-sessions/${encodeURIComponent(sessionId)}/questions/explanation`);
 }
 
-export type ClassroomPresentationTarget = "stage" | "shanghai_density" | "lujiazui" | "zhujiajiao";
+export type ClassroomPresentationTarget = "stage" | "shanghai_density" | "shanghai_age" | "lujiazui" | "zhujiajiao";
 export async function presentClassroomScene(sessionId: string, stageId: string, target: ClassroomPresentationTarget = "stage") {
   return requestJson<{ status: string; scene: { globe?: import("./types").LessonGlobeScene } }>(
     `/class-sessions/${encodeURIComponent(sessionId)}/presentation`, {

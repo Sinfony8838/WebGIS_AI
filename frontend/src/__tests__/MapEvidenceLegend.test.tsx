@@ -61,3 +61,15 @@ describe("precipitation comparison", () => {
     expect(screen.getByRole("checkbox", { name: /400毫米/ })).toBeDisabled();
   });
 });
+
+it("shows the census year, percentage scale and archived source for the age map", () => {
+  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false })));
+  const layer = { layer_id: "age", visible: true, metadata: { catalog_id: "shanghai_age_60_plus_2020" } } as LayerRecord;
+  render(<MapEvidenceLegend {...props} basemapId="amap_light" layers={[layer]} />);
+  expect(screen.getByText("上海 · 60岁及以上人口占比")).toBeVisible();
+  expect(screen.getByText("≥35%")).toBeVisible();
+  expect(screen.getByText(/2020 七普/)).toBeVisible();
+  fireEvent.click(screen.getByText("年龄数据来源与口径"));
+  expect(screen.getByRole("link", { name: /七普各区年龄构成/ })).toHaveAttribute("href", "https://tjj.sh.gov.cn/tjnj/2025tjnj/C0212.htm");
+  expect(screen.getByText(/区级比例不能确定街镇/)).toBeVisible();
+});

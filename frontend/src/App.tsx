@@ -1,7 +1,7 @@
 import Polygon from "ol/geom/Polygon";
 import MultiPolygon from "ol/geom/MultiPolygon";
 import { UrbanStudyPanel, type UrbanSource, type UrbanStatus } from "./components/UrbanStudyPanel";
-import { shanghaiDensityColor, densityColor, densityRadius, rankColor } from "./lib/populationVisual";
+import { shanghaiAgeColor, shanghaiDensityColor, densityColor, densityRadius, rankColor } from "./lib/populationVisual";
 import { MapEvidenceLegend } from "./components/MapEvidenceLegend";
 import { JobActivity } from "./lib/jobActivity";
 import { forgetPendingJob, rememberPendingJob, type PendingJob } from "./lib/pendingJobs";
@@ -385,6 +385,10 @@ function layerStyle(record: LayerRecord, showFit = false) {
     if (record.metadata?.catalog_id === "shanghai_population_density") {
       fillColor = shanghaiDensityColor(feature.get("density"));
       fillOpacity = 0.98; strokeColor = "#4b7776"; strokeWidth = 0.9;
+    }
+    if (record.metadata?.catalog_id === "shanghai_age_60_plus_2020") {
+      fillColor = shanghaiAgeColor(feature.get("age_60_plus_pct"));
+      fillOpacity = 0.98; strokeColor = "#ffffff"; strokeWidth = 1;
     }
     if (ranked) { fillColor = rankColor(Number(feature.get("rank")), rankCount); fillOpacity = .94; strokeColor = "#ffffff"; strokeWidth = 1.4; }
     if (record.layer_id === "generated_hu_line") { strokeColor = feature.get("line_type") === "dynamic" ? "#d88a26" : "#07575f"; strokeWidth = feature.get("line_type") === "dynamic" ? 2 : 3; }

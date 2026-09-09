@@ -31,3 +31,17 @@ export function shanghaiDensityColor(value: unknown): string {
   if (value == null || value === '' || !Number.isFinite(Number(value)) || Number(value) < 0) return '#dbe1e6';
   return (SHANGHAI_DENSITY_SCALE.find(item => Number(value) < item.max) || SHANGHAI_DENSITY_SCALE[4]).color;
 }
+
+// Separate hue and units from the teal density map; breaks are display classes,
+// not medical or demographic thresholds.
+export const SHANGHAI_AGE_SCALE = [
+  { max:20, color:'#f1eef6', label:'<20%' },
+  { max:25, color:'#cbc9e2', label:'20–<25%' },
+  { max:30, color:'#9e9ac8', label:'25–<30%' },
+  { max:35, color:'#756bb1', label:'30–<35%' },
+  { max:Infinity, color:'#54278f', label:'≥35%' },
+];
+export function shanghaiAgeColor(value: unknown): string {
+  if (value == null || value === '' || !Number.isFinite(Number(value)) || Number(value) < 0 || Number(value) > 100) return '#dbe1e6';
+  return (SHANGHAI_AGE_SCALE.find(item => Number(value) < item.max) || SHANGHAI_AGE_SCALE[4]).color;
+}

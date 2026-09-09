@@ -528,7 +528,7 @@ class ClassroomWorkflowRuntime:
             raise KeyError("Unknown stage")
         presentation = deepcopy(stage)
         if target != "stage":
-            if target not in {"shanghai_density", "lujiazui", "zhujiajiao"}:
+            if target not in {"shanghai_density", "shanghai_age", "lujiazui", "zhujiajiao"}:
                 raise ValueError("Unknown presentation target")
             if not ("上海" in lesson.title and "人口" in lesson.title and stage_id in {"shanghai_intro", "concept", "shanghai_inquiry", "shanghai_verify"}):
                 raise ValueError("此展示仅用于上海人口分布环节")
@@ -536,7 +536,13 @@ class ClassroomWorkflowRuntime:
             if not density_stage:
                 raise ValueError("课时缺少上海密度场景")
             presentation["scene"] = deepcopy(density_stage["scene"])
-            if target != "shanghai_density":
+            if target == "shanghai_age":
+                # Different indicators must replace one another, not blend their fills.
+                self.runtime.one_map_catalog_service.resolve_item_path(
+                    self.runtime.one_map_catalog_service.get_item("shanghai_age_60_plus_2020"))
+                presentation["scene"].update({"templates": [], "catalog_layers": ["shanghai_age_60_plus_2020"],
+                    "catalog_layer_focus": "shanghai_age_60_plus_2020", "annotations": [], "visual_query": None})
+            elif target != "shanghai_density":
                 center = [121.505, 31.237] if target == "lujiazui" else [121.054, 31.11]
                 presentation["scene"].update({"basemap_id": "amap_imagery", "templates": [], "catalog_layers": [],
                     "catalog_layer_focus": "", "annotations": [], "visual_query": None,

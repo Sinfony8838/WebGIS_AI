@@ -107,6 +107,13 @@ class PopulationReferenceLessonTest(unittest.TestCase):
         store.get_lesson(session.lesson_id).find_stage("shanghai_intro")["scene"]["view"]["center"] = [0, 0]
         runtime.classroom.present_session_scene(session_id, "shanghai_intro")
         self.assertEqual(store.get_project(project_id).view["center"], [121.47, 31.23])
+        runtime.classroom.present_session_scene(session_id, "shanghai_intro", "shanghai_age")
+        age_layers = [layer for layer in store.get_project(project_id).layers if layer.visible and layer.source == "one_map_catalog"]
+        self.assertEqual([layer.metadata["catalog_id"] for layer in age_layers], ["shanghai_age_60_plus_2020"])
+        self.assertEqual(len(age_layers[0].data["features"]), 16)
+        self.assertEqual(session.to_dict(), before)
+        runtime.classroom.present_session_scene(session_id, "shanghai_intro", "shanghai_density")
+        self.assertFalse(any(layer.visible and layer.metadata.get("catalog_id") == "shanghai_age_60_plus_2020" for layer in store.get_project(project_id).layers))
         runtime.classroom.present_session_scene(session_id, "shanghai_intro", "lujiazui")
         self.assertEqual(store.get_project(project_id).base_map["id"], "amap_imagery")
         self.assertEqual(store.get_project(project_id).view["center"], [121.505, 31.237])

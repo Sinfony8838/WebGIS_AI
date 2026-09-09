@@ -36,6 +36,7 @@ export function ShanghaiPopulationInquiry({ projectId, onPresent, onAssistantPro
   const [mapError, setMapError] = useState("");
   const [revealed, setRevealed] = useState(false);
   const [selectedPhoto, setSelectedPhoto] = useState(0);
+  const [ageMap, setAgeMap] = useState(false);
   useEffect(() => {
     let cancelled = false;
     setLoading(true); setLoadError(""); setQuestions([]); setRevealed(false);
@@ -59,7 +60,7 @@ export function ShanghaiPopulationInquiry({ projectId, onPresent, onAssistantPro
   async function showMap(target: ClassroomPresentationTarget, nextTab: number, photo = selectedPhoto) {
     if (busy) return;
     setBusy(true); setMapError("");
-    try { await onPresent(target); setTab(nextTab); setSelectedPhoto(photo); }
+    try { await onPresent(target); setAgeMap(target === "shanghai_age"); setTab(nextTab); setSelectedPhoto(photo); }
     catch (error) { setMapError(error instanceof Error ? error.message : "地图定位失败，请重试"); }
     finally { setBusy(false); }
   }
@@ -89,13 +90,20 @@ export function ShanghaiPopulationInquiry({ projectId, onPresent, onAssistantPro
       </>}
     </>}
     {tab===1 && <>
-      <h3>先看密度，再区分年龄结构</h3><p>地图显示2020年上海区级平均人口密度。比较中心城区与外围，定位题干所说的空间层次；不能用这张图推算老年人口比例。</p>
+      <h3>同一年份，比较两种分布</h3>
+      <div className="shanghai-photo-tabs">
+        <button disabled={busy} aria-pressed={!ageMap} onClick={() => void showMap("shanghai_density",1)}>人口密度</button>
+        <button disabled={busy} aria-pressed={ageMap} onClick={() => void showMap("shanghai_age",1)}>60岁及以上人口占比</button>
+      </div>
+      <p>{ageMap ? "2020 七普 · 各区60岁及以上常住人口占比（%）" : "2020 七普 · 各区平均人口密度（人/km²）"}。点击区名查看数值，收起面板可完整看图。</p>
+      <details><summary>原题空间示意与统计尺度</summary>
       <div className="shanghai-age-pattern" role="img" aria-label="按题干绘制的定性示意：中心城区老年比例高，郊区低，农村高；郊区有年轻劳动力集聚">
         {[['中心城区','老年人口比例高'],['郊区','老年人口比例低 · 年轻劳动力集聚'],['农村','老年人口比例高']].map(([name,value])=><div key={name}><strong>{name}</strong><span>{value}</span></div>)}
       </div>
       <small>依据原题材料的空间顺序示意，无精确比例、距离或边界；不是上海实测年龄分布地图。</small>
-      <p>思考：老年人口比例升高，是否必须伴随老年人口数量增加？年轻人口外迁会怎样改变分母？</p>
-      <button className="toolbar-button" disabled={busy} onClick={() => void showMap("shanghai_density",1)}>重新定位上海密度图</button>
+      <p>年龄图反映区级差异，不能确定街镇尺度的年轻环边界。比较崇明、青浦与虹口，再检验区级分布与题干示意有哪些对应与差异。</p>
+      <a href="https://tjj.sh.gov.cn/tjnj/2025tjnj/C0212.htm" target="_blank" rel="noreferrer">查看七普各区年龄构成原表</a>
+      </details>
     </>}
     {tab===2 && <>
       <p>选择地点后切换到局部二维影像，关闭密度填色以看清地表；历史景观照片辅助比较建筑形态。</p>

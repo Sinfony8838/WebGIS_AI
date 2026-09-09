@@ -15,3 +15,11 @@ it("keeps low and high Shanghai district densities distinguishable",()=>{
   expect(shanghaiDensityColor(null)).not.toBe(shanghaiDensityColor(0));
   expect(shanghaiDensityColor(999)).not.toBe(shanghaiDensityColor(1000));
 });
+
+it("keeps age percentages separate from density and rejects impossible ratios", async () => {
+  const { shanghaiAgeColor } = await import("../lib/populationVisual");
+  expect(shanghaiAgeColor(16.6)).not.toBe(shanghaiAgeColor(39.7));
+  expect(shanghaiAgeColor(0)).not.toBe(shanghaiAgeColor(null));
+  expect(shanghaiAgeColor(101)).toBe(shanghaiAgeColor(null));
+  expect(shanghaiAgeColor(19.9)).not.toBe(shanghaiAgeColor(20));
+});

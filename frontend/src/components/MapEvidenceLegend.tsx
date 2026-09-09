@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import { DENSITY_SCALE, SHANGHAI_DENSITY_SCALE } from "../lib/populationVisual";
+import { DENSITY_SCALE, SHANGHAI_DENSITY_SCALE, SHANGHAI_AGE_SCALE } from "../lib/populationVisual";
 import { GLOBE_THEMES } from "../lib/globeThemes";
 import type { LayerRecord } from "../types";
 import "./MapEvidenceLegend.css";
@@ -14,12 +14,13 @@ export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onSho
   const visible = layers.filter(layer => layer.visible);
   const hasDensity = globe ? themeIds.some(id => ["density_fill","density_3d","population_columns"].includes(id)) : visible.some(layer => ["builtin_population_regions","builtin_population_density"].includes(layer.layer_id));
   const shanghai = !globe && visible.find(layer => layer.metadata?.catalog_id === "shanghai_population_density");
+  const shanghaiAge = !globe && visible.some(layer => layer.metadata?.catalog_id === "shanghai_age_60_plus_2020");
   const precipitation = !globe && visible.some(layer => layer.metadata?.catalog_id === "china_precipitation_400mm");
   const line = visible.find(layer => layer.layer_id === "generated_hu_line");
   const hasLine = globe ? themeIds.includes("hu_line") : Boolean(line);
   const otherThemes = globe ? GLOBE_THEMES.filter(theme => themeIds.includes(theme.id) && !["density_fill","density_3d","population_columns","hu_line"].includes(theme.id)) : [];
   const ranked = !globe && visible.some(layer => Boolean(layer.metadata?.visualization));
-  if (!precipitation && !night && !populationGrid && !shanghai && !hasDensity && !hasLine && !otherThemes.length && !ranked) return null;
+  if (!shanghaiAge && !precipitation && !night && !populationGrid && !shanghai && !hasDensity && !hasLine && !otherThemes.length && !ranked) return null;
   const share = line?.metadata?.classic_share;
   return <section className={`map-evidence-legend${expanded ? "" : " is-collapsed"}`} aria-label="地图图例与依据">
     <button className="map-legend-toggle" aria-expanded={expanded} aria-controls={contentId} onClick={() => setExpanded(value => !value)}>
@@ -62,6 +63,16 @@ export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onSho
         <a href="https://tjj.sh.gov.cn/tjnj/2020rktjnj/fu02.pdf" target="_blank" rel="noreferrer">上海统计局 · 各区常住人口 ↗</a>
         <a href="https://tjj.sh.gov.cn/tjnj/2021tjnj/C0202.htm" target="_blank" rel="noreferrer">2020 年区划面积 ↗</a>
         <p>按 1千、5千、1万、2万人/km² 分级；灰色表示缺失。点击区县查看数值。</p>
+      </details>
+    </>}
+    {shanghaiAge && <>
+      <strong>上海 · 60岁及以上人口占比 <small>%</small></strong>
+      <div className="map-density-key">{SHANGHAI_AGE_SCALE.map(item => <span key={item.label}><i style={{background:item.color}}/><small>{item.label}</small></span>)}</div>
+      <p>2020 七普 · 区级常住人口 · 灰色为缺失</p>
+      <details><summary>年龄数据来源与口径</summary>
+        <p>60岁及以上人数 ÷ 本区常住人口合计 × 100。原始人数以万人保留两位，比例由同表计算至一位小数。</p>
+        <p>数据年为2020，年鉴出版年为2025。分级仅用于读图，区级比例不能确定街镇“年轻环”边界，也不等于老年人口数量。</p>
+        <a href="https://tjj.sh.gov.cn/tjnj/2025tjnj/C0212.htm" target="_blank" rel="noreferrer">上海统计局 · 七普各区年龄构成 ↗</a>
       </details>
     </>}
     {ranked && <><strong>人口排名图层</strong><p>深蓝到浅蓝表示排名由前到后，具体数值与年份见查询结果。行政区总量不等于城区密度。</p></>}
