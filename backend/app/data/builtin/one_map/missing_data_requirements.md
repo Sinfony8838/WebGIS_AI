@@ -1,13 +1,13 @@
 # One Map Missing Data Requirements
 
-Last updated: 2026-07-27
+Last updated: 2026-09-09
 
 | Data | Target format | Recommended source | Missing reason | Manual required | Status |
 | --- | --- | --- | --- | --- | --- |
 | ~~中国城市人口数据~~ | ~~CSV/GeoJSON~~ | ~~第七次全国人口普查~~ | ~~已从 人口课程数据 补入~~ | - | **filled** |
 | ~~中国省级 GDP 数据~~ | ~~GeoJSON~~ | ~~全球分省人均GDP 1990-2022~~ | ~~已从 人口课程数据 补入~~ | - | **filled** |
 | ~~中国地级市 GDP 数据~~ | ~~GeoJSON~~ | ~~立方数据学社 1990-2023~~ | ~~已从 人口课程数据 补入~~ | - | **filled** |
-| 中国年降水量数据 | GeoJSON/COG/TIF | WorldClim v2.1 precipitation zonal stats | large raster; not bundled in first pass | no | open |
+| 中国年降水量数据 | GeoJSON/COG/TIF | DWD / GPCC V2025，1991—2020，0.25° | 已补400毫米等值线及方法、许可；完整降水面图/数值查询尚未接入 | no | partial：china_precipitation_400mm |
 | 中国 1 月/7 月平均气温数据 | GeoJSON/COG/TIF | WorldClim v2.1 monthly tavg zonal stats | large raster; not bundled in first pass | no | open |
 | 中国主要交通线数据 | GeoJSON | OSM/official railway-road network | license/source choice needs confirmation | no | open |
 | 世界年降水量数据 | GeoJSON/COG/TIF | WorldClim v2.1 precipitation by country | large raster; generate by zonal_stats when cached | no | open |
@@ -41,3 +41,7 @@ Last updated: 2026-07-27
 | 中国省级人均 GDP（31 省含边界） | `polyg_adm1_gdp_perCapita_1990_2022.gpkg` | `china_province_gdp_per_capita` |
 | 中国地级市人均 GDP（375 城含边界） | `1990-2023年我国地级市人均GDP数据.shp` | `china_city_gdp_per_capita` |
 | 中国气候类型分布（9 类省级） | `中国气候类型分布.zip` | `china_climate_types` |
+
+## 2026-09-09 降水对照补充
+
+已联网核验并补入 GPCC 400毫米年降水量对照线，详见 [数据方法与复现](climate/china_precipitation_400mm.md)。WorldClim 2.1 官方禁止未经许可再分发，故未将其资料打包；改用 DWD 明确允许 CC BY 4.0 署名复用的 GPCC 数据。400毫米对照线不等于完整自然专题资料已补齐，未把其他气温、地形或三维数据标为完成。

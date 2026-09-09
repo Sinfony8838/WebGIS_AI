@@ -451,7 +451,7 @@ function layerStyle(record: LayerRecord, showFit = false) {
     if (ranked) { fillColor = rankColor(Number(feature.get("rank")), rankCount); fillOpacity = .94; strokeColor = "#ffffff"; strokeWidth = 1.4; }
     if (record.layer_id === "generated_hu_line") { strokeColor = feature.get("line_type") === "dynamic" ? "#d88a26" : "#07575f"; strokeWidth = feature.get("line_type") === "dynamic" ? 2 : 3; }
     const labelField = String(record.style.labelField || "name");
-    const labelValue = String(feature.get(labelField) || feature.get("name") || "");
+    const labelValue = feature.get("__hideLabel") === true ? "" : String(feature.get(labelField) || feature.get("name") || "");
     const catalogId = String(record.metadata?.catalog_id || "");
     const coverage = String(record.metadata?.coverage || "").toLowerCase();
     const templateId = String(record.metadata?.template_id || "");
@@ -1893,7 +1893,7 @@ export default function App({
       );
       try {
         if (visible && !existing) {
-          const response = await addCatalogDatasetLayer(project.project_id, datasetId);
+          const response = await addCatalogDatasetLayer(project.project_id, datasetId, datasetId === "china_precipitation_400mm");
           setViewMode("plane");
           pushToast("success", "专题图层已加载", response.layer.name || datasetId);
         } else if (existing) {
@@ -3444,7 +3444,7 @@ export default function App({
           <button type="button" onClick={() => handleViewModeToggle("plane")}>返回 2D 查看专题图</button>
         </div>
       ) : null}
-      <MapEvidenceLegend basemapId={activeBasemapId} layers={layerState?.items || []} globe={viewMode === "globe"} themeIds={globeThemeIds} showFit={showTeachingFit} onShowFit={setShowTeachingFit} />
+      <MapEvidenceLegend basemapId={activeBasemapId} layers={layerState?.items || []} globe={viewMode === "globe"} themeIds={globeThemeIds} showFit={showTeachingFit} onShowFit={setShowTeachingFit} busy={mapBusy} onTogglePrecipitation={value => handleToggleTextbookMap("china_precipitation_400mm", value)} />
       <MapBrushOverlay
         projection={mapInkProjection}
         scope={project?.project_id || ""}

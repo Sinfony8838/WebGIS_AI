@@ -399,6 +399,7 @@ class PoiSearchRequest(BaseModel):
 class CatalogLayerRequest(BaseModel):
     project_id: str
     dataset_id: str
+    preserve_view: bool = False
 
 
 class CatalogStatisticsRequest(BaseModel):
@@ -1477,7 +1478,7 @@ def get_dataset_catalog_data(dataset_id: str) -> Dict[str, Any]:
 def add_dataset_catalog_layer(payload: CatalogLayerRequest, request: Request) -> Dict[str, Any]:
     _require_project_access(request, payload.project_id)
     try:
-        return runtime.add_catalog_dataset_layer(payload.project_id, payload.dataset_id)
+        return runtime.add_catalog_dataset_layer(payload.project_id, payload.dataset_id, preserve_view=payload.preserve_view)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (FileNotFoundError, ValueError) as exc:

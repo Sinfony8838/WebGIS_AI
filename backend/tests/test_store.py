@@ -10,6 +10,24 @@ from backend.app.store import RuntimeStore
 
 
 class RuntimeStoreTest(unittest.TestCase):
+    def test_new_view_does_not_retain_bounds_from_another_scene(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "state.json"
+            store = RuntimeStore(path)
+            project_id = store.create_project(name="视野同步").project_id
+            shanghai = {"center": [121.5, 31.2], "zoom": 12, "extent": [121.4, 31.1, 121.6, 31.3]}
+            store.set_view(project_id, shanghai)
+            store.set_view(project_id, {"center": [15, 20], "zoom": 2})
+            self.assertNotIn("extent", store.get_project(project_id).view)
+            self.assertNotIn("extent", RuntimeStore(path).get_project(project_id).view)
+            # An explicitly supplied current extent remains authoritative.
+            world = [-165, -60, 180, 85]
+            store.set_view(project_id, {"center": [15, 20], "extent": world})
+            store.set_view(project_id, {})
+            self.assertEqual(store.get_project(project_id).view["extent"], world)
+            store.set_view(project_id, {"zoom": 3})
+            self.assertNotIn("extent", store.get_project(project_id).view)
+
     def test_project_layer_and_artifact_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             store = RuntimeStore(Path(temp_dir) / "state.json")

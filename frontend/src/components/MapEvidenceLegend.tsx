@@ -4,26 +4,45 @@ import { GLOBE_THEMES } from "../lib/globeThemes";
 import type { LayerRecord } from "../types";
 import "./MapEvidenceLegend.css";
 
-type Props = { basemapId?:string; layers:LayerRecord[]; globe:boolean; themeIds:string[]; showFit:boolean; onShowFit:(value:boolean)=>void };
-export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onShowFit}:Props) {
+type Props = { basemapId?:string; layers:LayerRecord[]; globe:boolean; themeIds:string[]; showFit:boolean; onShowFit:(value:boolean)=>void; busy?:boolean; onTogglePrecipitation?:(value:boolean)=>Promise<void> };
+export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onShowFit,busy=false,onTogglePrecipitation}:Props) {
   const contentId = useId();
+  const [changingPrecipitation, setChangingPrecipitation] = useState(false);
   const [expanded, setExpanded] = useState(() => !window.matchMedia?.("(max-width: 960px)").matches);
   const night = !globe && basemapId === "nasa_nightlights_2016";
   const populationGrid = !globe && basemapId === "nasa_population_2020";
   const visible = layers.filter(layer => layer.visible);
   const hasDensity = globe ? themeIds.some(id => ["density_fill","density_3d","population_columns"].includes(id)) : visible.some(layer => ["builtin_population_regions","builtin_population_density"].includes(layer.layer_id));
   const shanghai = !globe && visible.find(layer => layer.metadata?.catalog_id === "shanghai_population_density");
+  const precipitation = !globe && visible.some(layer => layer.metadata?.catalog_id === "china_precipitation_400mm");
   const line = visible.find(layer => layer.layer_id === "generated_hu_line");
   const hasLine = globe ? themeIds.includes("hu_line") : Boolean(line);
   const otherThemes = globe ? GLOBE_THEMES.filter(theme => themeIds.includes(theme.id) && !["density_fill","density_3d","population_columns","hu_line"].includes(theme.id)) : [];
   const ranked = !globe && visible.some(layer => Boolean(layer.metadata?.visualization));
-  if (!night && !populationGrid && !shanghai && !hasDensity && !hasLine && !otherThemes.length && !ranked) return null;
+  if (!precipitation && !night && !populationGrid && !shanghai && !hasDensity && !hasLine && !otherThemes.length && !ranked) return null;
   const share = line?.metadata?.classic_share;
   return <section className={`map-evidence-legend${expanded ? "" : " is-collapsed"}`} aria-label="地图图例与依据">
     <button className="map-legend-toggle" aria-expanded={expanded} aria-controls={contentId} onClick={() => setExpanded(value => !value)}>
       图例与数据 <span aria-hidden="true">{expanded ? "−" : "+"}</span>
     </button>
     <div id={contentId} className="map-legend-content" hidden={!expanded}>
+    {!globe && (hasLine || precipitation) && onTogglePrecipitation && <label>
+      <input type="checkbox" checked={precipitation} disabled={busy || changingPrecipitation} onChange={async event => {
+        const value = event.target.checked;
+        setChangingPrecipitation(true);
+        try { await onTogglePrecipitation(value); } finally { setChangingPrecipitation(false); }
+      }}/>对照400毫米年降水量线{changingPrecipitation ? "（加载中）" : ""}
+    </label>}
+    {precipitation && <>
+      <strong><i className="map-precipitation-key"/>400毫米年降水量线</strong>
+      <p>1991—2020 气候平均 · GPCC 0.25°网格推算</p>
+      <details><summary>降水来源与读图范围</summary>
+        <p>雨量站资料插值，12个月气候值相加后提取等值线，非2020年实测边界。保留局部闭合曲线与分支，不强行拼成一条线。</p>
+        <p>适合区域格局对照，不能据此判断街区或证明人口分布因果。中国及周边矩形窗口，不作为国界。</p>
+        <a href="https://opendata.dwd.de/climate_environment/GPCC/html/gpcc_precipitation_analysis_climatology_v2025_doi_download.html" target="_blank" rel="noreferrer">DWD / GPCC V2025 · 数据与方法 ↗</a>
+        <p>Rustemeier 等（2025），CC BY 4.0；GeoBot 年总量计算与等值线提取。</p>
+      </details>
+    </>}
     {night && <><strong>夜间灯光 <small>2016 · VIIRS</small></strong><p>亮度表示夜间灯光活动，受照明、产业和能源使用影响；不能直接换算人口或密度。</p><a href="https://worldview.earthdata.nasa.gov/?l=VIIRS_Black_Marble" target="_blank" rel="noreferrer">NASA Black Marble 来源 ↗</a></>}
     {populationGrid && <><strong>全球人口密度 <small>2020 · 人/km²</small></strong><img src="https://gibs.earthdata.nasa.gov/legends/GPW_Population_Density_2020_H.svg" alt="NASA GPW官方图例，浅黄低于1，深红大于等于1000人每平方千米" style={{width:"100%",height:"auto"}}/><p>GPW 人口栅格估计，非逐户测量；透明处为缺失。此图用于比较空间格局，瓦片不提供点击数值查询。</p><a href="https://gibs.earthdata.nasa.gov/colormaps/v1.3/GPW_Population_Density_2020.xml" target="_blank" rel="noreferrer">NASA 官方色标与单位 ↗</a></>}
     {hasDensity && <>

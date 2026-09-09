@@ -622,7 +622,13 @@ class RuntimeStore:
     def set_view(self, project_id: str, view_patch: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
             project = self.projects[project_id]
-            project.view = {**project.view, **(view_patch or {})}
+            patch = view_patch or {}
+            next_view = {**project.view, **patch}
+            # A new centre/zoom invalidates the previous visible bounds. Keeping
+            # a Shanghai extent after entering the world scene misleads the AI.
+            if "extent" not in patch and any(key in patch for key in ("center", "zoom")):
+                next_view.pop("extent", None)
+            project.view = next_view
             project.updated_at = utc_now()
             self._save()
             return project.view

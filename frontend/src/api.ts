@@ -350,12 +350,13 @@ export function fetchCatalogDatasetData(datasetId: string): Promise<CatalogDatas
 
 export async function addCatalogDatasetLayer(
   projectId: string,
-  datasetId: string
+  datasetId: string,
+  preserveView = false
 ): Promise<DatasetCatalogLayerResponse> {
   return requestJson<DatasetCatalogLayerResponse>("/datasets/catalog/layers", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ project_id: projectId, dataset_id: datasetId })
+    body: JSON.stringify({ project_id: projectId, dataset_id: datasetId, preserve_view: preserveView })
   });
 }
 
