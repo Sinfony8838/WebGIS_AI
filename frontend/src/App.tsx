@@ -120,6 +120,7 @@ import type {
   ArtifactRecord,
   AuthUser,
   ChatMessage,
+  CitationRecord,
   DatasetCatalogItem,
   DatasetStatsResponse,
   ExecutedAction,
@@ -832,7 +833,8 @@ export default function App({
       actionsExecuted?: ExecutedAction[] | null,
       imageAttachment?: ImageAttachment | null,
       planner?: string | null,
-      targetTab?: AssistantTab
+      targetTab?: AssistantTab,
+      citations?: CitationRecord[]
     ) => {
       if (!text.trim() && !imageAttachment) {
         return;
@@ -845,7 +847,8 @@ export default function App({
         intent: intent ?? undefined,
         actions_executed: actionsExecuted ?? undefined,
         image_attachment: imageAttachment ?? undefined,
-        planner: planner ?? undefined
+        planner: planner ?? undefined,
+        citations: citations?.map((item) => ({ ...item }))
       };
       if (targetTab === "interaction") {
         setInteractionChatLog((previous) => [...previous, message]);
@@ -1428,7 +1431,8 @@ export default function App({
             payload.result?.actions_executed,
             undefined,
             payload.result?.planner,
-            submittedTab
+            submittedTab,
+            payload.result?.citations ?? payload.result?.knowledge?.citations ?? []
           );
           if (submittedTab === "interaction") {
             setInteractionBusy(false);

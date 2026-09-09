@@ -504,7 +504,7 @@ describe("CopilotWidget", () => {
     expect(screen.getByText("计划摘要")).toBeInTheDocument();
   });
 
-  it("renders v2 confirmation and citation cards", () => {
+  it("preserves confirmation without attaching latest-job sources to existing chat", () => {
     const { onConfirm } = renderWidget({
       currentJob: {
         job_id: "job_1",
@@ -537,14 +537,42 @@ describe("CopilotWidget", () => {
 
     // v1.2: the per-stage "ROUTING / RETRIEVAL / …" debug strip and the
     // "回答类型 / 置信度" knowledge meta card were retired in favour of a
-    // single ChatGPT-style thinking indicator. Only functional cards
-    // (confirmation + citations) remain.
+    // single thinking indicator. Confirmation remains task-scoped,
+    // while sources must be attached to an actual answer.
     expect(screen.queryByText(/回答类型：/)).not.toBeInTheDocument();
     expect(screen.queryByText(/置信度：/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^ROUTING$/i)).not.toBeInTheDocument();
-    expect(screen.getByText("引用来源")).toBeInTheDocument();
+    expect(screen.queryByText("参考来源")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "CAS" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("确认执行"));
     expect(onConfirm).toHaveBeenCalledWith("confirm_1", "approve");
+  });
+
+  it("keeps each source with its answer and does not borrow citations for an unsourced reply", () => {
+    renderWidget({
+      chatLog: [
+        { role: "assistant", text: "上海通勤回答", timestamp: "1", citations: [{ title: "上海职住研究", url: "https://www.geog.com.cn/CN/abstract/article/0375-5444/48138" }] },
+        { role: "assistant", text: "人口总量回答", timestamp: "2", citations: [{ title: "人口普查", url: "https://www.stats.gov.cn/" }] },
+        { role: "assistant", text: "无来源的回答", timestamp: "3" },
+        { role: "user", text: "用户提供的文字", timestamp: "4", citations: [{ title: "不属于助教的来源", url: "https://example.com/" }] }
+      ]
+    });
+    const first = screen.getByText("上海通勤回答").closest("article")!;
+    const second = screen.getByText("人口总量回答").closest("article")!;
+    expect(within(first).getByRole("link", { name: "上海职住研究" })).toHaveAttribute("href", "https://www.geog.com.cn/CN/abstract/article/0375-5444/48138");
+    expect(within(first).queryByRole("link", { name: "人口普查" })).toBeNull();
+    expect(within(second).getByRole("link", { name: "人口普查" })).toBeInTheDocument();
+    expect(within(screen.getByText("无来源的回答").closest("article")!).queryByRole("link")).toBeNull();
+    expect(screen.queryByRole("link", { name: "不属于助教的来源" })).toBeNull();
+  });
+
+  it("keeps invalid source titles readable without creating executable or broken links", () => {
+    renderWidget({ chatLog: [{ role: "assistant", text: "参考回答", timestamp: "1", citations: [
+      { title: "无网址资料", url: "" }, { title: "异常网址", url: "javascript:alert(1)" }
+    ] }] });
+    expect(screen.getByText("无网址资料（链接不可用）")).toBeInTheDocument();
+    expect(screen.getByText("异常网址（链接不可用）")).toBeInTheDocument();
+    expect(within(screen.getByText("参考回答").closest("article")!).queryByRole("link")).toBeNull();
   });
 
   it("shows a generic thinking indicator while busy and hides it when done", () => {

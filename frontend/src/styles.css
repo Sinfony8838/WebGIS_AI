@@ -5174,6 +5174,32 @@ button {
   font-size: 11.5px;
 }
 
+/* Keep each answer's sources readable without a nested scrolling card. */
+.copilot-bubble .copilot-citation-list {
+  margin-top: 10px;
+  padding: 10px 0 0;
+  border: 0;
+  border-top: 1px solid var(--panel-border);
+  border-radius: 0;
+  background: transparent;
+  max-height: none;
+  overflow: visible;
+}
+
+.copilot-bubble .copilot-citation-list strong {
+  color: var(--text-soft);
+  font-size: 12px;
+  letter-spacing: normal;
+}
+
+.copilot-bubble .copilot-citation-list a,
+.copilot-bubble .copilot-citation-list > span {
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .copilot-confirm-actions {
   display: flex;
   gap: 8px;
@@ -7667,3 +7693,21 @@ button {
 .qpm-thinking-dot { display:inline-block; width:7px; height:7px; margin-right:8px; border-radius:50%; background:var(--accent); animation:qpm-thinking 1.2s ease-in-out infinite; }
 @keyframes qpm-thinking { 50% { opacity:.3; } }
 @media(prefers-reduced-motion:reduce) { .qpm-thinking-dot { animation:none; } }
+
+
+/* A narrow classroom window cannot fit a floating lesson panel and chat side by side. */
+@media (max-width: 960px) {
+  .copilot-widget {
+    position: fixed;
+    z-index: 72;
+    inset: 8px !important;
+    width: auto !important;
+    height: auto !important;
+    min-width: 0;
+    min-height: 0;
+    padding: 12px;
+    border-radius: 16px;
+  }
+  .copilot-widget-header { cursor: default; }
+  .copilot-resize-handle { display: none; }
+}

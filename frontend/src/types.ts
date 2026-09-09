@@ -289,6 +289,8 @@ export type ChatMessage = {
   intent?: string | null;
   /** Tools the agent executed for this reply - drives the collapsible tool-use trace. */
   actions_executed?: ExecutedAction[] | null;
+  /** Sources returned with this answer; never inferred from the latest job. */
+  citations?: CitationRecord[];
   image_attachment?: ImageAttachment | null;
   /** Planner that produced this reply (interaction_rule/interaction_minimax/…) - drives the 快速通道/AI 规划 badge. */
   planner?: string | null;

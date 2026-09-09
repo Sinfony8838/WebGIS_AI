@@ -472,7 +472,6 @@ export function CopilotWidget({
 
   const jobStages = useMemo(() => (currentJob ? Object.entries(currentJob.stages) : []), [currentJob]);
   const isListening = voiceStatus === "listening" || pushToTalkStream;
-  const citations = currentJob?.result?.citations || currentJob?.result?.knowledge?.citations || [];
   const plannedActions = currentJob?.result?.actions_planned || [];
   const confirmationId = String(currentJob?.result?.confirmation_id || "");
   const requiresConfirmation = Boolean(currentJob?.result?.requires_confirmation && confirmationId);
@@ -1156,17 +1155,6 @@ export function CopilotWidget({
             </div>
           ) : null}
 
-          {citations.length ? (
-            <div className="copilot-citation-list">
-              <strong>引用来源</strong>
-              {citations.map((item) => (
-                <a key={`${item.title}_${item.url}`} href={item.url} target="_blank" rel="noreferrer">
-                  {item.title}
-                </a>
-              ))}
-            </div>
-          ) : null}
-
           <div className="copilot-chat-log" data-testid="copilot-chat-log">
             {chatLog.map((message, index) => {
               const body = message.text;
@@ -1200,6 +1188,22 @@ export function CopilotWidget({
                     />
                   ) : null}
                   {body ? <p>{body}</p> : null}
+                  {message.role === "assistant" && message.citations?.length ? (
+                    <div className="copilot-citation-list" aria-label="本条回答参考来源">
+                      <strong>参考来源</strong>
+                      {message.citations.map((item, citationIndex) => {
+                        let url = "";
+                        try {
+                          const parsed = new URL(item.url);
+                          if (["https:", "http:"].includes(parsed.protocol)) url = parsed.href;
+                        } catch { /* A source title remains readable when its URL is unavailable. */ }
+                        const title = item.title || "来源未命名";
+                        return url ? (
+                          <a key={citationIndex} href={url} target="_blank" rel="noopener noreferrer">{title}</a>
+                        ) : <span key={citationIndex}>{title}（链接不可用）</span>;
+                      })}
+                    </div>
+                  ) : null}
                   {actions.length ? (
                     <div className="copilot-tool-trace" data-testid={`copilot-tool-trace-${index}`}>
                       <button
