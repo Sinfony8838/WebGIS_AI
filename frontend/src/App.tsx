@@ -3,6 +3,7 @@ import MultiPolygon from "ol/geom/MultiPolygon";
 import { UrbanStudyPanel, type UrbanSource, type UrbanStatus } from "./components/UrbanStudyPanel";
 import { shanghaiDensityColor, densityColor, densityRadius, rankColor } from "./lib/populationVisual";
 import { MapEvidenceLegend } from "./components/MapEvidenceLegend";
+import { JobActivity } from "./lib/jobActivity";
 import { MapToolsDock } from "./components/MapToolsDock";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "ol/ol.css";
@@ -532,8 +533,7 @@ export default function App({
   // 同步一份 phase 到 state：助教面板头部的阶段徽标与能力芯片排序需要触发渲染。
   const [teachingPhase, setTeachingPhase] = useState<TeachingContext["phase"]>("");
   const [copilotOpenSignal, setCopilotOpenSignal] = useState(0);
-  const activeJobStreamsRef = useRef(0);
-  const jobStreamsRef = useRef<Set<EventSource>>(new Set());
+  const jobStreamsRef = useRef(new JobActivity<EventSource>());
   const assistantSubmittingRef = useRef(false);
   const resourceSearchRequestRef = useRef(0);
   const pendingEvidenceSnapshotRef = useRef<{ sessionId: string; stageId: string } | null>(null);
@@ -661,6 +661,7 @@ export default function App({
   const [databaseCategory, setDatabaseCategory] = useState<DatabaseCategory>("all");
   const [layerManagerOpen, setLayerManagerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [mapBusy, setMapBusy] = useState(false);
   const [workflowDockOpen, setWorkflowDockOpen] = useState<boolean>(false);
   const [searchCardOpen, setSearchCardOpen] = useState(false);
   const [statsCardOpen, setStatsCardOpen] = useState(false);
@@ -1319,10 +1320,8 @@ export default function App({
   const closeJobStream = useCallback((source: EventSource): boolean => {
     const wasTracked = jobStreamsRef.current.delete(source);
     source.close();
-    if (wasTracked) {
-      activeJobStreamsRef.current = Math.max(0, activeJobStreamsRef.current - 1);
-    }
-    setBusy(activeJobStreamsRef.current > 0);
+    setBusy(jobStreamsRef.current.busy);
+    setMapBusy(jobStreamsRef.current.mapBusy);
     return wasTracked;
   }, []);
 
@@ -1376,14 +1375,17 @@ export default function App({
   );
 
   const subscribeToJob = useCallback(
-    (jobId: string) => {
+    (jobId: string, readOnly = false) => {
+      const submittedTab = lastSubmittedTabRef.current;
+      const submittedInputMode = lastInputModeRef.current;
       const source = new EventSource(`${getApiBase()}/jobs/${jobId}/stream`, {
         withCredentials: true
       });
-      jobStreamsRef.current.add(source);
-      activeJobStreamsRef.current += 1;
+      jobStreamsRef.current.add(source, readOnly);
       setBusy(true);
+      setMapBusy(jobStreamsRef.current.mapBusy);
       source.addEventListener("job", async (event) => {
+        if (!jobStreamsRef.current.has(source)) return;
         let payload: JobRecord;
         try {
           payload = JSON.parse((event as MessageEvent).data) as JobRecord;
@@ -1401,17 +1403,16 @@ export default function App({
           const uiOnly = Boolean(payload.result?.actions_executed?.length) && payload.result!.actions_executed!.every(
             (entry) => ["switch_view_mode", "open_panel"].includes(entry.action.tool_name)
           );
-          if (!uiOnly) {
+          if (!readOnly && !uiOnly) {
             try {
               await refreshProjectState(payload.project_id);
             } catch (error) {
               pushToast("error", "地图状态刷新失败", error instanceof Error ? error.message : "请重试刷新地图。");
             }
           }
-          handleAssistantUiActions(payload);
+          if (!readOnly) handleAssistantUiActions(payload);
           const message = payload.result?.assistant_message || payload.result?.summary || payload.error || "";
           const nextConversationId = String(payload.result?.conversation_id || "");
-          const submittedTab = lastSubmittedTabRef.current;
           if (nextConversationId) {
             if (submittedTab === "interaction") {
               setInteractionConversationId(nextConversationId);
@@ -1432,7 +1433,7 @@ export default function App({
           if (submittedTab === "interaction") {
             setInteractionBusy(false);
             // 语音发起的交互回合：播报结果（可关）。新回合开始时会先 cancel。
-            if (payload.status === "completed" && ttsEnabled && lastInputModeRef.current === "voice" && message) {
+            if (payload.status === "completed" && ttsEnabled && submittedInputMode === "voice" && message) {
               speak(message);
             }
           }
@@ -1456,9 +1457,7 @@ export default function App({
 
   useEffect(() => {
     return () => {
-      jobStreamsRef.current.forEach((source) => source.close());
-      jobStreamsRef.current.clear();
-      activeJobStreamsRef.current = 0;
+      jobStreamsRef.current.closeAll((source) => source.close());
     };
   }, []);
 
@@ -1475,7 +1474,7 @@ export default function App({
         return false;
       }
       const effectiveMessage = message.trim() || (imageAttachment ? "请识别并分析这张图片中的地理信息。" : "");
-      if (!effectiveMessage || assistantSubmittingRef.current) return false;
+      if (!effectiveMessage || assistantSubmittingRef.current || jobStreamsRef.current.busy) return false;
       assistantSubmittingRef.current = true;
       // 智能交互 Tab 走 interaction 模式（独立会话、直达工具规划）；
       // 教学助手 Tab 保持 teaching 模式与既有行为完全一致。
@@ -1518,7 +1517,7 @@ export default function App({
           const designId = String((response.lesson_design as { design_id?: string }).design_id || "");
           openLessonDesignWorkspace(designId);
         }
-        subscribeToJob(response.job_id);
+        subscribeToJob(response.job_id, response.read_only === true);
         return true;
       } catch (error) {
         pushToast("error", "助教消息发送失败", error instanceof Error ? error.message : "请检查网络后重试，输入内容已保留。");
@@ -3685,7 +3684,7 @@ export default function App({
             hasSearchArea={Boolean(searchAreaGeometry)}
             hasMeasurements={measurementCount > 0}
             hasAnnotations={annotationCount > 0}
-            busy={busy}
+            busy={mapBusy}
             showGraticule={showGraticule}
             onChangeMode={setInteractionMode}
             onChangeViewMode={handleViewModeToggle}
@@ -3753,7 +3752,7 @@ export default function App({
             }}
             textbookItems={textbookMapItems}
             textbookActiveIds={textbookActiveIds}
-            busy={busy}
+            busy={mapBusy}
             catalogError={datasetCatalogError}
             onRetryCatalog={() => {
               setDatasetCatalogError(false);
@@ -3907,8 +3906,9 @@ export default function App({
         <LessonWorkflowShell
           project={project}
           assistantJob={currentJob}
+          assistantBusy={busy}
           layerState={layerState}
-          busy={busy}
+          busy={mapBusy}
           openSignal={lessonWorkflowOpenSignal}
           onOpenDesignWorkspace={openLessonDesignWorkspace}
           rehearsalSignal={rehearsalTarget.signal}
@@ -3962,7 +3962,7 @@ export default function App({
           materials={materialViewerItems}
           onClose={() => setMaterialViewerOpen(false)}
         />
-        <UploadDialog open={uploadOpen} busy={busy} onClose={() => setUploadOpen(false)} onSubmit={handleUploadDataset} />
+        <UploadDialog open={uploadOpen} busy={mapBusy} onClose={() => setUploadOpen(false)} onSubmit={handleUploadDataset} />
         <WorkflowDock
           projectId={project?.project_id || ""}
           assistantJob={currentJob}
@@ -3977,7 +3977,7 @@ export default function App({
           open={layerManagerOpen}
           onClose={() => setLayerManagerOpen(false)}
           layers={layerState?.items || []}
-          busy={busy}
+          busy={mapBusy}
           onToggleLayer={(layerId, visible) => void handleLayerManagerToggle(layerId, visible)}
           onFocusLayer={(layerId) => void handleLayerManagerFocus(layerId)}
           onDeleteLayer={(layerId) => void handleLayerManagerDelete(layerId)}

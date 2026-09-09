@@ -9,6 +9,7 @@ type Props = {
   currentStageId: string;
   stageEnteredAt: number | null;
   busy: boolean;
+  assistantBusy?: boolean;
   quizActive: boolean;
   collapsed: boolean;
   onToggleCollapsed: () => void;
@@ -49,6 +50,7 @@ export function ClassRunPanel({
   currentStageId,
   stageEnteredAt,
   busy,
+  assistantBusy = false,
   quizActive,
   collapsed,
   onToggleCollapsed,
@@ -184,7 +186,7 @@ export function ClassRunPanel({
   }
 
   function runBrainstorm() {
-    if (!currentStage || !brainstorm || !hasBrainstorm || !onAssistantPrompt || brainstormSpinning || busy) {
+    if (!currentStage || !brainstorm || !hasBrainstorm || !onAssistantPrompt || brainstormSpinning || busy || assistantBusy) {
       return;
     }
     setBrainstormSpinning(true);
@@ -516,7 +518,7 @@ export function ClassRunPanel({
             <button
               type="button"
               className="toolbar-button compact primary class-brainstorm-run"
-              disabled={busy || brainstormSpinning}
+              disabled={busy || assistantBusy || brainstormSpinning}
               onClick={runBrainstorm}
               data-testid="run-brainstorm"
             >
@@ -580,7 +582,7 @@ export function ClassRunPanel({
       </footer>
       {inquiryOpen && shanghaiSupplement && onPresentScene && <ShanghaiPopulationInquiry
         key={session.session_id + currentStageId} projectId={session.project_id}
-        onPresent={onPresentScene} onAssistantPrompt={onAssistantPrompt} onClose={() => setInquiryOpen(false)} />}
+        onPresent={onPresentScene} assistantBusy={assistantBusy} onAssistantPrompt={onAssistantPrompt} onClose={() => setInquiryOpen(false)} />}
 
     </section>
   );

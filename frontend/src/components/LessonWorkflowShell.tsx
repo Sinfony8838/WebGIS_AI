@@ -57,6 +57,7 @@ type Props = {
   assistantJob?: JobRecord | null;
   layerState: LayersResponse | null;
   busy?: boolean;
+  assistantBusy?: boolean;
   onRefresh: () => void | Promise<void>;
   /** 底部状态栏（经纬度/层级），与课前/课中/课后按钮同坞排布，避免相互压盖。 */
   statusBar?: ReactNode;
@@ -191,6 +192,7 @@ export function LessonWorkflowShell({
   rehearsalLessonId = "",
   onTeachingContextChange,
   onAssistantPrompt,
+  assistantBusy = false,
   onApplyGlobeScene,
   getGlobeSceneSnapshot,
   onFocusEvidenceLayer,
@@ -778,6 +780,7 @@ export function LessonWorkflowShell({
           onFocusEvidenceLayer={onFocusEvidenceLayer}
           onRequestPlaneView={onRequestPlaneView}
           onAssistantPrompt={onAssistantPrompt}
+          assistantBusy={assistantBusy}
         />
       ) : null}
       {teachPanelVisible && projectionQuestion ? (

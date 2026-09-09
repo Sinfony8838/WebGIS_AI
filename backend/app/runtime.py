@@ -949,6 +949,9 @@ class WebGISRuntime:
             "project_id": project_id,
             "conversation_id": conversation_id,
             "assistant_mode": normalized_mode,
+            "read_only": normalized_mode == "knowledge" or (
+                normalized_mode == "teaching" and message.lstrip().startswith("GeoBot 头脑风暴：")
+            ),
         }
 
     def confirm_assistant_action(self, confirmation_id: str, decision: str = "approve") -> Dict[str, Any]:

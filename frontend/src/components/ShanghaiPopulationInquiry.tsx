@@ -19,8 +19,9 @@ function LandscapePhoto({ photo }: { photo: typeof PHOTOS[number] }) {
   </figure>;
 }
 
-export function ShanghaiPopulationInquiry({ projectId, onPresent, onAssistantPrompt, onClose }: {
+export function ShanghaiPopulationInquiry({ projectId, onPresent, onAssistantPrompt, onClose, assistantBusy = false }: {
   projectId: string;
+  assistantBusy?: boolean;
   onPresent: (target: ClassroomPresentationTarget) => Promise<void>;
   onAssistantPrompt?: (prompt: string, display?: string) => void;
   onClose: () => void;
@@ -63,7 +64,7 @@ export function ShanghaiPopulationInquiry({ projectId, onPresent, onAssistantPro
     finally { setBusy(false); }
   }
   function askAssistant() {
-    if (!questions.length || !onAssistantPrompt) return;
+    if (!questions.length || !onAssistantPrompt || assistantBusy) return;
     const prompt = ["GeoBot 头脑风暴：上海年轻环的条件变化追问。",
       "请围绕下面2025河南卷题组，沿用限定问题给出教师参考回答。",
       "材料：" + questions[0].material,
@@ -108,7 +109,7 @@ export function ShanghaiPopulationInquiry({ projectId, onPresent, onAssistantPro
       <button className="toolbar-button" disabled={!questions.length} onClick={()=>setRevealed(v=>!v)}>{revealed ? "隐藏参考答案" : "揭示题库参考答案"}</button>
       {revealed && questions.map((q,index)=><article key={q.question_id}><h3>第{index+1}题：{q.answer_letter || q.answer || "题库暂无答案"}</h3><p>{q.explanation || "题库暂无解析，请教师核验。"}</p></article>)}
       <p>迁移追问：如果郊区只增加住宅、没有相应就业机会，是否仍会形成“年轻环”？你还需要哪些资料来检验？</p>
-      {onAssistantPrompt && <button className="toolbar-button" disabled={!questions.length} onClick={askAssistant}>请助教展开这个追问</button>}
+      {onAssistantPrompt && <button className="toolbar-button" disabled={!questions.length || assistantBusy} onClick={askAssistant}>{assistantBusy ? "助教正在思考…" : "请助教展开这个追问"}</button>}
     </>}
     </div>
     <footer><button className="toolbar-button" disabled={busy} onClick={() => void showMap("stage",tab)}>恢复本环节地图</button><button className="toolbar-button primary" disabled={busy} onClick={async () => {

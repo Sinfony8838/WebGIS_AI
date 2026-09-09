@@ -255,6 +255,18 @@ describe("ClassRunPanel", () => {
     return props;
   }
 
+  it("allows map presentation and stage changes during an answer but prevents another brainstorm", async () => {
+    const onPresentScene = vi.fn().mockResolvedValue(undefined);
+    const props = renderPanel({ assistantBusy: true, onAssistantPrompt: vi.fn(), onPresentScene });
+    expect(screen.getByTestId("run-brainstorm")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "地图展示" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "地图展示" }));
+    await waitFor(() => expect(onPresentScene).toHaveBeenCalledWith("stage"));
+    fireEvent.click(screen.getByTestId("stage-chip-s2"));
+    expect(props.onEnterStage).toHaveBeenCalledWith("s2");
+    expect(props.onAssistantPrompt).not.toHaveBeenCalled();
+  });
+
   it("switches stage via the vertical stage list", () => {
     const props = renderPanel();
     fireEvent.click(screen.getByTestId("stage-chip-s2"));

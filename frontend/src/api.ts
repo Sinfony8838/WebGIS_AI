@@ -407,8 +407,8 @@ export async function sendAssistantMessage(
     teachingContext?: TeachingContext;
     imageAttachments?: Array<Pick<ImageAttachment, "artifact_id">>;
   }
-): Promise<{ job_id: string; conversation_id?: string; assistant_mode?: AssistantMode; lesson_design?: LessonDesignSession }> {
-  return requestJson<{ job_id: string; conversation_id?: string; assistant_mode?: AssistantMode; lesson_design?: LessonDesignSession }>("/assistant/messages", {
+): Promise<{ job_id: string; conversation_id?: string; assistant_mode?: AssistantMode; read_only?: boolean; lesson_design?: LessonDesignSession }> {
+  return requestJson<{ job_id: string; conversation_id?: string; assistant_mode?: AssistantMode; read_only?: boolean; lesson_design?: LessonDesignSession }>("/assistant/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
