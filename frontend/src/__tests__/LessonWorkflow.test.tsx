@@ -373,6 +373,25 @@ describe("ClassRunPanel", () => {
     expect(onPresentScene).toHaveBeenLastCalledWith("stage");
   });
 
+  it("offers local imagery only in Shanghai verification and keeps projection content clear", async () => {
+    const lesson = makeLesson(); lesson.title = "人口分布：从上海看中国与世界";
+    lesson.stages[0].stage_id = "shanghai_verify";
+    const onPresentScene = vi.fn().mockResolvedValue(undefined);
+    renderPanel({ lesson, currentStageId: "shanghai_verify", onPresentScene });
+    fireEvent.click(screen.getByRole("button", { name: "黄浦局部" }));
+    await waitFor(() => expect(onPresentScene).toHaveBeenLastCalledWith("huangpu_detail"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "崇明局部" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "崇明局部" }));
+    await waitFor(() => expect(onPresentScene).toHaveBeenLastCalledWith("chongming_detail"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "返回全市" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "返回全市" }));
+    await waitFor(() => expect(onPresentScene).toHaveBeenLastCalledWith("stage"));
+    expect(screen.queryByTestId("basic-knowledge-overlay")).toBeNull();
+    cleanup();
+    renderPanel({ lesson, currentStageId: "s2", onPresentScene });
+    expect(screen.queryByRole("group", { name: "上海局部影像对照" })).toBeNull();
+  });
+
   it("offers the Shanghai extension only after the Shanghai introductory basics", () => {
     const item = makeLesson(); item.title = "人口分布：从上海看中国与世界";
     item.stages[0].stage_id = "shanghai_intro";

@@ -527,7 +527,26 @@ class ClassroomWorkflowRuntime:
         if not stage:
             raise KeyError("Unknown stage")
         presentation = deepcopy(stage)
-        if target != "stage":
+        local_targets = {"huangpu_detail": "310101", "chongming_detail": "310151"}
+        if target in local_targets:
+            if stage_id != "shanghai_verify" or not ("上海" in lesson.title and "人口" in lesson.title):
+                raise ValueError("局部影像对照仅用于上海地图验证环节")
+            reference_path = self.config.builtin_dir / "one_map/shanghai/shanghai_population_density.geojson"
+            try:
+                reference = json.loads(reference_path.read_text(encoding="utf-8"))
+                feature = next(item for item in reference["features"]
+                               if item["properties"].get("region_code") == local_targets[target])
+                center = feature["properties"]["center"]
+                if len(center) != 2 or not (120 < float(center[0]) < 123 and 30 < float(center[1]) < 33):
+                    raise ValueError("Invalid local reference point")
+            except (OSError, ValueError, KeyError, TypeError, StopIteration) as exc:
+                raise ValueError("上海局部定位资料不可用，请使用全市地图手动定位") from exc
+            # Same zoom, with no old fit extent or opaque statistical polygons.
+            # These are map reference points, not representative district samples.
+            presentation["scene"].update({"basemap_id": "amap_imagery", "templates": [],
+                "catalog_layers": [], "catalog_layer_focus": "", "annotations": [], "visual_query": None,
+                "view": {"center": list(center), "zoom": 13}})
+        elif target != "stage":
             if target not in {"shanghai_density", "shanghai_age", "lujiazui", "zhujiajiao"}:
                 raise ValueError("Unknown presentation target")
             if not ("上海" in lesson.title and "人口" in lesson.title and stage_id in {"shanghai_intro", "concept", "shanghai_inquiry", "shanghai_verify"}):

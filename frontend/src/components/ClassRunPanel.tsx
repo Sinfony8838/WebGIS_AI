@@ -120,12 +120,13 @@ export function ClassRunPanel({
     [lesson, currentStageId]
   );
   const shanghaiSupplement = currentStageId === "shanghai_intro" && lesson.title.includes("上海") && lesson.title.includes("人口");
-  async function openMapPresentation() {
+  const shanghaiVerification = currentStageId === "shanghai_verify" && lesson.title.includes("上海") && lesson.title.includes("人口");
+  async function openMapPresentation(target: ClassroomPresentationTarget = "stage") {
     if (!onPresentScene || presentationBusy) return;
     const epoch = presentationEpoch.current;
     setPresentationBusy(true); setPresentationError("");
     try {
-      await onPresentScene("stage");
+      await onPresentScene(target);
 
     } catch (error) {
       if (epoch === presentationEpoch.current) setPresentationError(error instanceof Error ? error.message : "地图展示失败，请重试");
@@ -346,6 +347,15 @@ export function ClassRunPanel({
           </div>
         ) : null}
 
+        {shanghaiVerification && <div className="class-local-comparison" role="group" aria-label="上海局部影像对照">
+          <span className="question-detail-label">同级缩放 · 局部影像对照</span>
+          <div>
+            <button className="toolbar-button compact" disabled={busy || presentationBusy || !onPresentScene} onClick={() => void openMapPresentation("huangpu_detail")}>黄浦局部</button>
+            <button className="toolbar-button compact" disabled={busy || presentationBusy || !onPresentScene} onClick={() => void openMapPresentation("chongming_detail")}>崇明局部</button>
+            <button className="toolbar-button compact" disabled={busy || presentationBusy || !onPresentScene} onClick={() => void openMapPresentation()}>返回全市</button>
+          </div>
+          <small>参考点周边的景观样例，不代表全区；影像年份以提供方资料为准。</small>
+        </div>}
         {presentationError && <p role="alert">{presentationError}</p>}
         {shanghaiSupplement && onPresentScene && <div className="shanghai-supplement-launcher">
           <div><strong>基础讲完后 · 真题拓展</strong><small>2025 河南卷：人口分布与“年轻环”</small></div>

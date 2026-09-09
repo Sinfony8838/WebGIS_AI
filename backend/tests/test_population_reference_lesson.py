@@ -127,3 +127,37 @@ class PopulationReferenceLessonTest(unittest.TestCase):
         runtime.classroom.enter_session_stage(session_id, "china_inquiry")
         with self.assertRaises(ValueError):
             runtime.classroom.present_session_scene(session_id, "china_inquiry", "lujiazui")
+
+    def test_local_image_comparison_matches_zoom_and_restores_stage_without_timer_changes(self):
+        from copy import deepcopy
+        from unittest.mock import patch
+        from pathlib import Path
+        runtime, store, project_id = self.build_runtime()
+        sid = runtime.classroom.create_class_session("lesson_builtin_population_shanghai_world", project_id)["session"]["session_id"]
+        runtime.classroom.enter_session_stage(sid, "shanghai_verify")
+        runtime.classroom.launch_session_question(sid, stage_id="shanghai_verify", question_id="sh_verify_q")
+        session = store.get_class_session(sid)
+        before = deepcopy(session.to_dict())
+        for target, center in [("huangpu_detail", [121.490317,31.222771]), ("chongming_detail", [121.397516,31.626946])]:
+            runtime.classroom.present_session_scene(sid, "shanghai_verify", target)
+            project = store.get_project(project_id)
+            self.assertEqual(project.base_map["id"], "amap_imagery")
+            self.assertEqual(project.view["center"], center)
+            self.assertEqual(project.view["zoom"], 13)
+            self.assertNotIn("extent", project.view)
+            self.assertFalse(any(layer.visible and layer.source == "one_map_catalog" for layer in project.layers))
+            self.assertEqual(session.to_dict(), before)
+        with patch.object(Path, "read_text", side_effect=OSError("missing reference")):
+            with self.assertRaisesRegex(ValueError, "局部定位资料不可用"):
+                runtime.classroom.present_session_scene(sid, "shanghai_verify", "huangpu_detail")
+        runtime.classroom.present_session_scene(sid, "shanghai_verify", "stage")
+        project = store.get_project(project_id)
+        self.assertEqual(project.view["center"], [121.47,31.23])
+        self.assertEqual(project.view["zoom"], 10)
+        self.assertTrue(any(layer.visible and layer.metadata.get("catalog_id") == "shanghai_districts" for layer in project.layers))
+        self.assertEqual(session.to_dict(), before)
+        runtime.classroom.enter_session_stage(sid, "china_inquiry")
+        view_before = deepcopy(store.get_project(project_id).view)
+        with self.assertRaisesRegex(ValueError, "仅用于上海"):
+            runtime.classroom.present_session_scene(sid, "china_inquiry", "huangpu_detail")
+        self.assertEqual(store.get_project(project_id).view, view_before)
