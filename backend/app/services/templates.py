@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..config import AppConfig
-from ..geo import generate_dynamic_hu_line
+from ..geo import HU_LINE_METHODS, generate_dynamic_hu_line
 from ..models import LayerRecord
 from ..store import RuntimeStore
 
@@ -327,6 +327,7 @@ class TemplateService:
             data=dynamic_payload["features"],
             metadata={
                 "template_id": "hu_line_comparison",
+                **HU_LINE_METHODS,
                 "classic_share": round(dynamic_payload["classic_share"], 4),
                 "dynamic_share": round(dynamic_payload["dynamic_share"], 4),
                 "method": "fixed_direction_parallel_shift", "target_share": 0.94,

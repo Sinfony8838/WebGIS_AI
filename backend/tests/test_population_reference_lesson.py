@@ -60,6 +60,21 @@ class PopulationReferenceLessonTest(unittest.TestCase):
         runtime.classroom.lesson_service.apply_stage_scene_data(project_id, {"stage_id": "manual", "scene": {"layer_visibility": {"assistant_annotations": True}}})
         self.assertTrue(next(layer for layer in store.get_project(project_id).layers if layer.layer_id == "assistant_annotations").visible)
 
+    def test_previous_poi_results_are_hidden_but_explicit_scene_can_restore_them(self):
+        from backend.app.models import LayerRecord
+        runtime, store, project_id = self.build_runtime()
+        data = {"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [121.5, 31.2]}, "properties": {"name": "原检索地点"}}]}
+        store.upsert_layer(project_id, LayerRecord(layer_id="poi_search_results", name="旧检索", kind="vector", source="poi", geometry_type="Point", data=data))
+        runtime.classroom.apply_lesson_scene(project_id, "lesson_builtin_population_shanghai_world", "china_explain")
+        layer = next(item for item in store.get_project(project_id).layers if item.layer_id == "poi_search_results")
+        self.assertFalse(layer.visible)
+        self.assertEqual(layer.data, data)
+        hu = next(item for item in store.get_project(project_id).layers if item.layer_id == "generated_hu_line")
+        self.assertIn("黑河与腾冲", hu.metadata["reference_description"])
+        self.assertIn("预设94%", hu.metadata["fitted_description"])
+        runtime.classroom.lesson_service.apply_stage_scene_data(project_id, {"stage_id": "manual", "scene": {"layer_visibility": {"poi_search_results": True}}})
+        self.assertTrue(layer.visible)
+
     def test_inquiry_regions_follow_the_current_geographical_scale(self):
         runtime, store, _ = self.build_runtime()
         lesson = store.get_lesson("lesson_builtin_population_shanghai_world")

@@ -15,6 +15,12 @@ CLASSIC_END: Point = (98.5, 25.0)
 # "same side as reference" consistently means the populated south-east side.
 REFERENCE_POINT: Point = (121.47, 31.23)
 
+# Shared provenance for new layers and legacy persisted template layers.
+HU_LINE_METHODS = {
+    "reference_description": "经典线连接黑河与腾冲两个参考端点，用于概括人口分布格局；并非等降水量线或逐地实测边界。2020年指本次人口样本年份，不是参考线的提出年份。",
+    "fitted_description": "可选的平行拟合线以地级行政区中心点承载全区人口，按预设94%目标平移，是教学算法示例，不能证明真实人口分界线发生移动；该线默认不显示。",
+}
+
 
 def normalize_vector(dx: float, dy: float) -> Tuple[float, float]:
     length = math.hypot(dx, dy)

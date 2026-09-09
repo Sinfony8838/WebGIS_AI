@@ -8,6 +8,7 @@ from unittest import mock
 
 from backend.app.config import AppConfig
 from backend.app.runtime import WebGISRuntime
+from backend.app.models import LayerRecord
 from backend.app.store import RuntimeStore
 
 
@@ -103,6 +104,9 @@ class AssistantV2RuntimeTest(unittest.TestCase):
         runtime, project_id = self.build_runtime(enable_v2=False)
         runtime.session_engine.knowledge.minimax_client = None
 
+        for layer_id, name in [("terrain", "中国地形图"), ("rivers", "河流水系")]:
+            runtime.store.upsert_layer(project_id, LayerRecord(layer_id=layer_id, name=name, kind="vector", source="test", geometry_type="Polygon"))
+
         response = runtime.submit_assistant_message(
             project_id,
             "当前视图地貌特征",
@@ -110,7 +114,7 @@ class AssistantV2RuntimeTest(unittest.TestCase):
             map_context={
                 "center": [104, 35],
                 "zoom": 4,
-                "visible_layers": [{"name": "中国地形图"}, {"name": "河流水系"}],
+                "visible_layers": [{"layer_id": "terrain"}, {"layer_id": "rivers"}],
             },
         )
         job = self.wait_for_job(runtime, response["job_id"])

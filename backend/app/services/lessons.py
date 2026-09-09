@@ -399,9 +399,9 @@ class LessonService:
         scene_catalog_ids = {str(item) for item in scene.get("catalog_layers") or []}
         for layer in list(project.layers):
             layer_id = layer.layer_id
-            # Assistant annotations belong to the previous map discussion. Keep
+            # Assistant annotations and POIs belong to the previous map discussion. Keep
             # their data, but hide them unless this scene explicitly requests them.
-            if layer_id == "assistant_annotations" and layer.visible:
+            if layer_id in {"assistant_annotations", "poi_search_results"} and layer.visible:
                 self.store.patch_layer(project_id, layer_id, {"visible": False})
             if layer_id.startswith("visual_query_"):
                 self.store.remove_layer(project_id, layer_id)
