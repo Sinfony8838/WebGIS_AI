@@ -59,3 +59,22 @@ class PopulationReferenceLessonTest(unittest.TestCase):
         self.assertFalse(saved.visible)
         runtime.classroom.lesson_service.apply_stage_scene_data(project_id, {"stage_id": "manual", "scene": {"layer_visibility": {"assistant_annotations": True}}})
         self.assertTrue(next(layer for layer in store.get_project(project_id).layers if layer.layer_id == "assistant_annotations").visible)
+
+    def test_inquiry_regions_follow_the_current_geographical_scale(self):
+        runtime, store, _ = self.build_runtime()
+        lesson = store.get_lesson("lesson_builtin_population_shanghai_world")
+        self.assertEqual(lesson.metadata["builtin_version"], "4")
+        for stage_id in ("shanghai_inquiry", "shanghai_verify"):
+            self.assertEqual(lesson.find_stage(stage_id)["brainstorm"]["regions"], ["黄浦区", "崇明区"])
+        self.assertIn("塔里木盆地", lesson.find_stage("china_explain")["brainstorm"]["regions"])
+        self.assertIn("欧洲", lesson.find_stage("world_inquiry")["brainstorm"]["regions"])
+        # Do not interrupt the student-first line-drawing activity with AI answers.
+        self.assertEqual(lesson.find_stage("china_inquiry")["brainstorm"], {})
+        self.assertEqual(sum(len(stage["questions"]) for stage in lesson.stages), 11)
+
+    def test_invalid_brainstorm_regions_do_not_become_characters_or_labels(self):
+        from backend.app.services.lessons import normalize_brainstorm
+        for regions in ("上海", None, 2, {"name": "上海"}, [None, 5, " "]):
+            with self.subTest(regions=regions):
+                self.assertEqual(normalize_brainstorm({"prompt": "比较", "regions": regions}), {})
+        self.assertEqual(normalize_brainstorm({"prompt": "比较", "regions": [" 黄浦区 ", "黄浦区", "崇明区"]})["regions"], ["黄浦区", "崇明区"])

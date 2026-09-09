@@ -217,13 +217,19 @@ export function ClassRunPanel({
       brainstormTimerRef.current = null;
     }
     resetRecord();
-  }, [currentStageId]);
+  }, [currentStageId, session.session_id]);
 
   const currentStage: LessonStage | undefined = useMemo(
     () => lesson.stages.find((stage) => stage.stage_id === currentStageId),
     [lesson, currentStageId]
   );
   const currentStageIndex = lesson.stages.findIndex((stage) => stage.stage_id === currentStageId);
+  const brainstorm = currentStage?.brainstorm;
+  const brainstormRegions = Array.isArray(brainstorm?.regions)
+    ? [...new Set(brainstorm.regions.filter((region) => typeof region === "string" && region.trim()).map((region) => region.trim()))]
+    : [];
+  const hasBrainstorm = Boolean(brainstorm?.prompt?.trim() && brainstormRegions.length);
+
 
   const elapsedSeconds = stageEnteredAt ? Math.max(0, (nowTick - stageEnteredAt) / 1000) : 0;
   const plannedSeconds = (currentStage?.minutes || 0) * 60;
@@ -271,14 +277,13 @@ export function ClassRunPanel({
   }
 
   function runBrainstorm() {
-    const brainstorm = currentStage?.brainstorm;
-    if (!brainstorm || !onAssistantPrompt || brainstormSpinning || busy) {
+    if (!currentStage || !brainstorm || !hasBrainstorm || !onAssistantPrompt || brainstormSpinning || busy) {
       return;
     }
     setBrainstormSpinning(true);
     let tick = 0;
     brainstormTimerRef.current = window.setInterval(() => {
-      const preview = brainstorm.regions[tick % brainstorm.regions.length];
+      const preview = brainstormRegions[tick % brainstormRegions.length];
       setBrainstormRegion(preview);
       tick += 1;
       if (tick < 15) {
@@ -288,18 +293,19 @@ export function ClassRunPanel({
         window.clearInterval(brainstormTimerRef.current);
         brainstormTimerRef.current = null;
       }
-      const selected = brainstorm.regions[Math.floor(Math.random() * brainstorm.regions.length)] || preview;
+      const selected = brainstormRegions[Math.floor(Math.random() * brainstormRegions.length)] || preview;
       setBrainstormRegion(selected);
       setBrainstormSpinning(false);
       const prompt = [
         `GeoBot 头脑风暴：围绕“${currentStage.title}”开展随机地区探究。`,
         `随机抽中的地区是：${selected}。`,
-        `本环节可用地图资料：${[
-          ...(currentStage.scene?.templates || []),
-          ...(currentStage.scene?.catalog_layers || [])
-        ].join("、") || "当前人口专题地图"}。`,
+        `本课：${lesson.title}；当前环节：${currentStage.title}。`,
+        `本环节候选地区：${brainstormRegions.join("、")}。只围绕抽中的地区，保持本环节的比较尺度。`,
+        `本环节讲解材料：${currentStage.script.join("；")}。`,
+        "以下是教案原题的参考材料，不是学生回答，也不能当作本次课堂观察：",
+        ...currentStage.questions.slice(0, 3).map((question) => [question.text, question.material, question.answer, question.explanation].filter(Boolean).join("\n")),
         brainstorm.prompt,
-        "请提出一个教师难以提前穷举、但可以用高中地理知识回答的探究问题，并直接作答。",
+        "请生成一个与当前问题链衔接的追问，并提供教师参考回答；不替学生作答，不推断学生掌握情况。",
         "问题必须体现区域差异、条件变化、尺度转换或反直觉比较中的至少一种；资料不足时明确说明限制，不得编造数据。",
         "只输出“头脑风暴问题”“回答”“回答总结”三部分；回答总结必须是一句话。",
         "不要输出地图中心坐标、缩放级别、可见范围、证据或观察点、给学生的问题、教师收束语。"
@@ -579,16 +585,16 @@ export function ClassRunPanel({
           </div>
         </div>
 
-        {currentStage?.brainstorm && onAssistantPrompt ? (
+        {hasBrainstorm && brainstorm && onAssistantPrompt ? (
           <div className="class-brainstorm-card" data-testid="stage-brainstorm">
             <div className="class-brainstorm-identity">
               <span className="class-brainstorm-mark" aria-hidden="true">✦</span>
               <div>
                 <span>GeoBot AI</span>
-                <strong>{currentStage.brainstorm.title || "头脑风暴"}</strong>
+                <strong>{brainstorm.title || "头脑风暴"}</strong>
               </div>
             </div>
-            <p>随机抽取一个地区，把本节知识迁移到教师难以逐一预设的真实区域情境。</p>
+            <p>从本环节的地区中抽取一个，生成追问与教师参考回答。</p>
             <div className={`brainstorm-region-wheel ${brainstormSpinning ? "spinning" : ""}`} aria-live="polite">
               <span>{brainstormRegion || "等待抽取地区"}</span>
             </div>
@@ -599,7 +605,7 @@ export function ClassRunPanel({
               onClick={runBrainstorm}
               data-testid="run-brainstorm"
             >
-              {brainstormSpinning ? "GeoBot 正在转动…" : currentStage.brainstorm.button_label || "转动并生成探究"}
+              {brainstormSpinning ? "GeoBot 正在转动…" : brainstorm.button_label || "转动并生成探究"}
             </button>
           </div>
         ) : null}

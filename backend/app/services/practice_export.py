@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..models import ClassSessionRecord, LessonRecord
 from .question_bank import QuestionBankService
+from .lesson_homework import homework_guidance
 
 ORIGIN_LABELS = {
     "lesson_homework_basic": "教案课后作业（基础）",
@@ -146,7 +147,8 @@ class PracticeExportService:
             for text in homework.get("basic" if origin == "lesson_homework_basic" else "inquiry") or []:
                 text = str(text).strip()
                 if text:
-                    items.append({"kind": "task", "origin": origin, "text": text})
+                    items.append({"kind": "task", "origin": origin, "text": text,
+                                  "teacher_guidance": homework_guidance(homework, text)})
 
         # ② 教师课堂标注的部分掌握/误区：先回炉原题，再按误区标签与知识点检索变式题
         variant_queries: List[str] = []
@@ -450,7 +452,7 @@ class PracticeExportService:
         subtitle = doc.add_paragraph()
         subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
         subtitle.add_run(
-            "含官方答案、解析与课堂实测，仅供教师使用。" if teacher else "本卷不含答案与解析。"
+            "含题库答案、教案评分参考与已采集的课堂记录，仅供教师使用。" if teacher else "本卷不含答案与解析。"
         )
 
         heading_style = "Heading 2" if "Heading 2" in [style.name for style in doc.styles] else None
@@ -481,6 +483,9 @@ class PracticeExportService:
                 paragraph = doc.add_paragraph()
                 paragraph.add_run(f"{number}. 【{ORIGIN_LEVELS[item['origin']]}｜{ORIGIN_LABELS[item['origin']]}】").bold = True
                 paragraph.add_run(str(item["text"]))
+                if teacher:
+                    for point in item.get("teacher_guidance", {}).get("answer_points", []):
+                        doc.add_paragraph("教师评分参考：" + point)
                 continue
             self._add_question(doc, number, item, teacher)
         doc.save(path)

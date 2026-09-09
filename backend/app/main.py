@@ -1262,7 +1262,7 @@ def submit_assistant_message(
         wants_lesson_design = any(hint in assistant_message for hint in LESSON_DESIGN_REQUEST_HINTS) or (
             "教案" in assistant_message and any(token in assistant_message for token in ("共创", "设计", "生成", "备课", "规划"))
         )
-        if wants_lesson_design:
+        if wants_lesson_design and not assistant_message.lstrip().startswith("GeoBot 头脑风暴："):
             context = _current_auth(request)
             base_lesson_id = str((payload.teaching_context or {}).get("lesson_id") or "")
             if base_lesson_id:

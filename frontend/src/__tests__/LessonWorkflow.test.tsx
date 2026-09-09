@@ -420,6 +420,48 @@ describe("ClassRunPanel", () => {
     randomSpy.mockRestore();
   });
 
+  it.each([{}, { prompt: "比较", regions: [] }, { prompt: "比较", regions: "上海" }, { prompt: " ", regions: ["黄浦区"] }])("hides incomplete brainstorm configuration %j", (value) => {
+    const lesson = makeLesson();
+    lesson.stages[0].brainstorm = value as unknown as NonNullable<typeof lesson.stages[0]["brainstorm"]>;
+    renderPanel({ lesson, onAssistantPrompt: vi.fn() });
+    expect(screen.queryByTestId("stage-brainstorm")).toBeNull();
+  });
+
+  it("grounds Shanghai inquiry in the current questions and never dispatches a stale activity", () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const lesson = makeLesson();
+    lesson.title = "从上海看中国与世界";
+    const stage = lesson.stages[0];
+    stage.title = "比较黄浦与崇明";
+    stage.script = ["区级平均密度不代表街镇内部差异"];
+    stage.brainstorm = { title: "上海比较", prompt: "比较两区人口密度", regions: ["黄浦区", "崇明区"], button_label: "生成追问" };
+    stage.questions[0].material = "2020年黄浦662030人；面积20.46平方千米。来源：https://tjj.sh.gov.cn/tjnj/2021tjnj/C0202.htm";
+    stage.questions[0].answer = "约32357人/平方千米";
+    const onAssistantPrompt = vi.fn();
+    const props = renderPanel({ lesson, onAssistantPrompt });
+    fireEvent.click(screen.getByTestId("run-brainstorm"));
+    act(() => vi.advanceTimersByTime(1100));
+    const [prompt, display] = onAssistantPrompt.mock.calls[0];
+    expect(display).toBe("GeoBot 头脑风暴 · 黄浦区");
+    expect(prompt).toContain("本环节候选地区：黄浦区、崇明区");
+    expect(prompt).toContain("区级平均密度不代表街镇内部差异");
+    expect(prompt).toContain(stage.questions[0].material);
+    expect(prompt).toContain("32357人/平方千米");
+    expect(prompt).toContain("不是学生回答");
+    expect(prompt).not.toContain("population_distribution");
+    cleanup();
+    const view = render(<ClassRunPanel {...props} />);
+    fireEvent.click(screen.getByTestId("run-brainstorm"));
+    view.rerender(<ClassRunPanel {...props} currentStageId="s2" />);
+    act(() => vi.advanceTimersByTime(1100));
+    expect(onAssistantPrompt).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId("run-brainstorm"));
+    view.rerender(<ClassRunPanel {...props} currentStageId="s2" session={{ ...props.session, session_id: "new_session" }} />);
+    act(() => vi.advanceTimersByTime(1100));
+    expect(onAssistantPrompt).toHaveBeenCalledTimes(1);
+  });
+
   it("hides the brainstorm activity when no dispatcher is available", () => {
     renderPanel({ currentStageId: "s2" });
     expect(screen.queryByTestId("stage-brainstorm")).toBeNull();

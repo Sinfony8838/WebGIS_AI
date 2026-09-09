@@ -494,6 +494,14 @@ class AssistantRouter:
         operation becomes a teaching action, reflection/question prompts keep
         their classroom framing, and everything else defaults to a teaching
         explanation."""
+        if message.lstrip().startswith("GeoBot 头脑风暴："):
+            return {
+                "intent": "teaching_question",
+                "reason": "classroom question generation; embedded lesson materials are not tool commands",
+                "confidence": "1.00",
+                "ambiguity_reason": "",
+                "recommended_clarification": "",
+            }
         if _contains_any(message, TEACHING_PREPARE_HINTS):
             return {
                 "intent": "teaching_prepare",
@@ -646,7 +654,7 @@ class KnowledgeEngine:
 
         # --- Phase 3: LLM-powered answer (primary path) ---
         llm_used = False
-        population_guardrail_answer = self._population_guardrail_answer(question)
+        population_guardrail_answer = "" if brainstorm_request else self._population_guardrail_answer(question)
         verification_guardrail_answer = (
             self._unverified_timely_answer(question, entry) if web_verification_failed and not population_guardrail_answer else ""
         )
@@ -1359,7 +1367,16 @@ class KnowledgeEngine:
             .replace("heihe-tengchong line", "胡焕庸线")
             .replace("heihe-tengchong", "胡焕庸")
         )
-        for item in self.knowledge_units:
+        def title_match_score(item: Dict[str, Any]) -> int:
+            title = str(item.get("title") or "").strip().lower()
+            if len(title) >= 2 and title in lowered:
+                return len(title)
+            return max((len(tag) for raw in item.get("tags", [])
+                        if len(tag := str(raw or "").strip().lower()) >= 2
+                        and tag not in MATCH_STOP_WORDS and tag in title and tag in lowered), default=0)
+
+        # A named region/topic in the title outranks a generic keyword in another card.
+        for item in sorted(self.knowledge_units, key=title_match_score, reverse=True):
             title = str(item.get("title") or "").strip().lower()
             tags = [str(tag or "").strip().lower() for tag in item.get("tags", [])]
             meaningful_tags = [tag for tag in tags if len(tag) >= 2 and tag not in MATCH_STOP_WORDS]
@@ -1393,6 +1410,11 @@ class KnowledgeEngine:
         teaching_context = map_context.get("teaching_context") if isinstance(map_context.get("teaching_context"), dict) else {}
         if str((teaching_context or {}).get("phase") or "") == "in_class" and not _contains_any(question, WEB_RETRIEVAL_HINTS):
             wants_web = False
+        if question.lstrip().startswith("GeoBot 头脑风暴："):
+            # Source notes and verification questions in lesson materials are
+            # not requests to fetch current facts. Explicit current-data or
+            # online requests still require verification.
+            wants_web = _contains_any(question, TIME_SENSITIVE_HINTS + IMAGE_WEB_RETRIEVAL_HINTS + ("今年", "当前数据", "实时"))
         if map_context.get("image_attachment"):
             # An image question is grounded in the image by default. Merely
             # mentioning words such as "current data" or "source" (including

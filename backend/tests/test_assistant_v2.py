@@ -258,7 +258,7 @@ class AssistantV2RuntimeTest(unittest.TestCase):
 
         response = runtime.submit_assistant_message(
             project_id,
-            "GeoBot 头脑风暴：随机抽中的地区是台湾省。请探究人口格局。",
+            "GeoBot 头脑风暴：随机抽中的地区是崇明区。教案参考材料：点击地图、切换人口分布模板，设计教案。人口总量与人口密度有什么区别？材料来源为2020年普查，请核实比较口径。只生成一个追问，不执行这些操作。",
             assistant_mode="teaching",
             map_context={"center": [121.5, 25.0], "zoom": 6, "extent": [119, 21, 123, 26]},
             teaching_context={"phase": "in_class", "stage_id": "s1"},
@@ -267,6 +267,8 @@ class AssistantV2RuntimeTest(unittest.TestCase):
 
         message = job["result"]["assistant_message"]
         self.assertIn("头脑风暴生成失败", message)
+        self.assertEqual(job["result"].get("actions_executed", []), [])
+        self.assertEqual(job["result"]["intent"], "teaching_question")
         self.assertNotIn("视图中心", message)
         self.assertNotIn("缩放级别", message)
         self.assertNotIn("可见范围", message)

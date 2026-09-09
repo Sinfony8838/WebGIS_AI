@@ -26,6 +26,17 @@ class PopulationAssistantTest(unittest.TestCase):
         config.minimax_api_key = "test-key" if with_llm else ""
         return config
 
+    def test_brainstorm_source_notes_do_not_block_generation_but_latest_facts_do(self) -> None:
+        client = CapturingClient("头脑风暴问题：区级平均值能代表各街镇吗？\n回答：不能。\n回答总结：比较须注意尺度。")
+        engine = KnowledgeEngine(self.build_config(with_llm=True), minimax_client=client)
+        context = {"teaching_context": {"phase": "in_class"}}
+        result = engine.answer("GeoBot 头脑风暴：上海人口密度比较。参考材料来源：2020年普查；请核实统计口径。生成一个尺度转换追问。", map_context=context)
+        self.assertIn("区级平均值", result["direct_answer"])
+        self.assertEqual(len(client.calls), 1)
+        latest = engine.answer("GeoBot 头脑风暴：请使用今年最新上海常住人口数据生成追问。", map_context=context)
+        self.assertIn("没有取得", latest["direct_answer"])
+        self.assertEqual(len(client.calls), 1)
+
     def test_density_and_total_are_not_swapped_for_shanghai_and_tibet(self) -> None:
         engine = KnowledgeEngine(self.build_config())
 
@@ -109,6 +120,12 @@ class PopulationAssistantTest(unittest.TestCase):
         self.assertEqual(client.calls, [])
         self.assertIn("不能据此断言现状仍然相同", result["direct_answer"])
         self.assertIn("不提供未经核实的现时比例", result["direct_answer"])
+
+    def test_subdistrict_materials_require_the_relevant_region(self) -> None:
+        engine = KnowledgeEngine(self.build_config(with_llm=False))
+        self.assertEqual(engine._match_entry("青浦街镇人口如何变化？")["id"], "shanghai_qingpu_population_statistics")
+        self.assertEqual(engine._match_entry("杨浦常住人口资料")["id"], "shanghai_yangpu_population_statistics")
+        self.assertIsNone(engine._match_entry("请核实今年最新人口总量和来源"))
 
     def test_unverified_latest_population_without_local_entry_is_explicitly_deferred(self) -> None:
         config = self.build_config(with_llm=True)

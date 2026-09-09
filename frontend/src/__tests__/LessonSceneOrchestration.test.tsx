@@ -179,7 +179,9 @@ it("enters the first stage using the new session ID and adopts recorded events",
   apiMocks.fetchClassSessions.mockResolvedValue({ status: "success", items: [] });
   apiMocks.fetchPopulationSources.mockResolvedValue({ items: [] });
   apiMocks.fetchPopulationSourceVersions.mockResolvedValue({ versions: [] });
-  const session = { session_id: "new_session", project_id: "project_1", lesson_id: item.lesson_id, status: "running", current_stage_id: "", started_at: new Date().toISOString(), metadata: { lesson_snapshot: item }, events: [], responses: {}, active_question: {} };
+  const revised = structuredClone(item);
+  revised.stages[0].questions = [{ question_id: "new_q", type: "open", text: "新版：上海公共服务如何布局？", options: [], answer_index: null, expected_points: [], misconceptions: [] }];
+  const session = { session_id: "new_session", project_id: "project_1", lesson_id: item.lesson_id, status: "running", current_stage_id: "", started_at: new Date().toISOString(), metadata: { lesson_snapshot: revised }, events: [], responses: {}, active_question: {} };
   const entered = { ...session, current_stage_id: "s4", events: [{ event_id: "event_1", type: "stage_enter", stage_id: "s4", timestamp: new Date().toISOString(), payload: {} }] };
   apiMocks.createClassSession.mockResolvedValue({ session });
   apiMocks.enterSessionStage.mockResolvedValue({ session: entered, scene: item.stages[0].scene });
@@ -192,4 +194,5 @@ it("enters the first stage using the new session ID and adopts recorded events",
   expect(apiMocks.applyLessonScene).not.toHaveBeenCalled();
   await waitFor(() => expect(onTeachingContextChange).toHaveBeenLastCalledWith(expect.objectContaining({ session_id: "new_session", stage_id: "s4", phase: "in_class" })));
   expect(onApplyGlobeScene).toHaveBeenCalledWith(item.stages[0].scene.globe);
+  expect(screen.getByText("新版：上海公共服务如何布局？")).toBeInTheDocument();
 });

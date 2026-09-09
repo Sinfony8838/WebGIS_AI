@@ -154,7 +154,8 @@ def normalize_brainstorm(raw: Any) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
     prompt = str(raw.get("prompt") or "").strip()
-    regions = [str(item).strip() for item in raw.get("regions") or [] if str(item).strip()]
+    raw_regions = raw.get("regions")
+    regions = list(dict.fromkeys(item.strip() for item in raw_regions if isinstance(item, str) and item.strip())) if isinstance(raw_regions, list) else []
     if not prompt or not regions:
         return {}
     return {

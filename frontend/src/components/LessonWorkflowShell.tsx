@@ -582,9 +582,11 @@ export function LessonWorkflowShell({
     await runWithBusy(async () => {
       const response = await createClassSession(activeLesson.lesson_id, project.project_id);
       setActiveSession(response.session);
+      const openingLesson = lessonSnapshotFromSession(response.session) || activeLesson;
+      setActiveLesson(openingLesson);
       setLessonMode("teach");
       setPanelCollapsed(false);
-      const firstStage = (lessonSnapshotFromSession(response.session) || activeLesson).stages[0];
+      const firstStage = openingLesson.stages[0];
       if (firstStage) {
         // Use the newly created ID; React state still holds the previous session here.
         const entered = await enterSessionStage(response.session.session_id, firstStage.stage_id);

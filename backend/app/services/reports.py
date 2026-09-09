@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from ..config import AppConfig
 from ..models import ClassSessionRecord, LessonRecord
 from .minimax_client import MiniMaxClient
+from .lesson_homework import homework_guidance
 
 
 VERDICT_LABELS = {"correct": "回答正确", "partial": "部分正确", "misconception": "存在误区"}
@@ -267,10 +268,11 @@ class ReportService:
             for index, text in enumerate(homework.get(key) or [], start=1):
                 if not isinstance(text, str) or not text.strip():
                     continue
+                guide = homework_guidance(homework, text)
                 result.append({
                     "practice_id": f"lesson_homework_{key}_{index}", "level": label,
-                    "title": f"教案预设作业 · {label}{index}", "suggested_minutes": None,
-                    "prompt": text.strip(), "answer_points": [],
+                    "title": guide.get("title") or f"教案预设作业 · {label}{index}", "suggested_minutes": guide.get("suggested_minutes"),
+                    "prompt": text.strip(), "answer_points": guide.get("answer_points", []),
                     "evidence_basis": lesson_source + "这是教案预设任务。" + progress + evidence,
                 })
 

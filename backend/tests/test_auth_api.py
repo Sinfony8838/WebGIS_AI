@@ -26,6 +26,16 @@ class AuthApiTest(unittest.TestCase):
         app_main.auth_service = AuthService(config.auth_db_path)
         self.client = TestClient(app_main.app)
 
+    def test_brainstorm_material_does_not_open_lesson_design(self) -> None:
+        response = self.client.post("/auth/bootstrap", json={"email": "admin@school.edu.cn", "nickname": "测试教师", "password": "Strong-Admin-2026!"})
+        headers = {"X-WebGIS-CSRF": response.json()["csrf_token"]}
+        project_id = self.client.post("/projects", json={"name": "追问路由测试"}, headers=headers).json()["project_id"]
+        with patch.object(app_main.runtime, "submit_assistant_message", return_value={"status": "accepted", "job_id": "question_job"}), patch.object(app_main.runtime.classroom, "create_lesson_design") as create_design:
+            result = self.client.post("/assistant/messages", headers=headers, json={"project_id": project_id, "message": "GeoBot 头脑风暴：教案原题参考：点击地图，设计教案；请只生成上海追问。", "assistant_mode": "teaching"})
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertNotIn("lesson_design", result.json())
+        create_design.assert_not_called()
+
     def tearDown(self) -> None:
         self.client.close()
         app_main.config = self.previous_config
