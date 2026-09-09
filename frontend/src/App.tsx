@@ -4,6 +4,7 @@ import { UrbanStudyPanel, type UrbanSource, type UrbanStatus } from "./component
 import { shanghaiDensityColor, densityColor, densityRadius, rankColor } from "./lib/populationVisual";
 import { MapEvidenceLegend } from "./components/MapEvidenceLegend";
 import { JobActivity } from "./lib/jobActivity";
+import { subscribeJob, type JobSubscription } from "./lib/jobSubscription";
 import { MapToolsDock } from "./components/MapToolsDock";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "ol/ol.css";
@@ -38,7 +39,7 @@ import {
   createProject,
   exportSnapshot,
   fetchDatasetCatalog,
-  fetchCurrentUser,
+  fetchJob,
   fetchLessonResources,
   fetchHealth,
   fetchKbManifest,
@@ -534,7 +535,7 @@ export default function App({
   // 同步一份 phase 到 state：助教面板头部的阶段徽标与能力芯片排序需要触发渲染。
   const [teachingPhase, setTeachingPhase] = useState<TeachingContext["phase"]>("");
   const [copilotOpenSignal, setCopilotOpenSignal] = useState(0);
-  const jobStreamsRef = useRef(new JobActivity<EventSource>());
+  const jobStreamsRef = useRef(new JobActivity<JobSubscription>());
   const assistantSubmittingRef = useRef(false);
   const resourceSearchRequestRef = useRef(0);
   const pendingEvidenceSnapshotRef = useRef<{ sessionId: string; stageId: string } | null>(null);
@@ -1320,7 +1321,7 @@ export default function App({
       [focusedRegion, focusedRegionMaterials, layerState, project, searchAreaGeometry, selectedFeatureText]
     );
 
-  const closeJobStream = useCallback((source: EventSource): boolean => {
+  const closeJobStream = useCallback((source: JobSubscription): boolean => {
     const wasTracked = jobStreamsRef.current.delete(source);
     source.close();
     setBusy(jobStreamsRef.current.busy);
@@ -1381,80 +1382,67 @@ export default function App({
     (jobId: string, readOnly = false) => {
       const submittedTab = lastSubmittedTabRef.current;
       const submittedInputMode = lastInputModeRef.current;
-      const source = new EventSource(`${getApiBase()}/jobs/${jobId}/stream`, {
-        withCredentials: true
+      const source = subscribeJob(jobId, {
+        createSource: () => new EventSource(`${getApiBase()}/jobs/${jobId}/stream`, { withCredentials: true }),
+        fetchJob,
+        onRecovering: () => pushToast("info", "正在恢复任务结果", "连接中断，正在按原任务编号续查。无需重复提交，任务完成后会显示结果。"),
+        onJob: async (payload) => {
+          if (!jobStreamsRef.current.has(source)) return;
+          setCurrentJob(payload);
+          if (payload.status === "completed" || payload.status === "failed") {
+            if (!closeJobStream(source)) {
+              return;
+            }
+            const uiOnly = Boolean(payload.result?.actions_executed?.length) && payload.result!.actions_executed!.every(
+              (entry) => ["switch_view_mode", "open_panel"].includes(entry.action.tool_name)
+            );
+            if (!readOnly && !uiOnly) {
+              try {
+                await refreshProjectState(payload.project_id);
+              } catch (error) {
+                pushToast("error", "地图状态刷新失败", error instanceof Error ? error.message : "请重试刷新地图。");
+              }
+            }
+            if (!readOnly) handleAssistantUiActions(payload);
+            const message = payload.result?.assistant_message || payload.result?.summary || payload.error || "";
+            const nextConversationId = String(payload.result?.conversation_id || "");
+            if (nextConversationId) {
+              if (submittedTab === "interaction") {
+                setInteractionConversationId(nextConversationId);
+              } else {
+                setConversationId(nextConversationId);
+              }
+            }
+            appendChat(
+              payload.status === "failed" ? "system" : "assistant",
+              message,
+              payload.result?.teaching_contract,
+              payload.result?.intent,
+              payload.result?.actions_executed,
+              undefined,
+              payload.result?.planner,
+              submittedTab,
+              payload.result?.citations ?? payload.result?.knowledge?.citations ?? []
+            );
+            if (submittedTab === "interaction") {
+              setInteractionBusy(false);
+              // 语音发起的交互回合：播报结果（可关）。新回合开始时会先 cancel。
+              if (payload.status === "completed" && ttsEnabled && submittedInputMode === "voice" && message) {
+                speak(message);
+              }
+            }
+            const isAssistantAnswer = Boolean(payload.result?.assistant_message || payload.result?.conversation_id);
+            if (payload.status === "failed") {
+              pushToast("error", "任务失败", payload.error || message);
+            } else if (!isAssistantAnswer) {
+              pushToast("success", "任务完成", payload.result?.summary || message);
+            }
+          }
+        }
       });
       jobStreamsRef.current.add(source, readOnly);
       setBusy(true);
       setMapBusy(jobStreamsRef.current.mapBusy);
-      source.addEventListener("job", async (event) => {
-        if (!jobStreamsRef.current.has(source)) return;
-        let payload: JobRecord;
-        try {
-          payload = JSON.parse((event as MessageEvent).data) as JobRecord;
-        } catch {
-          if (closeJobStream(source)) {
-            pushToast("error", "任务流异常", "任务流返回了无法解析的数据。");
-          }
-          return;
-        }
-        setCurrentJob(payload);
-        if (payload.status === "completed" || payload.status === "failed") {
-          if (!closeJobStream(source)) {
-            return;
-          }
-          const uiOnly = Boolean(payload.result?.actions_executed?.length) && payload.result!.actions_executed!.every(
-            (entry) => ["switch_view_mode", "open_panel"].includes(entry.action.tool_name)
-          );
-          if (!readOnly && !uiOnly) {
-            try {
-              await refreshProjectState(payload.project_id);
-            } catch (error) {
-              pushToast("error", "地图状态刷新失败", error instanceof Error ? error.message : "请重试刷新地图。");
-            }
-          }
-          if (!readOnly) handleAssistantUiActions(payload);
-          const message = payload.result?.assistant_message || payload.result?.summary || payload.error || "";
-          const nextConversationId = String(payload.result?.conversation_id || "");
-          if (nextConversationId) {
-            if (submittedTab === "interaction") {
-              setInteractionConversationId(nextConversationId);
-            } else {
-              setConversationId(nextConversationId);
-            }
-          }
-          appendChat(
-            payload.status === "failed" ? "system" : "assistant",
-            message,
-            payload.result?.teaching_contract,
-            payload.result?.intent,
-            payload.result?.actions_executed,
-            undefined,
-            payload.result?.planner,
-            submittedTab,
-            payload.result?.citations ?? payload.result?.knowledge?.citations ?? []
-          );
-          if (submittedTab === "interaction") {
-            setInteractionBusy(false);
-            // 语音发起的交互回合：播报结果（可关）。新回合开始时会先 cancel。
-            if (payload.status === "completed" && ttsEnabled && submittedInputMode === "voice" && message) {
-              speak(message);
-            }
-          }
-          const isAssistantAnswer = Boolean(payload.result?.assistant_message || payload.result?.conversation_id);
-          if (payload.status === "failed") {
-            pushToast("error", "任务失败", payload.error || message);
-          } else if (!isAssistantAnswer) {
-            pushToast("success", "任务完成", payload.result?.summary || message);
-          }
-        }
-      });
-      source.addEventListener("error", () => {
-        if (closeJobStream(source)) {
-          pushToast("error", "任务流断开", "事件流提前关闭，请重试当前操作。");
-          void fetchCurrentUser().catch(() => undefined);
-        }
-      });
     },
     [appendChat, closeJobStream, handleAssistantUiActions, pushToast, refreshProjectState, ttsEnabled]
   );

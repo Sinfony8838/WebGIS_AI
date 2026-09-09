@@ -522,8 +522,8 @@ export async function fetchOutputs(projectId: string): Promise<{ items: Artifact
   return requestJson<{ items: ArtifactRecord[] }>(`/outputs?project_id=${encodeURIComponent(projectId)}`);
 }
 
-export async function fetchJob(jobId: string): Promise<JobRecord> {
-  return requestJson<JobRecord>(`/jobs/${jobId}`);
+export async function fetchJob(jobId: string, signal?: AbortSignal): Promise<JobRecord> {
+  return requestJson<JobRecord>(`/jobs/${jobId}`, { signal });
 }
 
 export async function fetchLessons(): Promise<{ status: string; items: LessonRecord[] }> {
