@@ -8,6 +8,7 @@ and falls back to data-driven rule text when the LLM is unavailable.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -511,11 +512,22 @@ class ReportService:
         lines.extend(["", "## 课后推荐练习巩固", "", "以下任务在课堂结束后使用，不计入课堂教学用时；预设作业需由教师结合实际进度确认。", ""])
         for index, item in enumerate(practice_recommendations or [], start=1):
             timing = f"（建议 {item['suggested_minutes']} 分钟）" if item.get("suggested_minutes") else ""
+            question = item.get("question") or {}
+            material = str(question.get("material") or "")
+            body = [material] if material else []
+            body.extend(f"![题图]({image['url']})" for image in question.get("images") or [] if image.get("url"))
+            body.append(str(item.get("prompt") or ""))
+            if question.get("task_text") and question["task_text"] != item.get("prompt"):
+                body.append(str(question["task_text"]))
+            body.extend(f"{chr(65 + n)}. " + re.sub(r"^[A-H][．.、]\s*", "", option) for n, option in enumerate(question.get("options") or []))
+            for sub in question.get("sub_questions") or []:
+                body.append(f"({sub['index']}) {sub['text']}")
+                body.extend(f"{chr(65 + n)}. " + re.sub(r"^[A-H][．.、]\s*", "", option) for n, option in enumerate(sub.get("options") or []))
             lines.extend(
                 [
                     f"### {index}. [{item.get('level', '')}] {item.get('title', '')}{timing}",
                     "",
-                    str(item.get("prompt") or ""),
+                    "\n\n".join(body),
                     "",
                     "- 参考要点：" + "；".join(str(point) for point in item["answer_points"]) if item.get("answer_points") else "- 开放任务或未附参考答案，请结合原题材料评阅。",
                     "- 推荐依据：" + str(item.get("evidence_basis") or ""),

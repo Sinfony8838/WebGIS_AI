@@ -198,10 +198,39 @@ class PracticeExportService:
             )
 
         summary = self._selection_summary(items)
-        notes = self._selection_notes(items, lesson)
+        notes = self._selection_notes(items, lesson, session)
         if skipped:
             notes.append("自动选题已跳过：" + "；".join(dict.fromkeys(skipped)) + "。未为凑题数补入不完整题目。")
         return items, summary, notes
+
+    def report_bank_recommendations(
+        self, session: ClassSessionRecord, lesson: Optional[LessonRecord]
+    ) -> Tuple[List[Dict[str, Any]], List[str]]:
+        items, _, notes = self.collect_items(session, lesson)
+        result = []
+        for item in items:
+            if item["origin"] not in {"bank_core", "observation_variant"}:
+                continue
+            q = item["question"]
+            source = " · ".join(dict.fromkeys(str(q.get(k) or "").strip()
+                                  for k in ("year", "region", "source_paper") if q.get(k)))
+            answer = q.get("answer") or q.get("answer_letter") or ""
+            points = [str(value) for value in (answer, q.get("explanation")) if value]
+            for sub in q.get("sub_questions") or []:
+                details = "；".join(str(value) for value in (sub.get("answer"), sub.get("explanation")) if value)
+                if details:
+                    points.append(f"({sub['index']}) {details}")
+            basis = ("依据教师速记对应考点检索，需核对具体观察；不代表全班存在同一误区。"
+                     if item["origin"] == "observation_variant" else
+                     "按本次教案主题与目标进行本地题库匹配；作为巩固候选，不代表学生答错。")
+            result.append({
+                "practice_id": "bank_" + q["question_id"], "level": ORIGIN_LEVELS[item["origin"]],
+                "title": source or "题库巩固题", "suggested_minutes": None,
+                "prompt": q["text"] or q["task_text"], "answer_points": points,
+                "evidence_basis": basis, "question": q,
+            })
+        notes.append("题库候选与练习卷使用同一套本地选题规则；教案、题库或课堂记录变化后请重新生成复盘。")
+        return result, notes
 
     @staticmethod
     def _lesson_question_index(lesson: Optional[LessonRecord]) -> Dict[str, Dict[str, Any]]:
@@ -360,6 +389,7 @@ class PracticeExportService:
                     objectives=objectives,
                     exclude_ids=sorted(excluded),
                     limit=10,
+                    use_llm=False,  # Report preview and paper use the same reproducible local ranking.
                 )
             except Exception as exc:
                 raise ValueError("题库检索失败，请重试；未将失败当作无题库或生成空卷。") from exc
@@ -405,12 +435,13 @@ class PracticeExportService:
         ]
 
     @staticmethod
-    def _selection_notes(items: List[Dict[str, Any]], lesson: Optional[LessonRecord]) -> List[str]:
+    def _selection_notes(items: List[Dict[str, Any]], lesson: Optional[LessonRecord], session: ClassSessionRecord) -> List[str]:
         notes: List[str] = []
-        if lesson is not None and str((lesson.metadata or {}).get("lesson_version") or "").strip():
-            notes.append(f"选题依据开课时刻的课时快照（版本 {lesson.metadata.get('lesson_version')}）。")
+        snapshot = (session.metadata or {}).get("lesson_snapshot")
+        if isinstance(snapshot, dict) and snapshot.get("lesson_id") == session.lesson_id:
+            notes.append("选题依据开课时保存的教案；未使用课后修改替换课堂内容。")
         else:
-            notes.append("选题依据当前课时内容生成。")
+            notes.append("本会话缺少开课教案快照，选题使用关联教案；布置前请核对课后修改。")
         if not any(item["kind"] == "question" for item in items):
             notes.append("没有选到符合当前目标且材料完整的题库题，也没有可回炉的课堂题；本卷仅包含教案作业任务。")
         return notes

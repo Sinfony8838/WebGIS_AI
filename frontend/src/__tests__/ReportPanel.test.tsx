@@ -296,3 +296,23 @@ it("does not inherit a delayed history response from a different project", async
   expect(screen.queryByRole("option", {name:/2026/})).toBeNull();
   expect(screen.getByTestId("generate-report")).toBeDisabled();
 });
+
+
+it("previews bank material, images, options and the honest selection basis", async () => {
+  const base = await fetchJob("baseline");
+  vi.mocked(fetchJob).mockResolvedValueOnce({...base, result:{...base.result,
+    practice_selection_notes:["题库与练习卷共用本地选题规则"],
+    practice_recommendations:[{practice_id:"bank_q1",level:"课后巩固",title:"2025 河南",
+      prompt:"人口分布差异？",answer_points:["参考解析"],suggested_minutes:null,evidence_basis:"不代表学生答错",
+      question:{question_id:"q1",material:"阅读人口材料",options:["A．甲","B．乙"],images:[{url:"/files/uploads/bank/map.png"}],
+        sub_questions:[{index:"1",text:"说明原因",options:[]}]}}]}} as any);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByTestId("generate-report")).not.toBeDisabled());
+  fireEvent.click(screen.getByTestId("generate-report"));
+  fireEvent.click(await screen.findByText("人口分布差异？"));
+  expect(screen.getByText("阅读人口材料")).toBeTruthy();
+  expect(screen.getByText("B. 乙")).toBeTruthy();
+  expect(screen.getByText("（1）说明原因")).toBeTruthy();
+  expect(screen.getByAltText("2025 河南 题图 1")).toHaveAttribute("src","/files/uploads/bank/map.png");
+  expect(screen.getByText(/不代表学生答错/)).toBeTruthy();
+});

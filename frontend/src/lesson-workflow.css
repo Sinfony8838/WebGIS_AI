@@ -2767,3 +2767,8 @@
 .shanghai-inquiry.is-collapsed > :not(header) { display: none; }
 .shanghai-inquiry header .toolbar-button { white-space: nowrap; flex-shrink: 0; }
 .shanghai-inquiry header .mini-control { flex-shrink: 0; }
+
+.report-practice-image { display: block; max-width: 100%; height: auto; margin: 12px auto; background: white; }
+.report-practice-material { white-space: pre-wrap; }
+
+.report-practice-list summary { cursor: pointer; line-height: 1.65; }

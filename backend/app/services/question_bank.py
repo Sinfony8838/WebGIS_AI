@@ -836,6 +836,7 @@ class QuestionBankService:
         qtype: str = "",
         exclude_ids: Optional[Sequence[str]] = None,
         limit: int = DEFAULT_RESULT_SIZE,
+        use_llm: bool = True,
     ) -> Dict[str, Any]:
         objectives = [str(item).strip() for item in objectives or [] if str(item).strip()]
         query_text = " ".join(part for part in [topic.strip(), knowledge.strip(), *objectives] if part)
@@ -862,7 +863,8 @@ class QuestionBankService:
             }
 
         pool = candidates[:CANDIDATE_POOL_SIZE]
-        ranked, reasons, generator = self._rerank(query_text, pool, limit)
+        ranked, reasons, generator = (self._rerank(query_text, pool, limit)
+                                      if use_llm else (pool[:limit], {}, "rules"))
         items = []
         for question in ranked:
             item = dict(question)

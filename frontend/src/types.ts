@@ -1241,12 +1241,14 @@ export type ReportPracticeRecommendation = {
   prompt: string;
   answer_points: string[];
   evidence_basis: string;
+  question?: LessonQuestion;
 };
 
 export type SessionReportResult = {
   statistics: SessionReportStatistics;
   diagnosis: { text: string; generator: string };
   practice_recommendations: ReportPracticeRecommendation[];
+  practice_selection_notes?: string[];
   report_url: string;
 };
 

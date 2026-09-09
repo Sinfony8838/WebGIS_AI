@@ -66,6 +66,31 @@ class PracticeExportTestBase(unittest.TestCase):
 
 
 class PracticeExportLessonGoalsTest(PracticeExportTestBase):
+    def test_report_bank_preview_matches_paper_and_keeps_material(self):
+        runtime, store, project_id = self.build_runtime()
+        lesson = store.get_lesson("lesson_builtin_population_distribution")
+        session = store.get_class_session(runtime.classroom.create_class_session(lesson.lesson_id, project_id)["session"]["session_id"])
+        service = runtime.classroom.practice_export
+        bank = Mock()
+        bank.search.return_value = {"items": [{
+            "question_id": "bank-q", "text": "人口分布差异的原因？", "material": "某地区人口材料",
+            "options": ["甲", "乙"], "answer": "乙", "answer_complete": True,
+            "year": "2025", "region": "河南", "bank_id": "bank-a", "explanation": "参考解析",
+        }]}
+        service.question_bank = bank
+        recommendations, notes = service.report_bank_recommendations(session, lesson)
+        items, _, _ = service.collect_items(session, lesson)
+        self.assertEqual([r["question"]["question_id"] for r in recommendations],
+                         [i["question"]["question_id"] for i in items if i["origin"] == "bank_core"])
+        self.assertEqual(recommendations[0]["question"]["material"], "某地区人口材料")
+        self.assertEqual(recommendations[0]["question"]["options"], ["甲", "乙"])
+        self.assertIn("不代表学生答错", recommendations[0]["evidence_basis"])
+        self.assertTrue(all(call.kwargs["project_id"] == project_id and call.kwargs["use_llm"] is False for call in bank.search.call_args_list))
+        markdown = runtime.classroom.report_service.render_markdown({}, {"text": "", "generator": "rules"}, recommendations)
+        self.assertIn("某地区人口材料", markdown)
+        self.assertIn("B. 乙", markdown)
+
+
     def test_population_auto_selection_requires_relevant_complete_material(self):
         runtime, store, project_id = self.build_runtime()
         lesson = store.get_lesson("lesson_builtin_population_distribution")
@@ -495,3 +520,15 @@ class PracticeExportRealBankTest(PracticeExportTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_local_bank_selection_never_invokes_model_reranking():
+    from backend.app.services.question_bank import QuestionBankService
+    service = object.__new__(QuestionBankService)
+    service._scored_candidates = Mock(return_value=[{"question_id": "q1", "answer_complete": True, "relevance": .9}])
+    service._rerank = Mock(side_effect=AssertionError("must stay local"))
+    result = service.search(project_id="p1", topic="人口分布", use_llm=False)
+    assert result["generator"] == "rules"
+    assert result["items"][0]["question_id"] == "q1"
+    assert result["items"][0]["auto_selectable"] is True
+    service._rerank.assert_not_called()

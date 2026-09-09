@@ -92,6 +92,7 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
             statistics: result.statistics,
             diagnosis: result.diagnosis,
             practice_recommendations: result.practice_recommendations || [],
+            practice_selection_notes: result.practice_selection_notes || [],
             report_url: result.report_url || ""
           });
           setGenerating(false);
@@ -303,7 +304,7 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
                 return (
                   <div key={optionIndex} className={`tally-row ${question.answer_index === optionIndex ? "answer" : ""}`}>
                     <span className="tally-label">
-                      {String.fromCharCode(65 + optionIndex)}. {option}
+                      {String.fromCharCode(65 + optionIndex)}. {option.replace(/^[A-H][．.、]\s*/, "")}
                       {question.answer_index === optionIndex ? " ✅" : ""}
                     </span>
                     <span className="tally-bar-track">
@@ -389,13 +390,28 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
             <em className="diagnosis-source">（课堂结束后 · 不计入课堂教学用时）</em>
           </h3>
           <div className="report-practice-list" data-testid="report-practice-list">
+            {report?.practice_selection_notes?.map((note, index) => <p className="report-note" key={index}>{note}</p>)}
             {practiceRecommendations.map((item) => (
               <article key={item.practice_id} className="report-question">
                 <p className="report-question-text">
                   [{item.level}] {item.title}{item.suggested_minutes ? ` · 建议 ${item.suggested_minutes} 分钟` : ""}
                 </p>
-                <p>{item.prompt}</p>
+                <details open={item.question ? undefined : true}>
+                  <summary>{item.prompt}</summary>
+                {item.question?.material ? <p className="report-practice-material">{item.question.material}</p> : null}
+                {item.question?.images?.map((image, index) => (
+                  <a key={index} href={buildAuthenticatedUrl(image.url)} target="_blank" rel="noreferrer" aria-label={`查看题图原图：${item.title} ${index + 1}`}>
+                    <img className="report-practice-image" src={buildAuthenticatedUrl(image.url)} alt={`${item.title} 题图 ${index + 1}`} loading="lazy" />
+                  </a>
+                ))}
+                {item.question?.task_text && item.question.task_text !== item.prompt ? <p>{item.question.task_text}</p> : null}
+                {item.question?.options?.map((option, index) => <p key={index}>{String.fromCharCode(65 + index)}. {option.replace(/^[A-H][．.、]\s*/, "")}</p>)}
+                {item.question?.sub_questions?.map((sub, index) => <div key={index}>
+                  <p>（{sub.index}）{sub.text}</p>
+                  {sub.options?.map((option, optionIndex) => <p key={optionIndex}>{String.fromCharCode(65 + optionIndex)}. {option.replace(/^[A-H][．.、]\s*/, "")}</p>)}
+                </div>)}
                 <p className="report-note">{item.answer_points.length ? `参考要点：${item.answer_points.join("；")}` : "开放任务或未附参考答案，请结合原题材料评阅。"}</p>
+                </details>
                 <p className="report-note">推荐依据：{item.evidence_basis}</p>
               </article>
             ))}
