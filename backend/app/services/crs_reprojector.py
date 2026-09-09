@@ -29,6 +29,12 @@ class ReprojectionReport:
     target_crs: str = "EPSG:4326"
     reprojected: bool = False
     warnings: List[Dict[str, str]] = field(default_factory=list)
+    # Feature-level accounting, filled by reproject_feature_collection so
+    # callers can report exactly how many geometries were actually
+    # transformed (null / unknown geometries are passed through untouched).
+    features_total: int = 0
+    features_transformed: int = 0
+    features_untouched: int = 0
 
     def add_warning(self, code: str, message_zh: str) -> None:
         self.warnings.append({"code": code, "message_zh": message_zh})
@@ -39,6 +45,9 @@ class ReprojectionReport:
             "target_crs": self.target_crs,
             "reprojected": self.reprojected,
             "warnings": list(self.warnings),
+            "features_total": self.features_total,
+            "features_transformed": self.features_transformed,
+            "features_untouched": self.features_untouched,
         }
 
 
@@ -66,8 +75,16 @@ def reproject_feature_collection(
       ``REPROJECTION_FAILED`` warning. We never crash the upload.
     """
     report = ReprojectionReport(source_crs=source_crs, target_crs=target_crs)
+    report.features_total = sum(
+        1
+        for feature in (collection.get("features") or [])
+        if isinstance(feature, dict)
+    )
 
     if not source_crs or source_crs == target_crs:
+        # Same-CRS path: nothing is transformed, but keep the accounting
+        # honest (every feature counts as untouched).
+        report.features_untouched = report.features_total
         return collection, report
 
     if not _PYPROJ_AVAILABLE:
@@ -103,15 +120,31 @@ def reproject_feature_collection(
             "REPROJECTION_FAILED",
             f"坐标转换过程中出错：{exc}。已保留原始坐标。",
         )
+        report.features_untouched = report.features_total
         return collection, report
 
     report.reprojected = True
+    report.features_transformed = _count_transformed(collection, new_collection)
+    report.features_untouched = report.features_total - report.features_transformed
     return new_collection, report
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers (no external deps; called only when pyproj is available)
 # ---------------------------------------------------------------------------
+
+
+def _count_transformed(old_collection: Dict[str, Any], new_collection: Dict[str, Any]) -> int:
+    """Count features whose geometry actually changed coordinates."""
+    old_features = old_collection.get("features") or []
+    new_features = new_collection.get("features") or []
+    changed = 0
+    for old, new in zip(old_features, new_features):
+        if not isinstance(old, dict) or not isinstance(new, dict):
+            continue
+        if old.get("geometry") != new.get("geometry"):
+            changed += 1
+    return changed
 
 
 def _transform_collection(collection: Dict[str, Any], transformer) -> Dict[str, Any]:
