@@ -418,6 +418,37 @@ describe("CopilotWidget", () => {
     expect(exceedsDragThreshold({ x: 20, y: 20 }, { x: 22, y: 23 })).toBe(false);
   });
 
+  it("keeps a jittering click target still and opens the assistant on click", () => {
+    renderWidget();
+    fireEvent.click(screen.getByLabelText("最小化助教"));
+    const orb = screen.getByLabelText("展开智能助教");
+    const originalStyle = orb.parentElement!.getAttribute("style");
+    vi.spyOn(orb, "getBoundingClientRect").mockReturnValue({ left: 352, top: 200 } as DOMRect);
+    for (const [type, x, y] of [["pointerdown", 380, 230], ["pointermove", 382, 232], ["pointerup", 382, 232]] as const) {
+      fireEvent(orb, new MouseEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0 }));
+    }
+    expect(orb.parentElement).toHaveAttribute("style", originalStyle);
+    fireEvent.click(orb, { detail: 1 });
+    expect(screen.getByLabelText("最小化助教")).toBeInTheDocument();
+  });
+
+  it("starts dragging at the rendered position and suppresses only the drag click", () => {
+    renderWidget();
+    fireEvent.click(screen.getByLabelText("最小化助教"));
+    const orb = screen.getByLabelText("展开智能助教");
+    vi.spyOn(orb, "getBoundingClientRect").mockReturnValue({ left: 352, top: 200 } as DOMRect);
+    fireEvent(orb, new MouseEvent("pointerdown", { bubbles: true, clientX: 380, clientY: 230, button: 0 }));
+    fireEvent(orb, new MouseEvent("pointermove", { bubbles: true, clientX: 400, clientY: 250, button: 0 }));
+    expect(orb.parentElement!.style.left).toBe("372px");
+    expect(orb.parentElement!.style.top).toBe("220px");
+    fireEvent(orb, new MouseEvent("pointerup", { bubbles: true, clientX: 400, clientY: 250, button: 0 }));
+    fireEvent.click(orb, { detail: 1 });
+    expect(screen.getByLabelText("展开智能助教")).toBeInTheDocument();
+    // Keyboard activation remains available after a drag, even if no pointer click followed it.
+    fireEvent.click(orb, { detail: 0 });
+    expect(screen.getByLabelText("最小化助教")).toBeInTheDocument();
+  });
+
   it("normalizes persisted panel sizes to safe minimum bounds", () => {
     const normalized = normalizePanelRect({ x: 9999, y: -20, width: 120, height: 100 });
 

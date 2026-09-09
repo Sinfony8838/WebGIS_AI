@@ -323,3 +323,15 @@ button:disabled { cursor: not-allowed; }
   .screen-shell-classroom .class-panel-current { flex:0 0 auto; overflow:visible; }
   .screen-shell-classroom .class-panel-header { position:sticky; top:-12px; z-index:1; background:var(--surface-raised); padding-block:6px; }
 }
+
+/* A saved edge position must not put the assistant behind classroom chrome. */
+.copilot-orb { touch-action:none; }
+@media (min-width:961px) {
+  .screen-shell-classroom .copilot-orb-shell {
+    left:clamp(14px, var(--copilot-orb-x), calc(100vw - var(--right-rail-width) - 128px)) !important;
+    top:clamp(calc(var(--header-height) + 14px), var(--copilot-orb-y), calc(100dvh - 180px)) !important;
+  }
+  .screen-shell-classroom:has(.class-run-panel) .copilot-orb-shell {
+    left:clamp(352px, var(--copilot-orb-x), calc(100vw - var(--right-rail-width) - 128px)) !important;
+  }
+}

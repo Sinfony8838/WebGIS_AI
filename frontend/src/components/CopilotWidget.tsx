@@ -1,6 +1,6 @@
 import { ThinkingIndicator } from "./ThinkingIndicator";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { DragEvent as ReactDragEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { CSSProperties, DragEvent as ReactDragEvent, PointerEvent as ReactPointerEvent } from "react";
 import { getSpeechRecognitionConstructor, getSpeechRecognitionErrorMessage, type BrowserSpeechRecognition } from "../speechRecognition";
 import { audioWorkletSupported, createVoiceStream, type VoiceStreamHandle } from "../voiceStream";
 import { describeScreenRejection, screenTranscript } from "../voiceGate";
@@ -566,6 +566,8 @@ export function CopilotWidget({
       }
     }
 
+    // Preserve the hit target until a real drag starts; small click jitter must not move it.
+    if (!state.moved) return;
     if (state.kind === "orb") {
       setOrbPosition(
         snaplessOrb({
@@ -613,7 +615,7 @@ export function CopilotWidget({
     }
 
     if (state.kind === "orb") {
-      setOrbPosition((previous) => snapOrb(previous));
+      if (state.moved) setOrbPosition((previous) => snapOrb(previous));
       preventRestoreOnClickRef.current = state.moved;
       setOrbDragging(false);
     }
@@ -664,7 +666,7 @@ export function CopilotWidget({
   }, []);
 
   function startDrag(kind: "orb" | "panel" | "resize", event: ReactPointerEvent, rect?: PanelRect | Point) {
-    event.preventDefault();
+    if (kind !== "orb") event.preventDefault();
     const baseRect = rect || (kind === "orb" ? orbPosition : panelRect);
     const panelCandidate = baseRect as Partial<PanelRect>;
     if (kind === "orb") {
@@ -977,22 +979,26 @@ export function CopilotWidget({
 
   if (minimized) {
     return (
-      <div className="copilot-orb-shell" style={{ left: orbPosition.x, top: orbPosition.y }}>
+      <div className="copilot-orb-shell" style={{ left: orbPosition.x, top: orbPosition.y,
+        "--copilot-orb-x": `${orbPosition.x}px`, "--copilot-orb-y": `${orbPosition.y}px` } as CSSProperties}>
         <button
           type="button"
           className={`copilot-orb ${busy ? "busy" : ""}`}
           aria-label="展开智能助教"
-          onClick={() => {
-            if (preventRestoreOnClickRef.current) {
+          onClick={(event) => {
+            if (event.detail !== 0 && preventRestoreOnClickRef.current) {
               preventRestoreOnClickRef.current = false;
               return;
             }
             restorePanel();
           }}
           onPointerDown={(event) => {
+            if (event.button !== 0 || event.isPrimary === false) return;
             event.stopPropagation();
+            preventRestoreOnClickRef.current = false;
             event.currentTarget.setPointerCapture?.(event.pointerId);
-            startDrag("orb", event, orbPosition);
+            const rect = event.currentTarget.getBoundingClientRect();
+            startDrag("orb", event, { x: rect.left, y: rect.top });
           }}
           onPointerMove={(event) => {
             if (dragStateRef.current?.kind !== "orb") {
