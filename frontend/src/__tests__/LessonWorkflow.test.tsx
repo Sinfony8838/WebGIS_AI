@@ -348,20 +348,27 @@ describe("ClassRunPanel", () => {
     expect(screen.queryByText("先找图例、年份和空间差异。")).toBeNull();
   });
 
-  it("opens student-facing textbook knowledge in a movable enlarged overlay", () => {
-    renderPanel();
-    expect(screen.queryByText("先看地图")).toBeNull();
-    fireEvent.click(within(screen.getByTestId("basic-knowledge-launcher")).getByText("放大展示"));
-    const overlay = screen.getByTestId("basic-knowledge-overlay");
-    expect(overlay.textContent).toContain("基础知识讲解");
-    expect(overlay.textContent).toContain("先看地图");
-    const header = overlay.querySelector(".basic-knowledge-overlay-header") as HTMLElement;
-    fireEvent.pointerDown(header, { pointerId: 1, clientX: 100, clientY: 100 });
-    fireEvent.pointerMove(header, { pointerId: 1, clientX: 180, clientY: 150 });
-    fireEvent.pointerUp(header, { pointerId: 1, clientX: 180, clientY: 150 });
-    expect(overlay.getAttribute("style")).toContain("left:");
-    fireEvent.click(screen.getByLabelText("关闭基础知识讲解"));
+  it("applies the map without opening a lecture overlay and reports failures", async () => {
+    const onPresentScene = vi.fn().mockRejectedValueOnce(new Error("场景已变化")).mockResolvedValueOnce(undefined);
+    renderPanel({ onPresentScene });
+    fireEvent.click(screen.getByRole("button", { name: "地图展示" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("场景已变化");
     expect(screen.queryByTestId("basic-knowledge-overlay")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "地图展示" }));
+    await waitFor(() => expect(onPresentScene).toHaveBeenCalledTimes(2));
+    expect(screen.queryByTestId("basic-knowledge-overlay")).toBeNull();
+    expect(screen.queryByText("讲解文字")).toBeNull();
+    expect(onPresentScene).toHaveBeenLastCalledWith("stage");
+  });
+
+  it("offers the Shanghai extension only after the Shanghai introductory basics", () => {
+    const item = makeLesson(); item.title = "人口分布：从上海看中国与世界";
+    item.stages[0].stage_id = "shanghai_intro";
+    const props = renderPanel({ lesson: item, currentStageId: "shanghai_intro", onPresentScene: vi.fn() });
+    expect(screen.getByRole("button", { name: "进入补充探究" })).toBeInTheDocument();
+    cleanup();
+    renderPanel({ ...props, currentStageId: "s2" });
+    expect(screen.queryByRole("button", { name: "进入补充探究" })).toBeNull();
   });
 
   it("focuses one evidence layer at a time from the stage guide", () => {

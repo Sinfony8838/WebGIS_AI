@@ -512,6 +512,35 @@ class ClassroomWorkflowRuntime:
                 self.store.add_recent_action(session.project_id, "End class", "Class session ended.", status="success")
         return {"status": "success", "session": session.to_dict()}
 
+    def present_session_scene(self, session_id: str, stage_id: str, target: str = "stage") -> Dict[str, Any]:
+        """Reframe the current snapshot without re-entering it or resetting question timers."""
+        from copy import deepcopy
+        session = self._require_session(session_id)
+        if session.status != "running" or session.current_stage_id != stage_id:
+            raise ValueError("课堂环节已变化，请重新打开地图展示")
+        lesson = self._lesson_for_session(session)
+        stage = lesson.find_stage(stage_id) if lesson else None
+        if not stage:
+            raise KeyError("Unknown stage")
+        presentation = deepcopy(stage)
+        if target != "stage":
+            if target not in {"shanghai_density", "lujiazui", "zhujiajiao"}:
+                raise ValueError("Unknown presentation target")
+            if not ("上海" in lesson.title and "人口" in lesson.title and stage_id in {"shanghai_intro", "concept", "shanghai_inquiry", "shanghai_verify"}):
+                raise ValueError("此展示仅用于上海人口分布环节")
+            density_stage = lesson.find_stage("shanghai_intro")
+            if not density_stage:
+                raise ValueError("课时缺少上海密度场景")
+            presentation["scene"] = deepcopy(density_stage["scene"])
+            if target != "shanghai_density":
+                center = [121.505, 31.237] if target == "lujiazui" else [121.054, 31.11]
+                presentation["scene"].update({"basemap_id": "amap_imagery", "templates": [], "catalog_layers": [],
+                    "catalog_layer_focus": "", "annotations": [], "visual_query": None,
+                    "view": {"center": center, "zoom": 14, "extent": [center[0]-.018, center[1]-.012, center[0]+.018, center[1]+.012]}})
+        presentation["scene"] = {**presentation.get("scene", {}), "globe": {"enabled": False}}
+        result = self.lesson_service.apply_stage_scene_data(session.project_id, presentation, lesson_id=session.lesson_id)
+        return {"status": "success", "target": target, "scene": result}
+
     def enter_session_stage(self, session_id: str, stage_id: str) -> Dict[str, Any]:
         session = self._require_session(session_id)
         if session.status != "running":

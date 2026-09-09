@@ -1,0 +1,34 @@
+import { afterEach, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { ShanghaiPopulationInquiry } from "../components/ShanghaiPopulationInquiry";
+const api = vi.hoisted(() => ({ fetchQuestionBanks: vi.fn(), fetchQuestionBankQuestions: vi.fn() }));
+vi.mock("../api", () => api);
+afterEach(() => { cleanup(); vi.clearAllMocks(); });
+it("loads the project question, hides answers, locates scenes and restores before returning", async () => {
+  api.fetchQuestionBanks.mockResolvedValue({ items: [{ bank_id: "bank" }] });
+  api.fetchQuestionBankQuestions.mockResolvedValue({ items: [{ question_id: "q", year: "2025", region: "河南", material: "上海的年轻环材料", stem: "人口年龄结构问题", number: "3", options: ["A 条件", "D 条件"], answer: "D", answer_letter: "D", explanation: "独立的教师参考解析" }] });
+  const onPresent = vi.fn().mockResolvedValue(undefined), onClose = vi.fn();
+  render(<ShanghaiPopulationInquiry projectId="test_project" onPresent={onPresent} onClose={onClose} />);
+  expect(await screen.findByText("上海的年轻环材料")).toBeInTheDocument();
+  expect(api.fetchQuestionBanks).toHaveBeenCalledWith("test_project");
+  expect(screen.queryByText("独立的教师参考解析")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "2 · 地图与年龄结构" }));
+  expect(await screen.findByRole("img", { name: /按题干绘制/ })).toBeInTheDocument();
+  expect(onPresent).toHaveBeenLastCalledWith("shanghai_density");
+  fireEvent.click(screen.getByRole("button", { name: "3 · 景观对照" }));
+  expect(await screen.findByAltText("陆家嘴 · 高层商务景观")).toBeInTheDocument();
+  expect(onPresent).toHaveBeenLastCalledWith("lujiazui");
+  fireEvent.click(screen.getByRole("button", { name: "4 · 解释与拓展" }));
+  expect(screen.queryByText("独立的教师参考解析")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "揭示题库参考答案" }));
+  expect(screen.getByText("独立的教师参考解析")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "结束补充，返回课堂" }));
+  expect(onPresent).toHaveBeenLastCalledWith("stage");
+});
+it("keeps missing questions explicit and never substitutes an invented exam", async () => {
+  api.fetchQuestionBanks.mockResolvedValue({ items: [] });
+  render(<ShanghaiPopulationInquiry projectId="empty" onPresent={vi.fn()} onClose={vi.fn()} />);
+  expect(await screen.findByText(/本项目尚未导入对应题组/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "4 · 解释与拓展" }));
+  expect(screen.getByRole("button", { name: "揭示题库参考答案" })).toBeDisabled();
+});

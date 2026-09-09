@@ -579,6 +579,11 @@ class SessionStageRequest(BaseModel):
     stage_id: str
 
 
+class SessionPresentationRequest(BaseModel):
+    stage_id: str
+    target: str = "stage"
+
+
 class QuestionLaunchRequest(BaseModel):
     stage_id: str = ""
     question_id: str = ""
@@ -2125,6 +2130,17 @@ def enter_session_stage(session_id: str, payload: SessionStageRequest, request: 
     _require_session_access(request, session_id)
     try:
         return runtime.classroom.enter_session_stage(session_id, payload.stage_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/class-sessions/{session_id}/presentation")
+def present_session_scene(session_id: str, payload: SessionPresentationRequest, request: Request) -> Dict[str, Any]:
+    _require_session_access(request, session_id)
+    try:
+        return runtime.classroom.present_session_scene(session_id, payload.stage_id, payload.target)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

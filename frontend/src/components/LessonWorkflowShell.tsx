@@ -3,6 +3,7 @@ import {
   addSessionObservation,
   activatePopulationSourceVersion,
   applyLessonScene,
+  presentClassroomScene,
   captureLessonScene,
   closeSessionQuestion,
   createClassSession,
@@ -760,6 +761,11 @@ export function LessonWorkflowShell({
           collapsed={panelCollapsed}
           onToggleCollapsed={() => setPanelCollapsed((value) => !value)}
           onEnterStage={(stageId) => void applyScene(stageId, true)}
+          onPresentScene={async (target) => {
+            const response = await presentClassroomScene(activeSession.session_id, activeSession.current_stage_id, target);
+            onApplyGlobeScene?.(response.scene.globe || {});
+            await onRefresh();
+          }}
           onLaunchQuestion={(questionId, stageId) => void launchQuestion(questionId, stageId)}
           onProjectQuestion={(questionId, stageId) => void projectQuestion(questionId, stageId)}
           onLaunchAdhocQuestion={(text, options) => void launchAdhocQuestion(text, options)}

@@ -78,3 +78,30 @@ class PopulationReferenceLessonTest(unittest.TestCase):
             with self.subTest(regions=regions):
                 self.assertEqual(normalize_brainstorm({"prompt": "比较", "regions": regions}), {})
         self.assertEqual(normalize_brainstorm({"prompt": "比较", "regions": [" 黄浦区 ", "黄浦区", "崇明区"]})["regions"], ["黄浦区", "崇明区"])
+
+    def test_presentation_uses_snapshot_without_reentering_stage_or_changing_question(self):
+        from copy import deepcopy
+        runtime, store, project_id = self.build_runtime()
+        response = runtime.classroom.create_class_session("lesson_builtin_population_shanghai_world", project_id)
+        session_id = response["session"]["session_id"]
+        runtime.classroom.enter_session_stage(session_id, "shanghai_intro")
+        runtime.classroom.launch_session_question(session_id, stage_id="shanghai_intro", question_id="sh_intro_q")
+        session = store.get_class_session(session_id)
+        before = deepcopy(session.to_dict())
+        # A later edit to the reusable lesson must not alter this classroom's map.
+        store.get_lesson(session.lesson_id).find_stage("shanghai_intro")["scene"]["view"]["center"] = [0, 0]
+        runtime.classroom.present_session_scene(session_id, "shanghai_intro")
+        self.assertEqual(store.get_project(project_id).view["center"], [121.47, 31.23])
+        runtime.classroom.present_session_scene(session_id, "shanghai_intro", "lujiazui")
+        self.assertEqual(store.get_project(project_id).base_map["id"], "amap_imagery")
+        self.assertEqual(store.get_project(project_id).view["center"], [121.505, 31.237])
+        self.assertFalse(any(layer.visible and layer.source == "one_map_catalog" for layer in store.get_project(project_id).layers))
+        runtime.classroom.present_session_scene(session_id, "shanghai_intro", "stage")
+        self.assertEqual(session.to_dict(), before)
+        with self.assertRaises(ValueError):
+            runtime.classroom.present_session_scene(session_id, "china_inquiry", "stage")
+        with self.assertRaises(ValueError):
+            runtime.classroom.present_session_scene(session_id, "shanghai_intro", "unknown")
+        runtime.classroom.enter_session_stage(session_id, "china_inquiry")
+        with self.assertRaises(ValueError):
+            runtime.classroom.present_session_scene(session_id, "china_inquiry", "lujiazui")

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent } from "react";
-import { createPortal } from "react-dom";
+import type { ClassroomPresentationTarget } from "../api";
+import { ShanghaiPopulationInquiry } from "./ShanghaiPopulationInquiry";
 import type { ClassSessionRecord, LessonQuestion, LessonRecord, LessonStage, ObservationVerdict } from "../types";
 
 type Props = {
@@ -13,6 +13,7 @@ type Props = {
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onEnterStage: (stageId: string) => void;
+  onPresentScene?: (target: ClassroomPresentationTarget) => Promise<void>;
   onLaunchQuestion: (questionId: string, stageId: string) => void;
   /** 全屏投屏本题：服务端计时 + 课堂大屏同步（题目投影模式）。 */
   onProjectQuestion?: (questionId: string, stageId: string) => void;
@@ -42,118 +43,6 @@ const EVIDENCE_LAYER_LABELS: Record<string, string> = {
   china_province_gdp_per_capita: "经济"
 };
 
-type KnowledgePosition = { x: number; y: number };
-
-function defaultKnowledgePosition(): KnowledgePosition {
-  if (typeof window === "undefined") {
-    return { x: 28, y: 92 };
-  }
-  return { x: Math.max(20, Math.min(72, window.innerWidth * 0.035)), y: Math.max(72, window.innerHeight * 0.1) };
-}
-
-function BasicKnowledgeOverlay({
-  title,
-  points,
-  position,
-  onPositionChange,
-  onClose
-}: {
-  title: string;
-  points: string[];
-  position: KnowledgePosition;
-  onPositionChange: (next: KnowledgePosition) => void;
-  onClose: () => void;
-}) {
-  const overlayRef = useRef<HTMLElement | null>(null);
-  const dragRef = useRef<{ pointerId: number; startX: number; startY: number; origin: KnowledgePosition } | null>(null);
-
-  function clampPosition(next: KnowledgePosition): KnowledgePosition {
-    const rect = overlayRef.current?.getBoundingClientRect();
-    const width = rect?.width || Math.min(880, Math.max(420, window.innerWidth * 0.56));
-    const height = rect?.height || Math.min(680, window.innerHeight * 0.7);
-    return {
-      x: Math.max(12, Math.min(Math.max(12, window.innerWidth - width - 12), next.x)),
-      y: Math.max(12, Math.min(Math.max(12, window.innerHeight - height - 12), next.y))
-    };
-  }
-
-  useEffect(() => {
-    const keepInViewport = () => {
-      const clamped = clampPosition(position);
-      if (clamped.x !== position.x || clamped.y !== position.y) {
-        onPositionChange(clamped);
-      }
-    };
-    keepInViewport();
-    window.addEventListener("resize", keepInViewport);
-    return () => window.removeEventListener("resize", keepInViewport);
-  }, [position.x, position.y]);
-
-  function startDrag(event: ReactPointerEvent<HTMLElement>) {
-    const clientX = Number.isFinite(event.clientX) ? event.clientX : 0;
-    const clientY = Number.isFinite(event.clientY) ? event.clientY : 0;
-    dragRef.current = {
-      pointerId: event.pointerId,
-      startX: clientX,
-      startY: clientY,
-      origin: position
-    };
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-  }
-
-  function moveDrag(event: ReactPointerEvent<HTMLElement>) {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) {
-      return;
-    }
-    const clientX = Number.isFinite(event.clientX) ? event.clientX : drag.startX;
-    const clientY = Number.isFinite(event.clientY) ? event.clientY : drag.startY;
-    onPositionChange(clampPosition({
-      x: drag.origin.x + clientX - drag.startX,
-      y: drag.origin.y + clientY - drag.startY
-    }));
-  }
-
-  function endDrag(event: ReactPointerEvent<HTMLElement>) {
-    if (dragRef.current?.pointerId === event.pointerId) {
-      event.currentTarget.releasePointerCapture?.(event.pointerId);
-      dragRef.current = null;
-    }
-  }
-
-  return createPortal(
-    <section
-      ref={overlayRef}
-      className="basic-knowledge-overlay glass-panel"
-      style={{ left: position.x, top: position.y }}
-      role="dialog"
-      aria-label={`${title}基础知识讲解`}
-      data-testid="basic-knowledge-overlay"
-    >
-      <header
-        className="basic-knowledge-overlay-header"
-        onPointerDown={startDrag}
-        onPointerMove={moveDrag}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-      >
-        <div>
-          <span>基础知识讲解</span>
-          <strong>{title}</strong>
-        </div>
-        <span className="basic-knowledge-drag-hint">拖动调整位置</span>
-        <button type="button" className="mini-control" onPointerDown={(event) => event.stopPropagation()} onClick={onClose} aria-label="关闭基础知识讲解">
-          ×
-        </button>
-      </header>
-      <ol className="basic-knowledge-points">
-        {points.map((point, index) => <li key={`${index}_${point}`}>{point}</li>)}
-      </ol>
-    </section>,
-    document.body
-  );
-}
-
 export function ClassRunPanel({
   session,
   lesson,
@@ -164,6 +53,7 @@ export function ClassRunPanel({
   collapsed,
   onToggleCollapsed,
   onEnterStage,
+  onPresentScene,
   onLaunchQuestion,
   onProjectQuestion,
   onLaunchAdhocQuestion,
@@ -183,8 +73,10 @@ export function ClassRunPanel({
   const [savedFlash, setSavedFlash] = useState(false);
   const [expandedQuestionId, setExpandedQuestionId] = useState("");
   const [oralQuestionId, setOralQuestionId] = useState("");
-  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
-  const [knowledgePosition, setKnowledgePosition] = useState<KnowledgePosition>(defaultKnowledgePosition);
+  const [inquiryOpen, setInquiryOpen] = useState(false);
+  const [presentationBusy, setPresentationBusy] = useState(false);
+  const [presentationError, setPresentationError] = useState("");
+  const presentationEpoch = useRef(0);
   const [brainstormRegion, setBrainstormRegion] = useState("");
   const [brainstormSpinning, setBrainstormSpinning] = useState(false);
   const brainstormTimerRef = useRef<number | null>(null);
@@ -208,8 +100,10 @@ export function ClassRunPanel({
   useEffect(() => {
     setExpandedQuestionId("");
     setOralQuestionId("");
-    setKnowledgeOpen(false);
-    setKnowledgePosition(defaultKnowledgePosition());
+    setInquiryOpen(false);
+    setPresentationError("");
+    setPresentationBusy(false);
+    presentationEpoch.current += 1;
     setBrainstormRegion("");
     setBrainstormSpinning(false);
     if (brainstormTimerRef.current !== null) {
@@ -223,6 +117,19 @@ export function ClassRunPanel({
     () => lesson.stages.find((stage) => stage.stage_id === currentStageId),
     [lesson, currentStageId]
   );
+  const shanghaiSupplement = currentStageId === "shanghai_intro" && lesson.title.includes("上海") && lesson.title.includes("人口");
+  async function openMapPresentation() {
+    if (!onPresentScene || presentationBusy) return;
+    const epoch = presentationEpoch.current;
+    setPresentationBusy(true); setPresentationError("");
+    try {
+      await onPresentScene("stage");
+
+    } catch (error) {
+      if (epoch === presentationEpoch.current) setPresentationError(error instanceof Error ? error.message : "地图展示失败，请重试");
+    } finally { if (epoch === presentationEpoch.current) setPresentationBusy(false); }
+  }
+
   const currentStageIndex = lesson.stages.findIndex((stage) => stage.stage_id === currentStageId);
   const brainstorm = currentStage?.brainstorm;
   const brainstormRegions = Array.isArray(brainstorm?.regions)
@@ -419,18 +326,26 @@ export function ClassRunPanel({
       </nav>
 
       <div className="class-panel-current">
-        {currentStage?.script?.length ? (
-          <div className="basic-knowledge-launcher" data-testid="basic-knowledge-launcher">
+        {currentStage?.scene ? (
+          <div className="basic-knowledge-launcher" data-testid="class-map-launcher">
             <div>
-              <span className="question-detail-label">基础知识讲解</span>
-              <strong>课本知识 × 当前真实地图</strong>
-              <small>点击后放大投屏，可拖动且不会锁住地图。</small>
+              <span className="question-detail-label">课堂地图</span>
+              <strong>先看分布，再解释原因</strong>
+              <small>定位本环节区域并打开对应图层，由教师组织讲解。</small>
             </div>
-            <button type="button" className="toolbar-button compact primary" onClick={() => setKnowledgeOpen(true)}>
-              放大展示
-            </button>
+            <div className="class-presentation-actions">
+              <button type="button" className="toolbar-button compact primary" disabled={busy || presentationBusy || !onPresentScene} onClick={() => void openMapPresentation()}>
+                {presentationBusy ? "正在定位…" : "地图展示"}
+              </button>
+            </div>
           </div>
         ) : null}
+
+        {presentationError && <p role="alert">{presentationError}</p>}
+        {shanghaiSupplement && onPresentScene && <div className="shanghai-supplement-launcher">
+          <div><strong>基础讲完后 · 真题拓展</strong><small>2025 河南卷：人口分布与“年轻环”</small></div>
+          <button className="toolbar-button compact" disabled={busy || presentationBusy} onClick={() => setInquiryOpen(true)}>进入补充探究</button>
+        </div>}
 
         {currentStage?.scene?.globe?.enabled && onRequestPlaneView ? (
           <div className="class-stage-view-handoff" data-testid="stage-view-handoff">
@@ -663,15 +578,10 @@ export function ClassRunPanel({
           </button>
         </div>
       </footer>
-      {knowledgeOpen && currentStage?.script?.length ? (
-        <BasicKnowledgeOverlay
-          title={currentStage.title}
-          points={currentStage.script}
-          position={knowledgePosition}
-          onPositionChange={setKnowledgePosition}
-          onClose={() => setKnowledgeOpen(false)}
-        />
-      ) : null}
+      {inquiryOpen && shanghaiSupplement && onPresentScene && <ShanghaiPopulationInquiry
+        key={session.session_id + currentStageId} projectId={session.project_id}
+        onPresent={onPresentScene} onAssistantPrompt={onAssistantPrompt} onClose={() => setInquiryOpen(false)} />}
+
     </section>
   );
 }
