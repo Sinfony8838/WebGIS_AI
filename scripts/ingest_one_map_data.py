@@ -62,23 +62,25 @@ SPECIAL_REGION_POPULATION = {
 }
 
 SHANGHAI_DISTRICT_STATS = {
-    # 2020 census population plus commonly published administrative land area.
+    # Population: https://tjj.sh.gov.cn/tjnj/2020rktjnj/fu02.pdf
+    # Area (2020): https://tjj.sh.gov.cn/tjnj/2021tjnj/C0202.htm
+    # Density is calculated from census population, NOT the year-end density column.
     "310101": (662030, 20.46),
     "310104": (1113078, 54.76),
     "310105": (693051, 38.30),
-    "310106": (975707, 37.37),
-    "310107": (1239800, 55.53),
+    "310106": (975707, 36.88),
+    "310107": (1239800, 54.83),
     "310109": (757498, 23.48),
-    "310110": (1242549, 60.61),
+    "310110": (1242548, 60.73),
     "310112": (2653489, 370.75),
-    "310113": (2235218, 365.30),
-    "310114": (1834258, 463.90),
+    "310113": (2235218, 270.99),
+    "310114": (1834258, 464.20),
     "310115": (5681512, 1210.41),
     "310116": (822776, 586.05),
-    "310117": (1909713, 604.67),
-    "310118": (1271424, 676.00),
+    "310117": (1909713, 605.64),
+    "310118": (1271424, 670.14),
     "310120": (1140872, 687.39),
-    "310151": (637921, 1413.00),
+    "310151": (637921, 1185.49),
 }
 
 
@@ -426,8 +428,11 @@ class Builder:
                 "density": density,
                 "center": props.get("center") or [],
                 "source_year": "2020",
-                "source_name": "Datav Aliyun boundary + Shanghai 2020 census benchmark table",
-                "source_url": DATAV_SHANGHAI,
+                "source_name": "上海统计局七普第二号公报（人口）与上海统计年鉴2021表2.2（2020年面积）；Datav边界",
+                "source_url": "https://tjj.sh.gov.cn/tjnj/2020rktjnj/fu02.pdf",
+                "area_source_url": "https://tjj.sh.gov.cn/tjnj/2021tjnj/C0202.htm",
+                "boundary_source_url": DATAV_SHANGHAI,
+                "density_method": "2020年11月1日七普常住人口 / 2020年行政区划面积；非年末密度",
                 "license": "source attribution required; review before redistribution",
             }
             features.append({"type": "Feature", "properties": out_props, "geometry": feature.get("geometry")})
@@ -443,8 +448,8 @@ class Builder:
             ["name", "adcode", "region_code", "population", "area", "density"],
             "Shanghai district-level",
             "2020",
-            "Datav Aliyun + Shanghai 2020 census benchmark table",
-            DATAV_SHANGHAI,
+            "上海统计局七普第二号公报（人口）与上海统计年鉴2021表2.2（2020年面积）；Datav边界",
+            "https://tjj.sh.gov.cn/tjnj/2020rktjnj/fu02.pdf",
             "source attribution required; review before redistribution",
             False,
             "ready",
@@ -460,8 +465,8 @@ class Builder:
             ["name", "population", "area", "density", "adcode", "region_code"],
             "Shanghai district-level",
             "2020",
-            "Datav Aliyun + Shanghai 2020 census benchmark table",
-            DATAV_SHANGHAI,
+            "上海统计局七普第二号公报（人口）与上海统计年鉴2021表2.2（2020年面积）；Datav边界",
+            "https://tjj.sh.gov.cn/tjnj/2020rktjnj/fu02.pdf",
             "source attribution required; review before redistribution",
             False,
             "ready",

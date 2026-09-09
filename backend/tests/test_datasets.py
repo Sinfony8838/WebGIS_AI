@@ -51,11 +51,14 @@ class DatasetServiceTest(unittest.TestCase):
 
     def test_repeated_upload_filename_gets_unique_storage_path(self) -> None:
         _config, _store, service, project_id = self.build_service()
-        raw = b'{"type":"FeatureCollection","features":[]}'
+        raw = b'{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"name":"A"},"geometry":{"type":"Point","coordinates":[120,30]}}]}'
         first = service.import_upload(project_id, "repeat.geojson", raw)
         second = service.import_upload(project_id, "repeat.geojson", raw)
 
         self.assertNotEqual(first["artifact"]["path"], second["artifact"]["path"])
+        # Duplicate imports are kept but renamed explicitly.
+        self.assertEqual(second["layer"]["metadata"]["duplicate_import"], True)
+        self.assertEqual(second["layer"]["name"], "repeat (2)")
 
     def test_safe_extract_zip_rejects_path_traversal_entries(self) -> None:
         _config, _store, service, _project_id = self.build_service()

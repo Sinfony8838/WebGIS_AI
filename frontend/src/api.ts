@@ -14,6 +14,7 @@ import type {
   DatasetCatalogLayerResponse,
   ConversationResponse,
   DatasetCatalogResponse,
+  DatasetUploadResponse,
   DatasetStatsResponse,
   HealthResponse,
   ImageAttachment,
@@ -82,6 +83,10 @@ export function setUnauthorizedHandler(handler: (() => void) | null): void {
   unauthorizedHandler = handler;
 }
 
+export class ApiError extends Error {
+  constructor(message: string, public readonly status: number) { super(message); this.name = "ApiError"; }
+}
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const method = String(init?.method || "GET").toUpperCase();
   const headers = new Headers(init?.headers);
@@ -119,7 +124,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
         if (text) message = text;
       } catch { /* ignore */ }
     }
-    throw new Error(message);
+    throw new ApiError(message, response.status);
   }
   return (await response.json()) as T;
 }
@@ -350,12 +355,13 @@ export function fetchCatalogDatasetData(datasetId: string): Promise<CatalogDatas
 
 export async function addCatalogDatasetLayer(
   projectId: string,
-  datasetId: string
+  datasetId: string,
+  preserveView = false
 ): Promise<DatasetCatalogLayerResponse> {
   return requestJson<DatasetCatalogLayerResponse>("/datasets/catalog/layers", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ project_id: projectId, dataset_id: datasetId })
+    body: JSON.stringify({ project_id: projectId, dataset_id: datasetId, preserve_view: preserveView })
   });
 }
 
@@ -407,8 +413,8 @@ export async function sendAssistantMessage(
     teachingContext?: TeachingContext;
     imageAttachments?: Array<Pick<ImageAttachment, "artifact_id">>;
   }
-): Promise<{ job_id: string; conversation_id?: string; assistant_mode?: AssistantMode; lesson_design?: LessonDesignSession }> {
-  return requestJson<{ job_id: string; conversation_id?: string; assistant_mode?: AssistantMode; lesson_design?: LessonDesignSession }>("/assistant/messages", {
+): Promise<{ job_id: string; conversation_id?: string; assistant_mode?: AssistantMode; read_only?: boolean; lesson_design?: LessonDesignSession }> {
+  return requestJson<{ job_id: string; conversation_id?: string; assistant_mode?: AssistantMode; read_only?: boolean; lesson_design?: LessonDesignSession }>("/assistant/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -497,9 +503,9 @@ export async function searchPoi(
   });
 }
 
-export async function uploadDataset(projectId: string, formData: FormData): Promise<{ job_id: string }> {
+export async function uploadDataset(projectId: string, formData: FormData): Promise<DatasetUploadResponse> {
   formData.set("project_id", projectId);
-  return requestJson<{ job_id: string }>("/datasets/upload", {
+  return requestJson<DatasetUploadResponse>("/datasets/upload", {
     method: "POST",
     body: formData
   });
@@ -522,8 +528,8 @@ export async function fetchOutputs(projectId: string): Promise<{ items: Artifact
   return requestJson<{ items: ArtifactRecord[] }>(`/outputs?project_id=${encodeURIComponent(projectId)}`);
 }
 
-export async function fetchJob(jobId: string): Promise<JobRecord> {
-  return requestJson<JobRecord>(`/jobs/${jobId}`);
+export async function fetchJob(jobId: string, signal?: AbortSignal): Promise<JobRecord> {
+  return requestJson<JobRecord>(`/jobs/${jobId}`, { signal });
 }
 
 export async function fetchLessons(): Promise<{ status: string; items: LessonRecord[] }> {
@@ -886,8 +892,8 @@ export async function endClassSession(sessionId: string): Promise<ClassSessionRe
 export async function enterSessionStage(
   sessionId: string,
   stageId: string
-): Promise<{ status: string; session_id: string; scene?: { globe?: import("./types").LessonGlobeScene } }> {
-  return requestJson<{ status: string; session_id: string; scene?: { globe?: import("./types").LessonGlobeScene } }>(`/class-sessions/${encodeURIComponent(sessionId)}/stage`, {
+): Promise<{ status: string; session_id: string; session?: ClassSessionRecord; scene?: { globe?: import("./types").LessonGlobeScene } }> {
+  return requestJson<{ status: string; session_id: string; session?: ClassSessionRecord; scene?: { globe?: import("./types").LessonGlobeScene } }>(`/class-sessions/${encodeURIComponent(sessionId)}/stage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ stage_id: stageId })
@@ -1027,16 +1033,31 @@ export async function fetchSessionLive(sessionId: string): Promise<SessionLiveSt
   return requestJson<SessionLiveState>(`/class-sessions/${encodeURIComponent(sessionId)}/live`);
 }
 
+export async function fetchSessionReviewHistory(sessionId: string): Promise<{
+  session_id: string;
+  report: { job_id: string; status: string; updated_at: string; error?: string; result?: import("./types").SessionReportResult } | null;
+  practice: { job_id: string; status: string; updated_at: string; result?: SessionPracticeExportResult & { selected_ids?: string[]; selection_token?: string } } | null;
+}> {
+  return requestJson(`/class-sessions/${sessionId}/review-history`);
+}
+
 export async function generateSessionReport(sessionId: string): Promise<{ status: string; job_id: string }> {
   return requestJson<{ status: string; job_id: string }>(`/class-sessions/${encodeURIComponent(sessionId)}/report`, {
     method: "POST"
   });
 }
 
-export async function exportSessionPractice(sessionId: string): Promise<SessionPracticeExportResult> {
+export async function submitSessionPracticeExport(sessionId: string, selection?: { token: string; selected_ids: string[] }): Promise<
+  { status: "accepted"; job_id: string; session_id: string } | SessionPracticeExportResult
+> {
+  return requestJson(`/class-sessions/${encodeURIComponent(sessionId)}/practice-export?background=true`,
+    { method: "POST", ...(selection ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(selection) } : {}) });
+}
+
+export async function exportSessionPractice(sessionId: string, selection?: { token: string; selected_ids: string[] }): Promise<SessionPracticeExportResult> {
   return requestJson<SessionPracticeExportResult>(
     `/class-sessions/${encodeURIComponent(sessionId)}/practice-export`,
-    { method: "POST" }
+    { method: "POST", ...(selection ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(selection) } : {}) }
   );
 }
 
@@ -1359,4 +1380,17 @@ export async function updateTimeline(
       body: JSON.stringify({ patch }),
     }
   );
+}
+
+export async function fetchQuestionExplanation(sessionId: string): Promise<{ question_id: string; timer: import("./types").QuestionTimerState | null }> {
+  return requestJson(`/class-sessions/${encodeURIComponent(sessionId)}/questions/explanation`);
+}
+
+export type ClassroomPresentationTarget = "stage" | "shanghai_density" | "shanghai_age" | "lujiazui" | "zhujiajiao" | "huangpu_detail" | "chongming_detail";
+export async function presentClassroomScene(sessionId: string, stageId: string, target: ClassroomPresentationTarget = "stage") {
+  return requestJson<{ status: string; scene: { globe?: import("./types").LessonGlobeScene } }>(
+    `/class-sessions/${encodeURIComponent(sessionId)}/presentation`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stage_id: stageId, target })
+    });
 }

@@ -147,21 +147,52 @@ function LoginCard({
   const [pending, setPending] = useState(false);
 
   return (
-    <div className="auth-screen">
+    <div className="auth-screen auth-entry">
       <ThemeToggle className="auth-theme-toggle" />
       <div className="auth-map-grid" aria-hidden="true" />
       <div className="auth-population-points" aria-hidden="true" />
-      <main className="auth-card" aria-labelledby="auth-title">
+      <div className="auth-entry-layout">
+      <section className="auth-story" aria-labelledby="auth-story-title">
+        <div className="auth-story-brand"><BrandLogo className="auth-story-logo" /><span>GeoBot<small>人口地理智能教学平台</small></span></div>
+        <div className="auth-story-copy">
+          <p className="auth-story-kicker">地图里的世界 · 课堂里的发现</p>
+          <h2 id="auth-story-title">让地理可见，<br />让探究发生。</h2>
+          <p>从一张地图出发，连接教案设计、课堂探究与教学复盘。</p>
+        </div>
+        <svg className="auth-globe-art" viewBox="0 0 640 420" fill="none" aria-hidden="true">
+          <defs>
+            <radialGradient id="auth-globe-fill"><stop stopColor="#23868c" stopOpacity=".24"/><stop offset="1" stopColor="#0b2a3e" stopOpacity=".04"/></radialGradient>
+            <clipPath id="auth-globe-clip"><circle cx="320" cy="218" r="173"/></clipPath>
+          </defs>
+          <ellipse cx="320" cy="218" rx="286" ry="90" transform="rotate(-23 320 218)" stroke="currentColor" strokeOpacity=".17" strokeDasharray="5 8"/>
+          <circle cx="320" cy="218" r="173" fill="url(#auth-globe-fill)" stroke="currentColor" strokeOpacity=".5"/>
+          <g stroke="currentColor" strokeOpacity=".2" clipPath="url(#auth-globe-clip)">
+            <ellipse cx="320" cy="218" rx="70" ry="173"/><ellipse cx="320" cy="218" rx="137" ry="173"/>
+            <ellipse cx="320" cy="218" rx="173" ry="59"/><ellipse cx="320" cy="218" rx="173" ry="125"/>
+            <path d="M147 218h346M320 45v346"/>
+            <path d="m201 116 32-16 18 15 35-8 21 25-19 18-4 32-32 4-19 31-22-15-5-29-30-14zM253 220l30 5 19 30-10 30-20 18-8 48-18-22-6-39-23-29zM335 107l36-22 52 29 33 37-17 22-39-13-15 32-29 5-15 39-27-20 8-42-22-24zM397 283l38-15 20 28-17 26-41-12z" fill="currentColor" fillOpacity=".2" strokeOpacity=".45"/>
+          </g>
+          <path d="M256 176Q340 87 411 179M256 176Q284 221 272 270" stroke="currentColor" strokeOpacity=".65" strokeDasharray="4 6"/>
+          <g fill="currentColor"><circle cx="256" cy="176" r="5"/><circle cx="411" cy="179" r="5"/><circle cx="272" cy="270" r="4"/></g>
+          <circle cx="411" cy="179" r="13" stroke="currentColor" strokeOpacity=".4"/>
+        </svg>
+        <ol className="auth-teaching-cycle">
+          <li><span>01 / 课前</span><strong>设计一堂好课</strong><p>教案共创 · 资源准备</p></li>
+          <li><span>02 / 课中</span><strong>在地图上探究</strong><p>可视化工具 · 智能助教</p></li>
+          <li><span>03 / 课后</span><strong>让教学有回响</strong><p>课堂记录 · 复盘改进</p></li>
+        </ol>
+      </section>
+      <main className="auth-card auth-entry-card" aria-labelledby="auth-title">
         <div className="auth-brand" aria-hidden="true">
           <BrandLogo className="auth-brand-logo" />
           <span>GeoBot</span>
         </div>
-        <p className="auth-eyebrow">人口地理智能教学平台</p>
+        <p className="auth-eyebrow">{bootstrap ? "开始使用 GEOBOT" : "欢迎回到 GEOBOT"}</p>
         <h1 id="auth-title">{bootstrap ? "创建系统管理员" : "教师工作台登录"}</h1>
         <p className="auth-subtitle">
           {bootstrap
             ? "首次启动仅需初始化一个管理员账号，之后由管理员为教师开户。"
-            : "使用学校分配的教师或管理员邮箱进入备课、授课与复盘工作台。"}
+            : "登录教师账号，继续你的地理课堂。"}
         </p>
         <form
           onSubmit={(event) => {
@@ -234,6 +265,7 @@ function LoginCard({
         </form>
         <footer>仅面向教师与管理员 · 不开放学生注册</footer>
       </main>
+      </div>
     </div>
   );
 }

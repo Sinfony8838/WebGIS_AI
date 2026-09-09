@@ -3,9 +3,11 @@ import {
   addSessionObservation,
   activatePopulationSourceVersion,
   applyLessonScene,
+  presentClassroomScene,
   captureLessonScene,
   closeSessionQuestion,
   createClassSession,
+  createLessonDesign,
   endClassSession,
   enterSessionStage,
   fetchClassSessions,
@@ -19,6 +21,7 @@ import {
   populationLessonPrepResult,
   preparePopulationLesson,
   revealSessionQuestion,
+  fetchQuestionExplanation,
   resolvePopulationLessonPrep,
   updateLesson,
   updateSessionQuestionTimer
@@ -54,6 +57,7 @@ type Props = {
   assistantJob?: JobRecord | null;
   layerState: LayersResponse | null;
   busy?: boolean;
+  assistantBusy?: boolean;
   onRefresh: () => void | Promise<void>;
   /** 底部状态栏（经纬度/层级），与课前/课中/课后按钮同坞排布，避免相互压盖。 */
   statusBar?: ReactNode;
@@ -62,7 +66,7 @@ type Props = {
   /** 助教识别到整节课设计请求时自动打开共创面板。 */
   designOpenSignal?: number;
   /** 打开全屏教案设计工作台（教案设计入口；未提供时退回右侧共创面板）。 */
-  onOpenDesignWorkspace?: () => void;
+  onOpenDesignWorkspace?: (designId?: string) => void;
   /** 打开指定课时的模拟测试（教案设计工作台「进入模拟测试」入口）。 */
   rehearsalSignal?: number;
   rehearsalLessonId?: string;
@@ -107,6 +111,14 @@ function lessonSnapshotFromSession(session: ClassSessionRecord): LessonRecord | 
   const candidate = snapshot as Partial<LessonRecord>;
   if (candidate.lesson_id !== session.lesson_id || !Array.isArray(candidate.stages)) return null;
   return candidate as LessonRecord;
+}
+
+function sessionStageEnteredAt(session: ClassSessionRecord): number | null {
+  const event = [...session.events].reverse().find(
+    (item) => item.type === "stage_enter" && item.stage_id === session.current_stage_id
+  );
+  const value = event ? Date.parse(event.timestamp) : NaN;
+  return Number.isFinite(value) ? value : null;
 }
 
 async function waitForLessonImport(jobId: string): Promise<LessonRecord | null> {
@@ -180,6 +192,7 @@ export function LessonWorkflowShell({
   rehearsalLessonId = "",
   onTeachingContextChange,
   onAssistantPrompt,
+  assistantBusy = false,
   onApplyGlobeScene,
   getGlobeSceneSnapshot,
   onFocusEvidenceLayer,
@@ -344,7 +357,7 @@ export function LessonWorkflowShell({
         setLessons((previous) => previous.some((item) => item.lesson_id === lesson.lesson_id)
           ? previous.map((item) => (item.lesson_id === lesson.lesson_id ? lesson : item))
           : [lesson, ...previous]);
-        setStageEnteredAt(Date.now());
+        setStageEnteredAt(sessionStageEnteredAt(running));
         setLessonMode("teach");
         setPanelCollapsed(false);
       })
@@ -369,15 +382,16 @@ export function LessonWorkflowShell({
         setActiveSession(session);
         const lesson = lessonSnapshotFromSession(session);
         if (lesson) setActiveLesson(lesson);
-        setStageEnteredAt(Date.now());
+        setStageEnteredAt(sessionStageEnteredAt(session));
         setLessonMode(session.status === "running" ? "teach" : "review");
         setPanelCollapsed(false);
       }
       if (entry.action.tool_name === "enter_lesson_stage") {
         const stage = entry.result?.stage as LessonStage | undefined;
         if (!stage?.stage_id) continue;
-        setActiveSession((previous) => previous ? { ...previous, current_stage_id: stage.stage_id } : previous);
-        setStageEnteredAt(Date.now());
+        const session = entry.result?.session as ClassSessionRecord | undefined;
+        setActiveSession((previous) => session || (previous ? { ...previous, current_stage_id: stage.stage_id } : previous));
+        setStageEnteredAt(session ? sessionStageEnteredAt(session) : Date.now());
         onApplyGlobeScene?.(stage.scene?.globe || {});
         setLessonMode("teach");
       }
@@ -419,6 +433,19 @@ export function LessonWorkflowShell({
     }
   }, []);
 
+  const designRequest = useRef(0);
+  useEffect(() => () => { designRequest.current += 1; }, [project?.project_id]);
+  const designFromLesson = useCallback(async (lesson: LessonRecord) => {
+    if (!project || !onOpenDesignWorkspace) return;
+    const requestId = ++designRequest.current;
+    await runWithBusy(async () => {
+      const design = await createLessonDesign(project.project_id, lesson.lesson_id);
+      if (requestId !== designRequest.current) return;
+      setLessonMode("off");
+      onOpenDesignWorkspace(design.design_id);
+    });
+  }, [project, onOpenDesignWorkspace, runWithBusy]);
+
   const selectLesson = useCallback(
     async (lessonId: string) => {
       await runWithBusy(async () => {
@@ -437,8 +464,8 @@ export function LessonWorkflowShell({
         if (viaSession && activeSession) {
           const response = await enterSessionStage(activeSession.session_id, stageId);
           globe = response.scene?.globe || {};
-          setActiveSession((previous) => (previous ? { ...previous, current_stage_id: stageId } : previous));
-          setStageEnteredAt(Date.now());
+          setActiveSession((previous) => response.session || (previous ? { ...previous, current_stage_id: stageId } : previous));
+          setStageEnteredAt(response.session ? sessionStageEnteredAt(response.session) : Date.now());
         } else {
           const response = await applyLessonScene(activeLesson.lesson_id, stageId, project.project_id);
           globe = response.globe || {};
@@ -558,13 +585,22 @@ export function LessonWorkflowShell({
     await runWithBusy(async () => {
       const response = await createClassSession(activeLesson.lesson_id, project.project_id);
       setActiveSession(response.session);
+      const openingLesson = lessonSnapshotFromSession(response.session) || activeLesson;
+      setActiveLesson(openingLesson);
       setLessonMode("teach");
-      const firstStage = activeLesson.stages[0];
+      setPanelCollapsed(false);
+      const firstStage = openingLesson.stages[0];
       if (firstStage) {
-        await applyScene(firstStage.stage_id, true);
+        // Use the newly created ID; React state still holds the previous session here.
+        const entered = await enterSessionStage(response.session.session_id, firstStage.stage_id);
+        const session = entered.session || { ...response.session, current_stage_id: firstStage.stage_id };
+        setActiveSession(session);
+        setStageEnteredAt(entered.session ? sessionStageEnteredAt(session) : Date.now());
+        onApplyGlobeScene?.(entered.scene?.globe || {});
       }
+      await onRefresh();
     });
-  }, [activeLesson, applyScene, project, runWithBusy]);
+  }, [activeLesson, onApplyGlobeScene, onRefresh, project, runWithBusy]);
 
   const endSession = useCallback(async () => {
     if (!activeSession) return;
@@ -645,12 +681,35 @@ export function LessonWorkflowShell({
     await runWithBusy(async () => {
       const response = await revealSessionQuestion(activeSession.session_id);
       setActiveSession((previous) =>
-        previous
+        previous?.session_id === activeSession.session_id && previous.active_question?.question_id === activeSession.active_question?.question_id
           ? { ...previous, active_question: { ...previous.active_question, timer: response.timer } }
           : previous
       );
     });
   }, [activeSession, runWithBusy]);
+
+  const explanationTimer = (activeSession?.active_question as Partial<LessonQuestion> | undefined)?.timer;
+  const explanationRequestId = explanationTimer?.ai_request_id;
+  const explanationStatus = explanationTimer?.ai_explanation_status;
+  useEffect(() => {
+    if (!activeSession || activeSession.status !== "running" || explanationStatus !== "pending") return;
+    let cancelled = false, timeout = 0;
+    const sessionId = activeSession.session_id;
+    const questionId = activeSession.active_question.question_id;
+    const poll = async () => {
+      try {
+        const response = await fetchQuestionExplanation(sessionId);
+        if (cancelled) return;
+        if (!response.timer || response.question_id !== questionId || response.timer.ai_request_id !== explanationRequestId) return;
+        setActiveSession(previous => previous?.session_id === sessionId && previous.active_question?.question_id === questionId && (previous.active_question as Partial<LessonQuestion>).timer?.ai_request_id === explanationRequestId
+          ? { ...previous, active_question: { ...previous.active_question, timer: response.timer! } } : previous);
+        if (response.timer.ai_explanation_status !== "pending") return;
+      } catch { /* A temporary disconnect must not close the question or lose its answer. */ }
+      if (!cancelled) timeout = window.setTimeout(poll, 1500);
+    };
+    timeout = window.setTimeout(poll, 700);
+    return () => { cancelled = true; window.clearTimeout(timeout); };
+  }, [activeSession?.session_id, activeSession?.active_question?.question_id, activeSession?.status, explanationRequestId, explanationStatus]);
 
   const closeProjection = useCallback(async () => {
     if (!activeSession) return;
@@ -689,7 +748,7 @@ export function LessonWorkflowShell({
   );
 
   const workflowBusy = busy || localBusy;
-  const teachPanelVisible = lessonMode === "teach" && Boolean(activeSession) && Boolean(activeLesson);
+  const teachPanelVisible = lessonMode === "teach" && activeSession?.status === "running" && Boolean(activeLesson);
 
   return (
     <>
@@ -704,6 +763,11 @@ export function LessonWorkflowShell({
           collapsed={panelCollapsed}
           onToggleCollapsed={() => setPanelCollapsed((value) => !value)}
           onEnterStage={(stageId) => void applyScene(stageId, true)}
+          onPresentScene={async (target) => {
+            const response = await presentClassroomScene(activeSession.session_id, activeSession.current_stage_id, target);
+            onApplyGlobeScene?.(response.scene.globe || {});
+            await onRefresh();
+          }}
           onLaunchQuestion={(questionId, stageId) => void launchQuestion(questionId, stageId)}
           onProjectQuestion={(questionId, stageId) => void projectQuestion(questionId, stageId)}
           onLaunchAdhocQuestion={(text, options) => void launchAdhocQuestion(text, options)}
@@ -716,6 +780,7 @@ export function LessonWorkflowShell({
           onFocusEvidenceLayer={onFocusEvidenceLayer}
           onRequestPlaneView={onRequestPlaneView}
           onAssistantPrompt={onAssistantPrompt}
+          assistantBusy={assistantBusy}
         />
       ) : null}
       {teachPanelVisible && projectionQuestion ? (
@@ -745,10 +810,10 @@ export function LessonWorkflowShell({
               type="button"
               className={`toolbar-button compact ${lessonMode === "teach" || lessonMode === "prep" ? "active" : ""}`}
               onClick={() =>
-                setLessonMode((value) => (value === "teach" ? "off" : activeSession ? "teach" : "prep"))
+                setLessonMode((value) => (value === "teach" ? "off" : activeSession?.status === "running" ? "teach" : "prep"))
               }
               data-testid="class-mode-toggle"
-              title={activeSession ? "进入课堂面板" : "先选择课时并开始上课"}
+              title={activeSession?.status === "running" ? "进入课堂面板" : "先选择课时并开始上课"}
             >
               课堂模式
             </button>
@@ -783,6 +848,7 @@ export function LessonWorkflowShell({
           onPrepareLesson={(input) => void prepareLesson(input)}
           onChangePopulationSourceVersion={(version) => void changePopulationSourceVersion(version)}
           onResolvePrepChangeSet={(decision, stageIds) => void resolvePrepChangeSet(decision, stageIds)}
+          onDesignFromLesson={onOpenDesignWorkspace ? (lesson) => void designFromLesson(lesson) : undefined}
           onStartClass={() => void startClass()}
           onStartRehearsal={startRehearsal}
           onClose={() => setLessonMode("off")}

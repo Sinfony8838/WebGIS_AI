@@ -1,7 +1,7 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../api", () => ({
+vi.mock("../api", () => { const api = {
   buildAuthenticatedUrl: (value: string) => value,
   fetchClassSessions: vi.fn().mockResolvedValue({
     status: "success",
@@ -22,6 +22,7 @@ vi.mock("../api", () => ({
       }
     ]
   }),
+  fetchSessionReviewHistory: vi.fn().mockImplementation(async (id: string) => ({ session_id: id, report: null, practice: null })),
   generateSessionReport: vi.fn().mockResolvedValue({ job_id: "job_report" }),
   exportSessionPractice: vi.fn().mockResolvedValue({
     status: "success",
@@ -105,9 +106,10 @@ vi.mock("../api", () => ({
       report_url: ""
     }
   })
-}));
+}; return { ...api, submitSessionPracticeExport: api.exportSessionPractice }; });
 
 import { ReportPanel } from "../components/ReportPanel";
+import { exportSessionPractice, fetchClassSessions, fetchJob, fetchSessionReviewHistory, generateSessionReport } from "../api";
 
 afterEach(() => {
   cleanup();
@@ -118,7 +120,7 @@ describe("ReportPanel", () => {
   it("marks student response data as uncollected and renders teacher oral evidence", async () => {
     render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
 
-    await waitFor(() => expect(screen.getByRole("option", { name: /人口分布/ })).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId("generate-report")).toBeEnabled());
     fireEvent.click(screen.getByTestId("generate-report"));
 
     await waitFor(() => expect(screen.getByText("未采集")).toBeTruthy());
@@ -127,8 +129,27 @@ describe("ReportPanel", () => {
     expect(screen.getByText(/规则生成 · 证据保护/)).toBeTruthy();
     expect(screen.getByText("课后推荐练习巩固")).toBeTruthy();
     expect(screen.getByText(/人口总量与人口密度辨析/)).toBeTruthy();
-    expect(screen.getByText(/不计入40分钟课时/)).toBeTruthy();
+    expect(screen.getByText(/不计入课堂教学用时/)).toBeTruthy();
     expect(screen.queryByText(/正确率/)).toBeNull();
+  });
+
+  it("offers stage-linked map review and preserves unavailable screenshot records", async () => {
+    const base = await fetchJob("baseline");
+    vi.mocked(fetchJob).mockResolvedValueOnce({...base, result:{...base.result,
+      statistics:{...(base.result as any).statistics, snapshots:[
+        {artifact_id:"a",timestamp:"2026-09-09T10:00:00",stage_id:"s",stage_title:"看上海",title:"上海密度",available:true,image_url:"/files/outputs/project_1/map.png"},
+        {artifact_id:"b",timestamp:"",stage_id:"s",stage_title:"看上海",title:"旧截图",available:false,image_url:""}
+      ]}}} as any);
+    render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId("generate-report")).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId("generate-report"));
+    await screen.findByTestId("report-snapshots");
+    const summary = screen.getByText("上海密度").closest("details")!.querySelector("summary")!;
+    fireEvent.click(summary);
+    expect(screen.getByRole("link",{name:"查看地图原图：上海密度",hidden:true})).toHaveAttribute("href","/files/outputs/project_1/map.png");
+    expect(screen.getByAltText("上海密度")).toHaveAttribute("loading","lazy");
+    expect(screen.getByText("截图文件不可用，保留原课堂记录。")).toBeTruthy();
+    expect(screen.getByText(/不能单独证明学生已经理解/)).toBeTruthy();
   });
 
   it("exports practice papers with student and teacher downloads", async () => {
@@ -149,4 +170,251 @@ describe("ReportPanel", () => {
     expect(screen.getByText(/教师课堂速记（原题回炉） ×2/)).toBeTruthy();
     expect(screen.queryByText(/教案课后作业（探究）/)).toBeNull();
   });
+});
+
+it("labels a projection without responses as uncollected instead of drawing zero-percent bars", async () => {
+  const payload = await fetchJob("fixture");
+  const result = structuredClone(payload) as any;
+  result.result.statistics.questions[0].collection_mode = "student_response";
+  vi.mocked(fetchJob).mockResolvedValueOnce(result);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByTestId("generate-report")).toBeEnabled());
+  fireEvent.click(screen.getByTestId("generate-report"));
+  await waitFor(() => expect(screen.getByText(/本题未采集作答数据/)).toBeTruthy());
+  expect(screen.queryByText(/0 人作答/)).toBeNull();
+  expect(document.querySelector(".tally-bar")).toBeNull();
+});
+
+
+it("renders preset open homework without fabricated answer or duration", async () => {
+  const payload = structuredClone(await fetchJob("fixture")) as any;
+  payload.result.practice_recommendations = [{practice_id:"homework",level:"探究作业",title:"教案预设作业",
+    prompt:"查找上海一个区的资料并说明来源。",suggested_minutes:null,answer_points:[],
+    evidence_basis:"来自开课时保存的教案；本次进入2/8个环节。"}];
+  vi.mocked(fetchJob).mockResolvedValueOnce(payload);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByTestId("generate-report")).toBeEnabled());
+  fireEvent.click(screen.getByTestId("generate-report"));
+  await waitFor(() => expect(screen.getByText("查找上海一个区的资料并说明来源。")).toBeTruthy());
+  const list=screen.getByTestId("report-practice-list");
+  expect(list.textContent).not.toContain("建议");
+  expect(list.textContent).not.toContain("答案要点：");
+  expect(list.textContent).toContain("开放任务或未附参考答案");
+  expect(list.textContent).toContain("2/8");
+});
+
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
+
+async function twoSessions() {
+  const payload = structuredClone(await fetchClassSessions({projectId:"fixture"}));
+  payload.items.push({...payload.items[0], session_id:"session_second", started_at:"2026-08-05T08:00:00+00:00"});
+  vi.mocked(fetchClassSessions).mockClear().mockResolvedValueOnce(payload);
+  return payload;
+}
+
+it("separates pending, failure and empty history with a retry", async () => {
+  const request=deferred<Awaited<ReturnType<typeof fetchClassSessions>>>();
+  vi.mocked(fetchClassSessions).mockReturnValueOnce(request.promise);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  expect(screen.getByRole("status").textContent).toContain("正在加载");
+  expect(screen.queryByText(/还没有课堂/)).toBeNull();
+  await act(async () => request.reject(new Error("offline")));
+  expect(screen.getByRole("alert").textContent).toContain("加载失败");
+  expect(screen.queryByText(/还没有课堂/)).toBeNull();
+  vi.mocked(fetchClassSessions).mockResolvedValueOnce({status:"success", items:[]});
+  fireEvent.click(screen.getByText("重新加载课堂记录"));
+  await waitFor(() => expect(screen.getByText(/该项目还没有课堂记录/)).toBeTruthy());
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByRole("status")).toBeNull();
+});
+
+it("clears completed report and paper links immediately on session change without refetching history", async () => {
+  await twoSessions();
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByTestId("generate-report")).toBeEnabled());
+  fireEvent.click(screen.getByTestId("generate-report"));
+  await waitFor(() => expect(screen.getByTestId("report-diagnosis")).toBeTruthy());
+  fireEvent.click(screen.getByTestId("export-practice"));
+  await waitFor(() => expect(screen.getByTestId("practice-student-link")).toBeTruthy());
+  fireEvent.change(screen.getByRole("combobox"), {target:{value:"session_second"}});
+  expect(screen.queryByTestId("report-diagnosis")).toBeNull();
+  expect(screen.queryByTestId("practice-student-link")).toBeNull();
+  expect(fetchClassSessions).toHaveBeenCalledTimes(1);
+});
+
+it("ignores late report submission and paper responses even after switching back to the original session", async () => {
+  await twoSessions();
+  const paper=await exportSessionPractice("fixture");
+  const reportRequest=deferred<Awaited<ReturnType<typeof generateSessionReport>>>();
+  const paperRequest=deferred<typeof paper>();
+  vi.mocked(generateSessionReport).mockReturnValueOnce(reportRequest.promise);
+  vi.mocked(exportSessionPractice).mockReturnValueOnce(paperRequest.promise);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByTestId("generate-report")).toBeEnabled());
+  fireEvent.click(screen.getByTestId("generate-report"));
+  fireEvent.click(screen.getByTestId("export-practice"));
+  fireEvent.change(screen.getByRole("combobox"), {target:{value:"session_second"}});
+  fireEvent.change(screen.getByRole("combobox"), {target:{value:"session_teacher_only"}});
+  await act(async () => { reportRequest.resolve({job_id:"late-job"} as any); paperRequest.resolve(paper); });
+  expect(fetchJob).not.toHaveBeenCalled();
+  expect(screen.queryByTestId("practice-export-result")).toBeNull();
+  expect(screen.getByTestId("generate-report")).toBeEnabled();
+  expect(screen.getByTestId("export-practice")).toBeEnabled();
+});
+
+it("ignores an in-flight job result for the previous session", async () => {
+  await twoSessions();
+  const job=await fetchJob("fixture");
+  vi.mocked(fetchJob).mockClear();
+  const request=deferred<typeof job>();
+  vi.mocked(fetchJob).mockReturnValueOnce(request.promise);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByTestId("generate-report")).toBeEnabled());
+  fireEvent.click(screen.getByTestId("generate-report"));
+  await waitFor(() => expect(fetchJob).toHaveBeenCalledTimes(1));
+  fireEvent.change(screen.getByRole("combobox"), {target:{value:"session_second"}});
+  await act(async () => request.resolve(job));
+  expect(screen.queryByTestId("report-diagnosis")).toBeNull();
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("does not inherit a delayed history response from a different project", async () => {
+  const oldPayload=await twoSessions();
+  const oldRequest=deferred<typeof oldPayload>();
+  // Replace the one-time two-session response with the delayed old project's request.
+  vi.mocked(fetchClassSessions).mockReset().mockReturnValueOnce(oldRequest.promise)
+    .mockResolvedValueOnce({status:"success",items:[]}).mockResolvedValue(oldPayload);
+  const view=render(<ReportPanel projectId="project_old" onClose={vi.fn()} />);
+  view.rerender(<ReportPanel projectId="project_new" onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByText(/该项目还没有课堂记录/)).toBeTruthy());
+  await act(async () => oldRequest.resolve(oldPayload));
+  expect(screen.queryByRole("option", {name:/2026/})).toBeNull();
+  expect(screen.getByTestId("generate-report")).toBeDisabled();
+});
+
+
+it("previews bank material, images, options and the honest selection basis", async () => {
+  const base = await fetchJob("baseline");
+  vi.mocked(fetchJob).mockResolvedValueOnce({...base, result:{...base.result,
+    practice_selection_notes:["题库与练习卷共用本地选题规则"],
+    practice_recommendations:[{practice_id:"bank_q1",level:"课后巩固",title:"2025 河南",
+      prompt:"人口分布差异？",answer_points:["参考解析"],suggested_minutes:null,evidence_basis:"不代表学生答错",
+      question:{question_id:"q1",material:"阅读人口材料",options:["A．甲","B．乙"],images:[{url:"/files/uploads/bank/map.png"}],
+        sub_questions:[{index:"1",text:"说明原因",options:[]}]}}]}} as any);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByTestId("generate-report")).not.toBeDisabled());
+  fireEvent.click(screen.getByTestId("generate-report"));
+  fireEvent.click(await screen.findByText("人口分布差异？"));
+  expect(screen.getByText("阅读人口材料")).toBeTruthy();
+  expect(screen.getByText("B. 乙")).toBeTruthy();
+  expect(screen.getByText("（1）说明原因")).toBeTruthy();
+  expect(screen.getByAltText("2025 河南 题图 1")).toHaveAttribute("src","/files/uploads/bank/map.png");
+  expect(screen.getByText(/不代表学生答错/)).toBeTruthy();
+});
+
+
+it("exports only checked candidates and disables empty selection", async () => {
+  const base = await fetchJob("baseline");
+  const make = (id: string, title: string) => ({practice_id:id,title,level:"课后巩固",prompt:title,answer_points:[],suggested_minutes:null,evidence_basis:"目标匹配"});
+  vi.mocked(fetchJob).mockResolvedValueOnce({...base, result:{...base.result,
+    practice_recommendations:[make("q1","上海人口"),make("q2","世界人口")],
+    practice_selection:{token:"candidate-token",item_ids:["q1","q2","not-visible"]}}} as any);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByTestId("generate-report")).not.toBeDisabled());
+  fireEvent.click(screen.getByTestId("generate-report"));
+  const world = await screen.findByRole("checkbox",{name:"选入练习卷：世界人口"});
+  fireEvent.click(world);
+  expect(screen.getByTestId("export-practice")).toHaveTextContent("导出所选 1 项");
+  fireEvent.click(screen.getByTestId("export-practice"));
+  await waitFor(() => expect(exportSessionPractice).toHaveBeenCalledWith("session_teacher_only",{token:"candidate-token",selected_ids:["q1"]}));
+  await screen.findByTestId("practice-export-result");
+  fireEvent.click(screen.getByRole("button",{name:"清空选择"}));
+  expect(screen.getByTestId("export-practice")).toBeDisabled();
+  expect(screen.queryByTestId("practice-export-result")).toBeNull();
+  fireEvent.click(screen.getByRole("button",{name:"全选"}));
+  expect(screen.getByTestId("export-practice")).toHaveTextContent("导出所选 2 项");
+});
+
+
+it("restores an existing report and paper without generating again", async () => {
+  const reportJob = await fetchJob("fixture");
+  const paper = await exportSessionPractice("fixture");
+  vi.mocked(fetchJob).mockClear();
+  vi.mocked(exportSessionPractice).mockClear();
+  vi.mocked(fetchSessionReviewHistory).mockResolvedValueOnce({ session_id: "session_teacher_only", report: { job_id: "saved_report", status: "completed", updated_at: "2026-09-09T10:00:00Z", result: reportJob.result }, practice: { job_id: "saved_paper", status: "success", updated_at: "", result: paper } } as any);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await screen.findByText("未采集");
+  expect(screen.getByTestId("practice-student-link")).toHaveAttribute("href", "/files/outputs/practice_student.docx");
+  expect(screen.getByText(/已读取上次报告任务/)).toBeInTheDocument();
+  expect(generateSessionReport).not.toHaveBeenCalled();
+  expect(exportSessionPractice).not.toHaveBeenCalled();
+  expect(fetchJob).not.toHaveBeenCalled();
+});
+
+it("continues the original report after a transient read failure without submitting a second job", async () => {
+  const complete = await fetchJob("fixture");
+  vi.mocked(fetchJob).mockClear().mockRejectedValueOnce(new Error("网络中断")).mockResolvedValueOnce(complete);
+  vi.mocked(fetchSessionReviewHistory).mockResolvedValueOnce({ session_id: "session_teacher_only", report: { job_id: "same_report", status: "running", updated_at: "" }, practice: null });
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await screen.findByText("网络中断");
+  fireEvent.click(screen.getByRole("button", { name: "继续读取报告" }));
+  await screen.findByText("未采集");
+  expect(generateSessionReport).not.toHaveBeenCalled();
+  expect(vi.mocked(fetchJob).mock.calls.map(call => call[0])).toEqual(["same_report", "same_report"]);
+});
+
+it("requires history re-read after ambiguous report submission failure", async () => {
+  vi.mocked(generateSessionReport).mockRejectedValueOnce(new Error("连接丢失"));
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByTestId("generate-report")).toBeEnabled());
+  fireEvent.click(screen.getByTestId("generate-report"));
+  await screen.findByText("连接丢失");
+  expect(screen.getByTestId("generate-report")).toBeDisabled();
+  expect(screen.getByRole("button", { name: "重新读取复盘历史" })).toBeEnabled();
+});
+
+
+it("restores the exported selection only against the same report and visible candidates", async () => {
+  const job = await fetchJob("fixture");
+  const paper = await exportSessionPractice("fixture");
+  vi.mocked(exportSessionPractice).mockClear();
+  const result = { ...job.result, practice_selection: { token: "same", item_ids: ["population_metric_check", "hidden"] } };
+  vi.mocked(fetchSessionReviewHistory).mockResolvedValueOnce({ session_id: "session_teacher_only", report: { job_id: "r", status: "completed", updated_at: "", result }, practice: { job_id: "p", status: "success", updated_at: "", result: { ...paper, selected_ids: ["population_metric_check", "hidden"], selection_token: "same" } } } as any);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await screen.findByRole("button", { name: "导出所选 1 项" });
+  expect(screen.getByRole("checkbox")).toBeChecked();
+  expect(exportSessionPractice).not.toHaveBeenCalled();
+});
+
+
+it("waits for a background export and recovers its two paper results", async () => {
+  const paper = await exportSessionPractice("fixture");
+  vi.mocked(exportSessionPractice).mockClear().mockResolvedValueOnce({ status: "accepted", job_id: "export_running", session_id: "session_teacher_only" } as any);
+  vi.mocked(fetchJob).mockResolvedValueOnce({ status: "success", result: paper } as any);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByTestId("export-practice")).toBeEnabled());
+  fireEvent.click(screen.getByTestId("export-practice"));
+  await screen.findByTestId("practice-student-link");
+  expect(fetchJob).toHaveBeenCalledWith("export_running");
+  expect(exportSessionPractice).toHaveBeenCalledOnce();
+});
+
+it("restores an in-progress export and retries only its GET after network loss", async () => {
+  const paper = await exportSessionPractice("fixture");
+  vi.mocked(exportSessionPractice).mockClear();
+  vi.mocked(fetchSessionReviewHistory).mockResolvedValueOnce({ session_id: "session_teacher_only", report: null, practice: { job_id: "old_export", status: "running", updated_at: "" } });
+  vi.mocked(fetchJob).mockRejectedValueOnce(new Error("连接中断")).mockResolvedValueOnce({ status: "success", result: paper } as any);
+  render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
+  await screen.findByText("连接中断");
+  expect(screen.getByTestId("generate-report")).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "继续读取练习卷" }));
+  await screen.findByTestId("practice-teacher-link");
+  expect(exportSessionPractice).not.toHaveBeenCalled();
+  expect(vi.mocked(fetchJob).mock.calls.map(call => call[0])).toEqual(["old_export", "old_export"]);
 });

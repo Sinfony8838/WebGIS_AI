@@ -157,6 +157,92 @@ def looks_like_projected_meters(values: Iterable[float], *, axis: str) -> bool:
     return False
 
 
+# Coordinate-pair classification outcomes for tabular imports. These are
+# *skip reasons*, not CRS assignments: a suspicious pair is reported to the
+# user, never silently reinterpreted.
+COORD_OK = "ok"
+COORD_SUSPECTED_SWAP = "suspected_swap"
+COORD_OUT_OF_RANGE = "out_of_range"
+
+
+def classify_coordinate_pair(lon: float, lat: float) -> str:
+    """Classify one parsed (lon, lat) pair for tabular imports.
+
+    ``"ok"`` — both values inside valid lon/lat ranges.
+    ``"suspected_swap"`` — the pair does not fit (lon, lat) but fits
+    (lat, lon): latitude slot exceeds ±90 while staying within ±180 and
+    the longitude slot is within ±90. Reported to the user, never
+    auto-corrected, because the ranges alone cannot *prove* the intent.
+    ``"out_of_range"`` — neither interpretation fits.
+    """
+    lon_ok = -180.0 <= lon <= 180.0
+    lat_ok = -90.0 <= lat <= 90.0
+    if lon_ok and lat_ok:
+        return COORD_OK
+    if (
+        not lat_ok
+        and -180.0 <= lat <= 180.0
+        and -90.0 <= lon <= 90.0
+    ):
+        return COORD_SUSPECTED_SWAP
+    return COORD_OUT_OF_RANGE
+
+
+def summarize_geojson_coord_range(collection: Any, *, sample_limit: int = 200) -> Optional[Dict[str, Any]]:
+    """Scan the first ``sample_limit`` coordinate pairs of a parsed GeoJSON
+    document for lon/lat range anomalies.
+
+    Returns ``None`` when every sampled pair fits EPSG:4326 ranges.
+    Otherwise returns a summary dict::
+
+        {"checked": 120, "out_of_range": 3, "example": [200.5, 30.1]}
+
+    This is a *soft* diagnostic only: callers must not change coordinates
+    or upgrade the assumed CRS because of it — real-world files carrying a
+    wrong ``crs`` member (or none) are too common for range heuristics to
+    be treated as proof.
+    """
+    checked = 0
+    anomalies = 0
+    example: Optional[List[float]] = None
+
+    def walk(node: Any) -> None:
+        nonlocal checked, anomalies, example
+        if checked >= sample_limit:
+            return
+        if isinstance(node, (list, tuple)) and len(node) >= 2 and isinstance(node[0], (int, float)) and isinstance(node[1], (int, float)):
+            if checked < sample_limit:
+                checked += 1
+                lon, lat = float(node[0]), float(node[1])
+                if classify_coordinate_pair(lon, lat) != COORD_OK:
+                    anomalies += 1
+                    if example is None:
+                        example = [lon, lat]
+            # Depth-first into nested lists happens below regardless.
+        if isinstance(node, (list, tuple)):
+            for item in node:
+                walk(item)
+        elif isinstance(node, dict):
+            # Feature → geometry; GeometryCollection → geometries; geometry
+            # → coordinates. Walking every key defensively keeps this robust
+            # to odd payload shapes without double-counting: coordinates
+            # appear under exactly one of these branches per path.
+            geometry = node.get("geometry")
+            if isinstance(geometry, dict):
+                walk(geometry)
+            for geom in node.get("geometries") or []:
+                if isinstance(geom, dict):
+                    walk(geom)
+            walk(node.get("coordinates"))
+
+    if not isinstance(collection, dict):
+        return None
+    walk(collection.get("features"))
+    if anomalies == 0:
+        return None
+    return {"checked": checked, "out_of_range": anomalies, "example": example}
+
+
 def is_wgs84(crs: Optional[str]) -> bool:
     """True iff ``crs`` is EPSG:4326 in canonical form."""
     return crs == "EPSG:4326"

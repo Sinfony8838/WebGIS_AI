@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
 import { DatabaseViewer } from "../components/DatabaseViewer";
@@ -91,6 +91,41 @@ function createProps(overrides: Partial<DatabaseViewerProps> = {}): DatabaseView
 }
 
 describe("DatabaseViewer", () => {
+  it("filters map topics independently of source groups and resets on navigation", () => {
+    const props = createProps({ activeCategory: "map-data" });
+    props.layers.push({ ...props.layers[0], layer_id: "temperature", name: "世界年均气温" });
+    const { rerender } = render(<DatabaseViewer {...props} />);
+    const facets = within(screen.getByRole("navigation", { name: "地图主题分类" }));
+    fireEvent.click(facets.getByRole("button", { name: /^气温/ }));
+    expect(screen.getByText("世界年均气温")).toBeInTheDocument();
+    expect(screen.queryByText("人口图层")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("筛选已入库内容"), { target: { value: "不存在" } });
+    expect(screen.getByText("没有匹配的数据")).toBeInTheDocument();
+    rerender(<DatabaseViewer {...props} activeCategory="resources" />);
+    expect(screen.queryByLabelText("筛选已入库内容")).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "资源检索" })).toBeInTheDocument();
+  });
+
+  it("distinguishes video, documents and links within teaching materials", () => {
+    const props = createProps({ activeCategory: "materials" });
+    props.knowledgeItems[0].materials = [
+      { id: "video", title: "人口视频", type: "video", url: "https://example.test/watch/1" },
+      { id: "pdf", title: "教学讲义", type: "link", url: "https://example.test/lesson.pdf?download=1" },
+      { id: "web", title: "参考网页", type: "link", url: "https://example.test/page" },
+    ].map(item => ({ source: "测试", thumbnail_url: "", description: "", region_binding: {}, sort_order: 0, created_at: "", ...item }));
+    render(<DatabaseViewer {...props} />);
+    const facets = within(screen.getByRole("navigation", { name: "教学资料类型" }));
+    fireEvent.click(facets.getByRole("button", { name: /^视频/ }));
+    expect(screen.getByText("人口视频")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "播放" })).toBeInTheDocument();
+    expect(screen.queryByText("参考网页")).not.toBeInTheDocument();
+    fireEvent.click(facets.getByRole("button", { name: /^文档/ }));
+    expect(screen.getByText("教学讲义")).toBeInTheDocument();
+    expect(screen.queryByText("人口视频")).not.toBeInTheDocument();
+    fireEvent.click(facets.getByRole("button", { name: /^网页链接/ }));
+    expect(screen.getByText("参考网页")).toBeInTheDocument();
+  });
+
   it("keeps the database page open when import is requested", () => {
     const props = createProps();
     render(<DatabaseViewer {...props} />);
@@ -106,12 +141,12 @@ describe("DatabaseViewer", () => {
     render(<DatabaseViewer {...createProps()} />);
 
     expect(screen.getByRole("heading", { name: "数据库" })).toBeInTheDocument();
-    expect(screen.getByText("地图数据、图片、分析产物、教学资料、题库与课时资源统一管理；检索与获取负责从知识库与权威联网补入新资料。")).toBeInTheDocument();
+    expect(screen.getByText("按主题浏览地图，按形式查找教学资料；需要补充内容时，使用“查找新资料”。")).toBeInTheDocument();
     // 「全部」页按分区渲染：知识条目与项目图层分区都应出现。
     expect(screen.getByTestId("database-section-knowledge")).toHaveTextContent("人口分布知识");
     expect(screen.getByTestId("database-section-layer")).toHaveTextContent("人口图层");
 
-    fireEvent.change(screen.getByLabelText("搜索"), { target: { value: "不存在的关键词xyz" } });
+    fireEvent.change(screen.getByLabelText("筛选已入库内容"), { target: { value: "不存在的关键词xyz" } });
 
     expect(screen.queryByText("人口分布知识")).not.toBeInTheDocument();
     expect(screen.queryByText("人口图层")).not.toBeInTheDocument();
@@ -258,7 +293,7 @@ describe("DatabaseViewer", () => {
 
     // 新 7 类导航 + 每类计数（用导航容器内精确文本匹配，避免撞分区标题）。
     const tabsNav = screen.getByLabelText("数据库分类");
-    for (const label of ["全部", "地图数据", "图片", "分析产物", "教学资料", "题库", "课时资源", "检索与获取"]) {
+    for (const label of ["全部", "地图数据", "图片", "分析产物", "教学资料", "题库", "课时资源"]) {
       const tab = Array.from(tabsNav.querySelectorAll("button")).find((btn) => btn.textContent?.includes(label));
       expect(tab, label).toBeTruthy();
     }

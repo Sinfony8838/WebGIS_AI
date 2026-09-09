@@ -4604,15 +4604,30 @@ button {
 .material-viewer-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 31;
+  width: 100vw;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 20px 18px;
+  border: 0;
+  box-sizing: border-box;
+  color: var(--text-main);
+  background: transparent;
+}
+
+.material-viewer-backdrop[open] {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.material-viewer-backdrop::backdrop {
   background: rgba(3, 9, 14, 0.56);
-  backdrop-filter: blur(10px);
 }
 
 .material-viewer {
+  background: var(--surface-raised);
   width: min(880px, calc(100vw - 36px));
   max-height: min(760px, calc(100vh - 40px));
   border-radius: 22px;
@@ -4643,9 +4658,9 @@ button {
 }
 
 .material-viewer-card {
-  border: 1px solid rgba(210, 221, 232, 0.14);
+  border: 1px solid var(--panel-border);
   border-radius: 16px;
-  background: rgba(15, 23, 42, 0.58);
+  background: var(--surface);
   padding: 12px;
   display: grid;
   gap: 10px;
@@ -5157,6 +5172,32 @@ button {
   font-style: normal;
   margin-left: 4px;
   font-size: 11.5px;
+}
+
+/* Keep each answer's sources readable without a nested scrolling card. */
+.copilot-bubble .copilot-citation-list {
+  margin-top: 10px;
+  padding: 10px 0 0;
+  border: 0;
+  border-top: 1px solid var(--panel-border);
+  border-radius: 0;
+  background: transparent;
+  max-height: none;
+  overflow: visible;
+}
+
+.copilot-bubble .copilot-citation-list strong {
+  color: var(--text-soft);
+  font-size: 12px;
+  letter-spacing: normal;
+}
+
+.copilot-bubble .copilot-citation-list a,
+.copilot-bubble .copilot-citation-list > span {
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .copilot-confirm-actions {
@@ -7587,4 +7628,122 @@ button {
 
 .database-danger-action:hover {
   background: rgba(239, 68, 68, 0.12) !important;
+}
+
+/* Primary map actions follow the brand; search stays at the far right. */
+.app-header { grid-template-columns: auto auto minmax(220px,1fr); }
+.app-header .header-actions { justify-self: start; justify-content: flex-start; flex-wrap: nowrap; }
+.app-header .header-search { justify-self: end; max-width: 620px; min-width: 0; }
+.app-header .header-search-row { min-width: 0; }
+.app-header .header-search-row input { min-width: 0; }
+@media (max-width: 1120px) and (min-width: 701px) {
+  :root { --header-height: 112px; }
+  .app-header { grid-template-columns: auto minmax(0,1fr); grid-template-rows: auto auto; gap: 8px 16px; }
+  .app-header .header-actions { width: 100%; overflow-x: auto; justify-content: flex-end; }
+  .app-header .header-search { grid-column: 1 / -1; width: min(620px,100%); }
+}
+@media (max-width: 700px) {
+  .app-header { grid-template-columns: minmax(0,1fr); grid-template-rows: auto auto auto; }
+  .app-header .header-actions { width: 100%; overflow-x: auto; justify-content: flex-start; }
+  .app-header .header-search { width: 100%; }
+}
+/* One centered dock holds both controls; short screens scroll within it. */
+.right-rail.map-tools-dock { position: fixed; top: calc(50% + var(--header-height) / 2); right: 16px; transform: translateY(-50%); width: var(--right-rail-width); max-height: calc(100dvh - var(--header-height) - 36px); display: flex; flex-direction: column; flex-wrap: nowrap; gap: 8px; align-self: auto; pointer-events: auto; }
+.right-rail.map-tools-dock.is-collapsed { width: 60px; }
+.map-tools-dock .map-tools-dock-content { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 0; }
+.map-tools-dock .map-tools-dock-toggle { flex: 0 0 auto; }
+.map-tools-dock .visual-map-panel.expanded { position: relative; inset: auto; width: 100%; }
+@media (max-width: 700px) { .right-rail.map-tools-dock { right: 8px; } }
+
+/* Topic and format filters distinguish library browsing from discovery. */
+.database-facets { display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:12px 0; border-bottom:1px solid var(--panel-border); }
+.database-facets > span { font-size:12px; color:var(--text-dim); margin-right:4px; }
+.database-facets button { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--panel-border); border-radius:18px; padding:6px 12px; background:var(--surface-raised); color:var(--text-main); cursor:pointer; font:inherit; font-size:13px; }
+.database-facets button.active { background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
+.database-facets em { font-style:normal; opacity:.65; font-size:11px; }
+.database-facets button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.database-resource-search h3 { margin:0 0 6px; }
+.database-resource-search > p { margin:0 0 16px; font-size:13px; color:var(--text-dim); }
+.database-viewer-actions button { white-space:nowrap; }
+/* Keep the expanded map chooser readable while anchoring tools at the right. */
+.map-tools-dock:has(.visual-map-panel.expanded):not(.is-collapsed) { width:min(320px, calc(100vw - 24px)); }
+.map-tools-dock .tool-group-rail { width:var(--right-rail-width); margin-left:auto; box-sizing:border-box; }
+.map-tools-dock .map-tools-dock-toggle { width:var(--right-rail-width); align-self:flex-end; }
+.map-tools-dock.is-collapsed .map-tools-dock-toggle { width:60px; }
+.map-tools-dock .tool-rail-layers { margin-top:8px; width:100%; }
+.map-tools-dock .tool-rail-button { min-height:38px; padding-top:8px; padding-bottom:8px; }
+:root[data-theme="light"] :is(.app-header, .map-tools-dock .glass-panel, .map-tools-dock-toggle, .layer-manager-panel) {
+  background:rgba(246,251,255,.83); backdrop-filter:blur(16px) saturate(1.15); -webkit-backdrop-filter:blur(16px) saturate(1.15);
+}
+:root[data-theme="light"] :is(.app-header .toolbar-button, .map-tools-dock .tool-rail-button, .map-tools-dock .tool-rail-mini) { background:rgba(255,255,255,.64); }
+:root[data-theme="light"] .map-tools-dock .tool-rail-button.active { background:rgba(196,232,252,.74); }
+:root[data-theme="light"] .app-header input { background:rgba(255,255,255,.72); }
+
+.database-viewer:has(.database-facets) { grid-template-rows:auto auto auto minmax(0,1fr); }
+
+.map-tools-dock-content { padding:0; overflow-x:hidden; }
+.map-tools-dock .tool-group-rail { flex-shrink:0; max-width:100%; }
+.map-tools-dock .visual-map-panel { flex-shrink:0; box-sizing:border-box; }
+
+/* Plain translucent paint keeps text outside filtered/composited surfaces. */
+.right-rail.map-tools-dock {
+  top:var(--header-height); bottom:0; transform:none; max-height:none;
+  justify-content:center; padding-block:18px; box-sizing:border-box; pointer-events:none;
+}
+.map-tools-dock .map-tools-dock-content { flex:0 1 auto; pointer-events:auto; }
+.map-tools-dock .map-tools-dock-toggle { pointer-events:auto; }
+:root[data-theme="light"] :is(.app-header, .map-tools-dock .glass-panel, .map-tools-dock-toggle, .layer-manager-panel, .map-status-bar) {
+  background:rgba(246,251,255,.82); backdrop-filter:none; -webkit-backdrop-filter:none;
+}
+:root[data-theme="light"] :is(.app-header, .map-tools-dock) :is(button, input, .tool-rail-label, .tool-group-header span) {
+  color:#18334b; text-shadow:none; font-family:"Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+  font-size:13px; line-height:20px; letter-spacing:normal;
+}
+:root[data-theme="light"] .app-header .toolbar-button { min-height:36px; height:36px; }
+:root[data-theme="light"] .map-tools-dock .tool-rail-button { font-weight:500; }
+:root[data-theme="light"] :is(.app-header .toolbar-button, .map-tools-dock .tool-rail-button) { box-shadow:none; }
+:root[data-theme="light"] :is(.app-header .toolbar-button, .map-tools-dock .tool-rail-button):hover { transform:none; }
+
+.map-tools-dock .visual-map-title { white-space:nowrap; font-size:12px; }
+.map-tools-dock .visual-map-header { gap:5px; }
+
+/* A static header at tablet widths fell behind the absolutely positioned map. */
+@media (min-width:701px) and (max-width:1120px) {
+  .screen-shell-classroom .app-header {
+    position:absolute; inset:0 0 auto; margin:0; box-sizing:border-box;
+    height:var(--header-height); min-height:var(--header-height);
+    grid-template-areas:"brand actions" "search search";
+  }
+  .screen-shell-classroom .app-header .brand-block { grid-area:brand; }
+  .screen-shell-classroom .app-header .header-actions { grid-area:actions; min-width:0; }
+  .screen-shell-classroom .app-header .header-search { grid-area:search; }
+}
+.map-basemap-notice {
+  position:fixed; z-index:17; top:calc(var(--header-height) + 8px); left:50%; transform:translateX(-50%);
+  display:flex; gap:10px; align-items:center; max-width:calc(100vw - 40px); padding:8px 12px;
+  color:var(--text-main); background:var(--surface-raised); border:1px solid var(--panel-border);
+  border-radius:10px; font-size:12px; line-height:1.5;
+}
+.map-basemap-notice button { flex-shrink:0; cursor:pointer; color:var(--accent); background:transparent; border:0; font:inherit; }
+
+.qpm-thinking-dot { display:inline-block; width:7px; height:7px; margin-right:8px; border-radius:50%; background:var(--accent); animation:qpm-thinking 1.2s ease-in-out infinite; }
+@keyframes qpm-thinking { 50% { opacity:.3; } }
+@media(prefers-reduced-motion:reduce) { .qpm-thinking-dot { animation:none; } }
+
+
+/* A narrow classroom window cannot fit a floating lesson panel and chat side by side. */
+@media (max-width: 960px) {
+  .copilot-widget {
+    position: fixed;
+    z-index: 72;
+    inset: 8px !important;
+    width: auto !important;
+    height: auto !important;
+    min-width: 0;
+    min-height: 0;
+    padding: 12px;
+    border-radius: 16px;
+  }
+  .copilot-widget-header { cursor: default; }
+  .copilot-resize-handle { display: none; }
 }

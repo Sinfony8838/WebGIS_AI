@@ -1,3 +1,4 @@
+import type { UrbanSource, UrbanStatus } from "./UrbanStudyPanel";
 /**
  * Cesium-based 3D digital globe view.
  *
@@ -41,13 +42,19 @@ export type Map3DGlobeHandle = {
     durationSeconds?: number,
     pitchDeg?: number
   ) => void;
+  lookAtLocation: (lon:number, lat:number, range:number, pitchDeg?:number) => void;
   resetView: () => void;
+  inkToWorld: (client: [number,number]) => [number,number] | null;
+  inkToClient: (world: [number,number]) => [number,number] | null;
+  subscribeInkRender: (render: () => void) => (() => void) | undefined;
   getCameraState: () => CameraState | null;
   captureImage: () => string;
   getCanvasRect: () => { left: number; top: number; width: number; height: number } | null;
 };
 
 type Props = {
+  urbanSource?: UrbanSource|null;
+  onUrbanStatus?: (status:UrbanStatus) => void;
   /** Visible state — hides the canvas without destroying the scene. */
   visible: boolean;
   /** XYZ template URL used as the globe imagery. Use {x}/{y}/{z} placeholders. */
@@ -97,6 +104,8 @@ function extractTokenPattern(template: string): { url: string; subdomains?: stri
 export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlobe(
   {
     visible,
+    urbanSource,
+    onUrbanStatus,
     imageryUrl,
     imagerySubdomains,
     showGraticule,
@@ -112,6 +121,8 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
   ref
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const urbanStatusRef = useRef(onUrbanStatus);
+  urbanStatusRef.current = onUrbanStatus;
   const tooltipRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<Cesium.Viewer | null>(null);
   const screenHandlerRef = useRef<Cesium.ScreenSpaceEventHandler | null>(null);
@@ -120,6 +131,8 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
   const baseImageryLayerRef = useRef<Cesium.ImageryLayer | null>(null);
   const themeManagerRef = useRef<GlobeThemeManager | null>(null);
   const themesActiveRef = useRef(false);
+  const urbanActiveRef = useRef(false);
+  urbanActiveRef.current = Boolean(urbanSource);
   const altitudeArmedRef = useRef(true);
   const lastCameraStateRef = useRef<CameraState | null>(null);
   const rafIdRef = useRef<number | null>(null);
@@ -331,7 +344,7 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
         if (!tooltipEl) {
           return;
         }
-        if (!themesActiveRef.current) {
+        if (!themesActiveRef.current && !urbanActiveRef.current) {
           tooltipEl.style.display = "none";
           return;
         }
@@ -355,8 +368,8 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
           tooltipEl.appendChild(row);
         }
         tooltipEl.style.display = "flex";
-        tooltipEl.style.left = `${Math.round(endPosition.x + 14)}px`;
-        tooltipEl.style.top = `${Math.round(endPosition.y + 12)}px`;
+        tooltipEl.style.left = `${Math.max(8, Math.min(Math.round(endPosition.x + 14), viewer.canvas.clientWidth-tooltipEl.offsetWidth-8))}px`;
+        tooltipEl.style.top = `${Math.max(8, Math.min(Math.round(endPosition.y + 12), viewer.canvas.clientHeight-tooltipEl.offsetHeight-8))}px`;
       });
     }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
     screenHandlerRef.current = screenHandler;
@@ -396,19 +409,71 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Each source owns its primitive and listeners; a stale request cannot replace a newer source.
+  useEffect(() => {
+    const viewer=viewerRef.current;
+    if (!viewer || !urbanSource) { urbanStatusRef.current?.("idle"); return; }
+    let cancelled=false;
+    let tileset:Cesium.Cesium3DTileset|null=null;
+    let buildings:Cesium.GeoJsonDataSource|null=null;
+    const removeListeners:(()=>void)[]=[];
+    urbanStatusRef.current?.("loading");
+    if (urbanSource.format === "geojson") {
+      Cesium.GeoJsonDataSource.load(urbanSource.url, {clampToGround:false}).then(async result => {
+        if(cancelled || viewer.isDestroyed()) return;
+        buildings=result;
+        for(const entity of result.entities.values) {
+          if(!entity.polygon) continue;
+          const properties=entity.properties?.getValue(Cesium.JulianDate.now()) || {};
+          const height=Number(properties.height_m);
+          const basis=properties.height_basis;
+          const known=Number.isFinite(height) && height>0 && height<1000;
+          entity.polygon.height=new Cesium.ConstantProperty(0);
+          entity.polygon.extrudedHeight=new Cesium.ConstantProperty(known ? height : 0);
+          entity.polygon.material=new Cesium.ColorMaterialProperty(Cesium.Color.fromCssColorString(!known ? "#9aa9ad" : basis === "osm_height" ? "#279589" : "#6695bc"));
+          entity.polygon.outline=new Cesium.ConstantProperty(false);
+          (entity as unknown as {__themeTooltip: {title:string;lines:string[]}}).__themeTooltip={
+            title:properties.name || "建筑轮廓",
+            lines:[!known ? "高度缺失，未拉伸" : basis === "osm_height" ? `OSM 标注高度：${height} 米` : `估算高度：${height} 米（${properties.levels_tag} 层 × 3 米）`,
+              "© OpenStreetMap contributors · 非人口数据"]
+          };
+        }
+        await viewer.dataSources.add(result);
+        if(cancelled || viewer.isDestroyed()) {if(!viewer.isDestroyed()) viewer.dataSources.remove(result,true);return;}
+        urbanStatusRef.current?.("visible");
+        viewer.scene.requestRender();
+      }).catch(()=>{if(!cancelled)urbanStatusRef.current?.("error");});
+    } else Cesium.Cesium3DTileset.fromUrl(urbanSource.url,{maximumScreenSpaceError:16,showCreditsOnScreen:true}).then(result=>{
+      if(cancelled || viewer.isDestroyed()) { result.destroy(); return; }
+      tileset=result;
+      viewer.scene.primitives.add(result);
+      urbanStatusRef.current?.("manifest");
+      removeListeners.push(result.tileVisible.addEventListener(()=>urbanStatusRef.current?.("visible")));
+      removeListeners.push(result.tileFailed.addEventListener(()=>urbanStatusRef.current?.("error")));
+      viewer.scene.requestRender();
+    }).catch(()=>{if(!cancelled)urbanStatusRef.current?.("error");});
+    return ()=>{
+      cancelled=true;
+      removeListeners.forEach(remove=>remove());
+      if(tileset && !viewer.isDestroyed()) viewer.scene.primitives.remove(tileset);
+      if(buildings && !viewer.isDestroyed()) viewer.dataSources.remove(buildings,true);
+    };
+  },[urbanSource]);
+
   // Live-swap the base imagery layer when the URL prop changes.
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer) {
       return;
     }
-    const { url, subdomains: extractedSubdomains } = extractTokenPattern(imageryUrl);
+    const osmBuildings=urbanSource?.format === "geojson";
+    const { url, subdomains: extractedSubdomains } = extractTokenPattern(osmBuildings ? "https://tile.openstreetmap.org/{z}/{x}/{y}.png" : imageryUrl);
     const subdomains = imagerySubdomains && imagerySubdomains.length ? imagerySubdomains : extractedSubdomains;
     const provider = new Cesium.UrlTemplateImageryProvider({
       url,
       subdomains,
       maximumLevel: 18,
-      credit: new Cesium.Credit("© 高德地图", false)
+      credit: new Cesium.Credit(osmBuildings ? '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>' : "© 高德地图", true)
     });
     const nextLayer = new Cesium.ImageryLayer(provider, {});
     // Insert below the grid layer (if any) but above other layers.
@@ -417,7 +482,7 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
       viewer.imageryLayers.remove(baseImageryLayerRef.current, true);
     }
     baseImageryLayerRef.current = nextLayer;
-  }, [imageryUrl, imagerySubdomains]);
+  }, [imageryUrl, imagerySubdomains, urbanSource?.format]);
 
   // Add or remove the lat/lon graticule overlay (lines + numeric labels).
   // The grid is two coordinated pieces: a tile-based GridImageryProvider
@@ -530,6 +595,13 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
           duration: durationSeconds
         });
       },
+      lookAtLocation: (lon,lat,range,pitchDeg=-40) => {
+        const viewer=viewerRef.current;
+        if(!viewer) return;
+        viewer.camera.flyToBoundingSphere(new Cesium.BoundingSphere(Cesium.Cartesian3.fromDegrees(lon,lat),100), {
+          offset:new Cesium.HeadingPitchRange(0,Cesium.Math.toRadians(pitchDeg),range), duration:1.6
+        });
+      },
       resetView: () => {
         const viewer = viewerRef.current;
         if (!viewer) {
@@ -548,6 +620,32 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
           },
           duration: 1.4
         });
+      },
+      inkToWorld: (client) => {
+        const viewer=viewerRef.current; if(!viewer) return null;
+        const rect=viewer.canvas.getBoundingClientRect(); if(!rect.width || !rect.height) return null;
+        const pixel=new Cesium.Cartesian2((client[0]-rect.left)*viewer.canvas.clientWidth/rect.width,(client[1]-rect.top)*viewer.canvas.clientHeight/rect.height);
+        const point=viewer.camera.pickEllipsoid(pixel,viewer.scene.globe.ellipsoid);
+        if(!point) return null;
+        const cartographic=Cesium.Cartographic.fromCartesian(point);
+        return [Cesium.Math.toDegrees(cartographic.longitude),Cesium.Math.toDegrees(cartographic.latitude)];
+      },
+      inkToClient: (world) => {
+        const viewer=viewerRef.current; if(!viewer) return null;
+        const point=Cesium.Cartesian3.fromDegrees(world[0],world[1]);
+        const delta=Cesium.Cartesian3.subtract(point,viewer.camera.positionWC,new Cesium.Cartesian3());
+        const distance=Cesium.Cartesian3.magnitude(delta);
+        const ray=new Cesium.Ray(viewer.camera.positionWC,Cesium.Cartesian3.normalize(delta,delta));
+        const intersection=Cesium.IntersectionTests.rayEllipsoid(ray,viewer.scene.globe.ellipsoid);
+        if(intersection && intersection.start < distance-1) return null;
+        const pixel=Cesium.SceneTransforms.worldToWindowCoordinates(viewer.scene,point);
+        if(!pixel) return null;
+        const rect=viewer.canvas.getBoundingClientRect();
+        return [rect.left+pixel.x*rect.width/viewer.canvas.clientWidth,rect.top+pixel.y*rect.height/viewer.canvas.clientHeight];
+      },
+      subscribeInkRender: (render) => {
+        const viewer=viewerRef.current; if(!viewer) return undefined;
+        return viewer.scene.postRender.addEventListener(render);
       },
       getCameraState: () => lastCameraStateRef.current,
       captureImage: () => {

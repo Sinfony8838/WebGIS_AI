@@ -1,5 +1,6 @@
+import { ThinkingIndicator } from "./ThinkingIndicator";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { DragEvent as ReactDragEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { CSSProperties, DragEvent as ReactDragEvent, PointerEvent as ReactPointerEvent } from "react";
 import { getSpeechRecognitionConstructor, getSpeechRecognitionErrorMessage, type BrowserSpeechRecognition } from "../speechRecognition";
 import { audioWorkletSupported } from "../voiceStream";
 import { cancelSpeech } from "../speechSynthesis";
@@ -551,7 +552,6 @@ export function CopilotWidget({
         return "进入即自动聆听：直接说出指令，例如“切换到三维地球”。";
     }
   })();
-  const citations = currentJob?.result?.citations || currentJob?.result?.knowledge?.citations || [];
   const plannedActions = currentJob?.result?.actions_planned || [];
   const confirmationId = String(currentJob?.result?.confirmation_id || "");
   const requiresConfirmation = Boolean(currentJob?.result?.requires_confirmation && confirmationId);
@@ -708,6 +708,8 @@ export function CopilotWidget({
       }
     }
 
+    // Preserve the hit target until a real drag starts; small click jitter must not move it.
+    if (!state.moved) return;
     if (state.kind === "orb") {
       setOrbPosition(
         snaplessOrb({
@@ -755,7 +757,7 @@ export function CopilotWidget({
     }
 
     if (state.kind === "orb") {
-      setOrbPosition((previous) => snapOrb(previous));
+      if (state.moved) setOrbPosition((previous) => snapOrb(previous));
       preventRestoreOnClickRef.current = state.moved;
       setOrbDragging(false);
     }
@@ -806,7 +808,7 @@ export function CopilotWidget({
   }, []);
 
   function startDrag(kind: "orb" | "panel" | "resize", event: ReactPointerEvent, rect?: PanelRect | Point) {
-    event.preventDefault();
+    if (kind !== "orb") event.preventDefault();
     const baseRect = rect || (kind === "orb" ? orbPosition : panelRect);
     const panelCandidate = baseRect as Partial<PanelRect>;
     if (kind === "orb") {
@@ -975,22 +977,26 @@ export function CopilotWidget({
 
   if (minimized) {
     return (
-      <div className="copilot-orb-shell" style={{ left: orbPosition.x, top: orbPosition.y }}>
+      <div className="copilot-orb-shell" style={{ left: orbPosition.x, top: orbPosition.y,
+        "--copilot-orb-x": `${orbPosition.x}px`, "--copilot-orb-y": `${orbPosition.y}px` } as CSSProperties}>
         <button
           type="button"
           className={`copilot-orb ${busy ? "busy" : ""}`}
           aria-label="展开智能助教"
-          onClick={() => {
-            if (preventRestoreOnClickRef.current) {
+          onClick={(event) => {
+            if (event.detail !== 0 && preventRestoreOnClickRef.current) {
               preventRestoreOnClickRef.current = false;
               return;
             }
             restorePanel();
           }}
           onPointerDown={(event) => {
+            if (event.button !== 0 || event.isPrimary === false) return;
             event.stopPropagation();
+            preventRestoreOnClickRef.current = false;
             event.currentTarget.setPointerCapture?.(event.pointerId);
-            startDrag("orb", event, orbPosition);
+            const rect = event.currentTarget.getBoundingClientRect();
+            startDrag("orb", event, { x: rect.left, y: rect.top });
           }}
           onPointerMove={(event) => {
             if (dragStateRef.current?.kind !== "orb") {
@@ -1159,17 +1165,6 @@ export function CopilotWidget({
             </div>
           ) : null}
 
-          {citations.length ? (
-            <div className="copilot-citation-list">
-              <strong>引用来源</strong>
-              {citations.map((item) => (
-                <a key={`${item.title}_${item.url}`} href={item.url} target="_blank" rel="noreferrer">
-                  {item.title}
-                </a>
-              ))}
-            </div>
-          ) : null}
-
           <div className="copilot-chat-log" data-testid="copilot-chat-log">
             {chatLog.map((message, index) => {
               const body = message.text;
@@ -1203,6 +1198,22 @@ export function CopilotWidget({
                     />
                   ) : null}
                   {body ? <p>{body}</p> : null}
+                  {message.role === "assistant" && message.citations?.length ? (
+                    <div className="copilot-citation-list" aria-label="本条回答参考来源">
+                      <strong>参考来源</strong>
+                      {message.citations.map((item, citationIndex) => {
+                        let url = "";
+                        try {
+                          const parsed = new URL(item.url);
+                          if (["https:", "http:"].includes(parsed.protocol)) url = parsed.href;
+                        } catch { /* A source title remains readable when its URL is unavailable. */ }
+                        const title = item.title || "来源未命名";
+                        return url ? (
+                          <a key={citationIndex} href={url} target="_blank" rel="noopener noreferrer">{title}</a>
+                        ) : <span key={citationIndex}>{title}（链接不可用）</span>;
+                      })}
+                    </div>
+                  ) : null}
                   {actions.length ? (
                     <div className="copilot-tool-trace" data-testid={`copilot-tool-trace-${index}`}>
                       <button
@@ -1234,21 +1245,7 @@ export function CopilotWidget({
                 </article>
               );
             })}
-            {busy ? (
-              <div
-                className="copilot-thinking"
-                role="status"
-                aria-live="polite"
-                data-testid="copilot-thinking"
-              >
-                <span className="copilot-thinking-dots" aria-hidden="true">
-                  <span />
-                  <span />
-                  <span />
-                </span>
-                <span className="copilot-thinking-label">{pickThinkingLabel(jobStages)}</span>
-              </div>
-            ) : null}
+            {busy ? <ThinkingIndicator label={pickThinkingLabel(jobStages)} testId="copilot-thinking" /> : null}
           </div>
         </div>
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -19,6 +20,9 @@ from .lessons import LessonService
 from .minimax_client import MiniMaxClient
 from .population_lesson_prep import ALLOWED_GLOBE_THEME_IDS
 from .question_bank import QuestionBankService
+
+
+logger = logging.getLogger(__name__)
 
 
 STEP_KEYS = (
@@ -94,6 +98,35 @@ class LessonDesignService:
         self.question_bank_service = question_bank_service
 
     @staticmethod
+    def _normalize_text_lists(draft: Dict[str, Any]) -> None:
+        """Canonical text fields stay renderable; keep rich model details separately."""
+        fields = [(draft, "objectives", "objectives")]
+        core = draft.get("core_questions")
+        if isinstance(core, dict):
+            fields.append((core, "sub_questions", "core_questions.sub_questions"))
+        for parent, key, path in fields:
+            if key not in parent:
+                continue
+            values = parent[key]
+            if not isinstance(values, list):
+                raise ValueError("教学目标和子问题必须按条目保存，不能使用整段对象。")
+            normalized = []
+            details = []
+            for item in values:
+                text = item if isinstance(item, str) else next(
+                    (item[field] for field in ("statement", "text", "question", "description")
+                     if isinstance(item.get(field), str) and item[field].strip()), None
+                ) if isinstance(item, dict) else None
+                if not isinstance(text, str) or not text.strip():
+                    raise ValueError("教学目标或子问题缺少可读文字，请补充具体内容。")
+                normalized.append(text.strip())
+                details.append(copy.deepcopy(item) if isinstance(item, dict) else None)
+            if any(item is not None for item in details):
+                # Archival metadata only; current text and 1-based order remain authoritative.
+                draft.setdefault("structured_text_originals", {})[path] = details
+            parent[key] = normalized
+
+    @staticmethod
     def _backfill_draft(draft: Dict[str, Any]) -> Dict[str, Any]:
         """旧教案/旧设计载入时补齐新章节默认值，保证字段完整可用。"""
         fresh = default_draft()
@@ -109,6 +142,7 @@ class LessonDesignService:
         draft["homework"].setdefault("inquiry", [])
         if not isinstance(draft.get("question_citations"), list):
             draft["question_citations"] = []
+        LessonDesignService._normalize_text_lists(draft)
         return draft
 
     def create_or_resume(
@@ -118,7 +152,7 @@ class LessonDesignService:
         existing = self.store.list_lesson_designs(project_id=project_id, owner_user_id=owner_user_id, active_only=True)
         for item in existing:
             if str(item.base_lesson_id or "") == str(base_lesson_id or ""):
-                return item
+                return self.get(item.design_id)
         draft = default_draft()
         if base_lesson_id:
             lesson = self.store.get_lesson(base_lesson_id)
@@ -150,6 +184,8 @@ class LessonDesignService:
         design = self.store.get_lesson_design(design_id)
         if design is None:
             raise KeyError("Unknown lesson design")
+        design = copy.deepcopy(design)
+        self._backfill_draft(design.draft)
         return design
 
     def capability_catalog(self) -> List[Dict[str, Any]]:
@@ -239,11 +275,24 @@ class LessonDesignService:
                 "auto_bound_questions": [],
                 "active_design_question": self._active_design_question(design),
             }
-        result = self._ask_minimax(design, current_step, message) or self._fallback_turn(design, current_step, message)
+        schedule = self._requested_schedule(message) if current_step == "process" else []
+        result = self._ask_minimax(design, current_step, message)
+        generation_mode = "model" if result is not None else "rules"
+        if current_step == "process" and schedule:
+            stages = (result or {}).get("section_patch", {}).get("stages")
+            if not self._matches_schedule(stages, schedule):
+                logger.warning("Lesson generation rejected: step=process reason=%s", "schedule_mismatch" if result else "model_unavailable")
+                # Never replace an explicit teacher plan with the generic three-stage template.
+                raise ValueError("本次生成未能按你指定的环节和时长完成，原草稿已保留。请重试，或在教学过程里直接编辑。")
+        if result is None:
+            result = self._fallback_turn(design, current_step, message)
         if current_step == "requirements":
             result = self._normalize_requirements_result(result, message, design.draft)
         patch = result.get("section_patch") if isinstance(result, dict) else {}
         patch = patch if isinstance(patch, dict) else {}
+        protected_questions = self._questions_to_preserve(design.draft, message)
+        if "stages" in patch and not self._preserves_questions(patch["stages"], protected_questions):
+            raise ValueError("本次生成改动或遗漏了需保留的题目，原草稿已保留。请重试；题库题和教师录入题请通过题目编辑入口修改。")
         # 已确认章节默认是稳定约束；只有教师明确提出修改/返回时才重新打开。
         reopen = any(token in message for token in ("修改", "调整", "返回", "重做", "换一种"))
         for key in list(patch):
@@ -265,10 +314,6 @@ class LessonDesignService:
             design.current_step = next_step
             design.pending_next_step = ""
         design.revision += 1
-        design.turns.append({
-            "revision": design.revision, "step": current_step, "message": message,
-            "reply": str(result.get("reply") or ""), "section_patch": copy.deepcopy(patch),
-        })
         retrieval_mode, retrieved_refs = self._retrieve(message, design.owner_user_id)
         design.source_refs = self._merge_refs(design.source_refs, result.get("source_refs"))
         design.source_refs = self._merge_refs(design.source_refs, retrieved_refs)
@@ -281,10 +326,32 @@ class LessonDesignService:
         auto_bound: List[Dict[str, Any]] = []
         if current_step == "question_matching":
             retrieval_candidates, auto_bound = self._auto_bind_questions(design)
+        rehearsal_report = None
+        if current_step in {"rehearsal", "confirmation"}:
+            rehearsal_report = self.validate_plan(design.draft, design.source_refs)
+            unconfirmed = [SECTION_LABELS.get(key, key) for key in REQUIRED_SECTIONS
+                           if design.section_status.get(key) != "confirmed"]
+            if rehearsal_report["errors"]:
+                reply = "预演检查未通过：" + "；".join(rehearsal_report["errors"])
+            else:
+                reply = "教案结构检查通过。"
+            if unconfirmed:
+                reply += " 尚待确认：" + "、".join(unconfirmed) + "。"
+            reply += " 当前尚未发布为课时草稿，也未生成 Word。"
+            if rehearsal_report["warnings"]:
+                reply += " 提醒：" + "；".join(rehearsal_report["warnings"])
+            result["reply"] = reply
+        if generation_mode == "rules":
+            result["reply"] = "本轮 AI 未返回有效内容，以下为规则草稿与系统检查结果，需逐项核对。" + str(result.get("reply") or "")
+        design.turns.append({
+            "revision": design.revision, "step": current_step, "message": message,
+            "reply": str(result.get("reply") or ""), "section_patch": copy.deepcopy(patch),
+            "generation_mode": generation_mode,
+        })
         self.store.upsert_lesson_design(design)
-        rehearsal_report = self.rehearse(design_id) if current_step == "rehearsal" else None
         return {
             "status": "success", "assistant_message": str(result.get("reply") or self._natural_prompt(next_step)),
+            "generation_mode": generation_mode,
             "next_step": design.current_step, "step_label": STEP_LABELS.get(design.current_step, design.current_step),
             "draft": copy.deepcopy(design.draft), "section_status": copy.deepcopy(design.section_status),
             "source_refs": copy.deepcopy(design.source_refs), "capability_bindings": copy.deepcopy(design.capability_bindings),
@@ -309,6 +376,12 @@ class LessonDesignService:
         normalized_decision = str(decision).lower()
         if normalized_decision in {"edit", "direct_edit", "直接编辑"}:
             patch_value = copy.deepcopy(value)
+            # A section can share a step name (objectives/core_questions).
+            # Single-section payloads and grouped step payloads are both supported.
+            if section_id == "objectives" and isinstance(patch_value, list):
+                patch_value = {"objectives": patch_value}
+            elif section_id == "core_questions" and isinstance(patch_value, dict) and "core_questions" not in patch_value:
+                patch_value = {"core_questions": patch_value}
             if section_id in STEP_SECTIONS:
                 if not isinstance(patch_value, dict):
                     raise ValueError("当前步骤的直接编辑内容格式不正确")
@@ -334,6 +407,7 @@ class LessonDesignService:
                         design.section_status[key] = "proposed"
                 if not any(key in allowed_group for key in patch_value):
                     raise ValueError("没有可保存的当前步骤内容")
+                self._normalize_text_lists(design.draft)
                 design.revision += 1
                 design.diff_summary = self._build_diff_summary(design)
                 self.store.upsert_lesson_design(design)
@@ -348,6 +422,7 @@ class LessonDesignService:
                 if not patch_value:
                     raise ValueError("直接编辑内容不能为空")
             design.draft[section_id] = patch_value
+            self._normalize_text_lists(design.draft)
             if section_id in SECTION_KEYS:
                 design.section_status[section_id] = "proposed"
             design.revision += 1
@@ -889,6 +964,46 @@ class LessonDesignService:
                 pass
         return mode, refs
 
+    def _dataset_facts(self, draft: Dict[str, Any], message: str) -> List[Dict[str, Any]]:
+        """Bounded scalar excerpts from referenced local datasets, never geometry or remote fetches."""
+        if self.catalog_service is None:
+            return []
+        identifiers = []
+        for stage in draft.get("stages") or []:
+            scene = stage.get("scene") if isinstance(stage, dict) else None
+            for identifier in scene.get("catalog_layers") or [] if isinstance(scene, dict) else []:
+                if isinstance(identifier, str) and identifier not in identifiers:
+                    identifiers.append(identifier)
+        context = message + json.dumps({k: v for k, v in draft.items() if k != "structured_text_originals"}, ensure_ascii=False)
+        excerpts = []
+        for identifier in identifiers[:8]:
+            try:
+                item = self.catalog_service.get_item(identifier)
+                path = self.catalog_service.resolve_item_path(item)
+                if path.suffix.lower() not in {".json", ".geojson"} or path.stat().st_size > 4_000_000:
+                    continue
+                data = json.loads(path.read_text(encoding="utf-8"))
+                features = data.get("features") if isinstance(data, dict) else None
+                if not isinstance(features, list):
+                    continue
+                records = []
+                keys = list(dict.fromkeys(["name", "short_name", "source_year", *item.get("fields", [])]))
+                for feature in features:
+                    props = feature.get("properties") if isinstance(feature, dict) else None
+                    if not isinstance(props, dict) or not any(isinstance(props.get(key), (int, float)) and not isinstance(props.get(key), bool) for key in item.get("fields", []) if key not in {"adcode", "region_code"}):
+                        continue
+                    record = {key: props[key] for key in keys if isinstance(props.get(key), (str, int, float, bool)) and (not isinstance(props[key], str) or len(props[key]) <= 160)}
+                    records.append(record)
+                if not records:
+                    continue
+                records.sort(key=lambda row: not any(isinstance(row.get(key), str) and row[key] and row[key] in context for key in ("name", "short_name")))
+                excerpts.append({"dataset_id": identifier, "source_name": item.get("source_name", ""),
+                                 "source_url": item.get("source_url", ""), "source_year": item.get("source_year", ""),
+                                 "sampled": len(records) > 12, "record_count": len(records), "records": records[:12]})
+            except (OSError, ValueError, KeyError, TypeError):
+                logger.warning("Lesson dataset excerpt unavailable")
+        return excerpts
+
     def _ask_minimax(self, design: LessonDesignRecord, step: str, message: str) -> Optional[Dict[str, Any]]:
         if self.minimax_client is None:
             return None
@@ -896,24 +1011,111 @@ class LessonDesignService:
             "你是高中地理教案共创助手。默认简体中文，每轮只推进一个步骤，先复述教师意图，再给可修改建议，"
             "回复末尾只提一个推进问题。"
             "只输出 JSON，字段为 reply、section_patch、next_step、source_refs、capability_bindings、suggestions。"
+            'section_patch 必须是以章节名为键的对象，不是 JSON Patch 操作数组，不需要改动的章节请省略，不要填 null。'
+            '格式示例：{"reply":"本轮建议","section_patch":{"stages":[{"stage_id":"s1","title":"环节名","minutes":5,"material":"材料与来源或待补充说明","question_chain":["问题"],"teacher_activities":["教师操作"],"student_activities":["学生任务"],"knowledge_conclusion":"结论","design_intent":"意图","objective_refs":[1],"system_steps":["真实操作"],"scene":{"templates":[],"catalog_layers":[]},"questions":[]}],"board_design":"板书文字"},"next_step":"question_matching","source_refs":[],"capability_bindings":[],"suggestions":[]}。'
+            '当前为教学过程时只输出 stages 和 board_design，保持其他章节不变；每个活动字段简洁具体，避免重复长段落。'
             "不要输出内部轨迹。当前步骤：" + STEP_LABELS.get(step, step) +
             "。九个步骤依次是：需求确认→课标与学情→目标与重难点→核心问题与问题链→教学过程→题目匹配→GIS/AI能力→预演检查→确认发布。"
             "核心章节要求：设计思路100-150字；3-4个可观察教学目标；1个核心问题+2-4个递进子问题；"
             "每环节包含 material/question_chain/teacher_activities/student_activities/knowledge_conclusion/"
             "design_intent/minutes/system_steps/objective_refs（1-based目标序号）；板书设计；基础作业+探究作业；预设教学反思。"
+            'objectives 必须是字符串数组；core_questions 必须为 {"core":"核心问题文字","sub_questions":["子问题文字"]}，不要把条目写成对象。'
+            "教师明确指定的教学环节名称、顺序和每环节分钟数是硬约束，必须逐一原样保留，不能合并或改成通用模板。"
+            "你的回复只说明本轮草稿修改，不得声称已发布、已生成文件、预演通过或全部步骤完成；这些状态由系统核验。"
             "题目匹配只能引用题库检索给出的题目，不得编造题目内容。"
             "草稿：" + json.dumps(design.draft, ensure_ascii=False)[:12000] +
-            "。真实能力目录：" + json.dumps(self.capability_catalog(), ensure_ascii=False)[:8000]
+            "。真实能力目录：" + json.dumps(self.capability_catalog(), ensure_ascii=False)[:8000] +
+            "。当前引用图层的本地统计摘录（只是本地数据，不代表已独立核验来源；sampled=true 时只是部分记录）：" +
+            json.dumps(self._dataset_facts(design.draft, message) if step == "process" else [], ensure_ascii=False) +
+            "。涉及数字、大小关系或排名时必须与摘录一致；摘录未覆盖或单位未明确时说明需核对，不要补造数值或宣称统计口径相同。"
         )
-        try:
-            content = self.minimax_client.chat_completion(
-                [{"role": "system", "content": system}, {"role": "user", "content": message[:6000]}],
-                temperature=0.2, extra_payload={"max_completion_tokens": 2400},
-            )
-            payload = self._extract_json(content)
-            return self._validate_model_payload(payload)
-        except Exception:
-            return None
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": message[:6000]}]
+        # One bounded correction for model formatting/content errors, never for network failures.
+        for attempt in range(2):
+            try:
+                content = self.minimax_client.chat_completion(
+                    messages, temperature=0.2,
+                    extra_payload={"max_completion_tokens": 12288 if step == "process" else 2400},
+                    timeout=90.0 if step == "process" else 45.0,
+                )
+            except Exception as exc:
+                logger.warning("Lesson generation failed: step=%s error_type=%s", step, type(exc).__name__)
+                return None
+            reason = "invalid_payload"
+            try:
+                payload = self._extract_json(content)
+                result = self._validate_model_payload(payload)
+            except (json.JSONDecodeError, ValueError, TypeError):
+                result, reason = None, "invalid_json"
+            schedule = self._requested_schedule(message) if step == "process" else []
+            if result is not None and schedule and not self._matches_schedule(result["section_patch"].get("stages"), schedule):
+                result, reason = None, "schedule_mismatch"
+            protected_questions = self._questions_to_preserve(design.draft, message)
+            if result is not None and "stages" in result["section_patch"] and not self._preserves_questions(result["section_patch"]["stages"], protected_questions):
+                result, reason = None, "protected_question_changed"
+            if result is not None:
+                return result
+            logger.warning("Lesson generation rejected: step=%s reason=%s attempt=%s", step, reason, attempt + 1)
+            if attempt == 0:
+                # Regenerate from the original teacher request, without replaying malformed output.
+                correction = "上次输出未通过系统校验。请重新生成完整 JSON 对象：section_patch 是章节字典，不是数组；不改动的字段省略，不填 null。"
+                if schedule:
+                    correction += "必须保留这些环节名称、顺序与分钟数：" + json.dumps(schedule, ensure_ascii=False)
+                if protected_questions:
+                    correction += "这些原题对象必须完整保留且各出现一次，可按教学意图移动到不同环节，不得改写或删减：" + json.dumps(protected_questions, ensure_ascii=False)
+                messages.append({"role": "user", "content": correction + "只返回简洁的完整结果，不要解释格式错误。"})
+        return None
+
+    @staticmethod
+    def _questions_to_preserve(draft: Dict[str, Any], message: str) -> List[Dict[str, Any]]:
+        preserve_open = bool(re.search(r"保留.{0,40}(?:题|原文)", message))
+        return [copy.deepcopy(question)
+                for stage in draft.get("stages") or [] if isinstance(stage, dict)
+                for question in stage.get("questions") or [] if isinstance(question, dict)
+                if preserve_open or question.get("source") in {"question_bank", "teacher_manual"}]
+
+    @staticmethod
+    def _preserves_questions(stages: Any, required: List[Dict[str, Any]]) -> bool:
+        if not required:
+            return True
+        if not isinstance(stages, list):
+            return False
+        questions = [question for stage in stages if isinstance(stage, dict)
+                     for question in stage.get("questions") or [] if isinstance(question, dict)]
+        for original in required:
+            identifier = original.get("question_id")
+            matches = [question for question in questions
+                       if question.get("question_id") == identifier] if identifier else [question for question in questions if question == original]
+            if len(matches) != 1 or matches[0] != original:
+                return False
+        return True
+
+    @staticmethod
+    def _requested_schedule(message: str) -> List[Dict[str, Any]]:
+        """Read explicit named time slots; do not interpret the lesson's total as a stage."""
+        content = re.split(r"环节安排(?:为|是)?[：:\s]*", message, maxsplit=1)[-1]
+        slots = []
+        for part in re.split(r"[、，,；;。\n]", content):
+            match = re.fullmatch(r"\s*(.+?)\s*(\d+)\s*分钟\s*", part)
+            if not match:
+                continue
+            title = re.sub(r"^\s*(?:\d+[.．、)]|第[一二三四五六七八九十\d]+环节[：:]?)\s*", "", match[1]).strip()
+            if not title or any(word in title for word in ("课时", "总计", "总共", "教案", "设计", "合计")):
+                continue
+            slots.append({"title": title, "minutes": int(match[2])})
+        return slots if len(slots) >= 2 else []
+
+    @staticmethod
+    def _matches_schedule(stages: Any, schedule: List[Dict[str, Any]]) -> bool:
+        if not isinstance(stages, list) or len(stages) != len(schedule):
+            return False
+        for stage, slot in zip(stages, schedule):
+            if not isinstance(stage, dict) or str(stage.get("title") or "").strip() != slot["title"]:
+                return False
+            # Numeric strings from a model are tolerated; fractional and boolean values are not.
+            if str(stage.get("minutes")) != str(slot["minutes"]):
+                return False
+        return True
 
     def _fallback_turn(self, design: LessonDesignRecord, step: str, message: str) -> Dict[str, Any]:
         draft, clean = design.draft, message.strip()
@@ -1159,12 +1361,20 @@ class LessonDesignService:
     @staticmethod
     def _validate_model_payload(payload: Any) -> Optional[Dict[str, Any]]:
         if not isinstance(payload, dict):
+            logger.warning("Lesson payload shape: root_type=%s", type(payload).__name__)
             return None
         patch = payload.get("section_patch", {})
         if not isinstance(patch, dict):
+            logger.warning("Lesson payload shape: patch_type=%s", type(patch).__name__)
             return None
         allowed = set(SECTION_KEYS) | {"title", "subject", "grade", "topic", "duration_minutes"}
         normalized_patch = {str(key): copy.deepcopy(value) for key, value in patch.items() if str(key) in allowed}
+        try:
+            LessonDesignService._normalize_text_lists(copy.deepcopy(normalized_patch))
+        except ValueError:
+            core = normalized_patch.get("core_questions")
+            logger.warning("Lesson payload shape: objectives_type=%s sub_questions_type=%s", type(normalized_patch.get("objectives")).__name__, type(core.get("sub_questions") if isinstance(core, dict) else None).__name__)
+            return None
         next_step = str(payload.get("next_step") or "")
         source_refs = payload.get("source_refs") if isinstance(payload.get("source_refs"), list) else []
         bindings = payload.get("capability_bindings") if isinstance(payload.get("capability_bindings"), list) else []
@@ -1188,6 +1398,7 @@ class LessonDesignService:
                 draft[key] = {**draft[key], **copy.deepcopy(value)}
             else:
                 draft[key] = copy.deepcopy(value)
+        LessonDesignService._normalize_text_lists(draft)
 
     @staticmethod
     def _next_step(step: str) -> str:

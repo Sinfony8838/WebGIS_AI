@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import tempfile
+import json
 import unittest
+from unittest.mock import Mock, patch
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -27,6 +29,197 @@ class LessonDesignServiceTest(unittest.TestCase):
         self.runtime = WebGISRuntime(config=config, store=self.store)
         self.project = self.runtime.create_project()["project_id"]
         self.addCleanup(self.temp_dir.cleanup)
+
+    def test_shanghai_seed_keeps_old_draft_and_original_scenes_questions_homework(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        old = service.create_or_resume(self.project, "local_admin")
+        old_before = json.dumps(old.to_dict(), ensure_ascii=False, sort_keys=True)
+        base = self.store.get_lesson("lesson_builtin_population_shanghai_world")
+        base_before = json.dumps(base.to_dict(), ensure_ascii=False, sort_keys=True)
+        design = service.create_or_resume(self.project, "local_admin", base.lesson_id)
+        self.assertNotEqual(design.design_id, old.design_id)
+        self.assertEqual(len(design.draft["stages"]), 8)
+        self.assertEqual(sum(len(s["questions"]) for s in design.draft["stages"]), 11)
+        self.assertEqual(design.draft["stages"], base.stages)
+        self.assertEqual(design.draft["homework"], base.plan["homework"])
+        self.assertEqual(design.draft["stages"][0]["scene"]["view"]["center"], [121.47, 31.23])
+        self.assertEqual(service.create_or_resume(self.project, "local_admin", base.lesson_id).design_id, design.design_id)
+        design.draft["stages"][0]["title"] = "教师草稿修改"
+        self.assertEqual(json.dumps(base.to_dict(), ensure_ascii=False, sort_keys=True), base_before)
+        self.assertEqual(json.dumps(self.store.get_lesson_design(old.design_id).to_dict(), ensure_ascii=False, sort_keys=True), old_before)
+
+    def test_legacy_structured_objectives_resume_as_text_without_read_mutation(self) -> None:
+        design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
+        stored = self.store.get_lesson_design(design["design_id"])
+        stored.draft["objectives"] = [{"id": 1, "statement": "描述人口分布", "type": "基础"}, "比较人口密度"]
+        stored.draft["core_questions"] = {"core": "为什么分布不均？", "sub_questions": [{"statement": "哪里人口密集？", "objective_refs": [1]}]}
+        self.store.upsert_lesson_design(stored)
+        resumed = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
+        self.assertEqual(resumed["draft"]["objectives"], ["描述人口分布", "比较人口密度"])
+        self.assertEqual(resumed["draft"]["core_questions"]["sub_questions"], ["哪里人口密集？"])
+        self.assertEqual(resumed["draft"]["structured_text_originals"]["objectives"][0]["type"], "基础")
+        self.assertIsInstance(self.store.get_lesson_design(design["design_id"]).draft["objectives"][0], dict)
+        self.assertEqual(resumed["revision"], design["revision"])
+
+    def test_direct_objective_and_core_question_edits_accept_section_payloads(self) -> None:
+        design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
+        result = self.runtime.classroom.resolve_lesson_design(design["design_id"], "objectives", "edit", "", 0, ["描述分布", "比较密度"])["design"]
+        self.assertEqual(result["draft"]["objectives"], ["描述分布", "比较密度"])
+        result = self.runtime.classroom.resolve_lesson_design(design["design_id"], "core_questions", "edit", "", result["revision"], {"core": "为何不均？", "sub_questions": ["稠密区在哪？"]})["design"]
+        self.assertEqual(result["draft"]["core_questions"]["core"], "为何不均？")
+        with self.assertRaisesRegex(ValueError, "缺少可读文字"):
+            self.runtime.classroom.resolve_lesson_design(design["design_id"], "objectives", "edit", "", result["revision"], [{"id": 1}])
+        self.assertEqual(self.store.get_lesson_design(design["design_id"]).draft["objectives"], ["描述分布", "比较密度"])
+
+    def test_model_text_objects_are_normalized_at_merge_and_unknown_shapes_rejected(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        payload = service._validate_model_payload({"section_patch": {"objectives": [{"statement": "描述分布"}], "core_questions": {"sub_questions": [{"text": "人口在哪里？"}]} }})
+        draft = {}
+        service._merge_patch(draft, payload["section_patch"])
+        self.assertEqual(draft["objectives"], ["描述分布"])
+        self.assertEqual(draft["core_questions"]["sub_questions"], ["人口在哪里？"])
+        self.assertIsNone(service._validate_model_payload({"section_patch": {"objectives": [{"id": 1}]}}))
+
+    def test_explicit_schedule_is_not_silently_replaced_on_model_failure(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        stored = self.store.get_lesson_design(design.design_id)
+        stored.draft["stages"] = [{"title": "已有课堂活动", "minutes": 40}]
+        self.store.upsert_lesson_design(stored)
+        message = "请生成40分钟教学过程。环节安排为世界人口分布读图5分钟、总量与密度辨析8分钟、胡焕庸线及成因探究15分钟、上海迁移应用8分钟、总结评价4分钟。"
+        schedule = service._requested_schedule(message)
+        self.assertEqual([s["minutes"] for s in schedule], [5, 8, 15, 8, 4])
+        bad_results = [None, {"section_patch": {"stages": service._make_stages("人口分布", 40)}},
+                       {"section_patch": {"stages": [{**item, "minutes": 8} for item in schedule]}}]
+        for result in bad_results:
+            with self.subTest(result=result), patch.object(service, "_ask_minimax", return_value=result):
+                with self.assertRaisesRegex(ValueError, "原草稿已保留"):
+                    service.turn(design.design_id, message, 0, "process")
+                unchanged = service.get(design.design_id)
+                self.assertEqual(unchanged.revision, 0)
+                self.assertEqual(unchanged.turns, [])
+                self.assertEqual(unchanged.draft["stages"], [{"title": "已有课堂活动", "minutes": 40}])
+        with patch.object(service, "_ask_minimax", return_value={"section_patch": {"stages": schedule}, "reply": "已按五个环节起草"}):
+            result = service.turn(design.design_id, message, 0, "process")
+        self.assertEqual(result["draft"]["stages"], schedule)
+        self.assertEqual(result["generation_mode"], "model")
+
+    def test_process_generation_has_headroom_and_diagnostics_do_not_log_response_secrets(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        client = Mock()
+        client.chat_completion.return_value = '{"section_patch": {}}'
+        service.minimax_client = client
+        service._ask_minimax(design, "process", "生成课堂过程")
+        self.assertEqual(client.chat_completion.call_args.kwargs["extra_payload"]["max_completion_tokens"], 12288)
+        self.assertEqual(client.chat_completion.call_args.kwargs["timeout"], 90.0)
+        client.chat_completion.side_effect = TimeoutError("sensitive-provider-response")
+        with self.assertLogs("backend.app.services.lesson_design", level="WARNING") as captured:
+            self.assertIsNone(service._ask_minimax(design, "process", "生成课堂过程"))
+        self.assertIn("TimeoutError", " ".join(captured.output))
+        self.assertNotIn("sensitive-provider-response", " ".join(captured.output))
+
+    def test_invalid_model_json_is_corrected_once_and_failures_are_bounded(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        client = Mock()
+        service.minimax_client = client
+        client.chat_completion.side_effect = ['{"section_patch":', '{"reply":"修正后的草稿","section_patch":{"board_design":"读图与归因"}}']
+        result = service._ask_minimax(design, "process", "设计课堂过程")
+        self.assertEqual(result["section_patch"]["board_design"], "读图与归因")
+        self.assertEqual(client.chat_completion.call_count, 2)
+        self.assertIn("未通过系统校验", client.chat_completion.call_args.args[0][-1]["content"])
+        client.reset_mock()
+        client.chat_completion.side_effect = ['{"section_patch":[]}', '{"section_patch":[]}']
+        self.assertIsNone(service._ask_minimax(design, "process", "设计课堂过程"))
+        self.assertEqual(client.chat_completion.call_count, 2)
+        client.reset_mock()
+        client.chat_completion.side_effect = TimeoutError("timeout")
+        self.assertIsNone(service._ask_minimax(design, "process", "设计课堂过程"))
+        self.assertEqual(client.chat_completion.call_count, 1)
+
+    def test_reading_design_validates_same_snapshot_without_model_or_store_changes(self) -> None:
+        design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
+        before = self.store.state_file.read_bytes()
+        with patch.object(self.runtime.classroom.lesson_design, "_ask_minimax") as ask:
+            first = self.runtime.classroom.get_lesson_design(design["design_id"])
+            second = self.runtime.classroom.get_lesson_design(design["design_id"])
+        ask.assert_not_called()
+        self.assertEqual(first["revision"], design["revision"])
+        self.assertEqual(first["turns"], design["turns"])
+        self.assertFalse(first["rehearsal_report"]["ready"])
+        self.assertEqual(first["rehearsal_report"], second["rehearsal_report"])
+        self.assertEqual(self.store.state_file.read_bytes(), before)
+
+    def test_model_and_rules_cannot_rewrite_or_drop_protected_question_snapshots(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        original = {"question_id": "q1", "text": "哪些因素共同影响人口分布？", "source": "teacher_manual", "answer": "自然与人文因素", "explanation": "需基于地图解释"}
+        record = self.store.get_lesson_design(design.design_id)
+        record.draft["stages"] = [{"stage_id": "s1", "questions": [original]}]
+        self.store.upsert_lesson_design(record)
+        for candidate in ([], [{**original, "text": "改写题目"}], [original, original], [{**original, "answer": "错误答案"}]):
+            with self.subTest(candidate=candidate), patch.object(service, "_ask_minimax", return_value={"section_patch": {"stages": [{"questions": candidate}]}}):
+                with self.assertRaisesRegex(ValueError, "需保留的题目"):
+                    service.turn(design.design_id, "修改教学活动", 0, "process")
+                self.assertEqual(service.get(design.design_id).revision, 0)
+                self.assertEqual(service.get(design.design_id).draft["stages"][0]["questions"], [original])
+        with patch.object(service, "_ask_minimax", return_value=None):
+            with self.assertRaisesRegex(ValueError, "需保留的题目"):
+                service.turn(design.design_id, "修改教学活动", 0, "process")
+        relocated = [{"stage_id": "s2", "questions": [original]}]
+        with patch.object(service, "_ask_minimax", return_value={"section_patch": {"stages": relocated}}):
+            result = service.turn(design.design_id, "调整活动顺序", 0, "process")
+        self.assertEqual(result["draft"]["stages"], relocated)
+        open_question = {"question_id": "q2", "text": "原开放题"}
+        self.assertEqual(service._questions_to_preserve({"stages": [{"questions": [open_question]}]}, "保留现有三道开放题及原文"), [open_question])
+
+    def test_dataset_context_uses_local_values_prioritizes_named_regions_and_omits_geometry(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        data_path = Path(self.temp_dir.name) / "population.geojson"
+        features = [{"properties": {"name": f"区域{i}", "population": i * 100, "source_year": "2020"}, "geometry": {"type": "Point", "coordinates": [100, 30]}} for i in range(15)]
+        data_path.write_text(json.dumps({"features": features}), encoding="utf-8")
+        catalog = Mock()
+        catalog.get_item.return_value = {"fields": ["name", "population"], "source_name": "测试统计表", "source_year": "2020", "source_url": "https://example.test/source"}
+        catalog.resolve_item_path.return_value = data_path
+        service.catalog_service = catalog
+        draft = {"stages": [{"scene": {"catalog_layers": ["population", "population"]}}]}
+        excerpts = service._dataset_facts(draft, "请比较区域14")
+        self.assertEqual(len(excerpts), 1)
+        rows = excerpts[0]["records"]
+        self.assertTrue(excerpts[0]["sampled"])
+        self.assertEqual(len(rows), 12)
+        self.assertEqual(next(row for row in rows if row["name"] == "区域14")["population"], 1400)
+        self.assertNotIn("geometry", json.dumps(excerpts))
+        self.assertEqual(excerpts[0]["source_year"], "2020")
+        catalog.resolve_item_path.side_effect = FileNotFoundError("missing")
+        self.assertEqual(service._dataset_facts(draft, ""), [])
+
+    def test_rules_are_disclosed_in_response_and_history(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        result = service.turn(design.design_id, "高一40分钟《人口分布》", 0)
+        self.assertEqual(result["generation_mode"], "rules")
+        self.assertIn("规则草稿", result["assistant_message"])
+        self.assertEqual(service.get(design.design_id).turns[-1]["reply"], result["assistant_message"])
+
+    def test_confirmation_uses_actual_post_patch_validation_not_model_claim(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        fake = {"reply": "全部9步完成，已发布并生成Word，资料全部来自题库检索", "section_patch": {"objectives": ["解释上海人口分布"]}}
+        for step in ("confirmation", "rehearsal"):
+            with self.subTest(step=step), patch.object(service, "_ask_minimax", return_value=fake):
+                result = service.turn(design.design_id, "请检查当前草稿", service.get(design.design_id).revision, step)
+            self.assertFalse(result["rehearsal_report"]["ready"])
+            self.assertIn("预演检查未通过", result["assistant_message"])
+            self.assertIn("尚未发布", result["assistant_message"])
+            self.assertNotIn("全部9步完成", result["assistant_message"])
+            self.assertNotIn("全部来自题库", result["assistant_message"])
+            self.assertNotIn("至少需要一个可观察的教学目标。", result["rehearsal_report"]["errors"])
+            saved = service.get(design.design_id)
+            self.assertEqual(saved.turns[-1]["reply"], result["assistant_message"])
+            self.assertEqual(saved.status, "active")
+            self.assertFalse(saved.final_lesson_id)
 
     def advance(self, design_id: str, message: str, revision: int) -> tuple[dict, int]:
         current = self.store.get_lesson_design(design_id).current_step
