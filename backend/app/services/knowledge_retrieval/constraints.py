@@ -127,6 +127,7 @@ class QueryConstraints:
     """Hard/soft constraints parsed from a natural-language query."""
 
     region: str = ""
+    regions: tuple[str, ...] = ()
     years: tuple[int, ...] = ()
     census_terms: tuple[str, ...] = ()
     metrics: tuple[str, ...] = ()
@@ -144,6 +145,7 @@ class DocumentConstraints:
 
     region: str = ""
     years: tuple[int, ...] = ()
+    mentioned_years: tuple[int, ...] = ()
     metrics: tuple[str, ...] = ()
     material_types: tuple[str, ...] = ()
     topic: str = ""
@@ -159,12 +161,16 @@ class DocumentConstraints:
     ) -> "DocumentConstraints":
         normalized_region = normalize_text(region)
         canonical_region = REGION_ALIASES.get(normalized_region, normalized_region)
+        # 统计时点只认 time 字段。资料正文或出处里的年份可能是发布年份、
+        # 引用年份或对照年份，不能拿来当资料的统计时点（2025 年发布的
+        # 报告完全可以描述 2020 年人口），只作为“提及年份”供宽松匹配。
         years = _years_from_time_field(time_value)
-        if not years:
-            years = tuple(
-                int(match.group(0))
-                for match in _YEAR_RUN_RE.finditer(normalize_text(text))
-            )
+        mentioned = tuple(
+            int(match.group(0)) for match in _YEAR_RUN_RE.finditer(normalize_text(text))
+        )
+        mentioned_years = tuple(
+            year for year in dict.fromkeys(mentioned) if year not in years
+        )
         metrics = tuple(
             dict.fromkeys(
                 metric
@@ -184,6 +190,7 @@ class DocumentConstraints:
         return cls(
             region=canonical_region,
             years=years,
+            mentioned_years=mentioned_years,
             metrics=metrics,
             material_types=merged_materials,
             topic=normalize_text(topic),
@@ -197,7 +204,15 @@ def extract_constraints(query: str) -> QueryConstraints:
 
     # Prefer the longest alias so “上海” wins over a bare “中国” hit inside a
     # longer phrase, and 中国/全国/我国 all resolve to the canonical china.
-    constraints.region = _longest_alias_match(normalized, REGION_ALIASES) or ""
+    # 比较类问句（“上海和全国”）会提到多个区域，全部记录用于放宽冲突判定。
+    mentioned: list[str] = []
+    for alias in sorted(REGION_ALIASES, key=len, reverse=True):
+        if alias in normalized:
+            canonical = REGION_ALIASES[alias]
+            if canonical not in mentioned:
+                mentioned.append(canonical)
+    constraints.regions = tuple(mentioned)
+    constraints.region = mentioned[0] if mentioned else ""
 
     years: list[int] = []
     census_terms: list[str] = []

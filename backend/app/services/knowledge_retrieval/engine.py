@@ -59,7 +59,7 @@ CENSUS_ALIAS_TERMS = frozenset(CENSUS_YEAR_ALIASES)
 
 # “NOUN的XXX怎么/什么…” 问句里，“的”后头名词才是真正要问的东西；语料
 # 缺失该名词时应如实说无资料，而不是用 NOUN 部分的字面重叠作答。
-_DE_HEAD_RE = re.compile(r"的([\u4e00-\u9fff]{2,6})(?=怎么|什么|如何|多少|吗|呢)")
+_DE_HEAD_RE = re.compile(r"的([一-鿿]{2,6})(?=怎么|什么|如何|多少|是多少|吗|呢)")
 MATERIAL_ALIAS_TERMS = frozenset(
     {
         "地图",
@@ -75,11 +75,14 @@ MATERIAL_ALIAS_TERMS = frozenset(
     }
 )
 
-# 表述同义：同一地理格局的常见口头说法与资料用词。只收录资料中
-# 实际出现的写法，不新增事实。
+# 领域泛词：只说明“这是一份资料”，不指示主题，不作为证据。
+DOMAIN_STOP_TERMS = frozenset({"资料", "数据", "内容", "情况", "信息", "材料"})
+
+# 表述同义：同一地理格局方向一致的常见口头说法。相反表述（如
+# “西多东少”）描述相反的空间格局，不得映射为“东密西疏”——否则纠错、
+# 判断类问题会被当成同义改写。
 PHRASE_SYNONYMS: dict[str, tuple[str, ...]] = {
     "东多西少": ("东密西疏",),
-    "西多东少": ("东密西疏",),
     "东南密集": ("东密西疏",),
 }
 
@@ -244,6 +247,7 @@ class RetrievalEngine:
             for term in query_terms
             if term not in REGION_ALIASES
             and term not in MATERIAL_ALIAS_TERMS
+            and term not in DOMAIN_STOP_TERMS
             and not term.isdigit()
         ]
         # Metric synonym expansion: 人口总数 also searches 人口数量, keeping
@@ -342,12 +346,17 @@ class RetrievalEngine:
                 if (
                     invocab_non_sub
                     and not oov_content
-                    and parsed.region
-                    and doc.constraints.region == parsed.region
+                    and parsed.regions
+                    and doc.constraints.region in parsed.regions
                 ):
                     admit_score += 1.5
                     admitted_notes.append(f"region_admitted:{doc.constraints.region}")
-                if parsed.material_types and set(doc.constraints.material_types) & set(parsed.material_types):
+                if (
+                    invocab_non_sub
+                    and not oov_content
+                    and parsed.material_types
+                    and set(doc.constraints.material_types) & set(parsed.material_types)
+                ):
                     admit_score += 2.0 * MATERIAL_MATCH_BONUS
                     admitted_notes.append("material_admitted")
                 if admit_score > 0:
@@ -370,11 +379,15 @@ class RetrievalEngine:
             # not for the guard — unless they are the only evidence, in
             # which case they are measured at full weight, because then
             # they represent the query's own words.
+            # 守门只认问句自己的词：同义扩展词是检索辅助，不是用户输入，
+            # 永不计入；子词仅在没有字面命中时按原权重计入。
             guard_terms = [
-                term for term in matched_evidence if term not in expanded_terms and term not in sub_term_weight
+                term
+                for term in matched_evidence
+                if term not in expanded_terms and term not in sub_term_weight
             ]
             if not guard_terms:
-                guard_terms = matched_evidence
+                guard_terms = [term for term in matched_evidence if term not in expanded_terms]
             matched_weight = sum(self._idf.get(term, 1.0) for term in guard_terms)
             guard = matched_weight / (matched_weight + oov_weight) if (matched_weight + oov_weight) else 1.0
             guard_ok = guard >= GUARD_RATIO
@@ -459,7 +472,7 @@ class RetrievalEngine:
         for doc in self.docs:
             score = 0.0
             notes: list[str] = []
-            if parsed.region and doc.constraints.region == parsed.region:
+            if parsed.regions and doc.constraints.region in parsed.regions:
                 score += 2.0
                 notes.append(f"region:{doc.constraints.region}")
             if parsed.years and doc.constraints.years:

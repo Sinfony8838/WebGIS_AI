@@ -71,7 +71,7 @@ GUARD_RATIO_STRONG = 0.40
 GUARD_STRONG_MIN_IDF = 3.5
 GUARD_STRONG_MIN_LEN = 4
 # single term, prose-only hit
-GUARD_WEAK_SINGLE = 0.6
+GUARD_WEAK_SINGLE = 0.65
 # document whose matched terms live only in prose fields
 WEAK_ONLY_DISCOUNT = 0.5
 
@@ -125,17 +125,23 @@ def constraint_multiplier(query: QueryConstraints, doc: DocumentConstraints) -> 
     multiplier = 1.0
     notes: list[str] = []
 
-    if query.region and doc.region in SPECIFIC_REGIONS:
-        if query.region == doc.region:
+    if query.regions and doc.region in SPECIFIC_REGIONS:
+        if doc.region in query.regions:
             multiplier *= REGION_MATCH_BONUS
             notes.append(f"region:{doc.region}")
-        elif REGION_CONFLICT_EXCLUDE and doc.region in REGION_SIBLINGS.get(query.region, frozenset()):
+        elif REGION_CONFLICT_EXCLUDE:
+            # 问句明确提到了区域（上海和全国的“全国”也算），而资料绑定在
+            # 另一个具体区域上：排除。问句未提区域时不做排除。
             return None
 
     if query.years and doc.years:
         if set(query.years) & set(doc.years):
             multiplier *= YEAR_MATCH_BONUS
             notes.append(f"year:{doc.years[0]}")
+        elif set(query.years) & set(doc.mentioned_years):
+            # 资料正文/出处提到过该年份（发布年、对照年）：中立保留，
+            # 不奖励也不排除。
+            notes.append("year_mentioned")
         elif any(min(query.years) <= year <= max(query.years) for year in doc.years):
             # 对比类问句（五普到七普）：中间年份属于问句区间，不奖励也不排除
             notes.append("year_in_range")
