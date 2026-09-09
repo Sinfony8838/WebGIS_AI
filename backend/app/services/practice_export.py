@@ -431,77 +431,160 @@ class PracticeExportService:
         from docx import Document
         from docx.enum.text import WD_ALIGN_PARAGRAPH
         from docx.oxml.ns import qn
-        from docx.shared import Inches, Pt
+        from docx.shared import Inches, Pt, RGBColor
 
         doc = Document()
         section = doc.sections[0]
         section.top_margin = section.bottom_margin = Inches(0.7)
         section.left_margin = section.right_margin = Inches(0.8)
-        normal = doc.styles["Normal"]
-        normal.font.name = "宋体"
-        normal._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
-        normal.font.size = Pt(10.5)
-        doc.core_properties.title = f"{lesson_title} 课后练习卷（{'教师卷' if teacher else '学生卷'}）"
+        for style_name, size in (("Normal", 11), ("Title", 16), ("Heading 2", 12)):
+            style = doc.styles[style_name]
+            style.font.name = "宋体"
+            style._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "宋体")
+            style.font.size = Pt(size)
+            style.font.color.rgb = RGBColor(0, 0, 0)
+            for border in style._element.xpath("./w:pPr/w:pBdr"):
+                border.getparent().remove(border)
+        normal = doc.styles["Normal"].paragraph_format
+        normal.space_after = Pt(6)
+        normal.line_spacing = 1.15
+        normal.widow_control = True
+        edition = "教师卷" if teacher else "学生卷"
+        doc.core_properties.title = f"{lesson_title} 课后练习卷 {edition}"
         doc.core_properties.author = "WebGIS-AI"
-
-        title = doc.add_paragraph()
+        title = doc.add_paragraph(doc.core_properties.title, style="Title")
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run = title.add_run(doc.core_properties.title)
-        run.bold = True
-        run.font.size = Pt(15)
+        title.paragraph_format.keep_with_next = True
+        for border in title._p.xpath("./w:pPr/w:pBdr"):
+            border.getparent().remove(border)
         subtitle = doc.add_paragraph()
         subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        subtitle.add_run(
-            "含题库答案、教案评分参考与已采集的课堂记录，仅供教师使用。" if teacher else "本卷不含答案与解析。"
-        )
+        subtitle.add_run("含参考答案、教案评分参考与已采集的课堂记录，仅供教师使用。" if teacher else
+                         "班级 __________  姓名 __________  日期 __________")
+        self._add_page_number(section.footer.paragraphs[0], edition)
 
-        heading_style = "Heading 2" if "Heading 2" in [style.name for style in doc.styles] else None
-        doc.add_paragraph("一、选题说明", style=heading_style)
-        for entry in summary:
-            unit = "项" if entry["origin"].startswith("lesson_homework") else "题"
-            doc.add_paragraph(f"{entry['label']}：{entry['count']} {unit}", style="List Bullet")
-        doc.add_paragraph(
-            "题目按“教案课后作业 → 课堂观察巩固/误区变式 → 核心目标巩固”的顺序编排；"
-            "来源在每题旁如实标注。",
-            style="List Bullet",
-        )
         if teacher:
-            doc.add_paragraph(
-                "教师卷中的课堂实测仅统计本次课堂的真实计时与作答记录；"
-                "未开放作答或无作答记录的题目如实标注“未收集到作答数据”，不填写猜测的正确率。",
-                style="List Bullet",
-            )
-        for note in notes:
-            doc.add_paragraph(note, style="List Bullet")
-
-        doc.add_paragraph("二、练习内容", style=heading_style)
+            doc.add_paragraph("选题说明", style="Heading 2")
+            for entry in summary:
+                unit = "项" if entry["origin"].startswith("lesson_homework") else "题"
+                doc.add_paragraph(f"{entry['label']}：{entry['count']} {unit}", style="List Bullet")
+            doc.add_paragraph("参考答案和解析来自题库或课时原题，未另行核验为官方发布版本。")
+            doc.add_paragraph("课堂实测只统计本次已采集的记录；无作答记录时标注未收集，不推测正确率。")
+            for note in notes:
+                doc.add_paragraph(note, style="List Bullet")
+        else:
+            doc.add_paragraph("选择题填写选项；综合题写出读图依据与推理过程。拓展题选做，图示可另附。")
+        doc.add_paragraph("练习内容", style="Heading 2")
         if not items:
             doc.add_paragraph("本次课堂没有可导出的课后练习内容。")
 
-        for number, item in enumerate(items, start=1):
+        shared_until = -1
+        for index, item in enumerate(items):
+            number = index + 1
             if item["kind"] == "task":
+                start = len(doc.paragraphs)
                 paragraph = doc.add_paragraph()
-                paragraph.add_run(f"{number}. 【{ORIGIN_LEVELS[item['origin']]}｜{ORIGIN_LABELS[item['origin']]}】").bold = True
+                paragraph.add_run(f"{number}. 【{ORIGIN_LEVELS[item['origin']]}】").bold = True
                 paragraph.add_run(str(item["text"]))
-                if teacher:
+                if not teacher:
+                    self._answer_space(doc, 12 if item["origin"] == "lesson_homework_inquiry" else 6)
+                self._keep_block(doc.paragraphs[start:])
+                continue
+            key = self._shared_material_key(item)
+            if index > shared_until and key:
+                end = index
+                while end + 1 < len(items) and self._shared_material_key(items[end + 1]) == key:
+                    end += 1
+                if end > index:
+                    shared_until = end
+                    start = len(doc.paragraphs)
+                    doc.add_paragraph(f"第 {number}—{end + 1} 题共用材料", style="Heading 2")
+                    self._add_material(doc, item["question"], teacher)
+                    self._keep_block(doc.paragraphs[start:], continue_next=True)
+            self._add_question(doc, number, item, teacher, shared_material=index <= shared_until)
+        if teacher:
+            heading = doc.add_paragraph("参考答案与讲评", style="Heading 2")
+            heading.paragraph_format.page_break_before = True
+            for number, item in enumerate(items, 1):
+                if item["kind"] == "task":
+                    start = len(doc.paragraphs)
+                    doc.add_paragraph(f"第 {number} 题 教师评分参考", style="Heading 2")
                     for point in item.get("teacher_guidance", {}).get("answer_points", []):
                         doc.add_paragraph("教师评分参考：" + point)
-                continue
-            self._add_question(doc, number, item, teacher)
+                    if len(doc.paragraphs) == start + 1:
+                        doc.add_paragraph("本项未提供评分参考，请教师结合教学目标评阅。")
+                    self._keep_block(doc.paragraphs[start:])
+                else:
+                    self._add_reference(doc, number, item)
         doc.save(path)
 
-    def _add_question(self, doc: Any, number: int, item: Dict[str, Any], teacher: bool) -> None:
-        question = item["question"]
-        header = doc.add_paragraph()
-        header_run = header.add_run(f"{number}. 【{ORIGIN_LEVELS[item['origin']]}｜{ORIGIN_LABELS[item['origin']]}】")
-        header_run.bold = True
-        if item.get("stage_title"):
-            header.add_run(f"（课堂环节：{item['stage_title']}）")
+    @staticmethod
+    def _keep_block(paragraphs: List[Any], continue_next: bool = False) -> None:
+        for index, paragraph in enumerate(paragraphs):
+            paragraph.paragraph_format.keep_together = True
+            paragraph.paragraph_format.keep_with_next = continue_next or index < len(paragraphs) - 1
 
+    @staticmethod
+    def _answer_space(doc: Any, lines: int) -> None:
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        from docx.shared import Pt
+        for _ in range(lines):
+            paragraph = doc.add_paragraph(" ")
+            paragraph.paragraph_format.line_spacing = Pt(20)
+            paragraph.paragraph_format.space_after = Pt(4)
+            borders = OxmlElement("w:pBdr")
+            for side in ("bottom", "between"):
+                border = OxmlElement(f"w:{side}")
+                for key, value in (("val", "single"), ("sz", "4"), ("color", "D9D9D9")):
+                    border.set(qn(f"w:{key}"), value)
+                borders.append(border)
+            paragraph._p.get_or_add_pPr().append(borders)
+
+    @staticmethod
+    def _add_page_number(paragraph: Any, edition: str) -> None:
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        paragraph.add_run(f"{edition}  第 ")
+        field = OxmlElement("w:fldSimple")
+        field.set(qn("w:instr"), "PAGE")
+        paragraph._p.append(field)
+        paragraph.add_run(" 页")
+
+    @staticmethod
+    def _shared_material_key(item: Dict[str, Any]) -> Optional[Tuple[Any, ...]]:
+        if item.get("kind") != "question":
+            return None
+        question = item["question"]
+        material = str(question.get("material") or "").strip()
+        images = question.get("images") or []
+        if not material or any(image.get("anchor", "group") != "group" for image in images):
+            return None
+        return (question.get("bank_id"), question.get("group_key"), material,
+                tuple(image.get("url") for image in images))
+
+    def _add_material(self, doc: Any, question: Dict[str, Any], teacher: bool) -> None:
         material = str(question.get("material") or "").strip()
         if material:
             doc.add_paragraph(f"材料：{material}")
         self._add_images(doc, question, teacher)
+
+    def _add_question(self, doc: Any, number: int, item: Dict[str, Any], teacher: bool, shared_material: bool = False) -> None:
+        question = item["question"]
+        body_start = len(doc.paragraphs)
+        header = doc.add_paragraph()
+        header_run = header.add_run(f"{number}. 【{ORIGIN_LEVELS[item['origin']]}】")
+        header_run.bold = True
+        if item.get("stage_title"):
+            header.add_run(f"（课堂环节：{item['stage_title']}）")
+
+        if not shared_material:
+            self._add_material(doc, question, teacher)
+        exam_source = " ".join(str(question.get(key) or "").strip() for key in ("year", "region")).strip()
+        if exam_source:
+            header.add_run(f"  {exam_source} 题库选题")
         task_text = str(question.get("task_text") or "").strip()
         if task_text:
             doc.add_paragraph(task_text)
@@ -520,19 +603,28 @@ class PracticeExportService:
 
         # 学生卷到此为止：以下内容只在教师卷生成，学生卷绝不读取答案字段。
         if not teacher:
+            if question.get("options"):
+                doc.add_paragraph("作答：________")
+            else:
+                self._answer_space(doc, 5)
+            self._keep_block(doc.paragraphs[body_start:])
             return
+        self._keep_block(doc.paragraphs[body_start:])
 
+    def _add_reference(self, doc: Any, number: int, item: Dict[str, Any]) -> None:
+        question = item["question"]
+        reference_start = len(doc.paragraphs)
         reference = doc.add_paragraph()
-        reference_run = reference.add_run("【教师参考】")
+        reference_run = reference.add_run(f"第 {number} 题 教师参考")
         reference_run.bold = True
 
         official_answer = self._official_answer_text(question)
-        self._labelled_line(doc, "官方答案", official_answer)
+        self._labelled_line(doc, "参考答案", official_answer)
         explanation = str(question.get("explanation") or "").strip()
         if explanation:
-            self._labelled_line(doc, "官方解析", explanation)
+            self._labelled_line(doc, "参考解析", explanation)
         else:
-            self._labelled_line(doc, "官方解析", "本题未提供官方解析")
+            self._labelled_line(doc, "参考解析", "本题未提供参考解析")
         sub_answers = self._sub_answer_lines(question)
         for line in sub_answers:
             doc.add_paragraph(line, style="List Bullet")
@@ -545,6 +637,7 @@ class PracticeExportService:
         if item.get("selection_reason"):
             source_line += f"（检索依据：{item['selection_reason']}）"
         self._labelled_line(doc, "来源", source_line)
+        self._keep_block(doc.paragraphs[reference_start:])
 
     @staticmethod
     def _option_text(option_index: int, option: Any) -> str:
@@ -569,7 +662,7 @@ class PracticeExportService:
         options = question.get("options") or []
         if isinstance(answer_index, int) and 0 <= answer_index < len(options):
             return f"正确选项：{chr(65 + answer_index)}. {options[answer_index]}"
-        return "本题未提供官方答案"
+        return "本题未提供参考答案"
 
     @staticmethod
     def _sub_answer_lines(question: Dict[str, Any]) -> List[str]:

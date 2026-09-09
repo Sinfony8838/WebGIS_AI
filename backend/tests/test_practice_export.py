@@ -26,7 +26,7 @@ TINY_PNG = base64.b64decode(
     "AAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 )
 
-STUDENT_ONLY_MARKERS = ("官方答案", "官方解析", "教师参考", "课堂实测", "课堂速记：", "考点：", "正确选项")
+STUDENT_ONLY_MARKERS = ("参考答案", "参考解析", "教师参考", "课堂实测", "课堂速记：", "考点：", "正确选项")
 
 
 def docx_text(path: str | Path) -> str:
@@ -269,23 +269,23 @@ class PracticeExportDualPaperTest(PracticeExportTestBase):
         self.assertIn("完成课本第32页活动题。", student_text)
         self.assertIn("查找胡焕庸线资料写一段短评。", student_text)
 
-        # 答案隔离：解析、官方答案、教师参考块、课堂实测、正确选项标记一律不出现
+        # 答案隔离：解析、参考答案、教师参考块、课堂实测、正确选项标记一律不出现
         for marker in STUDENT_ONLY_MARKERS:
             self.assertNotIn(marker, student_text)
         self.assertNotIn("胡焕庸线两侧人口密度差异显著", student_text)
         self.assertNotIn("正确率", student_text)
 
         # 教师卷包含对应内容（同一份数据，另一侧存在）
-        self.assertIn("官方答案", teacher_text)
+        self.assertIn("参考答案", teacher_text)
         self.assertIn("胡焕庸线两侧人口密度差异显著", teacher_text)
 
     def test_teacher_paper_contains_answers_knowledge_and_real_classroom_data(self) -> None:
         export = self.export()
         student_text, teacher_text = self.exported_text(export)
 
-        # q1：官方答案/解析/考点 + 真实课堂实测（2 人作答、正确率 50%、150 秒、超时 30 秒、已揭示）
-        self.assertIn("官方答案：B", teacher_text)
-        self.assertIn("官方解析：胡焕庸线两侧人口密度差异显著。", teacher_text)
+        # q1：参考答案/解析/考点 + 真实课堂实测（2 人作答、正确率 50%、150 秒、超时 30 秒、已揭示）
+        self.assertIn("参考答案：B", teacher_text)
+        self.assertIn("参考解析：胡焕庸线两侧人口密度差异显著。", teacher_text)
         self.assertIn("考点：人口分布格局", teacher_text)
         self.assertIn("2 人作答", teacher_text)
         self.assertIn("正确率 50%", teacher_text)
@@ -293,11 +293,11 @@ class PracticeExportDualPaperTest(PracticeExportTestBase):
         self.assertIn("课堂速记：存在误区（标签：混淆数量与密度）——有学生认为总量大密度就大", teacher_text)
         self.assertIn("来源：教师课堂速记（原题回炉）", teacher_text)
 
-        # q2：无官方答案如实标注；未投屏因此没有作答数据行
-        self.assertIn("官方答案：本题未提供官方答案", teacher_text)
-        self.assertIn("官方解析：本题未提供官方解析", teacher_text)
+        # q2：无参考答案如实标注；未投屏因此没有作答数据行
+        self.assertIn("参考答案：本题未提供参考答案", teacher_text)
+        self.assertIn("参考解析：本题未提供参考解析", teacher_text)
         self.assertIn("课堂速记：部分掌握（标签：密度概念不清）——把总量当密度", teacher_text)
-        self.assertNotIn("官方答案：本题未提供官方答案", student_text)
+        self.assertNotIn("参考答案：本题未提供参考答案", student_text)
 
         # q3：投屏但无人作答 → 如实写“未收集到作答数据”，绝不填 0% 或臆测正确率
         self.assertIn("未收集到作答数据", teacher_text)
@@ -330,6 +330,50 @@ class PracticeExportDualPaperTest(PracticeExportTestBase):
         job = self.runtime.get_job(export["job_id"])
         self.assertEqual(job["status"], "success")
         self.assertEqual(job["workflow_type"], "practice_export")
+
+    def test_printable_papers_share_group_material_keep_choices_and_separate_answer_space(self) -> None:
+        from docx import Document
+        from zipfile import ZipFile
+        upload = self.runtime.upload_image_asset(self.project_id, "shared.png", TINY_PNG)
+        image = {"url": upload["artifact"]["metadata"]["public_url"], "anchor": "group"}
+        question = {"material": "共同读图材料", "images": [image], "options": ["甲", "乙"],
+                    "answer": "B", "explanation": "只供教师查阅的解释", "group_key": "same", "bank_id": "bank"}
+        items = [{"kind": "task", "origin": "lesson_homework_basic", "text": "比较人口密度并解释原因。",
+                  "teacher_guidance": {"answer_points": ["不能混淆总量与密度"]}}]
+        items += [{"kind": "question", "origin": "bank_core", "question": {**question, "text": f"读图问题{i}"}}
+                  for i in (1, 2)]
+        service = self.runtime.classroom.practice_export
+        service.collect_items = Mock(return_value=(items, [], []))
+        export = self.export()
+        for kind in ("student", "teacher"):
+            path = export[f"{kind}_artifact"]["path"]
+            doc = Document(path)
+            text = docx_text(path)
+            self.assertEqual(text.count("共同读图材料"), 1)
+            self.assertEqual(len(doc.inline_shapes), 1)
+            self.assertIn("第 2—3 题共用材料", text)
+            self.assertIn("读图问题1", text)
+            self.assertIn("读图问题2", text)
+            self.assertTrue(next(p for p in doc.paragraphs if p.text == "A. 甲").paragraph_format.keep_with_next)
+            answer_lines = [p for p in doc.paragraphs if p._p.xpath("./w:pPr/w:pBdr")]
+            self.assertEqual(len(answer_lines), 6 if kind == "student" else 0)
+            self.assertTrue(all(p._p.xpath("./w:pPr/w:pBdr/w:between") for p in answer_lines))
+            self.assertFalse(doc.styles["Title"].element.xpath("./w:pPr/w:pBdr"))
+            with ZipFile(path) as zf:
+                self.assertIn(b'PAGE', zf.read("word/footer1.xml"))
+            if kind == "student":
+                self.assertNotIn("只供教师查阅的解释", text)
+                self.assertNotIn("不能混淆总量与密度", text)
+                self.assertNotIn("选题说明", text)
+            else:
+                self.assertIn("只供教师查阅的解释", text)
+                self.assertIn("第 2 题 教师参考", text)
+                self.assertIn("第 3 题 教师参考", text)
+                self.assertGreater(text.index("参考答案与讲评"), text.index("读图问题2"))
+        # Images anchored to individual questions must not be merged as shared material.
+        image["anchor"] = "question"
+        export = self.export()
+        self.assertEqual(len(Document(export["student_artifact"]["path"]).inline_shapes), 2)
 
     def test_uploaded_image_is_embedded_into_both_papers(self) -> None:
         upload = self.runtime.upload_image_asset(
@@ -436,11 +480,11 @@ class PracticeExportRealBankTest(PracticeExportTestBase):
         stem_fragment = str(snapshot["text"])[:20]
         self.assertIn(stem_fragment, student_text)
         self.assertIn(stem_fragment, teacher_text)
-        # 答案隔离：学生卷无任何教师参考块与官方答案标记
+        # 答案隔离：学生卷无任何教师参考块与参考答案标记
         for marker in STUDENT_ONLY_MARKERS:
             self.assertNotIn(marker, student_text)
-        # 教师卷有官方答案/解析与真实作答数据
-        self.assertIn("官方答案", teacher_text)
+        # 教师卷有参考答案/解析与真实作答数据
+        self.assertIn("参考答案", teacher_text)
         self.assertIn("1 人作答", teacher_text)
         self.assertIn("来源：教师课堂速记（原题回炉）", teacher_text)
         # 工件经项目门控注册
