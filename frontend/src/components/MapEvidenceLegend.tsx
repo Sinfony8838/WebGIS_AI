@@ -1,3 +1,4 @@
+import { useId, useState } from "react";
 import { DENSITY_SCALE, SHANGHAI_DENSITY_SCALE } from "../lib/populationVisual";
 import { GLOBE_THEMES } from "../lib/globeThemes";
 import type { LayerRecord } from "../types";
@@ -5,6 +6,8 @@ import "./MapEvidenceLegend.css";
 
 type Props = { basemapId?:string; layers:LayerRecord[]; globe:boolean; themeIds:string[]; showFit:boolean; onShowFit:(value:boolean)=>void };
 export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onShowFit}:Props) {
+  const contentId = useId();
+  const [expanded, setExpanded] = useState(() => !window.matchMedia?.("(max-width: 960px)").matches);
   const night = !globe && basemapId === "nasa_nightlights_2016";
   const populationGrid = !globe && basemapId === "nasa_population_2020";
   const visible = layers.filter(layer => layer.visible);
@@ -16,7 +19,11 @@ export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onSho
   const ranked = !globe && visible.some(layer => Boolean(layer.metadata?.visualization));
   if (!night && !populationGrid && !shanghai && !hasDensity && !hasLine && !otherThemes.length && !ranked) return null;
   const share = line?.metadata?.classic_share;
-  return <section className="map-evidence-legend" aria-label="地图图例与依据">
+  return <section className={`map-evidence-legend${expanded ? "" : " is-collapsed"}`} aria-label="地图图例与依据">
+    <button className="map-legend-toggle" aria-expanded={expanded} aria-controls={contentId} onClick={() => setExpanded(value => !value)}>
+      图例与数据 <span aria-hidden="true">{expanded ? "−" : "+"}</span>
+    </button>
+    <div id={contentId} className="map-legend-content" hidden={!expanded}>
     {night && <><strong>夜间灯光 <small>2016 · VIIRS</small></strong><p>亮度表示夜间灯光活动，受照明、产业和能源使用影响；不能直接换算人口或密度。</p><a href="https://worldview.earthdata.nasa.gov/?l=VIIRS_Black_Marble" target="_blank" rel="noreferrer">NASA Black Marble 来源 ↗</a></>}
     {populationGrid && <><strong>全球人口密度 <small>2020 · 人/km²</small></strong><img src="https://gibs.earthdata.nasa.gov/legends/GPW_Population_Density_2020_H.svg" alt="NASA GPW官方图例，浅黄低于1，深红大于等于1000人每平方千米" style={{width:"100%",height:"auto"}}/><p>GPW 人口栅格估计，非逐户测量；透明处为缺失。此图用于比较空间格局，瓦片不提供点击数值查询。</p><a href="https://gibs.earthdata.nasa.gov/colormaps/v1.3/GPW_Population_Density_2020.xml" target="_blank" rel="noreferrer">NASA 官方色标与单位 ↗</a></>}
     {hasDensity && <>
@@ -55,5 +62,6 @@ export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onSho
       {showFit && !globe && <p className="map-fit-note">橙色虚线：预设 94% 目标的教学拟合；非实测分界。</p>}
     </>}
     {otherThemes.map(theme => <div key={theme.id}><strong>{theme.legendTitle || theme.name}</strong><p>{theme.legendNote || theme.description}</p>{theme.legend?.map(item=><span className="map-other-key" key={item.label}><i style={{background:item.color}}/>{item.label}</span>)}</div>)}
+    </div>
   </section>;
 }

@@ -290,3 +290,36 @@ button:disabled { cursor: not-allowed; }
   .theme-toggle { padding: 5px; min-height: 30px; }
   .app-header .header-search-row { grid-template-columns: minmax(0, 1fr) auto auto; }
 }
+
+/* Keep classroom chrome in the viewport across tablet and narrow desktop widths. */
+@media (max-width:960px) {
+  .screen-shell-classroom { height:100dvh; min-height:0; padding:0; overflow:hidden; }
+  .screen-shell-classroom .app-header {
+    position:absolute; inset:0 0 auto; height:112px; min-height:112px; margin:0;
+    box-sizing:border-box; padding:8px; gap:6px 10px;
+    grid-template-columns:auto minmax(0,1fr); grid-template-rows:44px 40px;
+    grid-template-areas:"brand actions" "search search";
+  }
+  :root { --header-height:112px; }
+  .screen-shell-classroom .app-header .brand-block { grid-area:brand; min-width:0; gap:6px; }
+  .screen-shell-classroom .app-header .brand-logo { width:32px; height:32px; }
+  .screen-shell-classroom .app-header .header-actions { grid-area:actions; min-width:0; width:100%; flex-wrap:nowrap; justify-content:flex-start; overflow-x:auto; scrollbar-width:thin; }
+  .screen-shell-classroom .app-header .header-actions > * { flex-shrink:0; }
+  .screen-shell-classroom .app-header .header-search { grid-area:search; width:100%; max-width:none; }
+  .screen-shell-classroom .app-header .header-search-row { grid-template-columns:minmax(0,1fr) auto auto; }
+  .screen-shell-classroom .bottom-stack { left:auto; right:8px; bottom:8px; transform:none; max-width:calc(100vw - 68px); }
+  .screen-shell-classroom .bottom-dock .map-status-bar { display:none; }
+  .screen-shell-classroom .lesson-workflow-launcher::before { display:none; }
+  .screen-shell-classroom .account-dock,
+  .screen-shell-classroom:has(.class-run-panel) .account-dock { left:8px; bottom:10px; }
+  .screen-shell-classroom .account-dock .user-menu-trigger { padding:5px; border-radius:12px; }
+  .screen-shell-classroom .account-dock .user-menu-label,
+  .screen-shell-classroom .account-dock .user-menu-trigger > svg { display:none; }
+  .screen-shell-classroom .copilot-orb-shell { left:auto !important; right:8px !important; top:auto !important; bottom:72px !important; }
+  .screen-shell-classroom .right-rail.map-tools-dock { bottom:140px; padding-block:8px; }
+  .screen-shell-classroom .class-run-panel { bottom:126px; max-height:calc(100dvh - var(--header-height) - 146px); overflow-y:auto; overscroll-behavior:contain; scrollbar-width:thin; }
+  .screen-shell-classroom .class-run-panel > * { flex-shrink:0; }
+  .screen-shell-classroom .class-panel-stages { max-height:90px; }
+  .screen-shell-classroom .class-panel-current { flex:0 0 auto; overflow:visible; }
+  .screen-shell-classroom .class-panel-header { position:sticky; top:-12px; z-index:1; background:var(--surface-raised); padding-block:6px; }
+}

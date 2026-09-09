@@ -1,4 +1,4 @@
-.map-evidence-legend { position:fixed; left:16px; bottom:88px; z-index:16; width:290px; max-height:42vh; overflow:auto; box-sizing:border-box; padding:14px; border:1px solid var(--panel-border); border-radius:12px; background:var(--surface-raised,rgba(245,251,253,.96)); color:var(--text-main); box-shadow:0 3px 16px #0b25351a; font-size:12px; line-height:1.6; }
+.map-evidence-legend { position:fixed; left:16px; bottom:88px; z-index:16; width:290px; max-height:42vh; overflow:hidden; display:flex; flex-direction:column; box-sizing:border-box; padding:14px; border:1px solid var(--panel-border); border-radius:12px; background:var(--surface-raised,rgba(245,251,253,.96)); color:var(--text-main); box-shadow:0 3px 16px #0b25351a; font-size:12px; line-height:1.6; }
 .screen-shell:has(.class-run-panel) .map-evidence-legend { left:352px; }
 .map-evidence-legend strong { display:block; font-size:13px; margin-bottom:7px; }
 .map-evidence-legend strong small { font-size:11px; color:var(--text-dim); font-weight:400; }
@@ -16,3 +16,21 @@
 .map-other-key i { width:9px; height:9px; margin-top:4px; }
 .map-evidence-legend .map-fit-note { color:var(--warning); }
 @media(max-width:800px) { .map-evidence-legend { width:244px; bottom:100px; max-height:30vh; } .screen-shell:has(.class-run-panel) .map-evidence-legend { left:auto; right:12px; width:200px; max-height:24vh; } }
+
+.map-legend-toggle { display:flex; justify-content:space-between; align-items:center; gap:16px; flex-shrink:0; width:100%; padding:0 0 8px; border:0; background:transparent; color:var(--text-main); font:inherit; font-weight:600; cursor:pointer; }
+.map-legend-toggle:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.map-legend-content { min-height:0; overflow:auto; overscroll-behavior:contain; overflow-wrap:anywhere; }
+.map-legend-content[hidden] { display:none; }
+.map-evidence-legend.is-collapsed { width:132px; }
+.map-evidence-legend.is-collapsed .map-legend-toggle { padding-bottom:0; }
+@media (max-width:960px) {
+  .screen-shell .map-evidence-legend,
+  .screen-shell:has(.class-run-panel) .map-evidence-legend {
+    left:8px; right:auto; bottom:72px; width:min(300px, calc(100vw - 88px));
+    max-height:min(42dvh, calc(100dvh - var(--header-height) - 96px));
+    z-index:65; padding:10px;
+  }
+  .screen-shell .map-evidence-legend.is-collapsed { width:132px; }
+  .map-density-key { flex-wrap:wrap; row-gap:6px; }
+  .map-density-key > span { min-width:44px; }
+}
