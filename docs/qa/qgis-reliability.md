@@ -29,7 +29,7 @@
 - 新增错误码(`errors.py`):`WORKER_START_FAILED`、`WORKER_STUCK`、`WORKER_RESTARTED`、`STEP_QUEUED_TIMEOUT`、`STEP_EXEC_TIMEOUT`、`STEP_CANCELLED`、`OUTPUT_INVALID`。
 - 产物校验(`validation.py`):成功步骤发布的路径产物必须存在、非空、可重新打开(GeoJSON 需通过 JSON 解析;PNG/GPKG/TIFF 校验魔数);**合法空结果**(如 filter_features 零命中,`feature_count: 0` + 有效空 FeatureCollection)明确成功,不误报失败。
 - 确定性资源释放:`release_workflow` 清内存图层/步骤注册表并删除该工作流自有的 `steps/` 临时目录(`outputs/` 发布产物、日志、status.json 保留);引用了已释放/已丢失内存图层的后续请求得到准确的 `WORKER_RESTARTED` 报错。
-- 取消:`run_step(..., cancel_event=...)`、`cancel_request(id)`、`cancel_workflow(id)`、executor 级 `cancel_workflow(id)`;取消立即唤醒等待者(`STEP_CANCELLED`),独立取消队列会在 worker 执行下一个排队步骤前优先处理取消,迟到结果被隔离。HTTP 端点接线属共享文件(main.py),未在本任务修改。
+- 取消:`run_step(..., cancel_event=...)`、`cancel_request(id)`、`cancel_workflow(id)`、executor 级 `cancel_workflow(id)`，以及带项目访问控制和 CSRF 防护的 `POST /workflow/{workflow_id}/cancel`;取消立即唤醒等待者(`STEP_CANCELLED`),独立取消队列会在 worker 执行下一个排队步骤前优先处理取消,迟到结果被隔离。
 - 真实 QGIS 兼容修复(`bootstrap.py`):OSGeo4W `qgis-ltr-bin.env` 把 GRASS84 目录排在 Qt5 之前,且共享机器 PATH 混入的其他软件会遮蔽同名 DLL,导致 `import qgis.core` 报 "DLL load failed"。现按依赖顺序**全路径预加载** QGIS 运行时 DLL 并把 GRASS 目录移到 PATH 尾部(保留 GRASS 可用性)。
 
 ## 3. fake worker 测试结果(无 QGIS 依赖,协议级)
@@ -85,7 +85,7 @@ python scripts/qa/qgis_reliability/run_soak.py --qgis-root "D:\QGIS 3.40.10" --o
 
 ## 5. 回归验证
 
-- Python 3.12 后端全量:`python -m pytest backend/tests -q` → **492 passed**(462 既有 + 30 本任务新增),9 subtests passed
+- Python 3.12 后端全量:`python -m pytest backend/tests -q` → **494 passed**(462 既有 + 30 worker 可靠性测试 + 2 取消接口测试),9 subtests passed
 - `git diff --check` → 干净
 - 不涉及前端改动,无需 npm test/build
 
@@ -100,4 +100,4 @@ python scripts/qa/qgis_reliability/run_soak.py --qgis-root "D:\QGIS 3.40.10" --o
 
 复核发现并修复三处原测试未覆盖的生命周期问题：排队取消消息与步骤共用 FIFO 时实际无法抢在步骤前生效；同一 manager 关停后立即重启时，旧调度线程可能被误认为新一代调度线程；worker 进程存活但始终不发送 `worker_ready` 时会继续进入排队超时，而不是返回 `WORKER_START_FAILED`。此外，原“启动失败”测试使用不可序列化的局部函数，Windows 子进程会在测试通过后输出 `WinError 6` traceback；现改为模块级故障 worker，进程和队列句柄均确定性回收。
 
-复核后的独立验证：专属测试 **30 passed**，无退出 traceback；全量后端 **492 passed, 9 subtests passed**；真实 QGIS 3.40.10 soak 的 10 项 verdict 全部为 true。实测冷启动 7212.7 ms，连续 30 次真实操作平均 21.4 ms，10 组交错零串结果，执行超时 62.9 ms 返回，崩溃后 2470.6 ms 恢复，取消 611.7 ms 返回，最终 worker 进程已消失。冷启动时间受本机当时负载影响，功能与隔离判定全部通过。
+复核后的独立验证：worker 专属测试 **30 passed**，与取消接口测试合跑 **32 passed**，无退出 traceback；全量后端 **494 passed, 9 subtests passed**；真实 QGIS 3.40.10 soak 的 10 项 verdict 全部为 true。实测冷启动 7212.7 ms，连续 30 次真实操作平均 21.4 ms，10 组交错零串结果，执行超时 62.9 ms 返回，崩溃后 2470.6 ms 恢复，取消 611.7 ms 返回，最终 worker 进程已消失。冷启动时间受本机当时负载影响，功能与隔离判定全部通过。

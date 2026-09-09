@@ -1744,6 +1744,19 @@ class WebGISRuntime:
     def stream_workflow_events(self, workflow_id: str):
         return self.workflow_executor.stream(workflow_id)
 
+    def cancel_workflow(self, workflow_id: str) -> Dict[str, Any]:
+        record = self.store.get_workflow(workflow_id)
+        if record is None:
+            raise KeyError(f"Unknown workflow: {workflow_id}")
+        cancelled_requests = self.workflow_executor.cancel_workflow(workflow_id)
+        current = self.store.get_workflow(workflow_id) or record
+        return {
+            "status": "success",
+            "workflow_id": workflow_id,
+            "workflow_status": current.status,
+            "cancelled_requests": cancelled_requests,
+        }
+
     def workflow_init_warning(self) -> Optional[Dict[str, Any]]:
         return self.workflow_executor.init_warning()
 
