@@ -131,4 +131,41 @@ describe("KnowledgePanel", () => {
     renderPanel({ collapsed: false, availableLayerIds: [] });
     expect(screen.getByText("仅知识资料")).toBeDisabled();
   });
+
+  it("shows year and source provenance on result cards", () => {
+    renderPanel({ collapsed: false });
+    const resultsPanel = screen.getByTestId("kb-results");
+    expect(within(resultsPanel).getByText(/2024/)).toBeInTheDocument();
+    expect(within(resultsPanel).getByText("来源：teacher_upload")).toBeInTheDocument();
+  });
+
+  it("opens real citation links from the detail view", () => {
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    const item = sampleItem();
+    const citations = [
+      { title: "国家统计局", url: "https://www.stats.gov.cn/" },
+      { title: "无链接出处", url: "" }
+    ];
+    renderPanel({
+      collapsed: false,
+      items: [{ ...item, citations }],
+      editingItem: { ...item, citations }
+    });
+    const stats = screen.getByTestId("kb-citations");
+    fireEvent.click(within(stats).getByText("国家统计局"));
+    expect(openSpy).toHaveBeenCalledWith("https://www.stats.gov.cn/", "_blank", "noopener,noreferrer");
+    expect(within(stats).getByText("无链接出处")).toBeDisabled();
+    openSpy.mockRestore();
+  });
+
+  it("explains empty results in natural Chinese with the query echoed", () => {
+    renderPanel({
+      collapsed: false,
+      items: [],
+      total: 0,
+      query: { query: "板块构造", topic: "", region: "", tag: "" }
+    });
+    expect(screen.getByTestId("kb-empty")).toHaveTextContent(/没有找到与「板块构造」相关的资料/);
+    expect(screen.getByTestId("kb-empty")).toHaveTextContent(/更换关键词/);
+  });
 });

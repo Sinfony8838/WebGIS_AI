@@ -1,0 +1,207 @@
+{
+  "note": "检索评测语料。builtin_* 条目原样来自 backend/app/data/builtin/knowledge/（公共内置资料）；eval_ 前缀条目是仅用于本评测的合成资料描述：它们只描述『一份教学资料是什么』（标题/主题/区域/年份），不包含任何具体统计数字或外部事实断言，不进入产品知识库。",
+  "builtin_manifest": "backend/app/data/builtin/knowledge/kb_manifest.json",
+  "builtin_geo": "backend/app/data/builtin/knowledge/geo_knowledge.json",
+  "fixtures": [
+    {
+      "id": "eval_shanghai_census_2010",
+      "title": "上海市2010年人口普查资料",
+      "topic": "population_census",
+      "region": "shanghai",
+      "time": "2010",
+      "source": "eval_fixture",
+      "keywords": ["上海", "人口普查", "六普", "2010", "常住人口"],
+      "summary": "该资料收录上海市2010年人口普查的市级汇总表与区县分布底图，用于讲解上海人口在六普时点的空间格局。"
+    },
+    {
+      "id": "eval_shanghai_density_2020",
+      "title": "上海市2020年常住人口密度图",
+      "topic": "population_distribution",
+      "region": "shanghai",
+      "time": "2020",
+      "source": "eval_fixture",
+      "keywords": ["上海", "人口密度", "常住人口", "密度图", "2020"],
+      "summary": "该图展示上海市域内常住人口密度的空间差异，可用于讲解城市中心与郊区的人口密度梯度。"
+    },
+    {
+      "id": "eval_shanghai_density_video",
+      "title": "上海人口密度讲解视频",
+      "topic": "population_distribution",
+      "region": "shanghai",
+      "time": "classroom_demo",
+      "source": "eval_fixture",
+      "keywords": ["上海", "人口密度", "视频", "讲解"],
+      "summary": "一段讲解上海人口密度分布特点的课堂教学视频素材。"
+    },
+    {
+      "id": "eval_shanghai_qingpu_case",
+      "title": "上海市青浦区人口案例文档",
+      "topic": "population_distribution",
+      "region": "shanghai",
+      "time": "2018",
+      "source": "eval_fixture",
+      "keywords": ["上海", "青浦", "案例", "人口", "文档"],
+      "summary": "以上海市青浦区为例的区级人口结构案例文档，用于区县尺度的人口读图练习。"
+    },
+    {
+      "id": "eval_china_count_2020",
+      "title": "全国2020年常住人口数量统计",
+      "topic": "population_census",
+      "region": "china",
+      "time": "2020",
+      "source": "eval_fixture",
+      "keywords": ["全国", "人口数量", "常住人口", "统计", "2020"],
+      "summary": "该资料汇总全国2020年常住人口数量的分省统计表，用于人口总量与省际差异的教学。"
+    },
+    {
+      "id": "eval_china_count_2010",
+      "title": "全国2010年人口数量统计",
+      "topic": "population_census",
+      "region": "china",
+      "time": "2010",
+      "source": "eval_fixture",
+      "keywords": ["全国", "人口数量", "统计", "2010", "总数"],
+      "summary": "该资料汇总全国2010年人口数量的分省统计表，可与2020年表格做十年对比。"
+    },
+    {
+      "id": "eval_china_density_2000",
+      "title": "全国2000年人口密度图",
+      "topic": "population_distribution",
+      "region": "china",
+      "time": "2000",
+      "source": "eval_fixture",
+      "keywords": ["全国", "人口密度", "密度图", "2000", "分布"],
+      "summary": "该图绘制全国2000年人口密度分布，用于展示世纪之交的人口密度格局。"
+    },
+    {
+      "id": "eval_china_migration_2020",
+      "title": "全国2020年人口迁移流向图",
+      "topic": "population_migration",
+      "region": "china",
+      "time": "2020",
+      "source": "eval_fixture",
+      "keywords": ["全国", "人口迁移", "流向", "迁移流", "2020"],
+      "summary": "该图刻画全国2020年人口迁移的主要流向与强度，用于讲解人口迁移的空间格局。"
+    },
+    {
+      "id": "eval_migration_causes_animation",
+      "title": "人口迁移成因动画",
+      "topic": "population_migration",
+      "region": "general",
+      "time": "",
+      "source": "eval_fixture",
+      "keywords": ["人口迁移", "成因", "动画", "推拉理论"],
+      "summary": "用动画演示人口迁移的推力、拉力与中间障碍，帮助理解迁移成因。"
+    },
+    {
+      "id": "eval_world_population_map",
+      "title": "世界人口分布图",
+      "topic": "population_distribution",
+      "region": "global",
+      "time": "",
+      "source": "eval_fixture",
+      "keywords": ["世界", "全球", "人口分布", "分布图"],
+      "summary": "该图展示世界范围的人口分布格局，用于对比中外人口稠密区。"
+    },
+    {
+      "id": "eval_china_climate_zoning",
+      "title": "中国气候区划图",
+      "topic": "climate_zoning",
+      "region": "china",
+      "time": "",
+      "source": "eval_fixture",
+      "keywords": ["中国", "气候区划", "气候类型", "区划图"],
+      "summary": "该图划分中国的主要气候类型区，用于讲解气候区划的指标与界线。"
+    },
+    {
+      "id": "eval_january_precipitation_map",
+      "title": "全国1月降水分布图",
+      "topic": "climate_zoning",
+      "region": "china",
+      "time": "",
+      "source": "eval_fixture",
+      "keywords": ["全国", "降水", "1月", "分布图", "气候"],
+      "summary": "该图展示全国1月降水分布的东西差异，常与气温图叠加使用。"
+    },
+    {
+      "id": "eval_january_temperature_map",
+      "title": "全国1月气温分布图",
+      "topic": "climate_zoning",
+      "region": "china",
+      "time": "",
+      "source": "eval_fixture",
+      "keywords": ["全国", "气温", "1月", "分布图", "等温线"],
+      "summary": "该图展示全国1月气温的南北梯度与等温线走向，用于冬季气温格局讲解。"
+    },
+    {
+      "id": "eval_buffer_analysis_video",
+      "title": "缓冲区分析教学视频",
+      "topic": "gis_basics",
+      "region": "general",
+      "time": "",
+      "source": "eval_fixture",
+      "keywords": ["缓冲区分析", "GIS", "空间分析", "视频"],
+      "summary": "该视频演示缓冲区分析的建立步骤与邻近性应用场景。"
+    },
+    {
+      "id": "eval_hu_line_theme_map",
+      "title": "胡焕庸线专题地图",
+      "topic": "population_distribution",
+      "region": "china",
+      "time": "2020",
+      "source": "eval_fixture",
+      "keywords": ["胡焕庸线", "黑河腾冲", "专题地图", "人口分界"],
+      "summary": "该专题地图突出胡焕庸线两侧的人口分布对比，可叠加人口密度图层使用。"
+    },
+    {
+      "id": "eval_china_urbanization_2010",
+      "title": "全国2010年城镇化进程资料",
+      "topic": "urbanization",
+      "region": "china",
+      "time": "2010",
+      "source": "eval_fixture",
+      "keywords": ["全国", "城镇化", "城市化", "2010", "资料"],
+      "summary": "该资料梳理全国2010年前后城镇化进程的空间表现，用于城乡结构教学。"
+    },
+    {
+      "id": "eval_census_method_doc",
+      "title": "人口普查统计口径说明文档",
+      "topic": "population_census",
+      "region": "china",
+      "time": "",
+      "source": "eval_fixture",
+      "keywords": ["人口普查", "统计口径", "常住人口", "户籍人口", "文档"],
+      "summary": "该文档说明人口普查中常住人口与户籍人口的口径差别及数据时点含义。"
+    },
+    {
+      "id": "eval_qinghai_tibet_population",
+      "title": "青藏高原人口稀疏区案例图",
+      "topic": "population_distribution",
+      "region": "china",
+      "time": "2020",
+      "source": "eval_fixture",
+      "keywords": ["青藏高原", "人口稀疏", "案例", "自然条件"],
+      "summary": "该图以青藏高原为例说明地形与气候对人口稀疏区形成的影响。"
+    },
+    {
+      "id": "eval_gis_overlay_doc",
+      "title": "图层叠加分析讲义",
+      "topic": "gis_basics",
+      "region": "general",
+      "time": "",
+      "source": "eval_fixture",
+      "keywords": ["图层叠加", "叠加分析", "GIS", "讲义"],
+      "summary": "该讲义介绍多图层叠加分析在地理问题探究中的用法。"
+    },
+    {
+      "id": "eval_china_river_density_map",
+      "title": "全国河网密度图",
+      "topic": "hydrology",
+      "region": "china",
+      "time": "",
+      "source": "eval_fixture",
+      "keywords": ["河网密度", "河流", "水系", "分布图"],
+      "summary": "该图展示全国河网密度的空间差异，用于自然地理要素综合分析。"
+    }
+  ]
+}

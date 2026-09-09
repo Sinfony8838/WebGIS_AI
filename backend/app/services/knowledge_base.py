@@ -9,6 +9,15 @@ from uuid import uuid4
 
 from ..config import AppConfig
 from ..models import LayerRecord
+from .knowledge_retrieval import RetrievalDoc, RetrievalEngine, RetrievalResult
+
+# Bounded result cache: keyed by query+filters+owner+manifest fingerprint.
+# Values are already permission-filtered, and a different owner or an
+# older manifest fingerprint is a different key, so stale or cross-user
+# rows can never be served from it.
+_RESULT_CACHE_LIMIT = 256
+
+INSUFFICIENT_MESSAGE = "知识库中没有找到与该问题匹配的资料，请尝试更换关键词或放宽筛选条件。"
 
 
 def _utc_now() -> str:
@@ -164,6 +173,57 @@ class KnowledgeBaseService:
         self.knowledge_dir = Path(self.config.knowledge_dir)
         self.geo_path = self.knowledge_dir / "geo_knowledge.json"
         self.manifest_path = self.knowledge_dir / "kb_manifest.json"
+        self._manifest_fingerprint: Tuple[int, int] | None = None
+        self._cached_manifest: Dict[str, Any] | None = None
+        self._engine_cache: Dict[Tuple[str, bool], RetrievalEngine] = {}
+        self._result_cache: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+
+    def _fingerprint(self) -> Tuple[int, int]:
+        try:
+            stat = self.manifest_path.stat()
+            return (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            return (0, 0)
+
+    def _invalidate_caches(self) -> None:
+        self._manifest_fingerprint = None
+        self._cached_manifest = None
+        self._engine_cache.clear()
+        self._result_cache.clear()
+
+    def _engine_for(self, owner_user_id: str, include_all: bool) -> RetrievalEngine:
+        """Return an index built only from items this caller may access."""
+        key = (owner_user_id or "", bool(include_all))
+        self._manifest_items()  # refresh cache if the file changed on disk
+        engine = self._engine_cache.get(key)
+        if engine is None:
+            docs = [self._doc_from_item(item) for item in self._accessible_items(owner_user_id, include_all)]
+            engine = RetrievalEngine(docs)
+            self._engine_cache[key] = engine
+        return engine
+
+    def _accessible_items(self, owner_user_id: str, include_all: bool) -> List[Dict[str, Any]]:
+        return [
+            item
+            for item in self._manifest_items()
+            if self._can_access_item(item, owner_user_id, include_all)
+        ]
+
+    @staticmethod
+    def _doc_from_item(item: Dict[str, Any]) -> RetrievalDoc:
+        materials = [
+            " ".join(
+                part
+                for part in (
+                    str(material.get("title") or ""),
+                    str(material.get("description") or ""),
+                )
+                if part
+            )
+            for material in item.get("materials", [])
+            if isinstance(material, dict)
+        ]
+        return RetrievalDoc.from_mapping(item, material_texts=materials)
 
     def get_manifest(self, owner_user_id: str = "", include_all: bool = False) -> Dict[str, Any]:
         manifest = self._load_manifest(create_if_missing=True)
@@ -189,61 +249,71 @@ class KnowledgeBaseService:
         owner_user_id: str = "",
         include_all: bool = False,
     ) -> Dict[str, Any]:
+        cache_key = (
+            str(query or ""),
+            str(topic or ""),
+            str(region or ""),
+            str(tag or ""),
+            int(limit or 20),
+            str(owner_user_id or ""),
+            bool(include_all),
+            self._fingerprint(),
+        )
+        cached = self._result_cache.get(cache_key)
+        if cached is not None:
+            # Cache reuse re-applies nothing: the stored payload was already
+            # permission-filtered under this exact owner/include_all key.
+            return {**cached, "from_cache": True}
+
         query_tokens = [token for token in _normalize_keywords(query) if token]
         topic_lower = _as_text(topic).lower()
         region_lower = _as_text(region).lower()
         tag_lower = _as_text(tag).lower()
-        rows = []
 
-        for item in self._manifest_items():
-            if not self._can_access_item(item, owner_user_id, include_all):
-                continue
-            item_topic = _as_text(item.get("topic")).lower()
-            item_region = _as_text(item.get("region")).lower()
-            keywords = _normalize_keywords(item.get("keywords"))
-            tags = _normalize_keywords(item.get("tags")) or keywords
-            haystack_parts = [
-                _as_text(item.get("title")),
-                _as_text(item.get("topic")),
-                _as_text(item.get("region")),
-                _as_text(item.get("summary")),
-                _as_text(item.get("canonical_answer")),
-                " ".join(keywords),
-                " ".join(tags),
-            ]
-            haystack = " ".join(part.lower() for part in haystack_parts if part)
+        # Permission filtering happens before scoring and before any result
+        # is stored: the engine itself is built from accessible items only.
+        items = [
+            item
+            for item in self._accessible_items(owner_user_id, include_all)
+            if self._passes_explicit_filters(item, topic_lower, region_lower, tag_lower)
+        ]
 
-            if topic_lower and topic_lower not in item_topic:
-                continue
-            if region_lower and region_lower not in item_region:
-                continue
-            if tag_lower and not any(tag_lower in candidate.lower() for candidate in tags + keywords):
-                continue
-
-            score = 0
-            if query_tokens:
-                token_hits = sum(1 for token in query_tokens if token.lower() in haystack)
-                if token_hits == 0:
+        rows: List[Tuple[float, str, Dict[str, Any]]] = []
+        insufficient = False
+        message = ""
+        if query_tokens or _as_text(query).strip():
+            engine = self._engine_for(owner_user_id, include_all)
+            by_id = {str(item.get("id")): item for item in items}
+            result: RetrievalResult = engine.search(query, limit=max(1, min(int(limit or 20), 100)))
+            if result.insufficient:
+                insufficient = True
+                message = result.message or INSUFFICIENT_MESSAGE
+            for hit in result.hits:
+                item = by_id.get(hit.doc_id)
+                if item is None:
                     continue
-                score += token_hits
-            if topic_lower:
-                score += 2
-            if region_lower:
-                score += 2
-            if tag_lower:
-                score += 2
+                payload = dict(item)
+                payload["retrieval_score"] = round(hit.score, 4)
+                rows.append((float(hit.score), _as_text(item.get("updated_at")), payload))
+            rows.sort(key=lambda row: (row[0], row[1]), reverse=True)
+        else:
+            # No query text: keep the historical "list by filters" behavior.
+            for item in items:
+                score = 0.0
+                if topic_lower and topic_lower in _as_text(item.get("topic")).lower():
+                    score += 2
+                if region_lower and region_lower in _as_text(item.get("region")).lower():
+                    score += 2
+                if tag_lower:
+                    score += 2
+                payload = dict(item)
+                payload["retrieval_score"] = score
+                rows.append((score, _as_text(item.get("updated_at")), payload))
+            rows.sort(key=lambda row: (row[0], row[1]), reverse=True)
 
-            payload = dict(item)
-            payload["_score"] = score
-            rows.append(payload)
-
-        rows.sort(key=lambda item: (int(item.get("_score", 0)), str(item.get("updated_at", ""))), reverse=True)
         max_limit = max(1, min(int(limit or 20), 100))
-        paged = rows[:max_limit]
-        for item in paged:
-            item.pop("_score", None)
-
-        return {
+        paged = [payload for _, _, payload in rows[:max_limit]]
+        response = {
             "status": "success",
             "query": query,
             "topic": topic,
@@ -251,7 +321,26 @@ class KnowledgeBaseService:
             "tag": tag,
             "total": len(rows),
             "items": paged,
+            "insufficient": insufficient,
+            "message": message,
         }
+        self._result_cache[cache_key] = response
+        while len(self._result_cache) > _RESULT_CACHE_LIMIT:
+            self._result_cache.pop(next(iter(self._result_cache)))
+        return dict(response)
+
+    @staticmethod
+    def _passes_explicit_filters(item: Dict[str, Any], topic_lower: str, region_lower: str, tag_lower: str) -> bool:
+        if topic_lower and topic_lower not in _as_text(item.get("topic")).lower():
+            return False
+        if region_lower and region_lower not in _as_text(item.get("region")).lower():
+            return False
+        if tag_lower:
+            keywords = _normalize_keywords(item.get("keywords"))
+            tags = _normalize_keywords(item.get("tags")) or keywords
+            if not any(tag_lower in candidate.lower() for candidate in tags + keywords):
+                return False
+        return True
 
     def topics(self, owner_user_id: str = "", include_all: bool = False) -> Dict[str, Any]:
         groups: Dict[str, Dict[str, Any]] = {}
@@ -358,6 +447,44 @@ class KnowledgeBaseService:
         manifest["updated_at"] = _utc_now()
         self._write_manifest(manifest)
         return material
+
+    def delete_item(
+        self,
+        item_id: str,
+        *,
+        owner_user_id: str = "",
+        include_all: bool = False,
+    ) -> Dict[str, Any]:
+        """Remove one knowledge item and invalidate every derived cache.
+
+        Built-in items (no owner) stay read-only, mirroring ``upsert_item``.
+        The HTTP route for deletion is not wired yet; callers today use the
+        service directly.
+        """
+        manifest = self._load_manifest(create_if_missing=True)
+        target_id = _as_text(item_id)
+        if not target_id:
+            raise ValueError("Knowledge item deletion requires an item id")
+        items = _safe_list(manifest.get("items"))
+        found_index = -1
+        found: Dict[str, Any] = {}
+        for index, row in enumerate(items):
+            current = _safe_dict(row)
+            if _as_text(current.get("id")) == target_id:
+                found_index = index
+                found = current
+                break
+        if found_index < 0:
+            raise ValueError(f"Unknown knowledge item: {target_id}")
+        if not self._can_access_item(found, owner_user_id, include_all):
+            raise ValueError(f"Unknown knowledge item: {target_id}")
+        if not _as_text(found.get("owner_user_id")):
+            raise ValueError("Built-in knowledge items are read-only")
+        items.pop(found_index)
+        manifest["items"] = items
+        manifest["updated_at"] = _utc_now()
+        self._write_manifest(manifest)
+        return found
 
     def build_item_from_layer(
         self,
@@ -513,6 +640,15 @@ class KnowledgeBaseService:
         return payload if isinstance(payload, list) else []
 
     def _load_manifest(self, create_if_missing: bool = False) -> Dict[str, Any]:
+        fingerprint = self._fingerprint()
+        if fingerprint != self._manifest_fingerprint or self._cached_manifest is None:
+            self._cached_manifest = self._read_manifest(create_if_missing=create_if_missing)
+            self._manifest_fingerprint = fingerprint
+            self._engine_cache.clear()
+            self._result_cache.clear()
+        return self._cached_manifest
+
+    def _read_manifest(self, create_if_missing: bool) -> Dict[str, Any]:
         if not self.manifest_path.exists():
             manifest = self._default_manifest()
             if create_if_missing:
@@ -537,6 +673,12 @@ class KnowledgeBaseService:
     def _write_manifest(self, manifest: Dict[str, Any]) -> None:
         self.knowledge_dir.mkdir(parents=True, exist_ok=True)
         self.manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        # Any write (add/update/material/delete) must not leave stale rows
+        # in the fingerprint cache, per-owner indexes or result cache.
+        self._cached_manifest = None
+        self._manifest_fingerprint = None
+        self._engine_cache.clear()
+        self._result_cache.clear()
 
     def _default_manifest(self) -> Dict[str, Any]:
         return {
