@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from backend.app.config import AppConfig
@@ -36,6 +37,57 @@ class PopulationAssistantTest(unittest.TestCase):
         latest = engine.answer("GeoBot 头脑风暴：请使用今年最新上海常住人口数据生成追问。", map_context=context)
         self.assertIn("没有取得", latest["direct_answer"])
         self.assertEqual(len(client.calls), 1)
+
+    def test_shanghai_extension_retrieves_commuting_evidence_not_incidental_density(self) -> None:
+        client = CapturingClient("头脑风暴问题：只建住宅能形成年轻环吗？\n回答：不一定，还需观察实际入住与通勤。\n回答总结：居住与就业应分开检验。")
+        engine = KnowledgeEngine(self.build_config(with_llm=True), minimax_client=client)
+        result = engine.answer("GeoBot 头脑风暴：上海年轻环的条件变化追问。\n请围绕下面2025河南卷题组，沿用限定问题给出教师参考回答。\n材料：人口密度、人口总量、2020普查，地图不能推断年龄比例。", map_context={"teaching_context": {"phase": "in_class"}}, teaching_task="teaching_question")
+        self.assertTrue(result["llm_used"])
+        self.assertEqual([c["url"] for c in result["citations"]], ["https://www.geog.com.cn/CN/abstract/article/0375-5444/48138"])
+        reference = client.calls[0]["messages"][1]["content"]
+        self.assertIn("2017年9月", reference)
+        self.assertIn("跨区就业", reference)
+        self.assertIn("并非2025年高考试题官方解析", reference)
+        self.assertIn("没有取得", engine.answer("GeoBot 头脑风暴：今年上海年轻环最新年龄比例是什么？", map_context={"teaching_context": {"phase": "in_class"}})["direct_answer"])
+        self.assertEqual(len(client.calls), 1)
+
+    def test_long_or_absolute_classroom_draft_is_reviewed_before_display(self) -> None:
+        client = CapturingClient()
+        engine = KnowledgeEngine(self.build_config(with_llm=True), minimax_client=client)
+        final = "问题：只建住宅能保证年轻环形成吗？\n回答：不能保证；若通勤便利，年轻人也可能在郊区居住、跨区就业，应核对实际入住年龄与通勤资料。\n回答总结：不能只凭住宅供应判断。"
+        with patch.object(client, "chat_completion", side_effect=["职住平衡是年轻环形成的必要条件，缺一不可。", final]) as call:
+            result = engine.answer("GeoBot 头脑风暴：上海年轻环的条件变化追问。", teaching_task="teaching_question")
+        self.assertEqual(call.call_count, 2)
+        self.assertEqual(result["direct_answer"], final)
+        self.assertNotIn("缺一不可", result["direct_answer"])
+        with patch.object(client, "chat_completion", return_value="未经压缩的很长回答。" * 50) as call:
+            failed = engine.answer("GeoBot 头脑风暴：上海年轻环的条件变化追问。", teaching_task="teaching_question")
+        self.assertEqual(call.call_count, 2)
+        self.assertFalse(failed["llm_used"])
+        self.assertIn("未能生成可用回答", failed["direct_answer"])
+        with patch.object(client, "chat_completion", side_effect=["关于气候的冗长初稿。" * 50, "问题：降水如何影响分布？回答：需结合水资源及其他条件。总结：比较条件组合。"] ) as call:
+            engine.answer("GeoBot 头脑风暴：气候与人口分布的条件变化追问。")
+        self.assertNotIn("跨区通勤", call.call_args.args[0][0]["content"])
+
+    def test_fixed_shanghai_followup_rejects_known_false_necessity_claims(self) -> None:
+        question = "GeoBot 头脑风暴：上海年轻环的条件变化追问。\n限定任务：如果郊区仅增加住宅但缺少就业岗位，年轻环一定会形成吗？"
+        for draft in (
+            "职住平衡是年轻环形成的必要条件，缺一不可。",
+            "年轻环的形成需要职住空间分离。",
+            "缺少本地就业就不会形成年轻环。",
+        ):
+            with self.subTest(draft=draft):
+                client = CapturingClient(draft)
+                engine = KnowledgeEngine(self.build_config(with_llm=True), minimax_client=client)
+                result = engine.answer(question, teaching_task="teaching_question")
+                self.assertFalse(result["llm_used"])
+                self.assertIn("AI 回答未通过条件检查", result["direct_answer"])
+                self.assertIn("跨区就业", result["direct_answer"])
+                self.assertIn({"source": "reviewed_teacher_reference", "status": "fallback"}, result["retrieval_trace"])
+        client = CapturingClient("不一定。本地岗位少不等于就业不可达，通勤便利时仍可能吸引年轻人居住，需检验实际年龄结构。")
+        result = KnowledgeEngine(self.build_config(with_llm=True), minimax_client=client).answer(question)
+        self.assertTrue(result["llm_used"])
+        self.assertNotIn("未通过", result["direct_answer"])
 
     def test_density_and_total_are_not_swapped_for_shanghai_and_tibet(self) -> None:
         engine = KnowledgeEngine(self.build_config())

@@ -3,6 +3,44 @@
   "updated_at": "2026-08-16T00:00:00+08:00",
   "items": [
     {
+      "id": "kb_shanghai_young_ring_commuting",
+      "title": "年轻环与上海职住关系",
+      "topic": "population_distribution",
+      "region": "shanghai",
+      "time": "2017",
+      "status": "knowledge_only",
+      "source": "research_teaching_note",
+      "license": "source_link_only",
+      "grade_level": "high_school",
+      "keywords": [
+        "年轻环",
+        "上海职住",
+        "年龄结构与通勤"
+      ],
+      "tags": [
+        "年轻环",
+        "居住地",
+        "就业地"
+      ],
+      "summary": "用上海职住研究补充人口年龄结构探究，区分本地就业与跨区通勤。",
+      "canonical_answer": "《上海职住优化效应的代际差异》（2020年发表）使用2017年9月手机网格样本研究，发现青年群体居住地相对远离中心、通勤距离较长。该研究是历史样本分析，并非2025年高考试题官方解析，不能据此画出现时年轻环边界或给出普查年龄比例。教学推论：郊区本地岗位少不等于可达就业机会少；若住房与通勤条件合适，年轻人可以居住在郊区、跨区就业。因此，职住平衡不能直接当作年轻居住人口集聚的必要条件。仅增加住宅也不足以保证形成该格局，还需检验实际入住年龄、岗位可达性和通勤资料。原题选择题按给定材料与选项判断，条件变化追问则要检查适用边界。",
+      "teaching_points": [
+        "居住人口年龄结构与就业人口空间分布应分别观察。",
+        "不能由楼高、密度填色或住宅供应直接推断年龄构成。",
+        "手机样本有年龄覆盖偏差，不可替代全体常住人口普查。"
+      ],
+      "citations": [
+        {
+          "title": "上海职住优化效应的代际差异（地理学报，2020）",
+          "url": "https://www.geog.com.cn/CN/abstract/article/0375-5444/48138"
+        }
+      ],
+      "dataset_refs": [],
+      "materials": [],
+      "related_templates": [],
+      "updated_at": "2026-09-09T00:00:00+08:00"
+    },
+    {
       "id": "kb_hu_line",
       "title": "胡焕庸线",
       "topic": "population_distribution",

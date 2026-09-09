@@ -582,7 +582,10 @@ class KnowledgeEngine:
         # in a generic canned KB item. Skipping loose KB matches here prevents
         # unrelated teaching points from leaking into image interpretation.
         references_current_map = self._references_current_map((question or "").lower())
-        matched_entry = None if answer_type == "map_reading" and references_current_map else self._match_entry(question)
+        # The first line names a classroom activity; appended source material
+        # must not redirect retrieval to an incidental keyword in an option.
+        retrieval_question = question.splitlines()[0] if brainstorm_request else question
+        matched_entry = None if answer_type == "map_reading" and references_current_map and not brainstorm_request else self._match_entry(retrieval_question)
         retrieval_mode = self._retrieval_mode(question, answer_type, matched_entry, map_context)
         entry = matched_entry if retrieval_mode in {"local", "local_web"} else None
         citations = list(entry.get("citations", [])) if entry else []
@@ -681,9 +684,12 @@ class KnowledgeEngine:
                     teaching_task=teaching_task,
                     web_verification_failed=web_verification_failed,
                 )
-                llm_used = True
-                retrieval_trace.append({"source": "llm_generation", "status": "success"})
+                llm_used = not bool(llm_answer.get("quality_fallback"))
+                retrieval_trace.append({"source": "llm_generation", "status": "rejected" if not llm_used else "success"})
                 direct_answer = llm_answer["direct_answer"]
+                if not llm_used:
+                    deterministic_answer = direct_answer
+                    retrieval_trace.append({"source": "reviewed_teacher_reference", "status": "fallback"})
                 mechanism_explanation = llm_answer.get("mechanism_explanation", "")
                 teaching_points = llm_answer.get("teaching_points", [])
                 confidence = 0.45 if web_verification_failed else (0.88 if entry else 0.78)
@@ -710,7 +716,7 @@ class KnowledgeEngine:
             teaching_points = list(entry.get("teaching_points", [])) if entry else self._default_teaching_points(answer_type)
             confidence = 0.92 if entry else (0.45 if answer_type == "timely_fact" else 0.68)
             if brainstorm_request:
-                direct_answer = "头脑风暴生成失败：当前 AI 服务不可用，请稍后重试。"
+                direct_answer = "头脑风暴生成失败：当前 AI 未能生成可用回答，请稍后重试。"
                 mechanism_explanation = ""
                 teaching_points = []
                 confidence = 0.0
@@ -927,6 +933,9 @@ class KnowledgeEngine:
                 "\n本次是课堂头脑风暴活动。忽略上面的常规三部分格式，只输出以下三部分："
                 "“头脑风暴问题：”“回答：”“回答总结：”。问题必须体现区域差异、条件变化、尺度转换或"
                 "反直觉比较中的至少一种；回答总结必须是一句话。不得输出教师提示、系统图层名或视口元数据。\n"
+                "如用户已指定条件变化追问，直接沿用这个问题，不另拟主题。题干中的关键条件不能自动升级为普遍必要条件或充分条件；"
+                "区分材料内作答与改变条件后的推论，检验反例，不把可能结果写成必然结果。\n"
+                "使用纯文本标签，不加星号或Markdown标题。问题不超过50字，回答不超过120字，总结不超过30字；不复述原题材料和选项。\n"
             )
 
         teaching_context = map_context.get("teaching_context") if isinstance(map_context.get("teaching_context"), dict) else {}
@@ -991,6 +1000,23 @@ class KnowledgeEngine:
         # --- Post-process: strip think tags, code fences, JSON wrappers ---
         cleaned = self._strip_think_tags(raw)
         cleaned = self._strip_code_fences(cleaned)
+        if brainstorm_request and (
+            len(re.sub(r"\s", "", cleaned)) > 240
+            or ("年轻环" in question and _contains_any(cleaned, ("必要条件", "缺一不可", "必须同时", "需要两个条件同时")))
+        ):
+            # A bounded editing pass checks a draft before classroom display;
+            # it must not replace missing evidence with additional assertions.
+            reviewed = self.minimax_client.chat_completion([
+                {"role": "system", "content": system_prompt +
+                    "\n请审校下列初稿后只给出最终回答。必须纠正超出材料的必要性、充分性或必然性断言。"
+                    "常见影响因素不自动构成必要条件，材料没支持的断言直接删除；不要再发明条件。"
+                    "全文不超过180字，保留一个问题、一段参考回答、一句总结，不输出审校过程。"
+                    + ("区分居住地与就业地、本地岗位与可达岗位。允许跨区通勤的反例。" if "年轻环" in question else "")},
+                {"role": "user", "content": user_content + "\n\n待审校初稿：\n" + cleaned},
+            ], temperature=0.0)
+            cleaned = self._strip_code_fences(self._strip_think_tags(reviewed))
+            if len(re.sub(r"\s", "", cleaned)) > 280:
+                raise ValueError("课堂追问审校后仍超过展示长度")
         if vision_summary:
             cleaned = self._sanitize_image_answer_coordinates(cleaned, question)
             cleaned = self._ensure_population_legend_statement(cleaned, question, vision_summary)
@@ -1001,6 +1027,27 @@ class KnowledgeEngine:
                 digest = {}
             if isinstance(digest, dict) and digest.get("response_data_collected") is False:
                 cleaned = self._render_teacher_only_reflection(digest)
+
+        shanghai_housing_followup = (
+            brainstorm_request and "上海年轻环" in question
+            and "如果郊区仅增加住宅但缺少就业岗位" in question
+        )
+        if shanghai_housing_followup and (
+            _contains_any(cleaned, ("必要条件", "缺一不可", "不会形成", "职住空间分离", "两个条件同时"))
+            or re.search(r"年轻环.{0,12}(?:需要|必须).{0,10}职住", cleaned)
+        ):
+            return {
+                "direct_answer": (
+                    "AI 回答未通过条件检查，以下为教师参考：\n\n"
+                    "追问：郊区只增加住宅、缺少本地岗位，年轻环一定会形成吗？\n\n"
+                    "不一定。本地岗位少不等于就业不可达；住房合适、通勤便利时，年轻人可能在郊区居住、跨区就业。"
+                    "仅建住宅不能保证年轻人入住，应结合居住人口年龄、住房成本、岗位及通勤资料检验。\n\n"
+                    "总结：区分居住地与就业地，不能仅凭住宅供应推断年龄格局。"
+                ),
+                "mechanism_explanation": "",
+                "teaching_points": [],
+                "quality_fallback": True,
+            }
 
         # If the model still returned JSON despite the prompt, extract text from it
         if cleaned.startswith("{"):

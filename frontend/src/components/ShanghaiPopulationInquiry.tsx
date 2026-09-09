@@ -64,7 +64,8 @@ export function ShanghaiPopulationInquiry({ projectId, onPresent, onAssistantPro
   }
   function askAssistant() {
     if (!questions.length || !onAssistantPrompt) return;
-    const prompt = ["GeoBot 头脑风暴：请围绕上海人口分布补充环节的2025河南卷年轻环题，生成一个条件变化追问与教师参考回答。",
+    const prompt = ["GeoBot 头脑风暴：上海年轻环的条件变化追问。",
+      "请围绕下面2025河南卷题组，沿用限定问题给出教师参考回答。",
       "材料：" + questions[0].material,
       ...questions.map(q => `题干：${q.stem}；选项：${q.options.join("；")}；题库参考答案：${q.answer}`),
       "限定任务：如果郊区仅增加住宅但缺少就业岗位，年轻环一定会形成吗？讨论成立条件，不再做密度乘面积的假设计算。",
