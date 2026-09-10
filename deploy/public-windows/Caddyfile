@@ -1,0 +1,27 @@
+{
+	auto_https off
+	admin off
+}
+
+http://127.0.0.1:{$WEBGIS_AI_PUBLIC_PROXY_PORT:18080} {
+	root * "{$WEBGIS_AI_FRONTEND_DIST}"
+	encode zstd gzip
+	header {
+		-Server
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+	}
+
+	handle / {
+		file_server
+	}
+
+	@static file
+	handle @static {
+		file_server
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:{$WEBGIS_AI_PORT:18999}
+	}
+}
