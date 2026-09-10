@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import json
 import sys
 import time
@@ -16,7 +17,7 @@ import numpy as np
 import websockets
 
 WS_URL = "ws://127.0.0.1:18990/assistant/voice/stream"
-AUDIO_DIR = Path(__file__).resolve().parent
+AUDIO_DIR = Path(os.environ.get("WEBGIS_ACCEPTANCE_AUDIO", str(Path(__file__).resolve().parent)))
 CHUNK_SAMPLES = 2048  # 与前端 worklet 一致（~128ms @16k）
 EXPECT = {
     "01_globe": "切换到三维地球",

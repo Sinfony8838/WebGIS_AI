@@ -140,6 +140,33 @@ describe("VoiceSessionController", () => {
     expect(lastPhase(controller)).toBe("listening");
   });
 
+  it("ASR 不可用后重试：乐观重新探测，后端恢复即恢复聆听，未恢复则原因依旧准确", async () => {
+    const { controller } = makeController();
+    controller.enterInteraction();
+    await vi.advanceTimersByTimeAsync(500);
+    handles[0].emit({ kind: "open" });
+    expect(lastPhase(controller)).toBe("listening");
+
+    // 健康检查告知 ASR 不可用（模型未装）。
+    controller.setAsrAvailability(false, "本地语音识别模型未安装或不完整。");
+    expect(controller.snapshot().phase).toBe("unavailable");
+    expect(controller.snapshot().detail).toContain("模型未安装");
+
+    // 运维修复后（后端 ready），用户点击重试：真正重新探测而不是停留在旧结论。
+    controller.retry();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(vi.mocked(createVoiceStream)).toHaveBeenCalledTimes(2);
+    handles[1].emit({ kind: "open" });
+    expect(lastPhase(controller)).toBe("listening");
+
+    // 若后端仍未修复（4403 + not_installed 原因），重试后回到不可用且原因准确。
+    controller.setAsrAvailability(false, "本地语音识别模型未安装或不完整。");
+    controller.retry();
+    await vi.advanceTimersByTimeAsync(500);
+    handles[2].emit({ kind: "close", code: 4403 });
+    expect(controller.snapshot().phase).toBe("unavailable");
+  });
+
   it("手动暂停：采音停止、不提交；busy 翻转不会擅自重新打开", async () => {
     const { controller, submitted } = makeController();
     controller.enterInteraction();

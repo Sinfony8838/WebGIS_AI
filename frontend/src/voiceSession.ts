@@ -239,6 +239,11 @@ export class VoiceSessionController {
     this.reconnectAttempt = 0;
     // A retry is an explicit user action: it also clears a manual pause.
     this.userPaused = false;
+    // Health is only sampled at page load; a retry must re-probe the backend
+    // for real. Optimistically mark it available — if the backend is still
+    // down, the connection attempt fails with the precise reason (4403 state)
+    // and the unavailable state returns with that detail.
+    this.asrAvailable = true;
     this.recompute();
   }
 
