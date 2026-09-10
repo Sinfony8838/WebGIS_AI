@@ -87,7 +87,7 @@ class PopulationAssistantTest(unittest.TestCase):
         import json
         from unittest.mock import Mock
         lesson = json.loads((Path(__file__).resolve().parents[1] / "app/data/builtin/lessons/population_shanghai_world_lesson.json").read_text(encoding="utf-8"))
-        stage = next(stage for stage in lesson["stages"] if "比较胡焕庸线" in stage["title"])
+        stage = next(stage for stage in lesson["stages"] if stage["stage_id"] == "china_explain")
         for region in stage["brainstorm"]["regions"]:
             with self.subTest(region=region):
                 client = CapturingClient(f"头脑风暴问题：{region}的局部条件如何影响人口分布？\n回答：比较水源与地形，结论需地图验证。\n回答总结：总体与局部需分开比较。")

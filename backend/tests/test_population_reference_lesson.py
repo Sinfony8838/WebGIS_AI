@@ -21,6 +21,7 @@ class PopulationReferenceLessonTest(unittest.TestCase):
             if stage["stage_id"].startswith("shanghai"):
                 self.assertNotIn("builtin_population_regions", visible)
             if stage["stage_id"] == "china_inquiry":
+                self.assertIn("builtin_population_regions", visible)
                 self.assertNotIn("generated_hu_line", visible)
             if stage["stage_id"] == "china_explain":
                 self.assertIn("generated_hu_line", visible)
@@ -78,14 +79,51 @@ class PopulationReferenceLessonTest(unittest.TestCase):
     def test_inquiry_regions_follow_the_current_geographical_scale(self):
         runtime, store, _ = self.build_runtime()
         lesson = store.get_lesson("lesson_builtin_population_shanghai_world")
-        self.assertEqual(lesson.metadata["builtin_version"], "4")
-        for stage_id in ("shanghai_inquiry", "shanghai_verify"):
-            self.assertEqual(lesson.find_stage(stage_id)["brainstorm"]["regions"], ["黄浦区", "崇明区"])
+        self.assertEqual(lesson.metadata["builtin_version"], "5")
+        self.assertEqual(lesson.find_stage("shanghai_inquiry")["brainstorm"]["regions"], ["黄浦区", "崇明区"])
         self.assertIn("塔里木盆地", lesson.find_stage("china_explain")["brainstorm"]["regions"])
-        self.assertIn("欧洲", lesson.find_stage("world_inquiry")["brainstorm"]["regions"])
         # Do not interrupt the student-first line-drawing activity with AI answers.
         self.assertEqual(lesson.find_stage("china_inquiry")["brainstorm"], {})
-        self.assertEqual(sum(len(stage["questions"]) for stage in lesson.stages), 11)
+        self.assertEqual(lesson.find_stage("shanghai_verify")["brainstorm"], {})
+        self.assertEqual(lesson.find_stage("world_inquiry")["brainstorm"], {})
+        self.assertEqual(sum(len(stage["questions"]) for stage in lesson.stages), 12)
+
+    def test_question_chain_keeps_basic_tasks_and_exactly_two_group_discussions(self):
+        runtime, store, _ = self.build_runtime()
+        lesson = store.get_lesson("lesson_builtin_population_shanghai_world")
+        questions = [question for stage in lesson.stages for question in stage["questions"]]
+        student_text = "\n".join(question["text"] for question in questions)
+        discussions = [question for question in questions if question["text"].startswith("【小组讨论")]
+        case_materials = [question for question in questions if "案例：" in question.get("material", "")]
+        self.assertEqual(lesson.metadata["curriculum_standard"], "运用资料，描述人口分布的特点及其影响因素。")
+        self.assertEqual([question["question_id"] for question in discussions], ["sh_factors_q", "china_reason_q"])
+        self.assertEqual(sum(bool(stage.get("brainstorm")) for stage in lesson.stages), 2)
+        self.assertEqual([question["question_id"] for question in case_materials], ["concept_q", "sh_factors_q"])
+        self.assertTrue(all(question.get("knowledge_points") for question in questions))
+        self.assertIn("中国人口分布有什么特点", student_text)
+        self.assertIn("世界人口分布有什么特点", student_text)
+        self.assertIn("画一条大致分开", student_text)
+        for awkward in ("哪两个指标", "增加哪一项资料", "分母口径", "能否由此推出"):
+            self.assertNotIn(awkward, student_text)
+        self.assertIn("例如常住人口、建筑用途或居住用地", student_text)
+        self.assertIn("年龄结构、居民实际住在哪里、交通是否方便、已有服务点分布", student_text)
+
+    def test_china_density_map_is_rebuilt_when_enabled_template_layer_was_deleted(self):
+        runtime, store, project_id = self.build_runtime()
+        lesson_id = "lesson_builtin_population_shanghai_world"
+        session_id = runtime.classroom.create_class_session(lesson_id, project_id)["session"]["session_id"]
+        runtime.classroom.enter_session_stage(session_id, "china_inquiry")
+        project = store.get_project(project_id)
+        self.assertIn("population_distribution", project.enabled_templates)
+        store.remove_layer(project_id, "builtin_population_regions")
+        self.assertFalse(any(layer.layer_id == "builtin_population_regions" for layer in store.get_project(project_id).layers))
+
+        runtime.classroom.enter_session_stage(session_id, "world_inquiry")
+        runtime.classroom.enter_session_stage(session_id, "china_inquiry")
+
+        restored = next(layer for layer in store.get_project(project_id).layers if layer.layer_id == "builtin_population_regions")
+        self.assertTrue(restored.visible)
+        self.assertEqual(restored.metadata["template_id"], "population_distribution")
 
     def test_invalid_brainstorm_regions_do_not_become_characters_or_labels(self):
         from backend.app.services.lessons import normalize_brainstorm

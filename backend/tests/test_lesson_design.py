@@ -39,7 +39,7 @@ class LessonDesignServiceTest(unittest.TestCase):
         design = service.create_or_resume(self.project, "local_admin", base.lesson_id)
         self.assertNotEqual(design.design_id, old.design_id)
         self.assertEqual(len(design.draft["stages"]), 8)
-        self.assertEqual(sum(len(s["questions"]) for s in design.draft["stages"]), 11)
+        self.assertEqual(sum(len(s["questions"]) for s in design.draft["stages"]), 12)
         self.assertEqual(design.draft["stages"], base.stages)
         self.assertEqual(design.draft["homework"], base.plan["homework"])
         self.assertEqual(design.draft["stages"][0]["scene"]["view"]["center"], [121.47, 31.23])

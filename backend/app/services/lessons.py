@@ -311,7 +311,16 @@ class LessonService:
 
             for template_id in scene.get("templates") or []:
                 template_id = str(template_id)
-                if template_id in project.enabled_templates:
+                project = self.store.get_project(project_id)
+                template_layer_present = any(
+                    str((layer.metadata or {}).get("template_id") or "") == template_id
+                    for layer in (project.layers if project else [])
+                )
+                # A learner or an earlier workflow may delete a generated layer
+                # while leaving the template marked as enabled. Rebuild it when
+                # the lesson explicitly needs it; otherwise the stage opens on
+                # the right extent but shows no thematic map.
+                if template_id in project.enabled_templates and template_layer_present:
                     continue
                 self.template_service.apply_template(project_id, template_id, {})
                 applied["templates"].append(template_id)
