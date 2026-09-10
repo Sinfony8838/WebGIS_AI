@@ -317,7 +317,7 @@ describe("ClassRunPanel", () => {
   it("launches ad-hoc questions with optional options", () => {
     const props = renderPanel();
     const adhoc = screen.getByTestId("adhoc-question");
-    fireEvent.change(within(adhoc).getByPlaceholderText("输入课堂即兴问题…"), {
+    fireEvent.change(within(adhoc).getByPlaceholderText("写下想追问学生的话…"), {
       target: { value: "临时问题？" }
     });
     fireEvent.change(within(adhoc).getByPlaceholderText("选项用 / 分隔（留空为开放题）"), {
@@ -363,6 +363,7 @@ describe("ClassRunPanel", () => {
   it("applies the map without opening a lecture overlay and reports failures", async () => {
     const onPresentScene = vi.fn().mockRejectedValueOnce(new Error("场景已变化")).mockResolvedValueOnce(undefined);
     renderPanel({ onPresentScene });
+    expect(screen.getByTestId("class-map-launcher").textContent).toContain("进入环节会自动准备对应地图");
     fireEvent.click(screen.getByRole("button", { name: "地图展示" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("场景已变化");
     expect(screen.queryByTestId("basic-knowledge-overlay")).toBeNull();
@@ -429,7 +430,7 @@ describe("ClassRunPanel", () => {
     renderPanel({ lesson, onRequestPlaneView });
 
     const handoff = screen.getByTestId("stage-view-handoff");
-    expect(handoff.textContent).toContain("3D 用于宏观导入");
+    expect(handoff.textContent).toContain("三维地球适合整体观察");
     fireEvent.click(within(handoff).getByText("切回二维判读"));
     expect(onRequestPlaneView).toHaveBeenCalledOnce();
   });
@@ -447,7 +448,8 @@ describe("ClassRunPanel", () => {
     const onAssistantPrompt = vi.fn();
     renderPanel({ currentStageId: "s2", onAssistantPrompt });
     const card = screen.getByTestId("stage-brainstorm");
-    expect(card.textContent).toContain("GeoBot AI");
+    expect(card.textContent).toContain("GeoBot · 讨论助手");
+    expect(card.textContent).toContain("先让小组充分讨论");
     expect(card.textContent).not.toContain("判断更应关注人口总量还是人口密度");
     fireEvent.click(screen.getByTestId("run-brainstorm"));
     act(() => vi.advanceTimersByTime(1100));
@@ -461,6 +463,17 @@ describe("ClassRunPanel", () => {
     expect(task).not.toContain("本环节讲解材料：");
     expect(onAssistantPrompt.mock.calls[0][1]).toContain("以北京市为例，");
     randomSpy.mockRestore();
+  });
+
+  it("marks designated questions as group discussion without repeating the marker", () => {
+    const lesson = makeLesson();
+    lesson.stages[1].questions[0].text = "【小组讨论一】公共服务应该怎样布局？";
+    renderPanel({ lesson, currentStageId: "s2" });
+    const question = screen.getByTestId("question-toggle-s2q1");
+    expect(question.textContent).toContain("小组讨论");
+    expect(question.textContent).toContain("公共服务应该怎样布局？");
+    expect(question.textContent).not.toContain("【小组讨论一】");
+    expect(question.querySelector(".question-type-badge")?.className).toContain("discussion");
   });
 
   it.each([{}, { prompt: "比较", regions: [] }, { prompt: "比较", regions: "上海" }, { prompt: " ", regions: ["黄浦区"] }])("hides incomplete brainstorm configuration %j", (value) => {
