@@ -9,4 +9,6 @@
 .urban-study-panel label { display:grid; gap:4px; margin:10px 0; font-size:12px; }
 .urban-study-panel input,.urban-study-panel select { width:100%; min-width:0; box-sizing:border-box; padding:7px; color:inherit; background:var(--panel-bg,#fff); border:1px solid var(--panel-border,#afc9d5); border-radius:6px; }
 .urban-study-status { padding:8px; border-left:3px solid #288b87; background:#288b8710; }
+/* 720p 等小视口下说明文字较长，退出按钮随滚动容器粘性置底，始终可见可点 */
+.urban-study-panel .urban-study-exit { position:sticky; bottom:10px; width:100%; margin-top:12px; background:var(--panel-bg,#f1f9fd); box-shadow:0 -6px 12px -10px rgba(9,40,60,.5); z-index:2; }
 @media(max-width:500px) { .right-rail.map-tools-dock:has(.urban-study-panel[open]) { width:min(320px,calc(100vw - 32px)); } }
