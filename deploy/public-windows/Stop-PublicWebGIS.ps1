@@ -1,8 +1,15 @@
 [CmdletBinding()]
-param()
+param(
+    [string]$RepoRoot = ""
+)
 
 $ErrorActionPreference = "Stop"
-$repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
+$repoRoot = if ($RepoRoot) {
+    (Resolve-Path -LiteralPath $RepoRoot).Path
+}
+else {
+    (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
+}
 $runtimeDir = Join-Path $repoRoot "backend\data\public-runtime"
 $expectedProcessNames = @{
     caddy = @("caddy")

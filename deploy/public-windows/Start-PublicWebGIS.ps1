@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+    [string]$RepoRoot = "",
     [string]$Domain = "webgisai.com",
     [int]$BackendPort = 18999,
     [int]$ProxyPort = 18080,
@@ -69,7 +70,12 @@ if ($Domain -notmatch '^[A-Za-z0-9.-]+$') {
     throw "域名格式不正确：$Domain"
 }
 
-$repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
+$repoRoot = if ($RepoRoot) {
+    (Resolve-Path -LiteralPath $RepoRoot).Path
+}
+else {
+    (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
+}
 $frontendDir = Join-Path $repoRoot "frontend"
 $frontendDist = Join-Path $frontendDir "dist"
 $runtimeDir = Join-Path $repoRoot "backend\data\public-runtime"
@@ -85,6 +91,62 @@ $caddyCandidates = @(
 $pythonExe = Resolve-Executable -Name "python" -Candidates $pythonCandidates
 $npmExe = Resolve-Executable -Name "npm.cmd" -Candidates @("C:\Program Files\nodejs\npm.cmd")
 $caddyExe = Resolve-Executable -Name "caddy" -Candidates $caddyCandidates
+
+$runtimeEnvNames = @(
+    "WEBGIS_AI_LLM_PROVIDER",
+    "WEBGIS_AI_MIMO_API_KEY",
+    "WEBGIS_AI_MIMO_BASE_URL",
+    "WEBGIS_AI_MIMO_MODEL",
+    "WEBGIS_AI_MINIMAX_API_KEY",
+    "WEBGIS_AI_MINIMAX_BASE_URL",
+    "WEBGIS_AI_MINIMAX_MODEL",
+    "WEBGIS_AI_MINIMAX_IMAGE_BASE_URL",
+    "WEBGIS_AI_MINIMAX_IMAGE_MODEL",
+    "WEBGIS_AI_VISION_PROVIDER",
+    "WEBGIS_AI_VISION_ENABLED",
+    "WEBGIS_AI_VISION_MODEL",
+    "MIMO_API_KEY",
+    "MIMO_BASE_URL",
+    "MIMO_MODEL",
+    "XIAOMI_MIMO_API_KEY",
+    "MINIMAX_API_KEY",
+    "MINIMAX_ANTHROPIC_BASE_URL",
+    "MINIMAX_MODEL",
+    "QGIS_ROOT",
+    "WEBGIS_AI_QGIS_ROOT",
+    "WEBGIS_AI_QGIS_PYTHON"
+)
+foreach ($name in $runtimeEnvNames) {
+    if (Get-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue) {
+        continue
+    }
+    foreach ($scope in @("User", "Machine")) {
+        $value = [Environment]::GetEnvironmentVariable($name, $scope)
+        if ($value) {
+            Set-Item -LiteralPath "Env:$name" -Value $value
+            break
+        }
+    }
+}
+
+if (-not ($env:QGIS_ROOT -or $env:WEBGIS_AI_QGIS_ROOT)) {
+    $qgisCandidates = @(
+        "D:\QGIS 3.40.10",
+        "C:\OSGeo4W",
+        "C:\OSGeo4W64"
+    )
+    $qgisCandidates += Get-ChildItem -LiteralPath "C:\Program Files" -Directory -ErrorAction SilentlyContinue |
+        Where-Object Name -Match '^QGIS' |
+        ForEach-Object { $_.FullName }
+    $qgisRoot = $qgisCandidates |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_ "bin\python.exe") } |
+        Select-Object -First 1
+    if ($qgisRoot) {
+        $env:QGIS_ROOT = $qgisRoot
+        $env:WEBGIS_AI_QGIS_ROOT = $qgisRoot
+        $env:WEBGIS_AI_QGIS_PYTHON = Join-Path $qgisRoot "bin\python.exe"
+    }
+}
 
 Assert-PortAvailable -Port $BackendPort
 Assert-PortAvailable -Port $ProxyPort
@@ -189,6 +251,27 @@ try {
     Wait-HttpReady -Url "http://127.0.0.1:$ProxyPort/health" | Out-Null
     Set-Content -LiteralPath (Join-Path $runtimeDir "backend.pid") -Value $backendProcess.Id -Encoding ascii
     Set-Content -LiteralPath (Join-Path $runtimeDir "caddy.pid") -Value $caddyProcess.Id -Encoding ascii
+
+    $gitCommit = ""
+    $gitBranch = ""
+    $gitCommand = Get-Command git -ErrorAction SilentlyContinue
+    if ($gitCommand) {
+        $gitCommit = (& $gitCommand.Source -C $repoRoot rev-parse HEAD 2>$null | Select-Object -First 1)
+        $gitBranch = (& $gitCommand.Source -C $repoRoot branch --show-current 2>$null | Select-Object -First 1)
+    }
+    $indexHtml = Get-Content -LiteralPath (Join-Path $frontendDist "index.html") -Raw
+    $frontendAsset = [regex]::Match($indexHtml, 'assets/index-[^"'']+\.js').Value
+    $releaseQgisRoot = if ($env:QGIS_ROOT) { $env:QGIS_ROOT } else { $env:WEBGIS_AI_QGIS_ROOT }
+    @{
+        started_at = (Get-Date).ToString("o")
+        domain = $Domain
+        git_commit = [string]$gitCommit
+        git_branch = [string]$gitBranch
+        frontend_asset = $frontendAsset
+        backend_port = $BackendPort
+        proxy_port = $ProxyPort
+        qgis_root = [string]$releaseQgisRoot
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runtimeDir "release.json") -Encoding utf8
 
     Write-Host "WebGIS-AI 公网源站已启动。" -ForegroundColor Green
     Write-Host "本机检查：http://127.0.0.1:$ProxyPort"

@@ -63,6 +63,8 @@ https://webgisai.com
 
 ## 日常操作
 
+完整的版本发布、巡检、备份、故障处理和回滚制度见 [MAINTENANCE.md](./MAINTENANCE.md)。
+
 启动源站：
 
 ```powershell
@@ -73,6 +75,18 @@ https://webgisai.com
 
 ```powershell
 .\deploy\public-windows\Stop-PublicWebGIS.ps1
+```
+
+运行只读巡检：
+
+```powershell
+.\deploy\public-windows\Test-PublicWebGIS.ps1
+```
+
+在维护窗口内停止服务后备份生产数据：
+
+```powershell
+.\deploy\public-windows\Backup-PublicWebGISData.ps1
 ```
 
 运行日志位于 `backend/data/public-runtime/`，该目录属于本地运行状态，不应提交。
