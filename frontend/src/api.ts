@@ -6,6 +6,8 @@ import type {
   AuthBootstrapStatus,
   AuthSession,
   AuthUser,
+  RegistrationRequest,
+  RegistrationRequestStatus,
   ArtifactRecord,
   BasemapCatalog,
   BasemapPreset,
@@ -167,6 +169,31 @@ export async function fetchCurrentUser(): Promise<AuthSession> {
   return session;
 }
 
+export type RegistrationPayload = {
+  email: string;
+  nickname: string;
+  password: string;
+  organization?: string;
+  application_note?: string;
+};
+
+export async function submitRegistration(
+  payload: RegistrationPayload
+): Promise<{ status: string; message: string }> {
+  // Public endpoint: no CSRF token exists before an account does.
+  return requestJson("/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      email: payload.email,
+      nickname: payload.nickname,
+      password: payload.password,
+      organization: payload.organization ?? "",
+      application_note: payload.application_note ?? ""
+    })
+  });
+}
+
 export async function logoutUser(): Promise<void> {
   await requestJson("/auth/logout", { method: "POST" });
   setCsrfToken("");
@@ -248,6 +275,28 @@ export async function fetchAuditLogs(limit = 100): Promise<{
   items: AuthAuditLog[];
 }> {
   return requestJson(`/admin/audit-logs?limit=${encodeURIComponent(String(limit))}`);
+}
+
+export async function fetchRegistrationRequests(filters: {
+  query?: string;
+  status?: RegistrationRequestStatus | "";
+} = {}): Promise<{ status: string; items: RegistrationRequest[]; pending_count: number }> {
+  const query = new URLSearchParams();
+  if (filters.query) query.set("query", filters.query);
+  if (filters.status) query.set("status", filters.status);
+  const suffix = query.size ? `?${query.toString()}` : "";
+  return requestJson(`/admin/registration-requests${suffix}`);
+}
+
+export async function reviewRegistrationRequest(
+  requestId: string,
+  decision: "approved" | "rejected"
+): Promise<{ status: string; request: RegistrationRequest }> {
+  return requestJson(`/admin/registration-requests/${encodeURIComponent(requestId)}/review`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ decision })
+  });
 }
 
 export function getApiBase(): string {

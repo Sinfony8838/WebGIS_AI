@@ -44,7 +44,9 @@ PUBLIC_AUTH_PATHS = {
     "/auth/bootstrap-status",
     "/auth/bootstrap",
     "/auth/login",
+    "/auth/register",
 }
+REGISTRATION_MAX_BODY_BYTES = 8192
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
@@ -60,6 +62,16 @@ def _extract_access_token(request: Request) -> str:
 
 def _client_ip(request: Request) -> str:
     return request.client.host if request.client else ""
+
+
+def _registration_client_ip(request: Request) -> str:
+    # CF-Connecting-IP is only honored when the deployment explicitly opts in;
+    # the header is trivially forgeable everywhere else.
+    if config.trust_proxy_headers:
+        forwarded = request.headers.get("CF-Connecting-IP", "").strip()
+        if forwarded:
+            return forwarded.split(",")[0].strip()[:128]
+    return _client_ip(request)
 
 
 def _local_user() -> Dict[str, Any]:
@@ -334,6 +346,18 @@ class AuthBootstrapRequest(BaseModel):
 class AuthLoginRequest(BaseModel):
     email: str
     password: str
+
+
+class AuthRegisterRequest(BaseModel):
+    email: str = Field(max_length=254)
+    nickname: str = Field(default="", max_length=80)
+    organization: str = Field(default="", max_length=120)
+    application_note: str = Field(default="", max_length=300)
+    password: str = Field(max_length=128)
+
+
+class AdminRegistrationReviewRequest(BaseModel):
+    decision: str = Field(pattern="^(approved|rejected)$")
 
 
 class PasswordChangeRequest(BaseModel):
@@ -652,13 +676,83 @@ def auth_bootstrap_status() -> Dict[str, Any]:
         return {
             "status": "success",
             "auth_mode": config.auth_mode,
+            "registration_mode": "closed",
             "required": False,
         }
     return {
         "status": "success",
         "auth_mode": "users",
+        "registration_mode": config.registration_mode,
         "required": not auth_service.has_users(),
     }
+
+
+@app.post("/auth/register")
+def auth_register(request: Request, payload: AuthRegisterRequest) -> Response:
+    """Public self-registration endpoint.
+
+    Answers duplicate emails and internal failures with the same stable
+    response as a fresh submission so the endpoint cannot be used to probe
+    accounts; the real reason is only in the admin-visible audit log.
+    Never creates a session or sets a cookie, in any mode.
+    """
+    if config.auth_mode != "users" or auth_service is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "AUTH_MODE_DISABLED", "message": "当前未启用用户模式。"},
+        )
+    if config.registration_mode == "closed":
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "REGISTRATION_CLOSED", "message": "当前未开放注册。"},
+        )
+    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if content_type != "application/json":
+        raise HTTPException(
+            status_code=415,
+            detail={"code": "UNSUPPORTED_MEDIA_TYPE", "message": "请求内容类型不受支持。"},
+        )
+    try:
+        content_length = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        content_length = 0
+    if content_length > REGISTRATION_MAX_BODY_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail={"code": "PAYLOAD_TOO_LARGE", "message": "请求内容过大。"},
+        )
+    client_ip = _registration_client_ip(request)
+    user_agent = request.headers.get("User-Agent", "")
+    try:
+        if config.registration_mode == "open":
+            outcome = auth_service.register_open(
+                payload.email,
+                payload.nickname,
+                payload.password,
+                organization=payload.organization,
+                application_note=payload.application_note,
+                ip_address=client_ip,
+                user_agent=user_agent,
+            )
+            message = "注册完成，请使用新账号登录。"
+            status = "created"
+        else:
+            outcome = auth_service.submit_registration(
+                payload.email,
+                payload.nickname,
+                payload.password,
+                organization=payload.organization,
+                application_note=payload.application_note,
+                ip_address=client_ip,
+                user_agent=user_agent,
+            )
+            message = "注册申请已提交，管理员审核通过后方可登录。"
+            status = "submitted"
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+    # Same body for fresh submissions and duplicates: the specific outcome is
+    # recorded in the audit log, never on the public wire.
+    return JSONResponse({"status": status, "message": message})
 
 
 @app.post("/auth/bootstrap")
@@ -867,6 +961,43 @@ def admin_update_user(
     except AuthError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
     return {"status": "success", "user": user}
+
+
+@app.get("/admin/registration-requests")
+def admin_registration_requests(
+    request: Request,
+    status: str = "",
+    query: str = "",
+) -> Dict[str, Any]:
+    _require_admin(request)
+    if auth_service is None:
+        return {"status": "success", "items": [], "pending_count": 0}
+    return {
+        "status": "success",
+        "items": auth_service.list_registration_requests(query=query, status=status),
+        "pending_count": auth_service.count_pending_registration_requests(),
+    }
+
+
+@app.post("/admin/registration-requests/{request_id}/review")
+def admin_review_registration_request(
+    request_id: str,
+    request: Request,
+    payload: AdminRegistrationReviewRequest,
+) -> Dict[str, Any]:
+    context = _require_admin(request)
+    if auth_service is None:
+        raise HTTPException(status_code=409, detail="User management is unavailable")
+    try:
+        reviewed = auth_service.review_registration_request(
+            request_id,
+            payload.decision,
+            actor_user_id=str(context.user["user_id"]),
+            ip_address=_client_ip(request),
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+    return {"status": "success", "request": reviewed}
 
 
 @app.post("/admin/users/{user_id}/reset-password")
