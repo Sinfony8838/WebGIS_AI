@@ -3,7 +3,8 @@
 	admin off
 }
 
-http://127.0.0.1:{$WEBGIS_AI_PUBLIC_PROXY_PORT:18080} {
+http://:{$WEBGIS_AI_PUBLIC_PROXY_PORT:18080} {
+	bind 127.0.0.1
 	root * "{$WEBGIS_AI_FRONTEND_DIST}"
 	encode zstd gzip
 	header {
