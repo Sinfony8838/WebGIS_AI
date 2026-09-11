@@ -1507,14 +1507,22 @@ def _websocket_authorized(websocket: "WebSocket") -> bool:
     return auth_service.authenticate(websocket.cookies.get(SESSION_COOKIE, "")) is not None
 
 
-async def _reject_voice_stream(websocket: "WebSocket", state: str, detail: str, code: int = 4403) -> None:
+async def _reject_voice_stream(
+    websocket: "WebSocket",
+    state: str,
+    detail: str,
+    code: int = 4403,
+    *,
+    accepted: bool = False,
+) -> None:
     """Accept, explain why the stream cannot start, then close.
 
     The JSON event arrives before the close so the frontend can show the
     actionable reason (model missing / load failed / permission) instead of a
     bare close code.
     """
-    await websocket.accept()
+    if not accepted:
+        await websocket.accept()
     try:
         await websocket.send_text(json.dumps({"type": "error", "reason": state, "detail": detail}, ensure_ascii=False))
     except Exception:  # client already gone
@@ -1546,7 +1554,7 @@ async def assistant_voice_stream(websocket: "WebSocket") -> None:
     try:
         session = engine.create_session()
     except Exception as exc:  # lazy recognizer load failed between checks
-        await _reject_voice_stream(websocket, "load_failed", str(exc))
+        await _reject_voice_stream(websocket, "load_failed", str(exc), accepted=True)
         return
     try:
         while True:
