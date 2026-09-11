@@ -539,6 +539,10 @@ class AppConfig:
         if basemap_id:
             known_ids = {item["id"] for item in self.basemap_catalog()["items"]}
             if basemap_id in known_ids:
+                # 密钥被移除后，历史项目里保存的天气底图回落到默认底图，
+                # 而不是渲染一个只会显示高德参考层的“伪天气”状态。
+                if basemap_id.startswith(WEATHER_BASEMAP_PREFIX) and not self.weather_basemap_enabled():
+                    return self.default_basemap()
                 return self.basemap_by_id(basemap_id)
             if basemap_id == LEGACY_WEATHER_BASEMAP_ID or basemap_id.startswith(WEATHER_BASEMAP_PREFIX):
                 return self.default_basemap()
@@ -632,7 +636,10 @@ class AppConfig:
     def weather_tile_upstream_url(self, layer: str, z: int | str, x: int | str, y: int | str) -> str:
         api_key = self.openweathermap_api_key.strip()
         if not api_key:
-            raise ValueError("OpenWeatherMap API key is not configured")
+            # 503 文案会透出到前端天气状态面板，必须可直接指导教师配置。
+            raise ValueError(
+                "天气叠加未配置：请在后端环境变量设置 WEBGIS_AI_OPENWEATHERMAP_API_KEY 并重启服务。"
+            )
         layer = (layer or self.openweathermap_layer or OPENWEATHER_DEFAULT_LAYER).strip() or OPENWEATHER_DEFAULT_LAYER
         return (
             OPENWEATHER_TILE_TEMPLATE.replace("{layer}", layer)
