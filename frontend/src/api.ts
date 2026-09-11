@@ -171,8 +171,8 @@ export async function fetchCurrentUser(): Promise<AuthSession> {
 
 export type RegistrationPayload = {
   email: string;
-  nickname: string;
   password: string;
+  nickname?: string;
   organization?: string;
   application_note?: string;
 };
@@ -186,10 +186,10 @@ export async function submitRegistration(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       email: payload.email,
-      nickname: payload.nickname,
       password: payload.password,
-      organization: payload.organization ?? "",
-      application_note: payload.application_note ?? ""
+      ...(payload.nickname ? { nickname: payload.nickname } : {}),
+      ...(payload.organization ? { organization: payload.organization } : {}),
+      ...(payload.application_note ? { application_note: payload.application_note } : {})
     })
   });
 }

@@ -3,7 +3,7 @@
 # Usage (from this directory, network required on first run):
 #   python generate_auth_globe.py
 #
-# The script downloads ne_110m_land.geojson once, projects it with a true
+# The script downloads ne_110m_land.json once, projects it with a true
 # orthographic projection, clips polygons and the graticule to the visible
 # hemisphere, and writes auth-globe-dark.svg / auth-globe-light.svg next to
 # this tools/ directory. See ../README.md for data source and license.
@@ -34,6 +34,7 @@ MAX_EDGE_DEG = 2.0
 
 HERE = Path(__file__).resolve().parent
 OUT_DIR = HERE.parent
+DATA_PATH = OUT_DIR / "ne_110m_land.json"
 
 lon0 = math.radians(CENTER_LON)
 lat0 = math.radians(CENTER_LAT)
@@ -187,7 +188,7 @@ def graticule_paths() -> list[str]:
 
 
 def load_land() -> dict:
-    geojson_path = HERE / "ne_110m_land.geojson"
+    geojson_path = DATA_PATH
     if not geojson_path.exists():
         urllib.request.urlretrieve(DATA_URL, geojson_path)
     payload = json.loads(geojson_path.read_text(encoding="utf-8"))

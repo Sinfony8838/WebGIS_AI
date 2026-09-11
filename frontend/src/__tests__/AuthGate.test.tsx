@@ -151,8 +151,11 @@ describe("AuthGate registration", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "注册" }));
     expect(screen.getByRole("heading", { name: "申请教师账号" })).toBeInTheDocument();
-    expect(screen.getByLabelText("学校/机构（可选）")).toBeInTheDocument();
-    expect(screen.getByLabelText("申请说明（可选）")).toBeInTheDocument();
+    expect(screen.queryByLabelText("昵称")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("学校/机构（可选）")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("申请说明（可选）")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("邮箱")).toBeInTheDocument();
+    expect(screen.getByLabelText(/^密码$/)).toBeInTheDocument();
     expect(screen.getByLabelText("确认密码")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "登录" }));
@@ -166,7 +169,6 @@ describe("AuthGate registration", () => {
     fireEvent.click(screen.getByRole("button", { name: "注册" }));
 
     fireEvent.change(screen.getByLabelText("邮箱"), { target: { value: "new@school.edu.cn" } });
-    fireEvent.change(screen.getByLabelText("昵称"), { target: { value: "新教师" } });
     fireEvent.change(screen.getByLabelText(/^密码$/), { target: { value: "abcdefgh" } });
     fireEvent.change(screen.getByLabelText("确认密码"), { target: { value: "abcdefgh" } });
     fireEvent.click(screen.getByRole("button", { name: "提交注册申请" }));
@@ -188,18 +190,13 @@ describe("AuthGate registration", () => {
     fireEvent.click(screen.getByRole("button", { name: "注册" }));
 
     fireEvent.change(screen.getByLabelText("邮箱"), { target: { value: "new@school.edu.cn" } });
-    fireEvent.change(screen.getByLabelText("昵称"), { target: { value: "新教师" } });
-    fireEvent.change(screen.getByLabelText("学校/机构（可选）"), { target: { value: "上海中学" } });
     fireEvent.change(screen.getByLabelText(/^密码$/), { target: { value: "Strong-Teacher-2026!" } });
     fireEvent.change(screen.getByLabelText("确认密码"), { target: { value: "Strong-Teacher-2026!" } });
     fireEvent.click(screen.getByRole("button", { name: "提交注册申请" }));
 
     await waitFor(() => expect(apiMocks.submitRegistration).toHaveBeenCalledWith({
       email: "new@school.edu.cn",
-      nickname: "新教师",
-      password: "Strong-Teacher-2026!",
-      organization: "上海中学",
-      application_note: ""
+      password: "Strong-Teacher-2026!"
     }));
     expect(await screen.findByRole("status")).toHaveTextContent(
       "注册申请已提交，管理员审核通过后方可登录。"
@@ -219,7 +216,6 @@ describe("AuthGate registration", () => {
     fireEvent.click(screen.getByRole("button", { name: "注册" }));
 
     fireEvent.change(screen.getByLabelText("邮箱"), { target: { value: "new@school.edu.cn" } });
-    fireEvent.change(screen.getByLabelText("昵称"), { target: { value: "新教师" } });
     fireEvent.change(screen.getByLabelText(/^密码$/), { target: { value: "Strong-Teacher-2026!" } });
     fireEvent.change(screen.getByLabelText("确认密码"), { target: { value: "Strong-Teacher-2026!" } });
     fireEvent.click(screen.getByRole("button", { name: "提交注册申请" }));
@@ -235,7 +231,6 @@ describe("AuthGate registration", () => {
     await renderLogin("approval");
     fireEvent.click(screen.getByRole("button", { name: "注册" }));
     fireEvent.change(screen.getByLabelText("邮箱"), { target: { value: "new@school.edu.cn" } });
-    fireEvent.change(screen.getByLabelText("昵称"), { target: { value: "新教师" } });
     fireEvent.change(screen.getByLabelText(/^密码$/), { target: { value: "Strong-Teacher-2026!" } });
     fireEvent.change(screen.getByLabelText("确认密码"), { target: { value: "Strong-Teacher-2026!" } });
     fireEvent.click(screen.getByRole("button", { name: "提交注册申请" }));
@@ -267,5 +262,21 @@ describe("AuthGate registration", () => {
       "data-reduced-motion",
       "false"
     );
+  });
+
+  it("rotates the projected globe in both longitude and latitude when dragged", async () => {
+    await renderLogin("approval");
+    const globe = screen.getByTestId("auth-globe");
+    const svg = globe.querySelector("svg");
+    expect(svg).not.toBeNull();
+    const beforeLon = svg?.getAttribute("data-rotation-lon");
+    const beforeLat = svg?.getAttribute("data-rotation-lat");
+
+    fireEvent.pointerDown(globe, { pointerId: 7, button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(globe, { pointerId: 7, clientX: 150, clientY: 125 });
+    fireEvent.pointerUp(globe, { pointerId: 7, clientX: 150, clientY: 125 });
+
+    expect(svg?.getAttribute("data-rotation-lon")).not.toBe(beforeLon);
+    expect(svg?.getAttribute("data-rotation-lat")).not.toBe(beforeLat);
   });
 });
