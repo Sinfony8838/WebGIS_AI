@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import {
   bootstrapAdmin,
   changePassword,
@@ -13,8 +14,7 @@ import type { AuthUser, RegistrationMode } from "../types";
 import "../auth.css";
 import { BrandLogo } from "./BrandLogo";
 import { ThemeToggle } from "../theme";
-import globeDark from "../assets/earth/auth-globe-dark.svg";
-import globeLight from "../assets/earth/auth-globe-light.svg";
+import { AuthGlobe } from "./AuthGlobe";
 
 type AuthGateProps = {
   children: (user: AuthUser, signOut: () => void, updateUser: (user: AuthUser) => void) => React.ReactNode;
@@ -180,8 +180,6 @@ function LoginCard({
   const [mode, setMode] = useState<AuthCardMode>("signin");
   const [email, setEmail] = useState("");
   const [nickname, setNickname] = useState("");
-  const [organization, setOrganization] = useState("");
-  const [applicationNote, setApplicationNote] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [bootstrapKey, setBootstrapKey] = useState("");
@@ -193,6 +191,24 @@ function LoginCard({
 
   const signupAllowed = !bootstrap && Boolean(registrationMode && registrationMode !== "closed");
   const reducedMotion = usePrefersReducedMotion();
+
+  const handlePagePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (reducedMotion || event.pointerType === "touch") return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const x = (event.clientX - bounds.left) / Math.max(bounds.width, 1);
+    const y = (event.clientY - bounds.top) / Math.max(bounds.height, 1);
+    event.currentTarget.style.setProperty("--auth-pointer-x", `${(x * 100).toFixed(1)}%`);
+    event.currentTarget.style.setProperty("--auth-pointer-y", `${(y * 100).toFixed(1)}%`);
+    event.currentTarget.style.setProperty("--auth-parallax-x", `${((x - 0.5) * 14).toFixed(1)}px`);
+    event.currentTarget.style.setProperty("--auth-parallax-y", `${((y - 0.5) * 10).toFixed(1)}px`);
+  };
+
+  const resetPagePointer = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.currentTarget.style.setProperty("--auth-pointer-x", "50%");
+    event.currentTarget.style.setProperty("--auth-pointer-y", "35%");
+    event.currentTarget.style.setProperty("--auth-parallax-x", "0px");
+    event.currentTarget.style.setProperty("--auth-parallax-y", "0px");
+  };
 
   const switchTo = (next: AuthCardMode) => {
     setMode(next);
@@ -206,8 +222,8 @@ function LoginCard({
 
   const handleSignup = async () => {
     setSignupError("");
-    if (!email.trim() || !nickname.trim()) {
-      setSignupError("请填写邮箱和昵称。");
+    if (!email.trim()) {
+      setSignupError("请填写邮箱。");
       return;
     }
     if (!passwordMeetsPolicy(password)) {
@@ -222,16 +238,12 @@ function LoginCard({
     try {
       const result = await submitRegistration({
         email: email.trim(),
-        nickname: nickname.trim(),
-        password,
-        organization: organization.trim(),
-        application_note: applicationNote.trim()
+        password
       });
       // Success: return to the sign-in view with a safe notice. Registration
       // never signs the user in, in any mode.
       setPassword("");
       setConfirmPassword("");
-      setApplicationNote("");
       setSignupNotice(result.message || APPROVAL_NOTICE_DEFAULT);
       setMode("signin");
     } catch (reason) {
@@ -242,7 +254,12 @@ function LoginCard({
   };
 
   return (
-    <div className="auth-screen auth-entry" data-reduced-motion={reducedMotion ? "true" : "false"}>
+    <div
+      className="auth-screen auth-entry"
+      data-reduced-motion={reducedMotion ? "true" : "false"}
+      onPointerMove={handlePagePointerMove}
+      onPointerLeave={resetPagePointer}
+    >
       <ThemeToggle className="auth-theme-toggle" />
       <div className="auth-entry-layout">
         <section className="auth-story" aria-labelledby="auth-story-title">
@@ -250,14 +267,13 @@ function LoginCard({
             <BrandLogo className="auth-story-logo" />
             <span>GeoBot<small>地理智能教学平台</small></span>
           </div>
-          <div className="auth-story-copy anim-rise">
-            <p className="auth-story-kicker">地图里的世界 · 课堂里的发现</p>
-            <h2 id="auth-story-title">让地理可见，<br />让探究发生。</h2>
-            <p>从一张地图出发，连接教案设计、课堂探究与教学复盘。</p>
-          </div>
-          <div className="auth-globe-wrap anim-rise" aria-hidden="true">
-            <img className="auth-globe-img auth-globe-img-dark" src={globeDark} alt="" draggable={false} loading="eager" decoding="async" />
-            <img className="auth-globe-img auth-globe-img-light" src={globeLight} alt="" draggable={false} loading="eager" decoding="async" />
+          <div className="auth-story-stage">
+            <div className="auth-story-copy anim-rise">
+              <p className="auth-story-kicker">地图里的世界 · 课堂里的发现</p>
+              <h2 id="auth-story-title">让地理可见，<br />让探究发生。</h2>
+              <p>从一张地图出发，连接教案设计、课堂探究与教学复盘。</p>
+            </div>
+            <AuthGlobe reducedMotion={reducedMotion} />
           </div>
           <ol className="auth-teaching-cycle anim-rise">
             <li><span>01 / 课前</span><strong>设计一堂好课</strong><p>教案共创 · 资源准备</p></li>
@@ -265,7 +281,12 @@ function LoginCard({
             <li><span>03 / 课后</span><strong>让教学有回响</strong><p>课堂记录 · 复盘改进</p></li>
           </ol>
         </section>
-        <main className="auth-card auth-entry-card anim-rise" aria-labelledby="auth-title">
+        <main
+          className="auth-card auth-entry-card anim-rise"
+          aria-labelledby="auth-title"
+          data-auth-mode={mode}
+          data-bootstrap={bootstrap ? "true" : "false"}
+        >
           <div className="auth-brand" aria-hidden="true">
             <BrandLogo className="auth-brand-logo" />
             <span>GeoBot</span>
@@ -389,37 +410,6 @@ function LoginCard({
                   onChange={(event) => setEmail(event.target.value)}
                   placeholder="例如：teacher@school.edu.cn"
                   required
-                />
-              </label>
-              <label className="auth-field">
-                <span>昵称</span>
-                <input
-                  autoComplete="nickname"
-                  value={nickname}
-                  onChange={(event) => setNickname(event.target.value)}
-                  placeholder="用于课堂工作台显示"
-                  maxLength={80}
-                  required
-                />
-              </label>
-              <label className="auth-field">
-                <span>学校/机构（可选）</span>
-                <input
-                  autoComplete="organization"
-                  value={organization}
-                  onChange={(event) => setOrganization(event.target.value)}
-                  placeholder="例如：上海市某中学"
-                  maxLength={120}
-                />
-              </label>
-              <label className="auth-field">
-                <span>申请说明（可选）</span>
-                <textarea
-                  value={applicationNote}
-                  onChange={(event) => setApplicationNote(event.target.value)}
-                  placeholder="简要说明教学场景，帮助管理员更快审核"
-                  maxLength={300}
-                  rows={3}
                 />
               </label>
               <label className="auth-field">

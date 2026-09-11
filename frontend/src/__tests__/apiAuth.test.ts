@@ -4,6 +4,7 @@ import {
   getApiBase,
   setCsrfToken,
   setUnauthorizedHandler,
+  submitRegistration,
   updateAdminUser
 } from "../api";
 
@@ -42,6 +43,23 @@ describe("api url helpers", () => {
     const [, init] = fetchMock.mock.calls[0];
     expect(init?.credentials).toBe("include");
     expect(new Headers(init?.headers).get("X-WebGIS-CSRF")).toBe("csrf-only-in-memory");
+  });
+
+  it("sends only email and password for public registration", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ status: "submitted", message: "已提交" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+
+    await submitRegistration({ email: "teacher@example.com", password: "Strong-Teacher-2026!" });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(String(init?.body))).toEqual({
+      email: "teacher@example.com",
+      password: "Strong-Teacher-2026!"
+    });
   });
 
   it("invokes the centralized sign-out handler on any 401", async () => {
