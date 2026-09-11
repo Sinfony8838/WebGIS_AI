@@ -120,6 +120,20 @@ class AppConfig:
     session_max_hours: int = field(
         default_factory=lambda: int(os.getenv("WEBGIS_AI_SESSION_MAX_HOURS", "24"))
     )
+    # Public self-registration policy: "closed" disables the public endpoint,
+    # "approval" (the production default) queues requests for admin review,
+    # "open" creates a teacher account immediately (controlled environments
+    # only, never the public default).
+    registration_mode: str = field(
+        default_factory=lambda: os.getenv("WEBGIS_AI_REGISTRATION_MODE", "approval").strip().lower()
+    )
+    # Only when the deployment explicitly enables this flag may the server
+    # read CF-Connecting-IP for the real client address; the header is
+    # otherwise trivially spoofable.
+    trust_proxy_headers: bool = field(
+        default_factory=lambda: os.getenv("WEBGIS_AI_TRUST_PROXY_HEADERS", "false").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
     base_map_url: str = field(
         default_factory=lambda: os.getenv(
             "WEBGIS_AI_BASEMAP_URL",
@@ -309,6 +323,8 @@ class AppConfig:
         self.state_file = self.state_dir / "runtime.json"
         if self.auth_mode not in {"users", "legacy_token", "disabled"}:
             self.auth_mode = "users"
+        if self.registration_mode not in {"closed", "approval", "open"}:
+            self.registration_mode = "approval"
         # If the user set QGIS_ROOT but not WEBGIS_AI_QGIS_PYTHON, auto-derive
         # the QGIS-bundled interpreter at <QGIS_ROOT>/bin/python.exe (OSGeo4W
         # layout used by every official Windows installer). The worker

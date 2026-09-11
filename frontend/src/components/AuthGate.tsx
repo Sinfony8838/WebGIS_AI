@@ -6,12 +6,15 @@ import {
   fetchCurrentUser,
   loginUser,
   setCsrfToken,
-  setUnauthorizedHandler
+  setUnauthorizedHandler,
+  submitRegistration
 } from "../api";
-import type { AuthUser } from "../types";
+import type { AuthUser, RegistrationMode } from "../types";
 import "../auth.css";
 import { BrandLogo } from "./BrandLogo";
 import { ThemeToggle } from "../theme";
+import globeDark from "../assets/earth/auth-globe-dark.svg";
+import globeLight from "../assets/earth/auth-globe-light.svg";
 
 type AuthGateProps = {
   children: (user: AuthUser, signOut: () => void, updateUser: (user: AuthUser) => void) => React.ReactNode;
@@ -19,10 +22,40 @@ type AuthGateProps = {
 
 type AuthView = "loading" | "login" | "bootstrap" | "change-password";
 
+const PASSWORD_HINT = "至少 8 位，并包含字母、数字、特殊符号中的至少两种。";
+
+function passwordMeetsPolicy(value: string): boolean {
+  if (value.length < 8 || value.length > 128) return false;
+  const categories = [
+    /[a-zA-Z]/.test(value),
+    /[0-9]/.test(value),
+    /[^a-zA-Z0-9\s]/.test(value)
+  ].filter(Boolean).length;
+  return categories >= 2;
+}
+
+/** Tracks the OS reduce-motion preference so the login view can drop every
+ * decorative animation. CSS also honors the media query; this attribute keeps
+ * it testable and covers browsers where the SVG media context differs. */
+function usePrefersReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(
+    () => typeof window !== "undefined" && Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches)
+  );
+  useEffect(() => {
+    const query = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    if (!query) return undefined;
+    const update = () => setReduced(query.matches);
+    query.addEventListener?.("change", update);
+    return () => query.removeEventListener?.("change", update);
+  }, []);
+  return reduced;
+}
+
 export function AuthGate({ children }: AuthGateProps) {
   const [view, setView] = useState<AuthView>("loading");
   const [user, setUser] = useState<AuthUser | null>(null);
   const [error, setError] = useState("");
+  const [registrationMode, setRegistrationMode] = useState<RegistrationMode | undefined>(undefined);
 
   const reset = () => {
     setCsrfToken("");
@@ -40,6 +73,7 @@ export function AuthGate({ children }: AuthGateProps) {
       try {
         const status = await fetchBootstrapStatus();
         if (!active) return;
+        setRegistrationMode(status.registration_mode);
         if (status.required) {
           setView("bootstrap");
           return;
@@ -70,7 +104,7 @@ export function AuthGate({ children }: AuthGateProps) {
 
   if (view === "loading") {
     return (
-      <div className="auth-screen" aria-busy="true">
+      <div className="auth-screen auth-entry" aria-busy="true" data-reduced-motion="false">
         <div className="auth-loading">正在验证教师身份…</div>
       </div>
     );
@@ -100,6 +134,7 @@ export function AuthGate({ children }: AuthGateProps) {
     <LoginCard
       bootstrap={view === "bootstrap"}
       error={error}
+      registrationMode={registrationMode}
       onSubmit={async (payload) => {
         setError("");
         try {
@@ -129,146 +164,316 @@ type LoginPayload = {
   bootstrapKey: string;
 };
 
+type AuthCardMode = "signin" | "signup";
+
 function LoginCard({
   bootstrap,
   error,
+  registrationMode,
   onSubmit
 }: {
   bootstrap: boolean;
   error: string;
+  registrationMode: RegistrationMode | undefined;
   onSubmit: (payload: LoginPayload) => Promise<void>;
 }) {
+  const [mode, setMode] = useState<AuthCardMode>("signin");
   const [email, setEmail] = useState("");
   const [nickname, setNickname] = useState("");
+  const [organization, setOrganization] = useState("");
+  const [applicationNote, setApplicationNote] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [bootstrapKey, setBootstrapKey] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [capsLock, setCapsLock] = useState(false);
   const [pending, setPending] = useState(false);
+  const [signupError, setSignupError] = useState("");
+  const [signupNotice, setSignupNotice] = useState("");
+
+  const signupAllowed = !bootstrap && Boolean(registrationMode && registrationMode !== "closed");
+  const reducedMotion = usePrefersReducedMotion();
+
+  const switchTo = (next: AuthCardMode) => {
+    setMode(next);
+    setSignupError("");
+    if (next === "signin") {
+      // Keep the submitted notice visible until the teacher types again.
+    } else {
+      setSignupNotice("");
+    }
+  };
+
+  const handleSignup = async () => {
+    setSignupError("");
+    if (!email.trim() || !nickname.trim()) {
+      setSignupError("请填写邮箱和昵称。");
+      return;
+    }
+    if (!passwordMeetsPolicy(password)) {
+      setSignupError(`密码不符合要求：${PASSWORD_HINT}`);
+      return;
+    }
+    if (password !== confirmPassword) {
+      setSignupError("两次输入的密码不一致。");
+      return;
+    }
+    setPending(true);
+    try {
+      const result = await submitRegistration({
+        email: email.trim(),
+        nickname: nickname.trim(),
+        password,
+        organization: organization.trim(),
+        application_note: applicationNote.trim()
+      });
+      // Success: return to the sign-in view with a safe notice. Registration
+      // never signs the user in, in any mode.
+      setPassword("");
+      setConfirmPassword("");
+      setApplicationNote("");
+      setSignupNotice(result.message || APPROVAL_NOTICE_DEFAULT);
+      setMode("signin");
+    } catch (reason) {
+      setSignupError(reason instanceof Error ? reason.message : "注册提交失败，请稍后再试。");
+    } finally {
+      setPending(false);
+    }
+  };
 
   return (
-    <div className="auth-screen auth-entry">
+    <div className="auth-screen auth-entry" data-reduced-motion={reducedMotion ? "true" : "false"}>
       <ThemeToggle className="auth-theme-toggle" />
-      <div className="auth-map-grid" aria-hidden="true" />
-      <div className="auth-population-points" aria-hidden="true" />
       <div className="auth-entry-layout">
-      <section className="auth-story" aria-labelledby="auth-story-title">
-        <div className="auth-story-brand"><BrandLogo className="auth-story-logo" /><span>GeoBot<small>人口地理智能教学平台</small></span></div>
-        <div className="auth-story-copy">
-          <p className="auth-story-kicker">地图里的世界 · 课堂里的发现</p>
-          <h2 id="auth-story-title">让地理可见，<br />让探究发生。</h2>
-          <p>从一张地图出发，连接教案设计、课堂探究与教学复盘。</p>
-        </div>
-        <svg className="auth-globe-art" viewBox="0 0 640 420" fill="none" aria-hidden="true">
-          <defs>
-            <radialGradient id="auth-globe-fill"><stop stopColor="#23868c" stopOpacity=".24"/><stop offset="1" stopColor="#0b2a3e" stopOpacity=".04"/></radialGradient>
-            <clipPath id="auth-globe-clip"><circle cx="320" cy="218" r="173"/></clipPath>
-          </defs>
-          <ellipse cx="320" cy="218" rx="286" ry="90" transform="rotate(-23 320 218)" stroke="currentColor" strokeOpacity=".17" strokeDasharray="5 8"/>
-          <circle cx="320" cy="218" r="173" fill="url(#auth-globe-fill)" stroke="currentColor" strokeOpacity=".5"/>
-          <g stroke="currentColor" strokeOpacity=".2" clipPath="url(#auth-globe-clip)">
-            <ellipse cx="320" cy="218" rx="70" ry="173"/><ellipse cx="320" cy="218" rx="137" ry="173"/>
-            <ellipse cx="320" cy="218" rx="173" ry="59"/><ellipse cx="320" cy="218" rx="173" ry="125"/>
-            <path d="M147 218h346M320 45v346"/>
-            <path d="m201 116 32-16 18 15 35-8 21 25-19 18-4 32-32 4-19 31-22-15-5-29-30-14zM253 220l30 5 19 30-10 30-20 18-8 48-18-22-6-39-23-29zM335 107l36-22 52 29 33 37-17 22-39-13-15 32-29 5-15 39-27-20 8-42-22-24zM397 283l38-15 20 28-17 26-41-12z" fill="currentColor" fillOpacity=".2" strokeOpacity=".45"/>
-          </g>
-          <path d="M256 176Q340 87 411 179M256 176Q284 221 272 270" stroke="currentColor" strokeOpacity=".65" strokeDasharray="4 6"/>
-          <g fill="currentColor"><circle cx="256" cy="176" r="5"/><circle cx="411" cy="179" r="5"/><circle cx="272" cy="270" r="4"/></g>
-          <circle cx="411" cy="179" r="13" stroke="currentColor" strokeOpacity=".4"/>
-        </svg>
-        <ol className="auth-teaching-cycle">
-          <li><span>01 / 课前</span><strong>设计一堂好课</strong><p>教案共创 · 资源准备</p></li>
-          <li><span>02 / 课中</span><strong>在地图上探究</strong><p>可视化工具 · 智能助教</p></li>
-          <li><span>03 / 课后</span><strong>让教学有回响</strong><p>课堂记录 · 复盘改进</p></li>
-        </ol>
-      </section>
-      <main className="auth-card auth-entry-card" aria-labelledby="auth-title">
-        <div className="auth-brand" aria-hidden="true">
-          <BrandLogo className="auth-brand-logo" />
-          <span>GeoBot</span>
-        </div>
-        <p className="auth-eyebrow">{bootstrap ? "开始使用 GEOBOT" : "欢迎回到 GEOBOT"}</p>
-        <h1 id="auth-title">{bootstrap ? "创建系统管理员" : "教师工作台登录"}</h1>
-        <p className="auth-subtitle">
-          {bootstrap
-            ? "首次启动仅需初始化一个管理员账号，之后由管理员为教师开户。"
-            : "登录教师账号，继续你的地理课堂。"}
-        </p>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            setPending(true);
-            void onSubmit({ email, nickname, password, bootstrapKey }).finally(() => setPending(false));
-          }}
-        >
-          <label className="auth-field">
-            <span>邮箱</span>
-            <input
-              autoFocus
-              type="email"
-              autoComplete="username"
-              inputMode="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="例如：teacher@school.edu.cn"
-              required
-            />
-          </label>
-          {bootstrap ? (
-            <label className="auth-field">
-              <span>昵称</span>
-              <input
-                autoComplete="nickname"
-                value={nickname}
-                onChange={(event) => setNickname(event.target.value)}
-                placeholder="用于课堂工作台显示"
-                required
-              />
-            </label>
-          ) : null}
-          {bootstrap ? (
-            <label className="auth-field">
-              <span>部署初始化密钥（仅远程部署需要）</span>
-              <input
-                type="password"
-                autoComplete="off"
-                value={bootstrapKey}
-                onChange={(event) => setBootstrapKey(event.target.value)}
-                placeholder="本机初始化可留空"
-              />
-            </label>
-          ) : null}
-          <label className="auth-field">
-            <span>密码</span>
-            <span className="auth-password">
-              <input
-                type={showPassword ? "text" : "password"}
-                autoComplete={bootstrap ? "new-password" : "current-password"}
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                onKeyUp={(event) => setCapsLock(event.getModifierState("CapsLock"))}
-                onKeyDown={(event) => setCapsLock(event.getModifierState("CapsLock"))}
-                minLength={bootstrap ? 8 : undefined}
-                required
-              />
-              <button type="button" onClick={() => setShowPassword((value) => !value)}>
-                {showPassword ? "隐藏" : "显示"}
+        <section className="auth-story" aria-labelledby="auth-story-title">
+          <div className="auth-story-brand anim-rise">
+            <BrandLogo className="auth-story-logo" />
+            <span>GeoBot<small>地理智能教学平台</small></span>
+          </div>
+          <div className="auth-story-copy anim-rise">
+            <p className="auth-story-kicker">地图里的世界 · 课堂里的发现</p>
+            <h2 id="auth-story-title">让地理可见，<br />让探究发生。</h2>
+            <p>从一张地图出发，连接教案设计、课堂探究与教学复盘。</p>
+          </div>
+          <div className="auth-globe-wrap anim-rise" aria-hidden="true">
+            <img className="auth-globe-img auth-globe-img-dark" src={globeDark} alt="" draggable={false} loading="eager" decoding="async" />
+            <img className="auth-globe-img auth-globe-img-light" src={globeLight} alt="" draggable={false} loading="eager" decoding="async" />
+          </div>
+          <ol className="auth-teaching-cycle anim-rise">
+            <li><span>01 / 课前</span><strong>设计一堂好课</strong><p>教案共创 · 资源准备</p></li>
+            <li><span>02 / 课中</span><strong>在地图上探究</strong><p>可视化工具 · 智能助教</p></li>
+            <li><span>03 / 课后</span><strong>让教学有回响</strong><p>课堂记录 · 复盘改进</p></li>
+          </ol>
+        </section>
+        <main className="auth-card auth-entry-card anim-rise" aria-labelledby="auth-title">
+          <div className="auth-brand" aria-hidden="true">
+            <BrandLogo className="auth-brand-logo" />
+            <span>GeoBot</span>
+          </div>
+          <p className="auth-eyebrow">{bootstrap ? "开始使用 GEOBOT" : "欢迎回到 GEOBOT"}</p>
+          <h1 id="auth-title">{bootstrap ? "创建系统管理员" : mode === "signup" ? "申请教师账号" : "教师工作台登录"}</h1>
+          <p className="auth-subtitle">
+            {bootstrap
+              ? "首次启动仅需初始化一个管理员账号，之后由管理员为教师开户。"
+              : mode === "signup"
+                ? "提交注册申请，管理员审核通过后即可登录使用。"
+                : "登录教师账号，继续你的地理课堂。"}
+          </p>
+          {signupAllowed ? (
+            <div className="auth-mode-switch" role="group" aria-label="登录或注册">
+              <button
+                type="button"
+                aria-pressed={mode === "signin"}
+                className={mode === "signin" ? "active" : ""}
+                onClick={() => switchTo("signin")}
+              >
+                登录
               </button>
-            </span>
-          </label>
-          {capsLock ? <p className="auth-hint">Caps Lock 已开启</p> : null}
-          {bootstrap ? <p className="auth-hint">至少 8 位，并包含字母、数字、特殊符号中的至少两种。</p> : null}
-          {error ? <p className="auth-error" role="alert">{error}</p> : null}
-          <button className="auth-primary" type="submit" disabled={pending}>
-            {pending ? "请稍候…" : bootstrap ? "创建并进入系统" : "登录"}
-          </button>
-        </form>
-        <footer>仅面向教师与管理员 · 不开放学生注册</footer>
-      </main>
+              <button
+                type="button"
+                aria-pressed={mode === "signup"}
+                className={mode === "signup" ? "active" : ""}
+                onClick={() => switchTo("signup")}
+              >
+                注册
+              </button>
+            </div>
+          ) : null}
+          {signupNotice && mode === "signin" ? (
+            <p className="auth-success" role="status">{signupNotice}</p>
+          ) : null}
+          {mode === "signin" || bootstrap ? (
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                setPending(true);
+                void onSubmit({ email, nickname, password, bootstrapKey }).finally(() => setPending(false));
+              }}
+            >
+              <label className="auth-field">
+                <span>邮箱</span>
+                <input
+                  autoFocus
+                  type="email"
+                  autoComplete="username"
+                  inputMode="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="例如：teacher@school.edu.cn"
+                  required
+                />
+              </label>
+              {bootstrap ? (
+                <label className="auth-field">
+                  <span>昵称</span>
+                  <input
+                    autoComplete="nickname"
+                    value={nickname}
+                    onChange={(event) => setNickname(event.target.value)}
+                    placeholder="用于课堂工作台显示"
+                    required
+                  />
+                </label>
+              ) : null}
+              {bootstrap ? (
+                <label className="auth-field">
+                  <span>部署初始化密钥（仅远程部署需要）</span>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={bootstrapKey}
+                    onChange={(event) => setBootstrapKey(event.target.value)}
+                    placeholder="本机初始化可留空"
+                  />
+                </label>
+              ) : null}
+              <label className="auth-field">
+                <span>密码</span>
+                <span className="auth-password">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    autoComplete={bootstrap ? "new-password" : "current-password"}
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    onKeyUp={(event) => setCapsLock(event.getModifierState("CapsLock"))}
+                    onKeyDown={(event) => setCapsLock(event.getModifierState("CapsLock"))}
+                    minLength={bootstrap ? 8 : undefined}
+                    required
+                  />
+                  <button type="button" onClick={() => setShowPassword((value) => !value)}>
+                    {showPassword ? "隐藏" : "显示"}
+                  </button>
+                </span>
+              </label>
+              {capsLock ? <p className="auth-hint">Caps Lock 已开启</p> : null}
+              {bootstrap ? <p className="auth-hint">{PASSWORD_HINT}</p> : null}
+              {error ? <p className="auth-error" role="alert">{error}</p> : null}
+              <button className="auth-primary" type="submit" disabled={pending}>
+                {pending ? "请稍候…" : bootstrap ? "创建并进入系统" : "登录"}
+              </button>
+            </form>
+          ) : (
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!pending) void handleSignup();
+              }}
+            >
+              <label className="auth-field">
+                <span>邮箱</span>
+                <input
+                  type="email"
+                  autoComplete="username"
+                  inputMode="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="例如：teacher@school.edu.cn"
+                  required
+                />
+              </label>
+              <label className="auth-field">
+                <span>昵称</span>
+                <input
+                  autoComplete="nickname"
+                  value={nickname}
+                  onChange={(event) => setNickname(event.target.value)}
+                  placeholder="用于课堂工作台显示"
+                  maxLength={80}
+                  required
+                />
+              </label>
+              <label className="auth-field">
+                <span>学校/机构（可选）</span>
+                <input
+                  autoComplete="organization"
+                  value={organization}
+                  onChange={(event) => setOrganization(event.target.value)}
+                  placeholder="例如：上海市某中学"
+                  maxLength={120}
+                />
+              </label>
+              <label className="auth-field">
+                <span>申请说明（可选）</span>
+                <textarea
+                  value={applicationNote}
+                  onChange={(event) => setApplicationNote(event.target.value)}
+                  placeholder="简要说明教学场景，帮助管理员更快审核"
+                  maxLength={300}
+                  rows={3}
+                />
+              </label>
+              <label className="auth-field">
+                <span>密码</span>
+                <span className="auth-password">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    autoComplete="new-password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    onKeyUp={(event) => setCapsLock(event.getModifierState("CapsLock"))}
+                    onKeyDown={(event) => setCapsLock(event.getModifierState("CapsLock"))}
+                    minLength={8}
+                    maxLength={128}
+                    required
+                  />
+                  <button type="button" onClick={() => setShowPassword((value) => !value)}>
+                    {showPassword ? "隐藏" : "显示"}
+                  </button>
+                </span>
+              </label>
+              <label className="auth-field">
+                <span>确认密码</span>
+                <input
+                  type={showPassword ? "text" : "password"}
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  minLength={8}
+                  maxLength={128}
+                  required
+                />
+              </label>
+              <p className="auth-hint">{PASSWORD_HINT}</p>
+              {capsLock ? <p className="auth-hint">Caps Lock 已开启</p> : null}
+              {signupError ? <p className="auth-error" role="alert">{signupError}</p> : null}
+              <button className="auth-primary" type="submit" disabled={pending}>
+                {pending ? "正在提交申请…" : "提交注册申请"}
+              </button>
+            </form>
+          )}
+          <footer>
+            {registrationMode === "approval" || registrationMode === "open"
+              ? "面向地理教师与教学管理者 · 支持教师注册申请"
+              : "面向地理教师与教学管理者 · 不开放学生注册"}
+            <span className="auth-footer-note">不开放学生注册 · 审核通过后才能登录</span>
+          </footer>
+        </main>
       </div>
     </div>
   );
 }
+
+const APPROVAL_NOTICE_DEFAULT = "注册申请已提交，管理员审核通过后方可登录。";
 
 export function PasswordChangeCard({
   forced = false,
