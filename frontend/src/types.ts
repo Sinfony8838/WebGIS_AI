@@ -624,8 +624,11 @@ export type HealthResponse = {
   /** 本地流式语音识别（sherpa-onnx WebSocket）：available=false 时前端降级 Web Speech。 */
   voice_asr?: {
     available: boolean;
+    /** 就绪状态：ready / initializing / load_failed / incomplete / not_installed / disabled。 */
+    state?: string;
     reason?: string;
     model?: string;
+    model_dir?: string;
   };
   vision?: {
     enabled: boolean;

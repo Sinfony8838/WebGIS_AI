@@ -510,7 +510,7 @@ export default function App({
   const [interactionChatLog, setInteractionChatLog] = useState<ChatMessage[]>([
     {
       role: "assistant",
-      text: "智能交互模式已就绪：点麦克风说指令，或开启常开聆听后说“小智，切换到三维地球”。高频指令走快速通道，秒级响应。",
+      text: "智能交互模式已就绪：进入本页即自动聆听，直接说出指令（如“切换到三维地球”），无需每次加唤醒词；嘈杂环境可在下方开启「仅唤醒后执行」。高频指令走快速通道，秒级响应。",
       timestamp: timestamp()
     }
   ]);
@@ -3821,6 +3821,8 @@ export default function App({
           ttsEnabled={ttsEnabled}
           onTtsToggle={(enabled) => setTtsEnabled(enabled)}
           voiceStreamAvailable={Boolean(health?.voice_asr?.available)}
+          voiceAsrState={health?.voice_asr?.state || ""}
+          voiceAsrReason={health?.voice_asr?.reason || ""}
           onListeningChange={setOverlayListening}
           onPartialTranscript={setOverlayPartial}
           onCapturedCommand={(command) => {

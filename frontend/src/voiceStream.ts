@@ -3,61 +3,70 @@
  *
  * The backend runs sherpa-onnx (streaming Paraformer zh-en) and returns
  * `{"type":"partial"|"final","text"}` JSON events. The browser side only
- * captures audio: getUserMedia → AudioContext → AudioWorklet downsampler
- * (48 kHz float → 16 kHz PCM16, batched into ~128 ms chunks) → binary
- * WebSocket frames. Browsers without AudioWorklet or mic permission fall
- * back to Web Speech via CopilotWidget.
+ * captures audio: getUserMedia → AudioContext (pinned to 16 kHz so the
+ * browser itself resamples 44.1/48 kHz input; the worklet downsampler with
+ * fractional phase-carry is the safety net for engines that ignore the
+ * rate hint) → PCM16, batched into ~128 ms chunks → binary WebSocket
+ * frames. Browsers without AudioWorklet or mic permission fall back to
+ * Web Speech via CopilotWidget.
+ *
+ * Reliability contract (consumed by voiceSession.ts):
+ * - failures surface as typed {@link VoiceStreamError}s with actionable
+ *   Chinese messages (permission denied / no device / timeout / ASR down);
+ * - the server can reject the stream with a JSON error event before
+ *   closing (4403), reported via onServerError + onClose;
+ * - `stop()` flushes exactly once, aborts cleanly, and never leaves the
+ *   mic track or the WebSocket behind.
  */
+import { buildDownsamplerWorkletSource, TARGET_SAMPLE_RATE } from "./voiceResampler";
 
-const TARGET_SAMPLE_RATE = 16000;
-const CHUNK_SAMPLES = 2048;
-
-const DOWNSAMPLER_WORKLET = `
-class PcmDownsampler extends AudioWorkletProcessor {
-  constructor() {
-    super();
-    this.ratio = sampleRate / ${TARGET_SAMPLE_RATE};
-    this.acc = 0;
-    this.count = 0;
-    this.chunk = new Float32Array(${CHUNK_SAMPLES});
-    this.chunkPos = 0;
-  }
-  process(inputs) {
-    const input = inputs[0];
-    if (!input || !input[0]) return true;
-    const channel = input[0];
-    for (let i = 0; i < channel.length; i++) {
-      this.acc += channel[i];
-      this.count += 1;
-      if (this.count >= this.ratio) {
-        const sample = Math.max(-1, Math.min(1, this.acc / this.count));
-        this.acc = 0;
-        this.count = 0;
-        this.chunk[this.chunkPos++] = sample;
-        if (this.chunkPos >= this.chunk.length) {
-          const pcm = new Int16Array(this.chunk.length);
-          for (let j = 0; j < this.chunk.length; j++) {
-            pcm[j] = this.chunk[j] < 0 ? this.chunk[j] * 0x8000 : this.chunk[j] * 0x7fff;
-          }
-          this.port.postMessage(pcm, [pcm.buffer]);
-          this.chunkPos = 0;
-        }
-      }
-    }
-    return true;
-  }
-}
-registerProcessor("pcm-downsampler", PcmDownsampler);
-`;
+const CONNECT_TIMEOUT_MS = 8000;
+const FLUSH_TIMEOUT_MS = 2000;
 
 export type VoiceStreamState = "connecting" | "open" | "closed";
+
+export type VoiceStreamErrorKind =
+  | "permission_denied"
+  | "no_device"
+  | "connect_timeout"
+  | "unauthorized"
+  | "asr_unavailable"
+  | "audio_worklet_unsupported"
+  | "connection_failed"
+  | "unknown";
+
+const ERROR_MESSAGES: Record<VoiceStreamErrorKind, string> = {
+  permission_denied: "麦克风权限被拒绝。请在浏览器地址栏的权限设置中允许麦克风，然后点击重试。",
+  no_device: "没有检测到可用麦克风。请连接或选择录音设备后重试。",
+  connect_timeout: "连接本地语音识别服务超时，请确认后端已启动后重试。",
+  unauthorized: "登录状态已失效，请重新登录后再使用语音。",
+  asr_unavailable: "本地语音识别不可用（模型未就绪）。可在服务端运行 scripts/download_voice_models.py，或改用文字输入。",
+  audio_worklet_unsupported: "当前浏览器不支持音频采集（AudioWorklet），请使用桌面版 Chrome 或 Edge。",
+  connection_failed: "本地语音识别连接中断。",
+  unknown: "语音识别出现未知错误，可重试或改用文字输入。"
+};
+
+export class VoiceStreamError extends Error {
+  readonly kind: VoiceStreamErrorKind;
+
+  constructor(kind: VoiceStreamErrorKind, message?: string) {
+    super(message || ERROR_MESSAGES[kind]);
+    this.name = "VoiceStreamError";
+    this.kind = kind;
+  }
+}
+
+export type VoiceStreamCloseInfo = { code: number; reason: string };
 
 export type VoiceStreamEvents = {
   onPartial?: (text: string) => void;
   onFinal?: (text: string) => void;
   onOpen?: () => void;
-  onError?: (detail: string) => void;
-  onClose?: () => void;
+  /** Fatal setup/transport failure (typed, with an actionable message). */
+  onError?: (error: VoiceStreamError) => void;
+  /** Server refused the stream (JSON error event before a 4403 close). */
+  onServerError?: (payload: { reason: string; detail?: string }) => void;
+  onClose?: (info: VoiceStreamCloseInfo) => void;
 };
 
 export type VoiceStreamHandle = {
@@ -77,6 +86,20 @@ export function audioWorkletSupported(targetWindow: Window & typeof globalThis =
   return typeof (targetWindow as WindowWithAudioWorklet).AudioWorkletNode === "function";
 }
 
+function mapMediaError(exc: unknown): VoiceStreamError {
+  const name = exc instanceof DOMException ? exc.name : exc instanceof Error ? exc.name : "";
+  if (name === "NotAllowedError" || name === "SecurityError" || name === "PermissionDeniedError") {
+    return new VoiceStreamError("permission_denied");
+  }
+  if (name === "NotFoundError" || name === "DevicesNotFoundError" || name === "OverconstrainedError") {
+    return new VoiceStreamError("no_device");
+  }
+  if (name === "NotReadableError" || name === "TrackStartError") {
+    return new VoiceStreamError("no_device", "麦克风被其他应用占用或无法读取，请关闭占用它的程序后重试。");
+  }
+  return new VoiceStreamError("unknown", exc instanceof Error ? exc.message : String(exc));
+}
+
 export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): Promise<VoiceStreamHandle> {
   return new Promise<VoiceStreamHandle>((resolve, reject) => {
     let state: VoiceStreamState = "connecting";
@@ -87,7 +110,9 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
     let socket: WebSocket | null = null;
     let flushResolver: ((text: string | null) => void) | null = null;
     let flushTimer: number | null = null;
+    let connectTimer: number | null = null;
     let stopPromise: Promise<string | null> | null = null;
+    let closeInfo: VoiceStreamCloseInfo = { code: 0, reason: "" };
 
     const teardown = () => {
       try {
@@ -118,6 +143,10 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
     const finish = () => {
       if (state === "closed") return;
       state = "closed";
+      if (connectTimer !== null) {
+        window.clearTimeout(connectTimer);
+        connectTimer = null;
+      }
       if (flushTimer !== null) {
         window.clearTimeout(flushTimer);
         flushTimer = null;
@@ -125,13 +154,13 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
       flushResolver?.(null);
       flushResolver = null;
       teardown();
-      events.onClose?.();
+      events.onClose?.(closeInfo);
     };
 
     const handleEvent = (data: string) => {
-      let parsed: { type?: string; text?: string };
+      let parsed: { type?: string; text?: string; reason?: string; detail?: string } | null = null;
       try {
-        parsed = JSON.parse(data) as { type?: string; text?: string };
+        parsed = JSON.parse(data) as { type?: string; text?: string; reason?: string; detail?: string };
       } catch {
         return;
       }
@@ -148,14 +177,17 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
         }
       } else if (parsed.type === "partial") {
         events.onPartial?.(text);
+      } else if (parsed.type === "error") {
+        events.onServerError?.({ reason: String(parsed.reason || "unavailable"), detail: String(parsed.detail || "") });
       }
     };
 
-    const fail = (detail: string) => {
+    const fail = (error: VoiceStreamError) => {
       if (state === "closed") return;
+      closeInfo = { code: 0, reason: error.kind };
       finish();
       closeSocket();
-      reject(new Error(detail));
+      reject(error);
     };
 
     let wsUrl = `${apiBase.replace(/^http/, "ws")}/assistant/voice/stream`;
@@ -166,11 +198,22 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
     socket = new WebSocket(wsUrl);
     socket.binaryType = "arraybuffer";
 
+    // Covers "backend down / wrong port / firewall". The mic permission
+    // prompt is allowed to take longer: this timer is cleared once the
+    // socket opens, before getUserMedia runs.
+    connectTimer = window.setTimeout(() => {
+      fail(new VoiceStreamError("connect_timeout"));
+    }, CONNECT_TIMEOUT_MS);
+
     socket.onopen = () => {
+      if (connectTimer !== null) {
+        window.clearTimeout(connectTimer);
+        connectTimer = null;
+      }
       void (async () => {
         try {
           if (!audioWorkletSupported()) {
-            throw new Error("AudioWorklet not supported");
+            throw new VoiceStreamError("audio_worklet_unsupported");
           }
           stream = await navigator.mediaDevices.getUserMedia({
             audio: {
@@ -184,8 +227,12 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
             teardown();
             return;
           }
-          audioContext = new AudioContext();
-          const moduleUrl = URL.createObjectURL(new Blob([DOWNSAMPLER_WORKLET], { type: "application/javascript" }));
+          // Pin the context to 16 kHz: Chromium resamples the mic stream
+          // natively, so 44.1/48 kHz hardware input becomes exact 16 kHz
+          // here. If an engine ignores the hint, the worklet's fractional
+          // resampler below still produces true 16 kHz output.
+          audioContext = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+          const moduleUrl = URL.createObjectURL(new Blob([buildDownsamplerWorkletSource()], { type: "application/javascript" }));
           try {
             await audioContext.audioWorklet.addModule(moduleUrl);
           } finally {
@@ -225,7 +272,7 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
                     finish();
                     closeSocket();
                   }
-                }, 2000);
+                }, FLUSH_TIMEOUT_MS);
               });
               return stopPromise;
             },
@@ -238,7 +285,7 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
             state: () => state,
           });
         } catch (exc) {
-          fail(exc instanceof Error ? exc.message : String(exc));
+          fail(exc instanceof VoiceStreamError ? exc : mapMediaError(exc));
         }
       })();
     };
@@ -251,15 +298,16 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
 
     socket.onerror = () => {
       if (state === "connecting") {
-        fail("voice stream connection failed");
+        fail(new VoiceStreamError("connection_failed"));
       }
     };
 
     socket.onclose = (event: CloseEvent) => {
+      closeInfo = { code: event.code, reason: event.reason || "" };
       if (state === "connecting") {
-        const reason =
-          event.code === 4401 ? "unauthorized" : event.code === 4403 ? "voice_asr_unavailable" : "connection closed";
-        fail(reason);
+        const kind: VoiceStreamErrorKind =
+          event.code === 4401 ? "unauthorized" : event.code === 4403 ? "asr_unavailable" : "connection_failed";
+        fail(new VoiceStreamError(kind));
         return;
       }
       flushResolver?.(null);

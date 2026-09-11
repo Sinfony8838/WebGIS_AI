@@ -340,6 +340,10 @@ class WebGISRuntime:
         )
         self.timeline_service = TimelineService(self.minimax_client)
         self.voice_asr = VoiceAsrEngine(self.config)
+        # Preload the ONNX recognizer in the background so the first browser
+        # voice session connects instantly and /health reports "initializing"
+        # while the model is still loading instead of a slow first connect.
+        self.voice_asr.warm_up()
         self.classroom = ClassroomWorkflowRuntime(self)
         self.session_engine.set_session_stats_provider(self._session_statistics_for_assistant)
         self._normalize_loaded_projects()
