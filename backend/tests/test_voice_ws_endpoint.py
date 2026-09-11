@@ -108,13 +108,15 @@ class VoiceStreamEndpointTest(unittest.TestCase):
         self.assertEqual(session.feed_calls, [b"\x01\x00" * 160])
 
     def test_create_session_failure_returns_load_failed_and_4403(self) -> None:
-        # 文件在但真实加载失败：available 通过、create_session 抛异常。
-        engine = make_fake_engine(available=False, state="load_failed", reason="recognizer_init_failed: boom")
+        # 健康检查刚通过、真实懒加载随后失败：连接已 accept，不能二次握手。
+        engine = make_fake_engine(available=True)
+        engine.create_session.side_effect = RuntimeError("recognizer_init_failed: boom")
         mock.patch.object(app_main.runtime, "voice_asr", engine).start()
         with self.client.websocket_connect("/assistant/voice/stream") as websocket:
             payload = websocket.receive_json()
             self.assertEqual(payload["type"], "error")
             self.assertEqual(payload["reason"], "load_failed")
+            self.assertEqual(payload["detail"], "recognizer_init_failed: boom")
             with self.assertRaises(WebSocketDisconnect) as ctx:
                 websocket.receive_text()
         self.assertEqual(ctx.exception.code, 4403)
