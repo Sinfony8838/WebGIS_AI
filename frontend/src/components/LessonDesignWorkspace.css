@@ -1,0 +1,52 @@
+/* LessonDesignWorkspace 专属样式：本轮焦点卡 + 三个快速操作按钮。
+   其余 ldw-* 样式集中在 lesson-workflow.css（由 App.tsx 引入）。 */
+
+/* 本轮焦点：刚修改 / 还缺 / 下一步确认 */
+.ldw-focus {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 2px;
+  padding: 10px 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  background: #f8fbff;
+  color: #0f172a;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.ldw-focus-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.ldw-focus-label {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: #1e3a8a;
+  white-space: nowrap;
+}
+.ldw-focus-row > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ldw-focus-question {
+  display: block;
+  margin-top: 2px;
+  color: #475569;
+}
+.ldw-focus-note {
+  margin: 2px 0 0;
+  padding-top: 6px;
+  border-top: 1px dashed #dbe4f0;
+  color: #92400e;
+  font-size: 11px;
+}
+
+/* 快速操作：生成完整初稿 / 采用当前建议并继续 / 只修改当前环节 */
+.ldw-quick-actions {
+  justify-content: flex-start;
+}
+.ldw-quick-actions .toolbar-button.compact {
+  font-size: 12px;
+}

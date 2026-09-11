@@ -511,6 +511,154 @@ class LessonDesignServiceTest(unittest.TestCase):
         self.assertIn("WebGIS-AI", core_xml)
         self.assertNotIn("张珂", path.read_bytes().decode("latin1", errors="ignore"))
 
+    def test_full_requirement_paragraph_prefills_multiple_sections(self) -> None:
+        """验收：一段完整需求一次生成多环节初稿，且全部保持待确认。"""
+        service = self.runtime.classroom.lesson_design
+        design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
+        message = (
+            "设计一节胡焕庸线与中国人口分布课，45分钟，重点分析东南密集西北稀疏，"
+            "并安排地图观察和课堂提问。"
+        )
+        result = service.turn(design["design_id"], message, design["revision"])
+        draft = result["draft"]
+        self.assertEqual(result["generation_mode"], "draft_rules")
+        self.assertEqual(draft["title"], "胡焕庸线与中国人口分布")
+        self.assertEqual(draft["duration_minutes"], 45)
+        self.assertEqual(draft["requirements"]["raw"], message)
+        self.assertGreaterEqual(len(draft["objectives"]), 3)
+        self.assertTrue(draft["core_questions"]["core"])
+        self.assertGreaterEqual(len(draft["core_questions"]["sub_questions"]), 2)
+        self.assertTrue(any("胡焕庸" in stage["title"] for stage in draft["stages"]))
+        self.assertEqual(sum(int(stage["minutes"]) for stage in draft["stages"]), 45)
+        for stage in draft["stages"]:
+            self.assertTrue(stage["material"])
+            self.assertTrue(stage["question_chain"])
+            self.assertTrue(stage["student_activities"])
+            self.assertTrue(stage["knowledge_conclusion"])
+        self.assertTrue(draft["homework"]["basic"])
+        self.assertTrue(draft["homework"]["inquiry"])
+        self.assertTrue(result["capability_bindings"])
+        self.assertNotEqual(result["section_status"].get("stages"), "confirmed")
+        for key in ("requirements", "objectives", "core_questions", "stages", "homework", "capabilities"):
+            self.assertEqual(result["section_status"].get(key), "proposed")
+        self.assertTrue(any("待确认" in item for item in [result["assistant_message"]]))
+        self.assertIn("教学建议", result["assistant_message"])
+        focus = result["focus_summary"]
+        self.assertIn("教学过程", focus["changed_labels"])
+        self.assertTrue(focus["next_confirm_sections"])
+        self.assertTrue(focus["next_confirm_question"])
+        # 未审核内容不能直接定稿
+        with self.assertRaisesRegex(ValueError, "请先逐项确认"):
+            service.finalize(design["design_id"], result["revision"])
+        report = service.rehearse(design["design_id"])
+        self.assertTrue(report["ready"], report["errors"])
+
+    def test_full_draft_does_not_overwrite_existing_or_confirmed_sections(self) -> None:
+        """完整初稿只填空缺章节；已确认章节和已有内容一律不覆盖。"""
+        service = self.runtime.classroom.lesson_design
+        design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
+        first = service.turn(design["design_id"], "高一、40分钟、人口迁移", design["revision"])
+        stored = self.store.get_lesson_design(design["design_id"])
+        stored.draft["objectives"] = ["教师目标一", "教师目标二", "教师目标三"]
+        stored.draft["stages"] = [{
+            "stage_id": "s1", "title": "教师环节", "minutes": 40, "material": "教材图",
+            "question_chain": ["教师问题"], "teacher_activities": ["教师活动"],
+            "student_activities": ["学生活动"], "knowledge_conclusion": "教师结论",
+            "design_intent": "教师意图",
+            "questions": [{"question_id": "s1q1", "type": "open", "text": "教师问题",
+                           "options": [], "answer_index": None, "expected_points": [], "misconceptions": []}],
+        }]
+        self.store.upsert_lesson_design(stored)
+        result = service.turn(
+            design["design_id"],
+            "生成完整初稿：设计一节人口迁移课，重点分析推拉因素",
+            self.store.get_lesson_design(design["design_id"]).revision,
+        )
+        draft = result["draft"]
+        self.assertEqual(draft["objectives"], ["教师目标一", "教师目标二", "教师目标三"])
+        self.assertEqual(draft["stages"][0]["title"], "教师环节")
+        # 空缺章节仍被预填
+        self.assertTrue(draft["core_questions"]["core"])
+        self.assertTrue(draft["curriculum_interpretation"])
+        self.assertTrue(any("未覆盖" in item for item in [result["assistant_message"]]))
+        # 已确认章节保持确认状态（requirements 在首轮已确认）
+        accepted = self.runtime.classroom.resolve_lesson_design(
+            design["design_id"], "requirements", "accept", "",
+            self.store.get_lesson_design(design["design_id"]).revision,
+        )
+        self.assertEqual(accepted["design"]["section_status"]["requirements"], "confirmed")
+
+    def test_scoped_turn_only_modifies_current_step_sections(self) -> None:
+        """「只修改当前环节」：补丁只落当前步骤章节，改完留在本步等待复核。"""
+        service = self.runtime.classroom.lesson_design
+        design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
+        first = service.turn(design["design_id"], "高一40分钟《人口分布》", design["revision"])
+        stored = self.store.get_lesson_design(design["design_id"])
+        stored.draft["objectives"] = ["描述分布", "解释成因", "迁移方法"]
+        stored.draft["stages"] = [{
+            "stage_id": "s1", "title": "导入", "minutes": 10, "material": "人口分布图",
+            "question_chain": ["差异？"], "teacher_activities": ["引导"],
+            "student_activities": ["读图"], "knowledge_conclusion": "分布不均",
+            "design_intent": "观察",
+            "questions": [{"question_id": "s1q1", "type": "open", "text": "人口分布有何差异？",
+                           "options": [], "answer_index": None, "expected_points": [], "misconceptions": []}],
+        }]
+        stored.draft["board_design"] = "板书"
+        stored.current_step = "process"
+        self.store.upsert_lesson_design(stored)
+        revised_stage = dict(stored.draft["stages"][0], minutes=12)
+        cross_section_patch = {
+            "reply": "已调整", "section_patch": {"stages": [revised_stage], "objectives": ["越权目标"]},
+            "next_step": "question_matching", "source_refs": [], "capability_bindings": [], "suggestions": [],
+        }
+        with patch.object(service, "_ask_minimax", return_value=cross_section_patch):
+            result = service.turn(
+                design["design_id"], "只修改当前环节：把导入调整为12分钟",
+                self.store.get_lesson_design(design["design_id"]).revision, "process",
+            )
+        self.assertEqual(result["draft"]["objectives"], ["描述分布", "解释成因", "迁移方法"])
+        self.assertEqual(result["draft"]["stages"][0]["minutes"], 12)
+        self.assertEqual(result["section_status"].get("objectives"), "pending")
+        self.assertEqual(result["next_step"], "process")
+        self.assertEqual(self.store.get_lesson_design(design["design_id"]).pending_next_step, "")
+        self.assertEqual(result["focus_summary"]["changed_labels"], ["教学过程"])
+        # 空指令必须提示教师先写修改内容
+        with self.assertRaisesRegex(ValueError, "只修改当前环节"):
+            service.turn(
+                design["design_id"], "只修改当前环节",
+                self.store.get_lesson_design(design["design_id"]).revision, "process",
+            )
+
+    def test_focus_summary_supports_continuous_adoption(self) -> None:
+        """每轮突出刚改/还缺/下一步；初稿预填后可连续采用建议推进。"""
+        service = self.runtime.classroom.lesson_design
+        design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
+        result = service.turn(
+            design["design_id"],
+            "设计一节胡焕庸线与中国人口分布课，40分钟，重点分析东南密集西北稀疏。",
+            design["revision"],
+        )
+        focus = result["focus_summary"]
+        self.assertIn("教学过程", focus["changed_labels"])
+        self.assertIn("教学建议", focus["unverified_note"])
+        revision = result["revision"]
+        confirmed_seen = False
+        for step in ("requirements", "analysis", "objectives", "core_questions",
+                     "process", "question_matching", "capabilities"):
+            resolved = self.runtime.classroom.resolve_lesson_design(design["design_id"], step, "accept", "", revision)
+            revision = resolved["design"]["revision"]
+            if resolved["focus_summary"]["confirmed_labels"]:
+                confirmed_seen = True
+        self.assertTrue(confirmed_seen)
+        final_view = self.runtime.classroom.get_lesson_design(design["design_id"])
+        self.assertEqual(final_view["current_step"], "rehearsal")
+        required_confirmed = all(
+            final_view["section_status"].get(key) == "confirmed" for key in
+            ("requirements", "curriculum_interpretation", "objectives", "core_questions", "stages", "capabilities")
+        )
+        self.assertTrue(required_confirmed)
+        self.assertTrue(final_view["focus_summary"]["next_confirm_sections"] is not None)
+
 
 if __name__ == "__main__":
     unittest.main()

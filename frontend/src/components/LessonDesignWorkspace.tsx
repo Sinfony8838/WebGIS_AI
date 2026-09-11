@@ -1,4 +1,5 @@
 import { ThinkingIndicator } from "./ThinkingIndicator";
+import "./LessonDesignWorkspace.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   bindLessonDesignQuestion,
@@ -17,6 +18,7 @@ import {
 import type {
   DesignPlanItem,
   LessonDesignSession,
+  LessonDesignTurnResult,
   LessonQuestion,
   LessonRecord,
   LessonStage,
@@ -89,6 +91,23 @@ type DesignRehearsalReport = {
   duration_minutes?: number;
 };
 
+// 后端每轮计算的「本轮焦点」：刚修改 / 还缺 / 下一步确认。
+type FocusSummary = {
+  changed_labels?: string[];
+  confirmed_labels?: string[];
+  missing?: string[];
+  next_confirm_sections?: string[];
+  next_confirm_question?: string;
+  unverified_note?: string;
+};
+
+function sectionHasContent(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some((item) => sectionHasContent(item));
+  if (value && typeof value === "object") return Object.values(value).some((item) => sectionHasContent(item));
+  if (typeof value === "string") return value.trim().length > 0;
+  return value !== null && value !== undefined && value !== false && value !== 0;
+}
+
 export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose, onFinalized, onEnterRehearsal }: Props) {
   const [design, setDesign] = useState<LessonDesignSession | null>(null);
   const [planItems, setPlanItems] = useState<DesignPlanItem[]>([]);
@@ -110,13 +129,16 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
   const [searchText, setSearchText] = useState("");
   const [searchResults, setSearchResults] = useState<QuestionBankQuestion[]>([]);
   const [finalResult, setFinalResult] = useState<{ lesson: LessonRecord; export?: { status: string; artifact?: { metadata?: { public_url?: string } } } } | null>(null);
+  const [focus, setFocus] = useState<FocusSummary | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
-  const applySession = useCallback((payload: LessonDesignSession & Partial<{ plan_items: DesignPlanItem[]; active_design_question: string }>) => {
+  const applySession = useCallback((payload: LessonDesignSession & Partial<{ plan_items: DesignPlanItem[]; active_design_question: string; focus_summary: FocusSummary }>) => {
     setDesign(payload);
     if (payload.plan_items) setPlanItems(payload.plan_items);
     if (payload.active_design_question !== undefined) setActiveQuestion(payload.active_design_question);
+    // 打开/回读旧设计时也立即给出「还缺什么、下一步确认什么」。
+    if (payload.focus_summary !== undefined) setFocus(payload.focus_summary);
   }, []);
 
   useEffect(() => {
@@ -173,6 +195,26 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
     () => Object.values(design?.section_status || {}).filter((status) => status === "confirmed").length,
     [design?.section_status]
   );
+  // 「采用当前建议并继续」仅在当前步骤存在可确认内容时可用（空步骤不可冒充已审核）。
+  const canAdoptCurrent = useMemo(() => {
+    if (!design || design.status === "finalized") return false;
+    const sections = STEP_SECTION_KEYS[currentStep] || [];
+    const values = draft as Record<string, unknown>;
+    return sections.some((key) => sectionHasContent(values[key]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [design, currentStep, draft]);
+  const scopedEditAvailable = (STEP_SECTION_KEYS[currentStep] || []).length > 0 && design?.status !== "finalized";
+
+  function generateFullDraft() {
+    const requirement = input.trim();
+    void runTurn(requirement ? `生成完整初稿：${requirement}` : "生成完整初稿", currentStep);
+  }
+
+  function modifyCurrentStepOnly() {
+    const requirement = input.trim();
+    if (!requirement) return;
+    void runTurn(`只修改当前环节：${requirement}`, currentStep);
+  }
 
   function stepState(key: string): "done" | "active" | "todo" {
     const sections = STEP_SECTION_KEYS[key] || [];
@@ -224,6 +266,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
       setPlanItems(result.plan_items || []);
       setActiveQuestion(result.active_design_question || "");
       setCandidates(result.retrieval_candidates || []);
+      setFocus((result as LessonDesignTurnResult & { focus_summary?: FocusSummary }).focus_summary || null);
       setMessages((previous) => [...previous, { role: "assistant", text: result.assistant_message }]);
       setInput("");
       if (result.rehearsal_report) {
@@ -252,6 +295,9 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
       applySession(result.design);
       setPlanItems(result.design.plan_items || []);
       setActiveQuestion(result.design.active_design_question || "");
+      setFocus(
+        (result as { focus_summary?: FocusSummary }).focus_summary || null
+      );
       setMessages((previous) => [...previous, { role: "assistant", text: "这一部分已确认，我们继续下一步。" }]);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
@@ -269,6 +315,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
       applySession(result.design);
       setPlanItems(result.design.plan_items || []);
       setActiveQuestion(result.design.active_design_question || "");
+      setFocus((result as { focus_summary?: FocusSummary }).focus_summary || null);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
@@ -614,6 +661,32 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
             </div>
             {activeQuestion ? <p className="ldw-active-question" data-testid="ldw-active-question">{activeQuestion}</p> : null}
           </header>
+          {focus ? (
+            <div className="ldw-focus" data-testid="ldw-focus">
+              <div className="ldw-focus-row">
+                <span className="ldw-focus-label">刚修改</span>
+                <span>
+                  {focus.changed_labels?.length
+                    ? focus.changed_labels.join("、")
+                    : focus.confirmed_labels?.length
+                      ? `已确认：${focus.confirmed_labels.join("、")}`
+                      : "本轮草稿内容未变化"}
+                </span>
+              </div>
+              <div className="ldw-focus-row">
+                <span className="ldw-focus-label">还缺</span>
+                <span>{focus.missing?.length ? focus.missing.join("；") : "暂无阻断缺口"}</span>
+              </div>
+              <div className="ldw-focus-row">
+                <span className="ldw-focus-label">下一步确认</span>
+                <span>
+                  {focus.next_confirm_sections?.length ? focus.next_confirm_sections.join(" → ") : "无待确认章节"}
+                  {focus.next_confirm_question ? <small className="ldw-focus-question">{focus.next_confirm_question}</small> : null}
+                </span>
+              </div>
+              {focus.unverified_note ? <p className="ldw-focus-note">{focus.unverified_note}</p> : null}
+            </div>
+          ) : null}
           <div className="ldw-chat" aria-live="polite" data-testid="ldw-chat">
             {messages.map((message, index) => (
               <div key={`${message.role}-${index}`} className={`lesson-design-message ${message.role}`}>
@@ -639,6 +712,38 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
               disabled={busy}
               aria-label="教案设计对话输入"
             />
+            <div className="ldw-actions ldw-quick-actions" data-testid="ldw-quick-actions">
+              <button
+                type="button"
+                className="toolbar-button compact"
+                disabled={busy || !design || design.status === "finalized"}
+                onClick={generateFullDraft}
+                title="按当前输入（可留空）一次预填全部空缺环节，生成后仍需逐项确认"
+                data-testid="ldw-full-draft"
+              >
+                生成完整初稿
+              </button>
+              <button
+                type="button"
+                className="toolbar-button compact primary"
+                disabled={busy || !design || !canAdoptCurrent}
+                onClick={() => void acceptStep(currentStep)}
+                title="确认当前步骤的建议内容并进入下一步；下一章已有建议时可继续点按"
+                data-testid="ldw-adopt-continue"
+              >
+                采用当前建议并继续
+              </button>
+              <button
+                type="button"
+                className="toolbar-button compact"
+                disabled={busy || !design || !input.trim() || !scopedEditAvailable}
+                onClick={modifyCurrentStepOnly}
+                title="只把输入内容应用到当前环节，不覆盖其他章节"
+                data-testid="ldw-scoped-edit"
+              >
+                只修改当前环节
+              </button>
+            </div>
             <div className="ldw-actions">
               <button type="button" className="toolbar-button compact" disabled={busy || !design} onClick={() => void runTurn("返回上一步，重新讨论上一部分")}>
                 返回上一步
