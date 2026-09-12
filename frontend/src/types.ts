@@ -1,5 +1,6 @@
 export type UserRole = "admin" | "teacher";
 export type UserStatus = "active" | "disabled";
+export type RegistrationMode = "closed" | "approval" | "open";
 
 export type AuthUser = {
   user_id: string;
@@ -7,6 +8,7 @@ export type AuthUser = {
   nickname: string;
   role: UserRole;
   status: UserStatus;
+  organization?: string;
   must_change_password: boolean;
   created_at: string;
   updated_at: string;
@@ -25,7 +27,26 @@ export type AuthSession = {
 export type AuthBootstrapStatus = {
   status: string;
   auth_mode: "users" | "legacy_token" | "disabled";
+  registration_mode?: RegistrationMode;
   required: boolean;
+};
+
+export type RegistrationRequestStatus = "pending" | "approved" | "rejected";
+
+export type RegistrationRequest = {
+  request_id: string;
+  email: string;
+  display_name: string;
+  organization: string;
+  application_note: string;
+  status: RegistrationRequestStatus;
+  source_ip: string;
+  user_agent: string;
+  created_at: string;
+  updated_at: string;
+  reviewed_by: string;
+  reviewed_at: string;
+  resulting_user_id: string;
 };
 
 export type AuthAuditLog = {
@@ -624,8 +645,11 @@ export type HealthResponse = {
   /** 本地流式语音识别（sherpa-onnx WebSocket）：available=false 时前端降级 Web Speech。 */
   voice_asr?: {
     available: boolean;
+    /** 就绪状态：ready / initializing / load_failed / incomplete / not_installed / disabled。 */
+    state?: string;
     reason?: string;
     model?: string;
+    model_dir?: string;
   };
   vision?: {
     enabled: boolean;

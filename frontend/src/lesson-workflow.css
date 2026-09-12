@@ -1103,6 +1103,11 @@
   color: #f0bb78;
 }
 
+.question-type-badge.discussion {
+  background: rgba(167, 139, 250, 0.18);
+  color: #c4b5fd;
+}
+
 .class-question-text {
   font-size: 12px;
   line-height: 1.5;

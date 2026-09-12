@@ -5,6 +5,7 @@ const STATUS_LABELS: Record<string, string> = {
   running: "执行中",
   success: "已完成",
   error: "失败",
+  cancelled: "已取消",
   skipped: "已跳过"
 };
 
@@ -13,8 +14,17 @@ const STATUS_ICONS: Record<string, string> = {
   running: "🔄",
   success: "✅",
   error: "❌",
+  cancelled: "⏹️",
   skipped: "⤵️"
 };
+
+function stepStatusLabel(step: WorkflowStepRecord): string {
+  // A step stopped by a teacher cancel is not a failure — name it as one.
+  if (step.error?.code === "STEP_CANCELLED") {
+    return "已取消";
+  }
+  return STATUS_LABELS[step.status] || step.status;
+}
 
 export type WorkflowPanelProps = {
   workflowId: string;
@@ -63,7 +73,7 @@ export function WorkflowPanel(props: WorkflowPanelProps): JSX.Element | null {
                 <strong>{step.id}</strong>
                 <span className="workflow-panel__step-op">{step.op}</span>
                 <span className="workflow-panel__step-status">
-                  {STATUS_LABELS[step.status] || step.status}
+                  {stepStatusLabel(step)}
                 </span>
               </div>
               {step.error ? (

@@ -42,7 +42,7 @@ export function UrbanStudyPanel({active,source,status,onVisit,onSource,onExit}:{
           <button type="submit">连接数据</button>{source&&<button type="button" onClick={()=>onSource(null)}>移除三维数据</button>}
         </form>
       </details>
-      {active&&<button onClick={onExit}>退出城市观察</button>}
+      {active&&<button className="urban-study-exit" onClick={onExit}>退出城市观察</button>}
     </div>
   </details>;
 }

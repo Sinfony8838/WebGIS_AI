@@ -62,6 +62,21 @@ SECTION_LABELS = {
     "homework": "课后作业", "capabilities": "GIS/AI能力", "design_thinking": "设计思路",
     "references": "参考资料", "reflection": "教学反思",
 }
+# 三个明确操作：「生成完整初稿」「采用当前建议并继续」「只修改当前环节」。
+# 前两者通过 turn 消息前缀识别；「采用当前建议并继续」复用 resolve(accept)。
+FULL_DRAFT_COMMAND = "生成完整初稿"
+SCOPED_EDIT_COMMAND = "只修改当前环节"
+SMART_OPTIMIZE_COMMAND = "一键智能优化"
+# 整段需求识别：出现「设计/共创/准备/生成 ……课」的设计意图即视为完整需求，
+# 在预演之前的步骤触发多环节预填（排除课件/课时/课表等非课题词）。
+FULL_DRAFT_INTENT_PATTERN = re.compile(
+    r"(?:设计|共创|准备|生成)[一节一堂一次一个]{0,2}([^，,。；;！!？?\n]{2,40}?)课(?!件|时|表|程|堂)"
+)
+FULL_DRAFT_INTENT_STEPS = frozenset(STEP_KEYS) - {"rehearsal", "confirmation"}
+SCALAR_LABELS = {"title": "课题", "topic": "课题主题", "grade": "年级", "duration_minutes": "课时", "subject": "学科"}
+# 只修改当前环节：一轮补丁只允许落在当前步骤的章节内。
+STEP_PATCH_SCOPES = {step: set(STEP_SECTIONS.get(step, ())) for step in STEP_KEYS}
+STEP_PATCH_SCOPES["requirements"].update({"title", "topic", "grade", "duration_minutes", "subject"})
 
 
 def default_draft() -> Dict[str, Any]:
@@ -273,10 +288,31 @@ class LessonDesignService:
                 "plan_items": self._plan_items(design),
                 "retrieval_candidates": [],
                 "auto_bound_questions": [],
+                "focus_summary": self._focus_summary(design),
                 "active_design_question": self._active_design_question(design),
             }
-        schedule = self._requested_schedule(message) if current_step == "process" else []
-        result = self._ask_minimax(design, current_step, message)
+        # 「只修改当前环节」：本轮生成结果只允许落在当前步骤的章节内。
+        scoped_message = ""
+        if message.startswith(SCOPED_EDIT_COMMAND):
+            scoped_message = message[len(SCOPED_EDIT_COMMAND):].lstrip("：: ，,。\n\r\t")
+            if not scoped_message:
+                raise ValueError("请先在输入框写下要修改的内容，再点「只修改当前环节」。")
+        # 「生成完整初稿」：一段完整需求一次预填多个环节（全部标记待确认）。
+        # 显式指令（按钮）在任何步骤可用；整段需求文本只在预演之前的步骤自动识别，
+        # 且优先级低于「只修改当前环节」（后者明确限定只改当前步骤）。
+        full_draft_extra = self._full_draft_extra(message)
+        if full_draft_extra is None and not scoped_message and current_step in FULL_DRAFT_INTENT_STEPS \
+                and FULL_DRAFT_INTENT_PATTERN.search(message):
+            full_draft_extra = message
+        if full_draft_extra is not None:
+            return self._full_draft_turn(design, message, full_draft_extra, current_step)
+        # 「一键智能优化」：用模型对整份非确认初稿做一次系统性优化；AI 不可用时规则补齐空缺。
+        optimize_focus = self._smart_optimize_focus(message)
+        if optimize_focus is not None:
+            return self._optimize_draft_turn(design, message, optimize_focus, current_step)
+        generation_message = scoped_message or message
+        schedule = self._requested_schedule(generation_message) if current_step == "process" else []
+        result = self._ask_minimax(design, current_step, generation_message)
         generation_mode = "model" if result is not None else "rules"
         if current_step == "process" and schedule:
             stages = (result or {}).get("section_patch", {}).get("stages")
@@ -285,12 +321,16 @@ class LessonDesignService:
                 # Never replace an explicit teacher plan with the generic three-stage template.
                 raise ValueError("本次生成未能按你指定的环节和时长完成，原草稿已保留。请重试，或在教学过程里直接编辑。")
         if result is None:
-            result = self._fallback_turn(design, current_step, message)
+            result = self._fallback_turn(design, current_step, generation_message)
         if current_step == "requirements":
-            result = self._normalize_requirements_result(result, message, design.draft)
+            result = self._normalize_requirements_result(result, generation_message, design.draft)
         patch = result.get("section_patch") if isinstance(result, dict) else {}
         patch = patch if isinstance(patch, dict) else {}
-        protected_questions = self._questions_to_preserve(design.draft, message)
+        if scoped_message:
+            scope = STEP_PATCH_SCOPES.get(current_step, set())
+            patch = {key: value for key, value in patch.items() if key in scope}
+            result["section_patch"] = patch
+        protected_questions = self._questions_to_preserve(design.draft, generation_message)
         if "stages" in patch and not self._preserves_questions(patch["stages"], protected_questions):
             raise ValueError("本次生成改动或遗漏了需保留的题目，原草稿已保留。请重试；题库题和教师录入题请通过题目编辑入口修改。")
         # 已确认章节默认是稳定约束；只有教师明确提出修改/返回时才重新打开。
@@ -304,12 +344,15 @@ class LessonDesignService:
         next_step = str(result.get("next_step") or self._next_step(current_step))
         if next_step not in STEP_KEYS:
             next_step = self._next_step(current_step)
+        if scoped_message:
+            # 只修改当前环节：改完留在本步骤等教师复核，不自动跳步。
+            next_step = current_step
         for key in patch:
             if key in SECTION_KEYS:
                 design.section_status[key] = "proposed"
         if patch:
             design.current_step = current_step
-            design.pending_next_step = next_step
+            design.pending_next_step = "" if scoped_message else next_step
         else:
             design.current_step = next_step
             design.pending_next_step = ""
@@ -363,6 +406,7 @@ class LessonDesignService:
             "plan_items": self._plan_items(design),
             "retrieval_candidates": retrieval_candidates,
             "auto_bound_questions": auto_bound,
+            "focus_summary": self._focus_summary(design, changed_keys=list(patch)),
             "active_design_question": self._active_design_question(design),
         }
 
@@ -386,8 +430,10 @@ class LessonDesignService:
                 if not isinstance(patch_value, dict):
                     raise ValueError("当前步骤的直接编辑内容格式不正确")
                 allowed_group = set(STEP_SECTIONS[section_id])
+                written_keys: List[str] = []
                 for key, item in patch_value.items():
                     if key in allowed_group:
+                        written_keys.append(key)
                         if key == "capabilities":
                             if not isinstance(item, list):
                                 raise ValueError("系统能力配置格式不正确")
@@ -411,7 +457,8 @@ class LessonDesignService:
                 design.revision += 1
                 design.diff_summary = self._build_diff_summary(design)
                 self.store.upsert_lesson_design(design)
-                return {"status": "success", "message": "已保存当前步骤的直接编辑内容。", "design": design.to_dict(), **self.session_view(design)}
+                return {"status": "success", "message": "已保存当前步骤的直接编辑内容。", "design": design.to_dict(),
+                        **self.session_view(design), "focus_summary": self._focus_summary(design, changed_keys=written_keys)}
             if section_id == "duration_minutes":
                 try:
                     patch_value = max(1, int(value))
@@ -428,7 +475,8 @@ class LessonDesignService:
             design.revision += 1
             design.diff_summary = self._build_diff_summary(design)
             self.store.upsert_lesson_design(design)
-            return {"status": "success", "message": "已保存直接编辑内容。", "design": design.to_dict(), **self.session_view(design)}
+            return {"status": "success", "message": "已保存直接编辑内容。", "design": design.to_dict(),
+                    **self.session_view(design), "focus_summary": self._focus_summary(design, changed_keys=[section_id])}
         if normalized_decision in {"accept", "accepted", "确认", "接受"}:
             accepted = []
             for key in section_ids:
@@ -450,7 +498,9 @@ class LessonDesignService:
             message = "好的，我们保留现稿，按你的补充继续修改。"
         design.diff_summary = self._build_diff_summary(design)
         self.store.upsert_lesson_design(design)
-        return {"status": "success", "message": message, "design": design.to_dict(), **self.session_view(design)}
+        confirmed_keys = accepted if normalized_decision in {"accept", "accepted", "确认", "接受"} else []
+        return {"status": "success", "message": message, "design": design.to_dict(),
+                **self.session_view(design), "focus_summary": self._focus_summary(design, confirmed_keys=confirmed_keys)}
 
     # ------------------------------------------------------------------
     # 题目匹配：题库快照绑定 / 手动录入 / 替换 / 移除
@@ -560,6 +610,7 @@ class LessonDesignService:
             "plan_items": self._plan_items(design),
             "retrieval_candidates": [],
             "auto_bound_questions": [],
+            "focus_summary": self._focus_summary(design),
             "active_design_question": self._active_design_question(design),
         }
 
@@ -734,6 +785,532 @@ class LessonDesignService:
             if not str(draft.get("design_thinking") or "").strip():
                 return "确认发布前，先用 100-150 字概括这节课的设计思路好吗？"
         return self._natural_prompt(step)
+
+    # ------------------------------------------------------------------
+    # 三个明确操作：完整初稿 / 采用建议（resolve accept） / 只修改当前环节
+    # ------------------------------------------------------------------
+
+    def _focus_summary(
+        self, design: LessonDesignRecord, changed_keys: Any = (), confirmed_keys: Any = ()
+    ) -> Dict[str, Any]:
+        """每轮只突出三件事：刚改了什么、还缺什么、下一步确认什么。"""
+        changed = [SCALAR_LABELS.get(key, SECTION_LABELS.get(key, str(key))) for key in changed_keys
+                   if key in SECTION_KEYS or key in SCALAR_LABELS]
+        confirmed = [SECTION_LABELS.get(key, str(key)) for key in confirmed_keys if key in SECTION_KEYS]
+        try:
+            report = self.validate_plan(design.draft, design.source_refs)
+            missing = [str(item) for item in report.get("errors") or []]
+        except Exception:
+            missing = [
+                f"还缺少{SECTION_LABELS.get(key, key)}。" for key in REQUIRED_SECTIONS
+                if not self._section_has_content(design.draft.get(key))
+            ]
+        next_confirm = [
+            SECTION_LABELS.get(key, key) for key in REQUIRED_SECTIONS
+            if self._section_has_content(design.draft.get(key)) and design.section_status.get(key) != "confirmed"
+        ][:4]
+        return {
+            "changed_labels": changed,
+            "confirmed_labels": confirmed,
+            "missing": missing,
+            "next_confirm_sections": next_confirm,
+            "next_confirm_question": self._active_design_question(design),
+            "unverified_note": "初稿中未经核实的内容均为教学建议；发布前请核对数据、年份与来源。",
+        }
+
+    @staticmethod
+    def _full_draft_extra(message: str) -> Optional[str]:
+        """识别「生成完整初稿」指令；返回附带的需求文本（无附加时为空字符串）。"""
+        clean = str(message or "").strip()
+        if clean == FULL_DRAFT_COMMAND:
+            return ""
+        rest = clean[len(FULL_DRAFT_COMMAND):] if clean.startswith(FULL_DRAFT_COMMAND) else ""
+        if rest[:1] in {"：", ":", "\n", "\r", " ", "\t"}:
+            return rest.strip()
+        return None
+
+    @classmethod
+    def _parse_full_requirement(cls, message: str, draft: Dict[str, Any]) -> Dict[str, Any]:
+        """从一段完整需求中提取课题、年级、课时、重点与课堂活动关键词。"""
+        clean = str(message or "").strip()
+        topic = str(draft.get("topic") or draft.get("title") or "")
+        book = re.search(r"《\s*([^》\r\n]{1,80}?)\s*》", clean)
+        course = FULL_DRAFT_INTENT_PATTERN.search(clean)
+        explicit = re.search(r"(?:课题|标题)\s*(?:改为|调整为|改成|为|是)?\s*[:：]?\s*[\"“]?([^，,。；;\n”\"]{1,80})", clean)
+        if book:
+            topic = book.group(1).strip()
+        elif course:
+            topic = course.group(1).strip()
+        elif explicit:
+            topic = explicit.group(1).strip()
+        elif not topic:
+            topic = cls._extract_topic(clean)
+        duration_match = re.search(r"(\d+)\s*分钟", clean)
+        duration = int(duration_match.group(1)) if duration_match else int(draft.get("duration_minutes") or 40)
+        grade_match = re.search(r"(高[一二三]|初[一二三]|七年级|八年级|九年级)", clean)
+        grade = grade_match.group(1) if grade_match else str(draft.get("grade") or "")
+        focus = ""
+        focus_match = re.search(r"重点(?:是|在于|分析|讲|讲解|突破|关注)?[:：]?\s*([^。；;\n]{2,60}?)(?=[，,。；;]|并|$)", clean)
+        if focus_match:
+            focus = focus_match.group(1).strip(" 。")
+        activity_tokens = {
+            "地图观察": ("地图观察", "读图", "看图"),
+            "课堂提问": ("课堂提问", "提问", "问题链"),
+            "小组讨论": ("小组", "讨论", "合作"),
+            "数据查询": ("数据", "TOP20", "Top20", "top20", "统计", "指标"),
+            "案例探究": ("案例", "探究"),
+            "三维地球": ("三维", "3D", "3d", "地球"),
+        }
+        activities = {label for label, tokens in activity_tokens.items() if any(token in clean for token in tokens)}
+        return {
+            "topic": topic.strip(), "duration": max(10, duration), "grade": grade.strip(),
+            "focus": focus, "activities": activities,
+            "schedule": cls._requested_schedule(clean),
+        }
+
+    @staticmethod
+    def _make_full_draft_stages(parsed: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """人口专题初稿环节：总时长与课时一致，融入教师指定的重点与活动。"""
+        topic = parsed.get("topic") or "人口分布"
+        duration = max(10, int(parsed.get("duration") or 40))
+        focus = str(parsed.get("focus") or "")
+        hu_line = "胡焕庸" in topic or "胡焕庸" in focus
+        first = max(3, min(10, duration // 5))
+        middle = max(5, min(18, duration // 2))
+        last = duration - first - middle
+        if last < 3:
+            middle = max(3, duration - first - 3)
+            last = duration - first - middle
+        stages = [
+            {
+                "stage_id": "s1", "title": "情境导入与地图观察", "minutes": first,
+                "knowledge_unit": topic, "knowledge_point": f"{topic}格局",
+                "material": f"{topic}专题地图（建议叠加已注册的人口分布图层，具体图层课前核实）",
+                "question_chain": [f"{topic}在空间上呈现怎样的差异？", "这种差异是否具有稳定方向？"],
+                "teacher_activities": ["展示专题地图并引导读图", "追问差异的方向性"],
+                "student_activities": ["观察地图并圈出集中区与稀疏区", "用自己的语言描述空间格局"],
+                "knowledge_conclusion": f"{topic}分布不均衡，呈现明显的空间集中与稀疏格局。",
+                "design_intent": "从可观察的空间证据进入问题。", "objective_refs": [1],
+                "system_steps": ["打开2D地图", "叠加已注册的人口专题图层"],
+                "scene": {"templates": ["population_distribution"], "catalog_layers": []},
+                "script": [], "questions": [
+                    {"question_id": "s1q1", "type": "open", "text": f"{topic}在空间上呈现怎样的差异？",
+                     "options": [], "answer_index": None, "expected_points": [], "misconceptions": []}
+                ],
+                "assistant_prompts": [],
+            },
+            {
+                "stage_id": "s2", "title": "案例探究与成因解释" if not hu_line else "胡焕庸线两侧对比与成因探究",
+                "minutes": middle,
+                "knowledge_unit": topic,
+                "knowledge_point": "胡焕庸线两侧差异" if hu_line else f"{topic}的影响因素",
+                "material": "胡焕庸线两侧典型区域对比材料（建议选用已注册图层或教材图，数据需课前核实）" if hu_line
+                else "两个典型区域的对比案例（图文材料，数据需课前核实）",
+                "question_chain": [
+                    "胡焕庸线的走向和位置是怎样的？" if hu_line else "两个区域的条件有何不同？",
+                    "哪些自然因素导致或强化了这种差异？",
+                    "哪些社会经济因素又改变了这种差异？",
+                ],
+                "teacher_activities": ["组织对比阅读材料", "提供证据材料并追问因果"],
+                "student_activities": ["小组比较两侧或两个区域的条件", "用因果链解释差异成因"],
+                "knowledge_conclusion": (
+                    f"我国人口分布呈现“{focus}”的格局；自然条件提供基础，社会经济因素进一步塑造了这一格局。"
+                    if focus else "自然条件提供基础，社会经济因素强化或改变人口分布格局。"
+                ),
+                "design_intent": "围绕教师指定的重点完成由描述到解释的认知跃迁。",
+                "objective_refs": [2],
+                "system_steps": ["使用地图标注", "调用已注册的案例或知识库资料"],
+                "scene": {"templates": [], "catalog_layers": []},
+                "script": [], "questions": [
+                    {"question_id": "s2q1", "type": "open",
+                     "text": f"为什么我国人口分布会呈现“{focus}”的格局？" if focus
+                     else "哪些自然和社会条件共同造成了这种区域差异？",
+                     "options": [], "answer_index": None,
+                     "expected_points": ["自然条件", "社会经济条件", "因果联系"], "misconceptions": []}
+                ],
+                "assistant_prompts": [],
+            },
+            {
+                "stage_id": "s3", "title": "归纳迁移与课堂小结", "minutes": last,
+                "knowledge_unit": topic, "knowledge_point": f"{topic}规律与迁移",
+                "material": "本节课生成的地图标注与板书要点",
+                "question_chain": ["用一句话概括本课规律？", "换一个区域你会如何分析？"],
+                "teacher_activities": ["根据学生回答收束规律", "布置迁移任务"],
+                "student_activities": ["个人完成结论卡片", "口头迁移到新区域"],
+                "knowledge_conclusion": "读图描述格局 → 归因自然与人文因素 → 迁移到新区域的分析方法。",
+                "design_intent": "检查目标达成并形成可迁移的方法。", "objective_refs": [3],
+                "system_steps": ["课堂记录学生回答", "生成课后复习提示"],
+                "scene": {"templates": [], "catalog_layers": []},
+                "script": [], "questions": [
+                    {"question_id": "s3q1", "type": "open",
+                     "text": "换到另一个区域时，你会按什么顺序完成读图与解释？",
+                     "options": [], "answer_index": None,
+                     "expected_points": ["读图例", "描述格局", "解释原因"], "misconceptions": []}
+                ],
+                "assistant_prompts": [],
+            },
+        ]
+        if "课堂提问" in (parsed.get("activities") or set()):
+            for stage in stages:
+                chain = stage.get("question_chain") or []
+                stage["teacher_activities"] = list(stage.get("teacher_activities") or []) + ["按问题链逐层追问"]
+                if chain:
+                    stage["questions"] = list(stage.get("questions") or []) + [
+                        {"question_id": f"{stage['stage_id']}q{len(stage.get('questions') or []) + 1}",
+                         "type": "open", "text": chain[-1], "options": [], "answer_index": None,
+                         "expected_points": [], "misconceptions": []}
+                    ]
+        schedule = parsed.get("schedule") or []
+        if schedule:
+            base = stages
+            stages = []
+            for index, slot in enumerate(schedule):
+                stage = copy.deepcopy(base[min(index, len(base) - 1)])
+                stage["stage_id"] = f"s{index + 1}"
+                stage["title"] = str(slot["title"])
+                stage["minutes"] = int(slot["minutes"])
+                for q_index, question in enumerate(stage.get("questions") or []):
+                    question["question_id"] = f"s{index + 1}q{q_index + 1}"
+                stages.append(stage)
+        return stages
+
+    def _build_full_draft_patch(
+        self, design: LessonDesignRecord, requirement_text: str, parsed: Dict[str, Any], include_meta: bool
+    ) -> tuple[Dict[str, Any], List[str]]:
+        """构建完整初稿补丁：只预填空缺且未确认的章节，已有内容一律不覆盖。"""
+        topic = parsed["topic"]
+        focus = parsed.get("focus") or ""
+        activities = parsed.get("activities") or set()
+        draft = copy.deepcopy(design.draft)
+        patch: Dict[str, Any] = {"requirements": {**(draft.get("requirements") or {}), "raw": requirement_text}}
+        objectives = [
+            f"运用地图说出{topic[:24]}的空间分布特征",
+            "结合区域案例解释影响人口分布的自然与人文因素",
+            "借助人口统计数据完成简单的定量比较" if "数据查询" in activities else "归纳人口分布规律并尝试迁移到新区域",
+        ]
+        core = (
+            f"为什么我国人口分布呈现“{focus}”的格局？" if focus
+            else f"{topic}的空间格局是怎样的，为什么会这样？"
+        )
+        sub_questions = [
+            f"从地图上看，{topic[:24]}呈现出怎样的空间格局？",
+            "哪些自然因素影响了这一格局？",
+            "哪些社会经济因素又改变或强化了它？",
+        ]
+        hu_line = "胡焕庸" in topic or "胡焕庸" in focus
+        if hu_line:
+            sub_questions[1] = "胡焕庸线两侧的自然条件有何差异？"
+            sub_questions[2] = "胡焕庸线两侧的社会经济条件如何进一步塑造了人口分布？"
+        patch.update({
+            "curriculum_interpretation": "课标要求：运用地图和相关资料，描述人口分布的特点及其影响因素（教学建议，请对照现行课标原文核实）。",
+            "student_analysis": "学生已有人口密度的基础概念，但对空间格局的规范描述和成因解释容易停留在单因素归因（教学建议，请按学情修改）。",
+            "textbook_analysis": "教材围绕人口分布的数据、图表与区域案例展开，可按“观察格局→分析成因→归纳规律”组织学习（教学建议）。",
+            "objectives": objectives,
+            "key_difficulties": {
+                "key": [focus or objectives[0]],
+                "difficult": [f"解释“{focus}”的成因" if focus else "结合区域案例解释人口分布差异的成因"],
+            },
+            "methods": [name for name, flag in (
+                ("地图观察", True),
+                ("课堂提问与问题链", "课堂提问" in activities),
+                ("小组合作探究", "小组讨论" in activities or "案例探究" in activities),
+                ("数据查询", "数据查询" in activities),
+            ) if flag] or ["地图观察", "问题链"],
+            "knowledge_structure": ["地图观察", "空间格局描述", focus or "成因分析", "规律归纳与迁移"],
+            "core_questions": {"core": core, "sub_questions": sub_questions},
+            "stages": self._make_full_draft_stages(parsed),
+            "board_design": self._make_board_design(topic),
+            "homework": {
+                "basic": [f"完成《{topic[:30]}》基础练习：人口分布图判读与特征描述（建议题目，发布前请从题库选定或替换）。"],
+                "inquiry": [
+                    f"沿胡焕庸线在线两侧各选一个省区，比较人口密度并用本课方法解释差异（开放任务，供参考）。" if hu_line
+                    else "选择一个你熟悉的区域，用本课的读图与归因方法分析其人口分布特点（开放任务，供参考）。"
+                ],
+            },
+        })
+        bindings = [{"id": "map_2d", "reason": f"展示{topic[:24]}空间分布"}]
+        if "三维地球" in activities:
+            bindings.append({"id": "globe_3d", "reason": "从全球尺度观察人口分布"})
+        if "数据查询" in activities:
+            bindings.append({"id": "population_top20", "reason": "人口指标 TOP20 数据查询"})
+        bindings.append({"id": "population_sources", "reason": "人口专题来源卡备查"})
+        patch["capabilities"] = self._validate_bindings(bindings)
+        self._merge_patch(draft, patch)
+        if not str(draft.get("design_thinking") or "").strip():
+            patch["design_thinking"] = self._make_design_thinking(draft)
+        if not str(draft.get("reflection") or "").strip():
+            patch["reflection"] = "预设反思：关注学生能否规范描述空间格局、是否出现单因素归因；课后依据课堂记录补充。"
+        skipped: List[str] = []
+        for key in list(patch):
+            # 课题/年级/课时等标量由下方 meta 逻辑决定；章节内容一律不覆盖已有/已确认项。
+            if key not in SECTION_KEYS:
+                continue
+            if design.section_status.get(key) == "confirmed":
+                patch.pop(key)
+                if key != "requirements":
+                    skipped.append(SECTION_LABELS.get(key, key))
+                continue
+            if key == "requirements":
+                new_raw = str((patch.get("requirements") or {}).get("raw") or "")
+                old_raw = str((design.draft.get("requirements") or {}).get("raw") or "")
+                if not new_raw or new_raw == old_raw:
+                    patch.pop(key)
+                continue
+            if self._section_has_content(design.draft.get(key)):
+                patch.pop(key)
+                skipped.append(SECTION_LABELS.get(key, key))
+        if include_meta:
+            if parsed.get("topic"):
+                patch["title"] = parsed["topic"]
+                patch["topic"] = parsed["topic"]
+            if parsed.get("grade"):
+                patch["grade"] = parsed["grade"]
+            patch["duration_minutes"] = parsed["duration"]
+        else:
+            if not str(design.draft.get("title") or "").strip() and parsed.get("topic"):
+                patch["title"] = parsed["topic"]
+            if not str(design.draft.get("topic") or "").strip() and parsed.get("topic"):
+                patch["topic"] = parsed["topic"]
+            if not str(design.draft.get("grade") or "").strip() and parsed.get("grade"):
+                patch["grade"] = parsed["grade"]
+        return patch, skipped
+
+    def _full_draft_turn(
+        self, design: LessonDesignRecord, message: str, extra: str, current_step: str
+    ) -> Dict[str, Any]:
+        """一次生成多环节初稿：全部标记待确认，已有内容不覆盖，题目快照保留。"""
+        requirement_text = extra or str((design.draft.get("requirements") or {}).get("raw") or "").strip() or message
+        parsed = self._parse_full_requirement(requirement_text, design.draft)
+        if not parsed["topic"]:
+            raise ValueError("还无法从需求中识别课题。请补一句课题或主题（例如：课题是胡焕庸线与中国人口分布），再生成完整初稿。")
+        if not extra:
+            # 复用已保存需求时，课时/课题以当前草稿为准，避免与未重排的环节时长错位。
+            parsed["duration"] = max(10, int(design.draft.get("duration_minutes") or parsed["duration"]))
+            if str(design.draft.get("topic") or "").strip():
+                parsed["topic"] = str(design.draft.get("topic")).strip()
+        include_meta = bool(extra)
+        patch, skipped = self._build_full_draft_patch(design, requirement_text, parsed, include_meta)
+        stages_note = ""
+        if "stages" in patch:
+            protected = self._questions_to_preserve(design.draft, requirement_text)
+            old_stages = design.draft.get("stages") or []
+            if protected:
+                self._reattach_protected_questions(patch["stages"], old_stages)
+                if not self._preserves_questions(patch["stages"], protected):
+                    patch.pop("stages", None)
+                    stages_note = "你已绑定或录入的题目无法原样保留，本轮未重排教学过程；如需重排请先调整题目。"
+        self._merge_patch(design.draft, patch)
+        for key in patch:
+            if key in SECTION_KEYS:
+                design.section_status[key] = "proposed"
+        if "capabilities" in patch:
+            design.capability_bindings = copy.deepcopy(design.draft.get("capabilities") or [])
+        design.revision += 1
+        if current_step in STEP_KEYS:
+            design.current_step = current_step
+            design.pending_next_step = self._next_step(current_step)
+        retrieval_mode, retrieved_refs = self._retrieve(requirement_text, design.owner_user_id)
+        design.source_refs = self._merge_refs(design.source_refs, retrieved_refs)
+        design.draft["references"] = copy.deepcopy(design.source_refs)
+        design.diff_summary = self._build_diff_summary(design)
+        reply = self._full_draft_reply(design, patch, skipped, stages_note)
+        design.turns.append({
+            "revision": design.revision, "step": design.current_step, "message": message,
+            "reply": reply, "section_patch": copy.deepcopy(patch), "generation_mode": "draft_rules",
+        })
+        self.store.upsert_lesson_design(design)
+        return {
+            "status": "success", "assistant_message": reply, "generation_mode": "draft_rules",
+            "next_step": design.current_step,
+            "step_label": STEP_LABELS.get(design.current_step, design.current_step),
+            "draft": copy.deepcopy(design.draft), "section_status": copy.deepcopy(design.section_status),
+            "source_refs": copy.deepcopy(design.source_refs),
+            "capability_bindings": copy.deepcopy(design.capability_bindings),
+            "revision": design.revision, "suggestions": [],
+            "retrieval": {"mode": retrieval_mode, "used": bool(retrieved_refs)},
+            "diff_summary": copy.deepcopy(design.diff_summary),
+            "review_sections": [key for key in patch if key in SECTION_KEYS],
+            "rehearsal_report": None,
+            "plan_items": self._plan_items(design),
+            "retrieval_candidates": [],
+            "auto_bound_questions": [],
+            "focus_summary": self._focus_summary(design, changed_keys=list(patch)),
+            "active_design_question": self._active_design_question(design),
+        }
+
+    def _full_draft_reply(
+        self, design: LessonDesignRecord, patch: Dict[str, Any], skipped: List[str], stages_note: str
+    ) -> str:
+        changed = "、".join(
+            SCALAR_LABELS.get(key, SECTION_LABELS.get(key, key)) for key in patch
+            if key in SECTION_KEYS or key in SCALAR_LABELS
+        ) or "（本次没有可预填的空缺章节）"
+        try:
+            report = self.validate_plan(design.draft, design.source_refs)
+            missing = "；".join(report["errors"][:4]) or "暂无阻断性缺口"
+        except Exception:
+            missing = "请运行预演检查确认。"
+        parts = [
+            f"已按你的完整需求生成初稿，本轮预填：{changed}。以上内容全部为「待确认」，系统不会替你自动确认任何章节。"
+        ]
+        if skipped:
+            parts.append(f"这些章节已有内容，本轮未覆盖：{'、'.join(skipped)}。")
+        if stages_note:
+            parts.append(stages_note)
+        parts.append(f"还缺：{missing}。")
+        parts.append("下一步：从第 1 步开始逐项核对；确认无误的章节可连续点「采用当前建议并继续」。")
+        parts.append("提醒：初稿中的数据、年份与来源均为教学建议，未经核实，发布前请替换为已注册数据或教材资料。")
+        return "".join(parts)
+
+    @staticmethod
+    def _reattach_protected_questions(new_stages: List[Dict[str, Any]], old_stages: List[Dict[str, Any]]) -> None:
+        """初稿重排教学过程时，把已绑定/录入的题目按原环节顺序原样搬入新环节。"""
+        protected = [
+            copy.deepcopy(question)
+            for stage in old_stages or [] if isinstance(stage, dict)
+            for question in stage.get("questions") or []
+            if isinstance(question, dict) and question.get("source") in {"question_bank", "teacher_manual"}
+        ]
+        for index, question in enumerate(protected):
+            if not new_stages:
+                return
+            target = new_stages[min(index, len(new_stages) - 1)]
+            questions = target.setdefault("questions", [])
+            if not any(item.get("question_id") == question.get("question_id") for item in questions):
+                questions.append(question)
+
+    # ------------------------------------------------------------------
+    # 一键智能优化：模型整稿提升（非确认章节），AI 不可用时规则补齐空缺
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _smart_optimize_focus(message: str) -> Optional[str]:
+        """识别「一键智能优化」指令；返回教师附加的优化重点（无附加时为空字符串）。"""
+        clean = str(message or "").strip()
+        if clean == SMART_OPTIMIZE_COMMAND:
+            return ""
+        rest = clean[len(SMART_OPTIMIZE_COMMAND):] if clean.startswith(SMART_OPTIMIZE_COMMAND) else ""
+        if rest[:1] in {"：", ":", "\n", "\r", " ", "\t"}:
+            return rest.strip()
+        return None
+
+    def _optimize_draft_turn(
+        self, design: LessonDesignRecord, message: str, focus_text: str, current_step: str
+    ) -> Dict[str, Any]:
+        if not any(self._section_has_content(design.draft.get(key)) for key in SECTION_KEYS):
+            raise ValueError("当前还没有可优化的初稿内容。请先点「生成完整初稿」，或直接输入你的教学想法。")
+        generation_message = focus_text or message
+        result = self._ask_minimax(design, current_step, generation_message, optimize=True)
+        generation_mode = "model" if result is not None else "optimize_rules"
+        if result is None:
+            result = self._rules_optimize_fallback(design, generation_message)
+        patch = result.get("section_patch") if isinstance(result, dict) else {}
+        patch = patch if isinstance(patch, dict) else {}
+        # 一键优化是「建议升级」，不是「修改指令」：已确认章节保持稳定，不重开。
+        patch = {key: value for key, value in patch.items()
+                 if design.section_status.get(key) != "confirmed"}
+        result["section_patch"] = patch
+        protected_questions = self._questions_to_preserve(design.draft, generation_message)
+        if "stages" in patch and not self._preserves_questions(patch["stages"], protected_questions):
+            raise ValueError("本次优化改动或遗漏了需保留的题目，原草稿已保留。题目调整请通过题目编辑入口修改。")
+        if "stages" in patch:
+            self._enforce_stage_minutes(design.draft, patch["stages"])
+        self._merge_patch(design.draft, patch)
+        for key in patch:
+            if key in SECTION_KEYS:
+                design.section_status[key] = "proposed"
+        if "capabilities" in patch:
+            design.capability_bindings = self._validate_bindings(design.draft.get("capabilities") or [])
+            design.draft["capabilities"] = copy.deepcopy(design.capability_bindings)
+        design.revision += 1
+        retrieval_mode, retrieved_refs = self._retrieve(generation_message, design.owner_user_id)
+        design.source_refs = self._merge_refs(design.source_refs, retrieved_refs)
+        design.draft["references"] = copy.deepcopy(design.source_refs)
+        design.diff_summary = self._build_diff_summary(design)
+        changed_labels = "、".join(
+            SCALAR_LABELS.get(key, SECTION_LABELS.get(key, key)) for key in patch
+            if key in SECTION_KEYS or key in SCALAR_LABELS
+        ) or "（没有需要优化的章节，当前草稿保持不变）"
+        reply = str(result.get("reply") or "").strip()
+        if generation_mode == "model":
+            reply = f"已按「一键智能优化」更新：{changed_labels}。{reply}以上内容全部为「待确认」，请逐项核对后再采用。"
+        else:
+            reply = (
+                f"本轮 AI 未返回有效内容，以下为规则版补齐结果（只填空缺章节，不改已有内容），需逐项核对。"
+                f"本轮预填：{changed_labels}。以上内容全部为「待确认」。"
+                "也可以稍后重试「一键智能优化」，或逐段输入要求与助手一起打磨。"
+            )
+        design.turns.append({
+            "revision": design.revision, "step": design.current_step, "message": message,
+            "reply": reply, "section_patch": copy.deepcopy(patch), "generation_mode": generation_mode,
+        })
+        self.store.upsert_lesson_design(design)
+        return {
+            "status": "success", "assistant_message": reply, "generation_mode": generation_mode,
+            "next_step": design.current_step,
+            "step_label": STEP_LABELS.get(design.current_step, design.current_step),
+            "draft": copy.deepcopy(design.draft), "section_status": copy.deepcopy(design.section_status),
+            "source_refs": copy.deepcopy(design.source_refs),
+            "capability_bindings": copy.deepcopy(design.capability_bindings),
+            "revision": design.revision, "suggestions": [str(item) for item in result.get("suggestions") or []],
+            "retrieval": {"mode": retrieval_mode, "used": bool(retrieved_refs)},
+            "diff_summary": copy.deepcopy(design.diff_summary),
+            "review_sections": [key for key in patch if key in SECTION_KEYS],
+            "rehearsal_report": None,
+            "plan_items": self._plan_items(design),
+            "retrieval_candidates": [],
+            "auto_bound_questions": [],
+            "focus_summary": self._focus_summary(design, changed_keys=list(patch)),
+            "active_design_question": self._active_design_question(design),
+        }
+
+    def _rules_optimize_fallback(self, design: LessonDesignRecord, message: str) -> Dict[str, Any]:
+        """AI 不可用时的确定性兜底：复用完整初稿生成器，只补空缺、不动已有内容。"""
+        requirement_text = str((design.draft.get("requirements") or {}).get("raw") or "").strip() or message
+        parsed = self._parse_full_requirement(requirement_text, design.draft)
+        parsed["duration"] = max(10, int(design.draft.get("duration_minutes") or parsed["duration"]))
+        if str(design.draft.get("topic") or "").strip():
+            parsed["topic"] = str(design.draft.get("topic")).strip()
+        patch, _skipped = self._build_full_draft_patch(design, requirement_text, parsed, include_meta=False)
+        return {
+            "reply": "", "section_patch": patch, "next_step": "",
+            "source_refs": [], "capability_bindings": [], "suggestions": [],
+        }
+
+    @staticmethod
+    def _enforce_stage_minutes(draft: Dict[str, Any], stages: Any) -> None:
+        """优化后的环节分钟合计若与课时偏离，按比例校正回课时（保持相对节奏）。"""
+        try:
+            duration = int(draft.get("duration_minutes") or 0)
+        except (TypeError, ValueError):
+            return
+        if duration <= 0 or not isinstance(stages, list) or not stages:
+            return
+        total = 0
+        minutes: List[int] = []
+        for stage in stages:
+            try:
+                value = max(1, int((stage or {}).get("minutes") or 0))
+            except (TypeError, ValueError):
+                value = 1
+            minutes.append(value)
+            total += value
+        if total == duration:
+            return
+        scale = duration / total
+        distributed = [max(1, round(value * scale)) for value in minutes]
+        delta = duration - sum(distributed)
+        order = sorted(range(len(distributed)), key=lambda idx: distributed[idx], reverse=True)
+        cursor = 0
+        while delta != 0 and cursor < len(order) * 4:
+            idx = order[cursor % len(order)]
+            step = 1 if delta > 0 else -1
+            if distributed[idx] + step >= 1:
+                distributed[idx] += step
+                delta -= step
+            cursor += 1
+        for stage, value in zip(stages, distributed):
+            stage["minutes"] = value
 
     def rehearse(self, design_id: str) -> Dict[str, Any]:
         design = self.get(design_id)
@@ -1004,39 +1581,58 @@ class LessonDesignService:
                 logger.warning("Lesson dataset excerpt unavailable")
         return excerpts
 
-    def _ask_minimax(self, design: LessonDesignRecord, step: str, message: str) -> Optional[Dict[str, Any]]:
+    def _ask_minimax(self, design: LessonDesignRecord, step: str, message: str, optimize: bool = False) -> Optional[Dict[str, Any]]:
         if self.minimax_client is None:
             return None
-        system = (
-            "你是高中地理教案共创助手。默认简体中文，每轮只推进一个步骤，先复述教师意图，再给可修改建议，"
-            "回复末尾只提一个推进问题。"
-            "只输出 JSON，字段为 reply、section_patch、next_step、source_refs、capability_bindings、suggestions。"
-            'section_patch 必须是以章节名为键的对象，不是 JSON Patch 操作数组，不需要改动的章节请省略，不要填 null。'
-            '格式示例：{"reply":"本轮建议","section_patch":{"stages":[{"stage_id":"s1","title":"环节名","minutes":5,"material":"材料与来源或待补充说明","question_chain":["问题"],"teacher_activities":["教师操作"],"student_activities":["学生任务"],"knowledge_conclusion":"结论","design_intent":"意图","objective_refs":[1],"system_steps":["真实操作"],"scene":{"templates":[],"catalog_layers":[]},"questions":[]}],"board_design":"板书文字"},"next_step":"question_matching","source_refs":[],"capability_bindings":[],"suggestions":[]}。'
-            '当前为教学过程时只输出 stages 和 board_design，保持其他章节不变；每个活动字段简洁具体，避免重复长段落。'
-            "不要输出内部轨迹。当前步骤：" + STEP_LABELS.get(step, step) +
-            "。九个步骤依次是：需求确认→课标与学情→目标与重难点→核心问题与问题链→教学过程→题目匹配→GIS/AI能力→预演检查→确认发布。"
-            "核心章节要求：设计思路100-150字；3-4个可观察教学目标；1个核心问题+2-4个递进子问题；"
-            "每环节包含 material/question_chain/teacher_activities/student_activities/knowledge_conclusion/"
-            "design_intent/minutes/system_steps/objective_refs（1-based目标序号）；板书设计；基础作业+探究作业；预设教学反思。"
-            'objectives 必须是字符串数组；core_questions 必须为 {"core":"核心问题文字","sub_questions":["子问题文字"]}，不要把条目写成对象。'
-            "教师明确指定的教学环节名称、顺序和每环节分钟数是硬约束，必须逐一原样保留，不能合并或改成通用模板。"
-            "你的回复只说明本轮草稿修改，不得声称已发布、已生成文件、预演通过或全部步骤完成；这些状态由系统核验。"
-            "题目匹配只能引用题库检索给出的题目，不得编造题目内容。"
-            "草稿：" + json.dumps(design.draft, ensure_ascii=False)[:12000] +
-            "。真实能力目录：" + json.dumps(self.capability_catalog(), ensure_ascii=False)[:8000] +
-            "。当前引用图层的本地统计摘录（只是本地数据，不代表已独立核验来源；sampled=true 时只是部分记录）：" +
-            json.dumps(self._dataset_facts(design.draft, message) if step == "process" else [], ensure_ascii=False) +
-            "。涉及数字、大小关系或排名时必须与摘录一致；摘录未覆盖或单位未明确时说明需核对，不要补造数值或宣称统计口径相同。"
-        )
+        if optimize:
+            system = (
+                "你是高中地理教案共创助手，现在执行「一键智能优化」：对整份人口专题教案初稿做一次系统性润色与补强。"
+                "只输出需要新增或改进的章节（section_patch 以章节名为键），已经足够好的章节省略，不要填 null。"
+                "优化要求：教学目标 3-4 个可观察条目；1 个核心问题 + 2-4 个递进子问题；"
+                "每环节保持 material/question_chain/teacher_activities/student_activities/knowledge_conclusion/"
+                "design_intent/minutes/system_steps/objective_refs 结构完整且具体可执行；"
+                "不得改变教学环节的名称、顺序和分钟数；各环节分钟合计必须等于课时。"
+                "教师指定的重点表述必须保留；题目对象（questions）除非教师明确要求，原样保留，不得改写或删减。"
+                'objectives 必须是字符串数组；core_questions 必须为 {"core":"核心问题","sub_questions":["子问题"]}。'
+                "涉及数字、大小关系或排名时必须与数据摘录一致；摘录未覆盖时写明需核实，不要编造数值。"
+                "reply 用 2-4 句话说明本轮优化了哪些方面；不得声称已确认、已发布、预演通过或全部完成，这些状态由系统核验。"
+                "不要输出内部轨迹。只输出 JSON。"
+                "草稿：" + json.dumps(design.draft, ensure_ascii=False)[:12000] +
+                "。真实能力目录：" + json.dumps(self.capability_catalog(), ensure_ascii=False)[:8000] +
+                "。引用图层的本地统计摘录（只是本地数据，不代表已独立核验来源；sampled=true 时只是部分记录）：" +
+                json.dumps(self._dataset_facts(design.draft, message), ensure_ascii=False) + "。"
+            )
+        else:
+            system = (
+                "你是高中地理教案共创助手。默认简体中文，每轮只推进一个步骤，先复述教师意图，再给可修改建议，"
+                "回复末尾只提一个推进问题。"
+                "只输出 JSON，字段为 reply、section_patch、next_step、source_refs、capability_bindings、suggestions。"
+                'section_patch 必须是以章节名为键的对象，不是 JSON Patch 操作数组，不需要改动的章节请省略，不要填 null。'
+                '格式示例：{"reply":"本轮建议","section_patch":{"stages":[{"stage_id":"s1","title":"环节名","minutes":5,"material":"材料与来源或待补充说明","question_chain":["问题"],"teacher_activities":["教师操作"],"student_activities":["学生任务"],"knowledge_conclusion":"结论","design_intent":"意图","objective_refs":[1],"system_steps":["真实操作"],"scene":{"templates":[],"catalog_layers":[]},"questions":[]}],"board_design":"板书文字"},"next_step":"question_matching","source_refs":[],"capability_bindings":[],"suggestions":[]}。'
+                '当前为教学过程时只输出 stages 和 board_design，保持其他章节不变；每个活动字段简洁具体，避免重复长段落。'
+                "不要输出内部轨迹。当前步骤：" + STEP_LABELS.get(step, step) +
+                "。九个步骤依次是：需求确认→课标与学情→目标与重难点→核心问题与问题链→教学过程→题目匹配→GIS/AI能力→预演检查→确认发布。"
+                "核心章节要求：设计思路100-150字；3-4个可观察教学目标；1个核心问题+2-4个递进子问题；"
+                "每环节包含 material/question_chain/teacher_activities/student_activities/knowledge_conclusion/"
+                "design_intent/minutes/system_steps/objective_refs（1-based目标序号）；板书设计；基础作业+探究作业；预设教学反思。"
+                'objectives 必须是字符串数组；core_questions 必须为 {"core":"核心问题文字","sub_questions":["子问题文字"]}，不要把条目写成对象。'
+                "教师明确指定的教学环节名称、顺序和每环节分钟数是硬约束，必须逐一原样保留，不能合并或改成通用模板。"
+                "你的回复只说明本轮草稿修改，不得声称已发布、已生成文件、预演通过或全部步骤完成；这些状态由系统核验。"
+                "题目匹配只能引用题库检索给出的题目，不得编造题目内容。"
+                "草稿：" + json.dumps(design.draft, ensure_ascii=False)[:12000] +
+                "。真实能力目录：" + json.dumps(self.capability_catalog(), ensure_ascii=False)[:8000] +
+                "。当前引用图层的本地统计摘录（只是本地数据，不代表已独立核验来源；sampled=true 时只是部分记录）：" +
+                json.dumps(self._dataset_facts(design.draft, message) if step == "process" else [], ensure_ascii=False) +
+                "。涉及数字、大小关系或排名时必须与摘录一致；摘录未覆盖或单位未明确时说明需核对，不要补造数值或宣称统计口径相同。"
+            )
         messages = [{"role": "system", "content": system}, {"role": "user", "content": message[:6000]}]
         # One bounded correction for model formatting/content errors, never for network failures.
         for attempt in range(2):
             try:
                 content = self.minimax_client.chat_completion(
                     messages, temperature=0.2,
-                    extra_payload={"max_completion_tokens": 12288 if step == "process" else 2400},
-                    timeout=90.0 if step == "process" else 45.0,
+                    extra_payload={"max_completion_tokens": 12288 if (step == "process" or optimize) else 2400},
+                    timeout=90.0 if (step == "process" or optimize) else 45.0,
                 )
             except Exception as exc:
                 logger.warning("Lesson generation failed: step=%s error_type=%s", step, type(exc).__name__)
@@ -1047,7 +1643,7 @@ class LessonDesignService:
                 result = self._validate_model_payload(payload)
             except (json.JSONDecodeError, ValueError, TypeError):
                 result, reason = None, "invalid_json"
-            schedule = self._requested_schedule(message) if step == "process" else []
+            schedule = self._requested_schedule(message) if step == "process" and not optimize else []
             if result is not None and schedule and not self._matches_schedule(result["section_patch"].get("stages"), schedule):
                 result, reason = None, "schedule_mismatch"
             protected_questions = self._questions_to_preserve(design.draft, message)

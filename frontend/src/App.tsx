@@ -82,6 +82,8 @@ import {
 } from "./api";
 import { AnnotationDialog } from "./components/AnnotationDialog";
 import { BasemapMenu } from "./components/BasemapMenu";
+import { WeatherOverlayStatus } from "./components/WeatherOverlayStatus";
+import { isWeatherBasemapId, type WeatherOverlayPhase } from "./lib/weatherOverlay";
 import { BrandLogo } from "./components/BrandLogo";
 import { CopilotWidget } from "./components/CopilotWidget";
 import { LessonDesignWorkspace } from "./components/LessonDesignWorkspace";
@@ -510,7 +512,7 @@ export default function App({
   const [interactionChatLog, setInteractionChatLog] = useState<ChatMessage[]>([
     {
       role: "assistant",
-      text: "智能交互模式已就绪：点麦克风说指令，或开启常开聆听后说“小智，切换到三维地球”。高频指令走快速通道，秒级响应。",
+      text: "智能交互模式已就绪：进入本页即自动聆听，直接说出指令（如“切换到三维地球”），无需每次加唤醒词；嘈杂环境可在下方开启「仅唤醒后执行」。高频指令走快速通道，秒级响应。",
       timestamp: timestamp()
     }
   ]);
@@ -613,6 +615,8 @@ export default function App({
   const [layerManagerOpen, setLayerManagerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [mapBusy, setMapBusy] = useState(false);
+  // 天气叠加真实加载状态：由 OpenLayers 瓦片事件驱动，用于状态面板展示。
+  const [weatherStatus, setWeatherStatus] = useState<WeatherOverlayPhase>("idle");
   const [workflowDockOpen, setWorkflowDockOpen] = useState<boolean>(false);
   const [searchCardOpen, setSearchCardOpen] = useState(false);
   const [statsCardOpen, setStatsCardOpen] = useState(false);
@@ -694,6 +698,13 @@ export default function App({
   const onlinePoiEnabled = health?.online_services.amap_poi_enabled ?? false;
   const basemapItems = health?.basemaps.items || [];
   const activeBasemapId = layerState?.base_map.id || health?.basemaps.default_id || "";
+  // health.online_services.weather_basemap_enabled 由后端下发（types.ts 暂未
+  // 收录该字段，这里做窄化读取，避免改动共享类型文件）。
+  const weatherBasemapEnabled = Boolean(
+    (health as { online_services?: { weather_basemap_enabled?: boolean } } | null)?.online_services
+      ?.weather_basemap_enabled
+  );
+  const weatherBasemapActive = isWeatherBasemapId(activeBasemapId);
   const kbActiveLayerId = layerState?.active_layer_id || "";
   const hasVisibleOneMapLayer = Boolean(
     layerState?.items.some((item) => item.source === "one_map_catalog" && item.visible)
@@ -2927,8 +2938,29 @@ export default function App({
     const basemapId = layerState.base_map.id;
     const listenerKeys: Array<unknown> = [];
     const loadStats = { started: 0, finished: 0, errored: 0 };
+    // 天气叠加层单独计数：基础底图（高德）成功不代表天气瓦片成功，
+    // 状态面板必须反映叠加层自身的真实加载结果。
+    const overlayStats = { started: 0, finished: 0, errored: 0 };
+    const isWeatherOverlay = isWeatherBasemapId(basemapId);
     basemapLayersRef.current.forEach((layer) => map.removeLayer(layer));
     basemapLayersRef.current = [];
+
+    if (isWeatherOverlay) {
+      setWeatherStatus("loading");
+    } else {
+      setWeatherStatus("idle");
+    }
+
+    const syncWeatherStatus = () => {
+      if (!isWeatherOverlay) {
+        return;
+      }
+      if (overlayStats.finished > 0) {
+        setWeatherStatus("ready");
+      } else if (overlayStats.errored > 0 && overlayStats.started <= overlayStats.errored) {
+        setWeatherStatus("error");
+      }
+    };
 
     layerState.base_map.layers
       .slice()
@@ -2940,19 +2972,23 @@ export default function App({
           maxZoom: descriptor.max_zoom ?? 18,
           crossOrigin: descriptor.cross_origin || "anonymous"
         });
+        const isOverlayDescriptor = (descriptor.class_name || "").includes("basemap-weather-overlay");
+        const countInto = isOverlayDescriptor ? overlayStats : loadStats;
         listenerKeys.push(
           source.on("tileloadstart", () => {
-            loadStats.started += 1;
+            countInto.started += 1;
           })
         );
         listenerKeys.push(
           source.on("tileloadend", () => {
-            loadStats.finished += 1;
+            countInto.finished += 1;
+            syncWeatherStatus();
           })
         );
         listenerKeys.push(
           source.on("tileloaderror", () => {
-            loadStats.errored += 1;
+            countInto.errored += 1;
+            syncWeatherStatus();
           })
         );
         const layer = new TileLayer({
@@ -2965,6 +3001,8 @@ export default function App({
         source.refresh();
       });
 
+    // 只有基础底图全部失败才自动回退到兼容底图；天气叠加失败时基础底图仍
+    // 正常显示，交由天气状态面板给出反馈，而不是整图弹走。
     window.requestAnimationFrame(() => {
       map.updateSize();
       map.renderSync();
@@ -3435,11 +3473,35 @@ export default function App({
           setViewMode("plane");
         }}
       />
-      {viewMode === "globe" && layerState?.base_map.layers.length && !layerState.base_map.layers.some(layer => layer.kind === "xyz" && layer.usable_in_3d !== false && layer.urls.length) ? (
+      {viewMode === "globe" && layerState?.base_map.layers.length && (weatherBasemapActive || !layerState.base_map.layers.some(layer => layer.kind === "xyz" && layer.usable_in_3d !== false && layer.urls.length)) ? (
         <div className="map-basemap-notice" role="status">
-          当前底图仅支持二维，三维显示高德参考底图。
-          <button type="button" onClick={() => handleViewModeToggle("plane")}>返回 2D 查看专题图</button>
+          {weatherBasemapActive
+            ? "天气叠加仅支持 2D 平面地图，3D 数字地球当前显示高德参考底图。"
+            : "当前底图仅支持二维，三维显示高德参考底图。"}
+          <button type="button" onClick={() => handleViewModeToggle("plane")}>
+            {weatherBasemapActive ? "切到 2D 查看天气叠加" : "返回 2D 查看专题图"}
+          </button>
         </div>
+      ) : null}
+      {viewMode === "plane" && weatherBasemapActive ? (
+        <WeatherOverlayStatus
+          basemapId={activeBasemapId}
+          title={basemapItems.find(item => item.id === activeBasemapId)?.title || "天气叠加"}
+          phase={weatherStatus}
+          onRestoreBasemap={() => {
+            if (!project) {
+              return;
+            }
+            void switchBasemap(project.project_id, "amap_vector")
+              .then(() => refreshProjectState(project.project_id))
+              .then(() => {
+                pushToast("info", "已恢复高德标准底图", "天气叠加已关闭。");
+              })
+              .catch(() => {
+                pushToast("error", "底图切换失败", "恢复高德标准底图未成功，请重试。");
+              });
+          }}
+        />
       ) : null}
       <MapEvidenceLegend basemapId={activeBasemapId} layers={layerState?.items || []} globe={viewMode === "globe"} themeIds={globeThemeIds} showFit={showTeachingFit} onShowFit={setShowTeachingFit} busy={mapBusy} onTogglePrecipitation={value => handleToggleTextbookMap("china_precipitation_400mm", value)} />
       <MapBrushOverlay
@@ -3513,6 +3575,10 @@ export default function App({
             items={basemapItems}
             activeId={activeBasemapId}
             disabled={!project}
+            weatherEnabled={weatherBasemapEnabled}
+            onWeatherBlocked={(title, message) => {
+              pushToast("info", `${title} · 未配置`, message);
+            }}
             onSelect={async (basemapId) => {
               if (!project) {
                 return;
@@ -3821,6 +3887,8 @@ export default function App({
           ttsEnabled={ttsEnabled}
           onTtsToggle={(enabled) => setTtsEnabled(enabled)}
           voiceStreamAvailable={Boolean(health?.voice_asr?.available)}
+          voiceAsrState={health?.voice_asr?.state || ""}
+          voiceAsrReason={health?.voice_asr?.reason || ""}
           onListeningChange={setOverlayListening}
           onPartialTranscript={setOverlayPartial}
           onCapturedCommand={(command) => {

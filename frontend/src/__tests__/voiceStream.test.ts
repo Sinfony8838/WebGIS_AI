@@ -73,7 +73,7 @@ describe("voice stream lifecycle", () => {
     getUserMedia.mockReturnValue(permission.promise);
     const onOpen = vi.fn();
     const pending = createVoiceStream("http://localhost:8000", { onOpen });
-    const rejected = expect(pending).rejects.toThrow("connection closed");
+    const rejected = expect(pending).rejects.toThrow("连接中断");
     FakeSocket.last.onopen?.();
     FakeSocket.last.onclose?.({ code: 1006 });
     await rejected;
@@ -89,7 +89,7 @@ describe("voice stream lifecycle", () => {
     addModule.mockReturnValue(module.promise);
     const onOpen = vi.fn();
     const pending = createVoiceStream("http://localhost:8000", { onOpen });
-    const rejected = expect(pending).rejects.toThrow("connection closed");
+    const rejected = expect(pending).rejects.toThrow("连接中断");
     FakeSocket.last.onopen?.();
     await vi.advanceTimersByTimeAsync(0);
     FakeSocket.last.onclose?.({ code: 1006 });

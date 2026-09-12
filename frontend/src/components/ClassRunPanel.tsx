@@ -207,19 +207,19 @@ export function ClassRunPanel({
       setBrainstormRegion(selected);
       setBrainstormSpinning(false);
       const regionalQuestions:Record<string,string> = {
-        "青藏高原河谷":"青藏高原人口稀疏，为何部分河谷聚落集中？比较水热与地形条件，并提出检验资料。",
-        "塔里木盆地":"塔里木盆地整体干旱，为什么聚落多见于盆地边缘绿洲？如果山地来水减少，这种分布可能怎样变化？",
-        "河西走廊":"河西走廊较干旱，为什么仍能形成绿洲城市？比较水源、地形与交通条件，说明水资源约束如何影响聚落扩展。"
+        "青藏高原河谷":"青藏高原总体人口较少，为什么一些河谷仍有人口集聚？请从热量、地形和交通中选择两项说明。",
+        "塔里木盆地":"塔里木盆地很干旱，为什么人口和城镇多分布在盆地边缘的绿洲？请从水源、地形和生产方式中选择两项说明。",
+        "河西走廊":"河西走廊较干旱，为什么仍能形成绿洲城市？请从水源、地形和交通中选择两项说明。"
       };
       const inquiryQuestion = regionalQuestions[selected] || `以${selected}为例，${brainstorm.prompt}`;
       const prompt = [
-        `GeoBot 头脑风暴：围绕“${currentStage.title}”开展随机地区探究。`,
+        `GeoBot 头脑风暴：围绕“${currentStage.title}”补充一个小组讨论案例。`,
         `随机抽中的地区是：${selected}。`,
         "【本次探究任务】",
         inquiryQuestion,
         brainstorm.prompt,
-        "请沿用上述完整问题，直接回答抽中地区的局地机制，不转去概述胡焕庸线。",
-        "沿用本次探究问题，提供教师参考回答；不替学生作答，不推断学生掌握情况。",
+        "请围绕抽中的地区解释，不转去泛泛介绍胡焕庸线。",
+        "提供教师参考追问和参考回答；先保留学生思考空间，不替学生作答，不推断学生掌握情况。",
         "【课堂参考材料】",
         `本课：${lesson.title}；当前环节：${currentStage.title}。`,
         `本环节候选地区：${brainstormRegions.join("、")}。只围绕抽中的地区，保持本环节的比较尺度。`,
@@ -227,7 +227,7 @@ export function ClassRunPanel({
         "以下是教案原题的参考材料，不是学生回答，也不能当作本次课堂观察：",
         ...currentStage.questions.slice(0, 3).map((question) => [question.text, question.material, question.answer, question.explanation].filter(Boolean).join("\n")),
         "【回答格式】",
-        "问题必须体现区域差异、条件变化、尺度转换或反直觉比较中的至少一种；资料不足时明确说明限制，不得编造数据。",
+        "问题要聚焦一个清楚的地区差异；信息不足时直接说明，不得编造数据。",
         "只输出“头脑风暴问题”“回答”“回答总结”三部分；回答总结必须是一句话。",
         "不要输出地图中心坐标、缩放级别、可见范围、证据或观察点、给学生的问题、教师收束语。"
       ].join("\n");
@@ -344,8 +344,8 @@ export function ClassRunPanel({
           <div className="basic-knowledge-launcher" data-testid="class-map-launcher">
             <div>
               <span className="question-detail-label">课堂地图</span>
-              <strong>先看分布，再解释原因</strong>
-              <small>定位本环节区域并打开对应图层，由教师组织讲解。</small>
+              <strong>先看图，再说发现</strong>
+              <small>进入环节会自动准备对应地图。先让学生描述看到的现象，再一起解释。</small>
             </div>
             <div className="class-presentation-actions">
               <button type="button" className="toolbar-button compact primary" disabled={busy || presentationBusy || !onPresentScene} onClick={() => void openMapPresentation()}>
@@ -372,7 +372,7 @@ export function ClassRunPanel({
 
         {currentStage?.scene?.globe?.enabled && onRequestPlaneView ? (
           <div className="class-stage-view-handoff" data-testid="stage-view-handoff">
-            <span>3D 用于宏观导入；开始读图和答题时回到二维规范专题图。</span>
+            <span>三维地球适合整体观察；需要读图和答题时，请回到清晰的二维专题图。</span>
             <button type="button" className="toolbar-button compact" onClick={onRequestPlaneView}>
               切回二维判读
             </button>
@@ -406,6 +406,8 @@ export function ClassRunPanel({
           <div className="class-panel-questions">
             {currentStage.questions.map((question) => {
               const expanded = expandedQuestionId === question.question_id;
+              const groupDiscussion = question.text.startsWith("【小组讨论");
+              const displayText = groupDiscussion ? question.text.replace(/^【小组讨论[一二]】\s*/, "") : question.text;
               return (
                 <article key={question.question_id} className={`class-question-card ${expanded ? "expanded" : ""}`}>
                   <button
@@ -414,10 +416,10 @@ export function ClassRunPanel({
                     onClick={() => setExpandedQuestionId(expanded ? "" : question.question_id)}
                     data-testid={`question-toggle-${question.question_id}`}
                   >
-                    <span className={`question-type-badge ${question.type}`}>
-                      {question.type === "choice" ? "选择" : "问答"}
+                    <span className={`question-type-badge ${groupDiscussion ? "discussion" : question.type}`}>
+                      {groupDiscussion ? "小组讨论" : question.type === "choice" ? "选择" : "问答"}
                     </span>
-                    <span className="class-question-text">{question.text}</span>
+                    <span className="class-question-text">{displayText}</span>
                   </button>
 
                   {oralQuestionId === question.question_id ? (
@@ -497,7 +499,7 @@ export function ClassRunPanel({
           <span className="question-detail-label">临时口头提问</span>
           <input
             value={adhocText}
-            placeholder="输入课堂即兴问题…"
+            placeholder="写下想追问学生的话…"
             onChange={(event) => setAdhocText(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
@@ -518,7 +520,7 @@ export function ClassRunPanel({
               onClick={launchAdhoc}
               data-testid="launch-adhoc"
             >
-              记录提问
+              记录并提问
             </button>
           </div>
         </div>
@@ -528,13 +530,13 @@ export function ClassRunPanel({
             <div className="class-brainstorm-identity">
               <span className="class-brainstorm-mark" aria-hidden="true">✦</span>
               <div>
-                <span>GeoBot AI</span>
-                <strong>{brainstorm.title || "头脑风暴"}</strong>
+                <span>GeoBot · 讨论助手</span>
+                <strong>{brainstorm.title || "小组讨论"}</strong>
               </div>
             </div>
-            <p>从本环节的地区中抽取一个，生成追问与教师参考回答。</p>
+            <p>先让小组充分讨论，再抽取一个案例，由 GeoBot 提供教师追问和参考。</p>
             <div className={`brainstorm-region-wheel ${brainstormSpinning ? "spinning" : ""}`} aria-live="polite">
-              <span>{brainstormRegion || "等待抽取地区"}</span>
+              <span>{brainstormRegion || "等待抽取案例"}</span>
             </div>
             <button
               type="button"
@@ -543,7 +545,7 @@ export function ClassRunPanel({
               onClick={runBrainstorm}
               data-testid="run-brainstorm"
             >
-              {brainstormSpinning ? "GeoBot 正在转动…" : brainstorm.button_label || "转动并生成探究"}
+              {brainstormSpinning ? "GeoBot 正在抽取…" : brainstorm.button_label || "抽取案例并生成追问"}
             </button>
           </div>
         ) : null}

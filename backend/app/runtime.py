@@ -39,11 +39,14 @@ from .services.vision import MapVisionService
 from .store import RuntimeStore
 
 
+MAX_IMAGE_LIBRARY_BYTES = 20 * 1024 * 1024
+
+# 1x1 透明 PNG。天气瓦片代理不再用它伪装成功（未配置密钥时返回 503），
+# 仅作为图像库/图像生成相关测试的通用最小 PNG 夹具保留。
 TRANSPARENT_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR42mP8z8BQDwAFgwJ/lU9nWQAAAABJRU5ErkJggg=="
 )
 
-MAX_IMAGE_LIBRARY_BYTES = 20 * 1024 * 1024
 SUPPORTED_IMAGE_MIME_BY_SUFFIX = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -340,6 +343,10 @@ class WebGISRuntime:
         )
         self.timeline_service = TimelineService(self.minimax_client)
         self.voice_asr = VoiceAsrEngine(self.config)
+        # Preload the ONNX recognizer in the background so the first browser
+        # voice session connects instantly and /health reports "initializing"
+        # while the model is still loading instead of a slow first connect.
+        self.voice_asr.warm_up()
         self.classroom = ClassroomWorkflowRuntime(self)
         self.session_engine.set_session_stats_provider(self._session_statistics_for_assistant)
         self._normalize_loaded_projects()
@@ -697,8 +704,8 @@ class WebGISRuntime:
         return {"status": "success", **self.config.basemap_catalog()}
 
     def fetch_weather_tile(self, layer: str, z: int, x: int, y: int) -> tuple[bytes, str]:
-        if not self.config.weather_basemap_enabled():
-            return TRANSPARENT_PNG, "image/png"
+        # 未配置密钥时 config.weather_tile_upstream_url 抛 ValueError → 端点回 503，
+        # 让前端明确显示“未配置/失败”，绝不返回透明 PNG 伪装成功。
         request = urllib.request.Request(
             self.config.weather_tile_upstream_url(layer, z, x, y),
             headers={"User-Agent": "WebGIS-AI/1.1"},

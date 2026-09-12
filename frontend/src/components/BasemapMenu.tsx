@@ -5,8 +5,15 @@ type Props = {
   items: BasemapPreset[];
   activeId: string;
   disabled?: boolean;
+  /** 后端是否配置了 WEBGIS_AI_OPENWEATHERMAP_API_KEY；false 时天气选项仅提示、不切换。 */
+  weatherEnabled?: boolean;
+  /** 点击未配置的天气选项时触发，由宿主展示可操作提示。 */
+  onWeatherBlocked?: (title: string, message: string) => void;
   onSelect: (basemapId: string) => void | Promise<void>;
 };
+
+const WEATHER_BLOCKED_MESSAGE =
+  "天气底图未配置：请在后端设置 WEBGIS_AI_OPENWEATHERMAP_API_KEY 环境变量并重启服务。当前底图保持不变。";
 
 type BasemapGroup = {
   id: "basic" | "weather";
@@ -25,10 +32,11 @@ function isWeatherBasemap(item: BasemapPreset): boolean {
   );
 }
 
-export function BasemapMenu({ items, activeId, disabled = false, onSelect }: Props) {
+export function BasemapMenu({ items, activeId, disabled = false, weatherEnabled = true, onWeatherBlocked, onSelect }: Props) {
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const [expandedGroup, setExpandedGroup] = useState<BasemapGroup["id"] | null>(null);
+  const [weatherBlockedHint, setWeatherBlockedHint] = useState(false);
 
   const activeItem = useMemo(
     () => items.find((item) => item.id === activeId) || items[0] || null,
@@ -64,6 +72,18 @@ export function BasemapMenu({ items, activeId, disabled = false, onSelect }: Pro
   const closeMenu = () => {
     setOpen(false);
     setExpandedGroup(null);
+    setWeatherBlockedHint(false);
+  };
+
+  const handleWeatherSelect = (item: BasemapPreset) => {
+    if (!weatherEnabled) {
+      setWeatherBlockedHint(true);
+      onWeatherBlocked?.(item.title, WEATHER_BLOCKED_MESSAGE);
+      return;
+    }
+    setWeatherBlockedHint(false);
+    void onSelect(item.id);
+    closeMenu();
   };
 
   useEffect(() => {
@@ -123,7 +143,12 @@ export function BasemapMenu({ items, activeId, disabled = false, onSelect }: Pro
                   }
                 >
                   <span className="basemap-group-copy">
-                    <strong>{group.title}</strong>
+                    <strong>
+                      {group.title}
+                      {group.id === "weather" && !weatherEnabled ? (
+                        <em className="basemap-weather-badge">未配置</em>
+                      ) : null}
+                    </strong>
                     <small>{activeChild?.title || group.description}</small>
                   </span>
                   <span className="basemap-group-arrow" aria-hidden="true">
@@ -140,6 +165,7 @@ export function BasemapMenu({ items, activeId, disabled = false, onSelect }: Pro
                   >
                     {group.items.map((item) => {
                       const selected = item.id === activeId;
+                      const blocked = group.id === "weather" && !weatherEnabled;
 
                       return (
                         <button
@@ -147,13 +173,14 @@ export function BasemapMenu({ items, activeId, disabled = false, onSelect }: Pro
                           type="button"
                           role="menuitemradio"
                           aria-checked={selected}
+                          aria-disabled={blocked || undefined}
                           className={`basemap-option ${selected ? "active" : ""}`}
-                          onClick={async () => {
-                            await onSelect(item.id);
-                            closeMenu();
-                          }}
+                          onClick={() => handleWeatherSelect(item)}
                         >
-                          <strong>{item.title}</strong>
+                          <strong>
+                            {item.title}
+                            {blocked ? <em className="basemap-weather-badge">未配置</em> : null}
+                          </strong>
                           <span>{item.description}</span>
                         </button>
                       );
@@ -163,6 +190,11 @@ export function BasemapMenu({ items, activeId, disabled = false, onSelect }: Pro
               </div>
             );
           })}
+          {weatherBlockedHint ? (
+            <p className="basemap-menu-hint" role="status">
+              {WEATHER_BLOCKED_MESSAGE}
+            </p>
+          ) : null}
         </div>
       ) : null}
     </div>

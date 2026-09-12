@@ -340,7 +340,23 @@ INTERACTION_SESSION_END_KEYWORDS = ("下课", "结束上课", "结束班课", "�
 INTERACTION_STAGE_NEXT_KEYWORDS = ("下一环节", "下一个环节", "下一阶段", "下一个阶段", "进入下一", "继续下一")
 INTERACTION_STAGE_PREVIOUS_KEYWORDS = ("上一环节", "上一个环节", "上一阶段", "上一个阶段", "返回上一", "回到上一")
 INTERACTION_STAGE_ENTER_KEYWORDS = ("进入", "跳到", "切到", "切换到")
-INTERACTION_WORKFLOW_TRIGGER_KEYWORDS = ("做一个", "做一个分析", "运行", "跑一个", "执行", "来一个", "做个", "做个分析", "分析一下", "开始分析")
+INTERACTION_WORKFLOW_TRIGGER_KEYWORDS = ("做一个", "做一个分析", "运行", "跑一个", "执行", "来一个", "来个", "做个", "做个分析", "分析一下", "开始分析", "分级", "设色", "对比")
+INTERACTION_QUESTION_WORDS = ("为什么", "为何", "怎么", "怎样", "解释", "讲解", "讲讲", "读图", "说明")
+
+# 人口 Demo 常用线要素的口语别名。规划层用它做两件事：
+# 1) 消息与某个图层名同时包含同一片段时，把该图层解析为显隐/顺序/透明度目标；
+# 2) 含这些片段的指令不得被“降水/天气”等底图关键词劫持成 switch_basemap。
+LINE_LAYER_NAME_FRAGMENTS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("胡焕庸线", ("胡焕庸", "胡线", "黑河腾冲")),
+    ("400毫米等降水量线", ("400毫米", "四百毫米", "等降水量线", "降水量线")),
+)
+
+# 科学底图（NASA GIBS）只在明确“底图”措辞下参与匹配，避免“做一个人口密度
+# 分析”这类普通指令被误判成切换底图。
+BASEMAP_EXPLICIT_KEYWORDS: Dict[str, Tuple[str, ...]] = {
+    "nasa_nightlights_2016": ("夜光", "夜间灯光", "夜灯", "灯光图"),
+    "nasa_population_2020": ("人口密度", "世界人口"),
+}
 
 BUILTIN_REGION_ANCHORS: Tuple[Dict[str, Any], ...] = (
     {"name": "上海", "aliases": ["上海市", "沪上"], "center": [121.47, 31.23], "zoom": 8},
@@ -394,7 +410,7 @@ TEACHING_MAP_TRIGGER_KEYWORDS = (
     "教学地图", "课本地图", "课本插图", "教材图",
     "人口分布图", "人口密度分布图", "人口密度图", "人口图", "气温图", "降水图", "降水量图", "地形图",
     "温度带", "土壤图", "绿洲",
-    "胡焕庸线图",
+    "胡焕庸线图", "胡焕庸线",
     "东北地区", "塔里木",
 )
 
@@ -667,7 +683,14 @@ class AssistantService:
 
         # A keyword match cannot resolve negation, conditions or multiple
         # instructions. Let the existing planner see the complete request.
-        complex_request = bool(re.search(r"然后|接着|同时|并且|并|再|如果|否则|而是|只|(?:和|及|、).*(?:底图|图层|地图|面板)", normalized))
+        complex_request = bool(re.search(r"然后|接着|同时|并且|并|再|如果|假如|要是|否则|而是|只|(?:和|及|、).*(?:底图|图层|地图|面板)", normalized))
+        # Quoted speech / reported commands / hedging ("刚才说切换到三维",
+        # "好像可以切换") must never hit the keyword fast path — the mention
+        # of a command is not a command. Route them to the LLM planner which
+        # sees full semantics instead.
+        hedged = bool(re.search(r"刚才|刚刚|上次|他说|她说|他们|好像|似乎|可能|也许|大概|比如|例如|举个例子", normalized))
+        if hedged:
+            complex_request = True
         negation = r"不要|(?<!分)别|不用|无需|不必|不能|不许|禁止"
         negated = bool(re.search(negation, normalized))
         if negated:
@@ -681,6 +704,12 @@ class AssistantService:
                 return {"assistant_message": "好的，保持当前状态，不执行该操作。", "actions": [], "stop_planning": True}
             complex_request = True
         if complex_request:
+            # 多步操控指令优先做确定性顺序分解；任何一步无法确定时才交给
+            # LLM 完整规划，绝不能只执行最后一步或漏掉中间步骤。
+            if not hedged:
+                sequential_plan = self._plan_sequential_clauses(normalized, project)
+                if sequential_plan is not None:
+                    return sequential_plan
             return {"assistant_message": "这条指令需要完整规划，暂未执行任何操作。", "actions": []}
 
         # --- 班课控制（短语最具体，优先判定）---
@@ -724,11 +753,18 @@ class AssistantService:
                             }
                         ],
                     }
+            # 明确说了“面板”但没说哪个：给一次具体的澄清，而不是笼统的没听懂。
+            if "面板" in normalized:
+                return self._clarification("请问要打开或关闭哪个面板？可以说“图层”“数据库”或“工作流”。")
 
         # --- 图层透明度 ---
         if any(keyword in normalized for keyword in INTERACTION_OPACITY_KEYWORDS):
             opacity = self._parse_opacity_phrase(normalized)
-            if opacity is not None:
+            if opacity is None:
+                # 有调整语义但没给数值：问一次具体数值，不猜、不装作已执行。
+                if re.search(r"调|设置|设为|改成|变成|变为", normalized):
+                    return self._clarification("请问要把图层透明度调到多少？可以说“半透明”或“80%”。")
+            else:
                 target_layer = self._resolve_target_layer(normalized, project, include_active_fallback=False)
                 named_target = re.match(r"(?:请)?(?:帮我)?(?:把|将)?(.*?)图层", normalized)
                 if not target_layer and named_target and named_target.group(1) not in ("", "当前", "选中", "这个", "该", "活动"):
@@ -745,6 +781,84 @@ class AssistantService:
                             }
                         ],
                     }
+
+        # --- 图层显隐（含胡焕庸线 / 400毫米等降水量线别名）---
+        if not re.search(r"面板|管理器|工作流|分析|对比|模板|底图", normalized):
+            toggle_eligible = bool(re.search(r"图层|胡焕庸|黑河腾冲|胡线|等降水量线|降水量线|400毫米|四百毫米", normalized))
+            if toggle_eligible and re.search(r"显示|打开|叠加|隐藏|关闭|取消叠加", normalized):
+                target = self._resolve_target_layer(normalized, project, include_active_fallback=False)
+                if target:
+                    hide = bool(re.search(r"隐藏|关闭|取消", normalized))
+                    state_text = "隐藏" if hide else "显示"
+                    return {
+                        "assistant_message": f"好的，{state_text}图层“{target['name']}”。",
+                        "actions": [
+                            {"tool_name": "toggle_layer", "tool_params": {"layer_id": target["layer_id"], "visible": not hide}}
+                        ],
+                    }
+                if re.search(r"胡焕庸|黑河腾冲|胡线", normalized):
+                    return self._clarification("当前项目里还没有胡焕庸线图层，可以先在数据库面板导入，或者直接说“做一个胡焕庸线对比分析”，要哪一个？")
+                if re.search(r"降水量线|400毫米|四百毫米", normalized):
+                    return self._clarification("当前项目里还没有400毫米等降水量线图层，请先在数据库面板导入后再试，好吗？")
+                return self._clarification("请问要显示或隐藏哪个图层？可以说出图层名称，例如“显示胡焕庸线”。")
+
+        # --- 定位到图层（区别于地名定位）---
+        if not re.search(r"管理器|面板", normalized):
+            focus_match = re.search(r"(?:定位|聚焦|缩放|放大)(?:到|至)?(.*?)图层", normalized)
+            if focus_match:
+                target_name = focus_match.group(1).strip("的")
+                if target_name in ("", "当前", "该", "这个", "选中", "活动"):
+                    active_layer = next((layer for layer in project.layers if layer.layer_id == project.active_layer_id), None)
+                    if active_layer is None:
+                        return self._clarification("当前没有激活图层，请说出要定位的图层名称。")
+                    resolved = active_layer.to_dict()
+                else:
+                    resolved = self._resolve_target_layer(f"定位到{target_name}图层", project, include_active_fallback=False)
+                    if resolved is None:
+                        return self._clarification(f"没有找到名为“{target_name}”的图层，请问要定位哪个图层？")
+                return {
+                    "assistant_message": f"好的，定位到图层“{resolved['name']}”。",
+                    "actions": [{"tool_name": "focus_layer", "tool_params": {"layer_id": resolved["layer_id"]}}],
+                }
+
+        # --- 图层顺序 ---
+        if re.search(r"图层", normalized) and re.search(r"置顶|最上面|最上层|顶层|最下面|最底层|最下层|底层", normalized):
+            named_target = re.search(r"(?:把|将)(.{1,16}?)图层", normalized)
+            explicit_name = named_target.group(1).strip() if named_target else ""
+            explicit_and_unknown = explicit_name not in ("", "当前", "该", "这个", "选中", "活动")
+            target = self._resolve_target_layer(normalized, project, include_active_fallback=not explicit_and_unknown)
+            if target is None:
+                if explicit_and_unknown:
+                    return self._clarification(f"没有找到名为“{explicit_name}”的图层，请问要移动哪个图层？")
+                return self._clarification("请问要移动哪个图层？可以说出图层名称，例如“把人口分布图层置顶”。")
+            to_top = bool(re.search(r"置顶|最上面|最上层|顶层", normalized))
+            z_values = [layer.z_index for layer in project.layers] or [0]
+            new_z = max(z_values) + 10 if to_top else min(z_values) - 10
+            direction = "最上层" if to_top else "最下层"
+            return {
+                "assistant_message": f"好的，我把图层“{target['name']}”移到{direction}。",
+                "actions": [{"tool_name": "reorder_layer", "tool_params": {"layer_id": target["layer_id"], "z_index": new_z}}],
+            }
+
+        # --- 图层颜色样式 ---
+        if re.search(r"改成|换成|调成|设为|涂成|变成|变为", normalized):
+            requested_color = self._extract_requested_color(normalized)
+            if requested_color:
+                style_target = self._resolve_target_layer(normalized, project, include_active_fallback=True)
+                if style_target:
+                    return {
+                        "assistant_message": f"好的，我把图层“{style_target['name']}”改成你要求的颜色。",
+                        "actions": [
+                            {
+                                "tool_name": "style_layer",
+                                "tool_params": {
+                                    "layer_id": style_target["layer_id"],
+                                    "style": {"fillColor": requested_color, "strokeColor": "#ffffff"},
+                                },
+                            }
+                        ],
+                    }
+                return self._clarification("请问要给哪个图层换颜色？可以说出图层名称，例如“把人口分布图层改成红色”。")
 
         # --- 教学环节推进 ---
         if any(keyword in normalized for keyword in INTERACTION_STAGE_NEXT_KEYWORDS):
@@ -767,7 +881,7 @@ class AssistantService:
         # --- GIS 分析工作流（白名单模板）---
         # 窄疑问词判定：「分析」在这里是动作触发词而不是疑问词，
         # 所以只拦 为什么/怎么/讲讲 这类真正的提问。
-        interaction_question_words = ("为什么", "为何", "怎么", "怎样", "解释", "讲解", "讲讲", "读图", "说明")
+        interaction_question_words = INTERACTION_QUESTION_WORDS
         is_question = any(keyword in normalized for keyword in interaction_question_words)
         if not is_question:
             template_id = detect_template(normalized)
@@ -781,6 +895,12 @@ class AssistantService:
                         "assistant_message": f"好的，已提交「{template_title}」分析，完成后结果图层会自动加载。",
                         "actions": [{"tool_name": "run_workflow", "tool_params": {"template_id": template_id}}],
                     }
+            if template_id is None and "分析" in normalized and any(
+                keyword in normalized for keyword in INTERACTION_WORKFLOW_TRIGGER_KEYWORDS
+            ):
+                # 想跑分析但没说跑哪个：列出白名单里的三个分析，问一次。
+                if not re.search(r"人口|降水|气温|密度|字段|胡焕庸|地形|缓冲|裁剪|交集|连接", normalized):
+                    return self._clarification("语音可以直接发起三类分析：人口密度分级设色、胡焕庸线对比、字段分级。请说要哪一个？")
 
         # --- 继承语音规则组：地名定位/图层显隐/底图/教学地图/素材/视觉查询/讲解 ---
         # 只有包含明确指令动词或疑问词时才接受继承规则，避免「今天天气不错啊」
@@ -788,6 +908,8 @@ class AssistantService:
         interaction_command_words = (
             "转到", "转向", "飞到", "聚焦", "定位", "切到", "切换", "去看", "去看",
             "显示", "隐藏", "打开", "关闭", "叠加", "来看", "取消",
+            "改成", "调成", "换成", "设为",
+            "查一下", "查询", "排名",
         ) + VOICE_VIEW_KEYWORDS
         looks_like_command = any(keyword in normalized for keyword in interaction_command_words)
         looks_like_question = any(keyword in normalized for keyword in interaction_question_words)
@@ -806,6 +928,133 @@ class AssistantService:
             "assistant_message": "这条指令我没有直接听懂。可以说：“切换到三维地球”“打开图层管理”“转到长三角”“下一环节”。",
             "actions": [],
         }
+
+    @staticmethod
+    def _clarification(question: str) -> Dict[str, Any]:
+        """参数不足时的一次具体澄清；stop_planning 让管线直接作答，不再打扰 LLM。"""
+        return {"assistant_message": question, "actions": [], "stop_planning": True}
+
+    def _plan_sequential_clauses(self, normalized: str, project: ProjectRecord) -> Optional[Dict[str, Any]]:
+        """把“打开…，定位…，然后解释…”拆解为顺序正确的动作列表。
+
+        规则：任何一步无法确定解析，整个计划放弃（交给 LLM 完整规划），
+        绝不输出只执行最后一步的部分计划。并列连词（和/及/同时）与面板/
+        班课/环节类子句刻意不参与顺序分解，保持既有复合指令走 LLM 的行为。
+        """
+        if not re.search(r"\s|然后|接着|随后", normalized):
+            return None
+        if re.search(r"和|及|同时|并且", normalized):
+            return None
+        raw_clauses = re.split(r"\s+|然后|接着|随后|最后", normalized)
+        clauses: List[str] = []
+        for raw in raw_clauses:
+            clause = re.sub(r"^(先|再|然后|接着|随后|最后|请|帮忙|帮我|麻烦)+", "", raw.strip()).strip()
+            if clause:
+                clauses.append(clause)
+        if len(clauses) < 2:
+            return None
+        actions: List[Dict[str, Any]] = []
+        narratives: List[str] = []
+        for clause in clauses:
+            resolved = self._resolve_interaction_clause(clause, project)
+            if resolved is None:
+                return None
+            actions.append(resolved[0])
+            narratives.append(resolved[1])
+        return {
+            "assistant_message": "好的，我将按顺序执行：" + "；".join(narratives) + "。",
+            "actions": actions,
+        }
+
+    def _resolve_interaction_clause(self, clause: str, project: ProjectRecord) -> Optional[Tuple[Dict[str, Any], str]]:
+        """解析单个操控子句为 (action, narrative)；无法确定时返回 None。"""
+        # 1) 2D/3D 投影
+        wants_globe = any(keyword in clause for keyword in INTERACTION_GLOBE_KEYWORDS)
+        wants_plane = any(keyword in clause for keyword in INTERACTION_PLANE_KEYWORDS)
+        if wants_globe and not wants_plane:
+            return {"tool_name": "switch_view_mode", "tool_params": {"mode": "globe"}}, "切换到三维地球"
+        if wants_plane and not wants_globe:
+            return {"tool_name": "switch_view_mode", "tool_params": {"mode": "plane"}}, "切换到二维平面地图"
+        # 2) 底图
+        basemap_id = self._extract_basemap_id(clause)
+        if basemap_id:
+            return {"tool_name": "switch_basemap", "tool_params": {"basemap_id": basemap_id}}, "切换课堂底图"
+        # 3) 图层显隐（含线要素别名）
+        if not re.search(r"面板|管理器|工作流|分析|对比|模板", clause):
+            toggle_eligible = bool(re.search(r"图层|胡焕庸|黑河腾冲|胡线|等降水量线|降水量线|400毫米|四百毫米", clause))
+            if toggle_eligible and re.search(r"显示|打开|叠加|隐藏|关闭|取消叠加", clause):
+                target = self._resolve_target_layer(clause, project, include_active_fallback=False)
+                if target is None:
+                    return None
+                hide = bool(re.search(r"隐藏|关闭|取消", clause))
+                state_text = "隐藏" if hide else "显示"
+                return (
+                    {"tool_name": "toggle_layer", "tool_params": {"layer_id": target["layer_id"], "visible": not hide}},
+                    f'{state_text}图层“{target["name"]}”',
+                )
+        # 4) 透明度
+        if any(keyword in clause for keyword in INTERACTION_OPACITY_KEYWORDS):
+            opacity = self._parse_opacity_phrase(clause)
+            target = self._resolve_target_layer(clause, project, include_active_fallback=True) if opacity is not None else None
+            if opacity is None or target is None:
+                return None
+            return (
+                {"tool_name": "set_layer_opacity", "tool_params": {"layer_id": target["layer_id"], "opacity": opacity}},
+                f'把图层“{target["name"]}”透明度调整为 {opacity:g}',
+            )
+        # 5) 教学模板
+        template_action = self._resolve_voice_template_action(clause)
+        if template_action:
+            narrative = template_action["narrative"]
+            if narrative.startswith("我先"):
+                narrative = "先" + narrative[2:]
+            return (
+                {"tool_name": template_action["tool_name"], "tool_params": dict(template_action["tool_params"])},
+                narrative,
+            )
+        # 6) GIS 分析（白名单）
+        if not any(keyword in clause for keyword in INTERACTION_QUESTION_WORDS):
+            template_id = detect_template(clause)
+            if template_id and template_id in INTERACTION_ALLOWED_TEMPLATES:
+                if any(keyword in clause for keyword in INTERACTION_WORKFLOW_TRIGGER_KEYWORDS) or "分析" in clause:
+                    template_title = next((item["title"] for item in list_templates() if item["id"] == template_id), template_id)
+                    return (
+                        {"tool_name": "run_workflow", "tool_params": {"template_id": template_id}},
+                        f"提交「{template_title}」分析",
+                    )
+        # 7) 地名定位 / 图层定位
+        if self._is_voice_view_command(clause):
+            focus_match = re.search(r"(?:定位|聚焦|缩放|放大)(?:到|至)?(.*?)图层", clause)
+            if focus_match:
+                target_name = focus_match.group(1).strip("的")
+                if target_name in ("", "当前", "该", "这个", "选中", "活动"):
+                    active_layer = next((layer for layer in project.layers if layer.layer_id == project.active_layer_id), None)
+                    target = active_layer.to_dict() if active_layer else None
+                else:
+                    target = self._resolve_target_layer(f"{target_name}图层", project, include_active_fallback=False)
+                if target is None:
+                    return None
+                return (
+                    {"tool_name": "focus_layer", "tool_params": {"layer_id": target["layer_id"]}},
+                    f'定位到图层“{target["name"]}”',
+                )
+            place = self._resolve_voice_place(clause, project, allow_llm=False)
+            if place:
+                view_params: Dict[str, Any] = {"center": list(place["center"]), "zoom": int(place["zoom"])}
+                if place.get("extent"):
+                    view_params["extent"] = list(place["extent"])
+                return (
+                    {"tool_name": "set_view", "tool_params": view_params},
+                    f'把视角定位到“{place["name"]}”',
+                )
+            return None
+        # 8) 讲解
+        if any(keyword in clause for keyword in INTERACTION_QUESTION_WORDS):
+            return (
+                {"tool_name": "explain_current_view", "tool_params": {"focus": clause}},
+                "结合当前画面给出讲解",
+            )
+        return None
 
     @staticmethod
     def _parse_opacity_phrase(text: str) -> Optional[float]:
@@ -950,9 +1199,18 @@ class AssistantService:
         include_active_fallback: bool = True,
     ) -> Optional[Dict[str, Any]]:
         lowered = (message or "").lower()
+        compact = "".join(lowered.split())
         for layer in project.layers:
-            if layer.name.lower() in lowered:
+            if layer.name.lower() in compact:
                 return layer.to_dict()
+        # 线要素口语别名：消息与图层名同时包含同一片段才算命中，
+        # 让“显示400毫米等降水量线”能命中长图层名。
+        for _label, fragments in LINE_LAYER_NAME_FRAGMENTS:
+            for fragment in fragments:
+                if fragment in compact:
+                    for layer in project.layers:
+                        if fragment in layer.name.lower():
+                            return layer.to_dict()
         if include_active_fallback and project.active_layer_id:
             for layer in project.layers:
                 if layer.layer_id == project.active_layer_id:
@@ -960,6 +1218,9 @@ class AssistantService:
         return None
 
     def _resolve_template_action(self, lowered: str) -> Optional[Dict[str, Any]]:
+        # “切换到人口密度底图”是换底图，不是套模板。
+        if re.search(r"底图|背景", lowered):
+            return None
         template_keywords = [
             ("population_classroom_pack", ["\u4eba\u53e3\u4e13\u9898", "\u4eba\u53e3\u5305", "population pack"], "\u6211\u5148\u5207\u5230\u4eba\u53e3\u4e13\u9898\u8bfe\u5802\u5305\u3002"),
             ("population_distribution", ["\u4eba\u53e3\u5206\u5e03", "\u5206\u5e03\u56fe"], "\u6211\u5148\u5207\u5230\u4eba\u53e3\u5206\u5e03\u6a21\u677f\u3002"),
@@ -970,6 +1231,10 @@ class AssistantService:
         ]
         for template_id, keywords, narrative in template_keywords:
             if any(keyword in lowered for keyword in keywords):
+                # “显示/隐藏胡焕庸线”是图层显隐意图；只有对比/分析语境才套模板。
+                if template_id == "hu_line_comparison" and not any(token in lowered for token in ("对比", "分析", "模板", "工作流")):
+                    if re.search(r"显示|隐藏|打开|关闭|叠加|取消叠加|移除", lowered):
+                        return None
                 return {"tool_name": "apply_template", "tool_params": {"template_id": template_id}, "narrative": narrative}
         return None
 
@@ -1059,7 +1324,16 @@ class AssistantService:
 
     def _extract_basemap_id(self, message: str) -> str:
         lowered = (message or "").lower()
+        # 没有明确底图措辞时，线要素/图层指令（“显示400毫米等降水量线”“隐藏
+        # 降水图层”）不得被降水、天气等关键词劫持成换底图。
+        mentions_basemap = bool(re.search(r"底图|背景", lowered))
+        if not mentions_basemap and re.search(r"等降水量线|降水量线|胡焕庸|胡线|黑河腾冲|图层", lowered):
+            return ""
         available_ids = {item["id"] for item in self.config.basemap_catalog()["items"]}
+        if mentions_basemap:
+            for basemap_id, keywords in BASEMAP_EXPLICIT_KEYWORDS.items():
+                if basemap_id in available_ids and any(keyword in lowered for keyword in keywords):
+                    return basemap_id
         for basemap_id, keywords in BASEMAP_KEYWORDS.items():
             if basemap_id not in available_ids:
                 continue

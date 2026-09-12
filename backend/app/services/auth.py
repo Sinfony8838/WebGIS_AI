@@ -7,6 +7,7 @@ import sqlite3
 import string
 import threading
 from contextlib import contextmanager
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,6 +21,8 @@ from argon2.low_level import Type
 
 ALLOWED_ROLES = {"admin", "teacher"}
 ALLOWED_STATUSES = {"active", "disabled"}
+ALLOWED_REGISTRATION_STATUSES = {"pending", "approved", "rejected"}
+ALLOWED_REGISTRATION_DECISIONS = {"approved", "rejected"}
 
 
 def utc_now() -> datetime:
@@ -65,11 +68,19 @@ class AuthService:
         *,
         idle_minutes: int = 480,
         max_hours: int = 24,
+        registration_ip_limit: int = 5,
+        registration_email_limit: int = 3,
+        registration_window_seconds: int = 3600,
     ) -> None:
         self.db_path = Path(db_path)
         self.idle_minutes = max(5, int(idle_minutes))
         self.max_hours = max(1, int(max_hours))
+        self.registration_ip_limit = max(1, int(registration_ip_limit))
+        self.registration_email_limit = max(1, int(registration_email_limit))
+        self.registration_window_seconds = max(60, int(registration_window_seconds))
         self._lock = threading.RLock()
+        self._registration_rate_lock = threading.Lock()
+        self._registration_attempts: Dict[str, deque] = {}
         self._password_hasher = PasswordHasher(
             time_cost=2,
             memory_cost=19_456,
@@ -154,8 +165,41 @@ class AuthService:
                     user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
                     created_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS registration_requests (
+                    request_id TEXT PRIMARY KEY,
+                    email TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    organization TEXT NOT NULL DEFAULT '',
+                    application_note TEXT NOT NULL DEFAULT '',
+                    password_hash TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),
+                    source_ip TEXT NOT NULL DEFAULT '',
+                    user_agent TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    reviewed_by TEXT NOT NULL DEFAULT '',
+                    reviewed_at TEXT NOT NULL DEFAULT '',
+                    resulting_user_id TEXT NOT NULL DEFAULT ''
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_registration_requests_status
+                ON registration_requests(status, created_at);
+
+                -- At most one pending request per normalized email.
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_registration_requests_pending_email
+                ON registration_requests(email) WHERE status = 'pending';
                 """
             )
+            # Backward-compatible additive migration: older auth databases do
+            # not carry the organization profile column on users.
+            user_columns = {
+                str(row["name"]) for row in connection.execute("PRAGMA table_info(users)")
+            }
+            if "organization" not in user_columns:
+                connection.execute(
+                    "ALTER TABLE users ADD COLUMN organization TEXT NOT NULL DEFAULT ''"
+                )
 
     def has_users(self) -> bool:
         with self._connect() as connection:
@@ -598,6 +642,389 @@ class AuthService:
             raise AuthError("EMAIL_EXISTS", "该邮箱已存在。", 409) from exc
         return {"user": user, "temporary_password": temporary_password}
 
+    # ── Public self-registration ───────────────────────────────────────────
+    #
+    # Registration requests live in their own table so the users table keeps
+    # its strict active/disabled CHECK and no pending account can ever hold a
+    # session. Approvals re-use the stored Argon2id hash; it is wiped from the
+    # request row as soon as a decision is recorded.
+
+    def submit_registration(
+        self,
+        email: str,
+        nickname: str,
+        password: str,
+        *,
+        organization: str = "",
+        application_note: str = "",
+        ip_address: str = "",
+        user_agent: str = "",
+    ) -> str:
+        """Queue a teacher registration request for admin review.
+
+        Returns one of "submitted", "duplicate_email", "duplicate_request".
+        Callers must answer duplicate outcomes with the same stable public
+        response as a fresh submission; the distinguishing reason lives only
+        in the audit log.
+        """
+        outcome = self._validate_registration_payload(
+            email,
+            nickname,
+            password,
+            organization=organization,
+            application_note=application_note,
+        )
+        normalized, display_name, clean_organization, clean_note = outcome
+        self._check_registration_rate_limit(ip_address, normalized)
+        now = iso(utc_now())
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT 1 FROM users WHERE username = ? COLLATE NOCASE",
+                (normalized,),
+            ).fetchone()
+            if existing:
+                self._audit(
+                    connection,
+                    "",
+                    "register_request",
+                    "",
+                    "duplicate_email",
+                    detail=f"email={normalized}",
+                    ip_address=ip_address,
+                )
+                return "duplicate_email"
+            pending = connection.execute(
+                "SELECT 1 FROM registration_requests WHERE email = ? AND status = 'pending'",
+                (normalized,),
+            ).fetchone()
+            if pending:
+                self._audit(
+                    connection,
+                    "",
+                    "register_request",
+                    "",
+                    "duplicate_request",
+                    detail=f"email={normalized}",
+                    ip_address=ip_address,
+                )
+                return "duplicate_request"
+            request_id = f"regreq_{uuid4().hex}"
+            connection.execute(
+                """
+                INSERT INTO registration_requests (
+                    request_id, email, display_name, organization, application_note,
+                    password_hash, status, source_ip, user_agent, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+                """,
+                (
+                    request_id,
+                    normalized,
+                    display_name,
+                    clean_organization,
+                    clean_note,
+                    self._password_hasher.hash(password),
+                    ip_address[:128],
+                    user_agent[:512],
+                    now,
+                    now,
+                ),
+            )
+            self._audit(
+                connection,
+                "",
+                "register_request",
+                request_id,
+                "success",
+                detail=f"email={normalized}",
+                ip_address=ip_address,
+            )
+            return "submitted"
+
+    def register_open(
+        self,
+        email: str,
+        nickname: str,
+        password: str,
+        *,
+        organization: str = "",
+        application_note: str = "",
+        ip_address: str = "",
+        user_agent: str = "",
+    ) -> str:
+        """Open-mode registration: create an active teacher immediately.
+
+        Never creates a session. Returns "created" or "duplicate_email"; the
+        caller answers both with the same public response.
+        """
+        outcome = self._validate_registration_payload(
+            email,
+            nickname,
+            password,
+            organization=organization,
+            application_note=application_note,
+        )
+        normalized, display_name, clean_organization, _note = outcome
+        self._check_registration_rate_limit(ip_address, normalized)
+        now_dt = utc_now()
+        now = iso(now_dt)
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT 1 FROM users WHERE username = ? COLLATE NOCASE",
+                (normalized,),
+            ).fetchone()
+            if existing:
+                self._audit(
+                    connection,
+                    "",
+                    "register_open",
+                    "",
+                    "duplicate_email",
+                    detail=f"email={normalized}",
+                    ip_address=ip_address,
+                )
+                return "duplicate_email"
+            user_id = f"user_{uuid4().hex}"
+            self._insert_user(
+                connection,
+                user_id=user_id,
+                email=normalized,
+                display_name=display_name,
+                role="teacher",
+                password_hash=self._password_hasher.hash(password),
+                must_change_password=False,
+                organization=clean_organization,
+                now=now,
+            )
+            pending = connection.execute(
+                "SELECT request_id FROM registration_requests WHERE email = ? AND status = 'pending'",
+                (normalized,),
+            ).fetchone()
+            if pending:
+                connection.execute(
+                    """
+                    UPDATE registration_requests
+                    SET status = 'approved', reviewed_by = '', reviewed_at = ?,
+                        resulting_user_id = ?, password_hash = '', updated_at = ?
+                    WHERE request_id = ?
+                    """,
+                    (now, user_id, now, str(pending["request_id"])),
+                )
+            self._audit(
+                connection,
+                "",
+                "register_open",
+                user_id,
+                "success",
+                detail=f"email={normalized}",
+                ip_address=ip_address,
+            )
+            return "created"
+
+    def list_registration_requests(
+        self,
+        query: str = "",
+        status: str = "",
+    ) -> List[Dict[str, Any]]:
+        sql = "SELECT * FROM registration_requests WHERE 1 = 1"
+        params: List[Any] = []
+        if query.strip():
+            sql += " AND (email LIKE ? OR display_name LIKE ? OR organization LIKE ?)"
+            needle = f"%{query.strip()}%"
+            params.extend([needle, needle, needle])
+        if status in ALLOWED_REGISTRATION_STATUSES:
+            sql += " AND status = ?"
+            params.append(status)
+        sql += " ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, created_at DESC"
+        with self._connect() as connection:
+            rows = connection.execute(sql, params).fetchall()
+        return [self._public_registration_request(row) for row in rows]
+
+    def count_pending_registration_requests(self) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM registration_requests WHERE status = 'pending'"
+            ).fetchone()
+        return int(row["count"]) if row else 0
+
+    def review_registration_request(
+        self,
+        request_id: str,
+        decision: str,
+        *,
+        actor_user_id: str,
+        ip_address: str = "",
+    ) -> Dict[str, Any]:
+        if decision not in ALLOWED_REGISTRATION_DECISIONS:
+            raise AuthError("INVALID_DECISION", "审核操作不正确。", 400)
+        now = iso(utc_now())
+        with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM registration_requests WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            if not row:
+                raise AuthError("REQUEST_NOT_FOUND", "注册申请不存在。", 404)
+            if str(row["status"]) != "pending":
+                raise AuthError("ALREADY_REVIEWED", "该申请已经处理过。", 409)
+            email = str(row["email"])
+            resulting_user_id = ""
+            if decision == "approved":
+                # Re-check uniqueness inside the same transaction so a race
+                # with admin creation cannot produce a duplicate account; the
+                # request stays pending when this fails.
+                conflict = connection.execute(
+                    "SELECT 1 FROM users WHERE username = ? COLLATE NOCASE",
+                    (email,),
+                ).fetchone()
+                if conflict:
+                    raise AuthError(
+                        "EMAIL_EXISTS",
+                        "该邮箱已被注册，无法批准；请拒绝该申请或联系教师更换邮箱。",
+                        409,
+                    )
+                user_id = f"user_{uuid4().hex}"
+                self._insert_user(
+                    connection,
+                    user_id=user_id,
+                    email=email,
+                    display_name=str(row["display_name"]),
+                    role="teacher",
+                    password_hash=str(row["password_hash"]),
+                    must_change_password=False,
+                    organization=str(row["organization"] or ""),
+                    now=now,
+                )
+                resulting_user_id = user_id
+            cursor = connection.execute(
+                """
+                UPDATE registration_requests
+                SET status = ?, reviewed_by = ?, reviewed_at = ?,
+                    resulting_user_id = ?, password_hash = '', updated_at = ?
+                WHERE request_id = ? AND status = 'pending'
+                """,
+                (decision, actor_user_id, now, resulting_user_id, now, request_id),
+            )
+            if cursor.rowcount != 1:
+                raise AuthError("ALREADY_REVIEWED", "该申请已经处理过。", 409)
+            self._audit(
+                connection,
+                actor_user_id,
+                "registration_review",
+                request_id,
+                "success",
+                detail=f"decision={decision};email={email};user={resulting_user_id}",
+                ip_address=ip_address,
+            )
+            updated = connection.execute(
+                "SELECT * FROM registration_requests WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            return self._public_registration_request(updated)
+
+    def _check_registration_rate_limit(self, ip_address: str, email: str) -> None:
+        """Sliding-window limiter over source IP and normalized email.
+
+        Deliberately counts every submission attempt (including duplicates)
+        so attackers cannot probe the endpoint for free.
+        """
+        now = utc_now()
+        with self._registration_rate_lock:
+            buckets = (
+                (f"ip:{ip_address}", self.registration_ip_limit),
+                (f"email:{email}", self.registration_email_limit),
+            )
+            for key, limit in buckets:
+                if not key.split(":", 1)[1]:
+                    continue
+                window = self._registration_attempts.setdefault(key, deque())
+                while window and (
+                    now - window[0]
+                ).total_seconds() > self.registration_window_seconds:
+                    window.popleft()
+                if len(window) >= limit:
+                    raise AuthError(
+                        "RATE_LIMITED",
+                        "注册请求过于频繁，请稍后再试。",
+                        429,
+                    )
+                window.append(now)
+
+    def _validate_registration_payload(
+        self,
+        email: str,
+        nickname: str,
+        password: str,
+        *,
+        organization: str = "",
+        application_note: str = "",
+    ) -> tuple[str, str, str, str]:
+        normalized = self._validate_email(email)
+        self._validate_password(password)
+        display_name = self._clean_nickname(nickname, normalized)
+        clean_organization = str(organization or "").strip()
+        if len(clean_organization) > 120:
+            raise AuthError("INVALID_ORGANIZATION", "学校/机构不能超过 120 个字符。", 400)
+        clean_note = str(application_note or "").strip()
+        if len(clean_note) > 300:
+            raise AuthError("INVALID_APPLICATION_NOTE", "申请说明不能超过 300 个字符。", 400)
+        return normalized, display_name, clean_organization, clean_note
+
+    @staticmethod
+    def _insert_user(
+        connection: sqlite3.Connection,
+        *,
+        user_id: str,
+        email: str,
+        display_name: str,
+        role: str,
+        password_hash: str,
+        must_change_password: bool,
+        organization: str,
+        now: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO users (
+                user_id, username, display_name, email, role, status,
+                password_hash, must_change_password, organization, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                email,
+                display_name,
+                email,
+                role,
+                password_hash,
+                1 if must_change_password else 0,
+                organization,
+                now,
+                now,
+            ),
+        )
+
+    @staticmethod
+    def _public_registration_request(row: sqlite3.Row) -> Dict[str, Any]:
+        # Never expose password_hash outside the service layer.
+        return {
+            "request_id": str(row["request_id"]),
+            "email": str(row["email"]),
+            "display_name": str(row["display_name"]),
+            "organization": str(row["organization"] or ""),
+            "application_note": str(row["application_note"] or ""),
+            "status": str(row["status"]),
+            "source_ip": str(row["source_ip"] or ""),
+            "user_agent": str(row["user_agent"] or ""),
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]),
+            "reviewed_by": str(row["reviewed_by"] or ""),
+            "reviewed_at": str(row["reviewed_at"] or ""),
+            "resulting_user_id": str(row["resulting_user_id"] or ""),
+        }
+
     def update_user(
         self,
         user_id: str,
@@ -606,7 +1033,7 @@ class AuthService:
         actor_user_id: str,
         ip_address: str = "",
     ) -> Dict[str, Any]:
-        allowed = {"nickname", "email", "role", "status"}
+        allowed = {"nickname", "email", "role", "status", "organization"}
         unknown = set(patch) - allowed
         if unknown:
             raise AuthError("INVALID_USER_PATCH", "包含不支持的用户字段。", 400)
@@ -618,6 +1045,9 @@ class AuthService:
                 next_status = str(patch.get("status", current["status"]))
                 self._validate_role(next_role)
                 self._validate_status(next_status)
+                organization = str(patch.get("organization", current["organization"] or "")).strip()
+                if len(organization) > 120:
+                    raise AuthError("INVALID_ORGANIZATION", "学校/机构不能超过 120 个字符。", 400)
                 if (
                     str(current["role"]) == "admin"
                     and str(current["status"]) == "active"
@@ -638,10 +1068,10 @@ class AuthService:
                 connection.execute(
                     """
                     UPDATE users
-                    SET username = ?, display_name = ?, email = ?, role = ?, status = ?, updated_at = ?
+                    SET username = ?, display_name = ?, email = ?, role = ?, status = ?, organization = ?, updated_at = ?
                     WHERE user_id = ?
                     """,
-                    (email, nickname, email, next_role, next_status, now, user_id),
+                    (email, nickname, email, next_role, next_status, organization, now, user_id),
                 )
                 if (
                     next_status != "active"
@@ -805,6 +1235,7 @@ class AuthService:
             "nickname": str(row["display_name"]),
             "role": str(row["role"]),
             "status": str(row["status"]),
+            "organization": str(row["organization"] or ""),
             "must_change_password": bool(row["must_change_password"]),
             "created_at": str(row["created_at"]),
             "updated_at": str(row["updated_at"]),

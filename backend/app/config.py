@@ -120,6 +120,20 @@ class AppConfig:
     session_max_hours: int = field(
         default_factory=lambda: int(os.getenv("WEBGIS_AI_SESSION_MAX_HOURS", "24"))
     )
+    # Public self-registration policy: "closed" disables the public endpoint,
+    # "approval" (the production default) queues requests for admin review,
+    # "open" creates a teacher account immediately (controlled environments
+    # only, never the public default).
+    registration_mode: str = field(
+        default_factory=lambda: os.getenv("WEBGIS_AI_REGISTRATION_MODE", "approval").strip().lower()
+    )
+    # Only when the deployment explicitly enables this flag may the server
+    # read CF-Connecting-IP for the real client address; the header is
+    # otherwise trivially spoofable.
+    trust_proxy_headers: bool = field(
+        default_factory=lambda: os.getenv("WEBGIS_AI_TRUST_PROXY_HEADERS", "false").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
     base_map_url: str = field(
         default_factory=lambda: os.getenv(
             "WEBGIS_AI_BASEMAP_URL",
@@ -219,6 +233,14 @@ class AppConfig:
     voice_asr_enabled: bool = field(
         default_factory=lambda: os.getenv("WEBGIS_AI_VOICE_ASR_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
     )
+    # Local voice-model storage. Both values stay out of Git (machine paths);
+    # resolution order lives in services/voice_model_paths.py and is shared
+    # with scripts/download_voice_models.py so a model downloaded once is
+    # found from every worktree. ``voice_model_dir`` pins the model root
+    # directly; ``voice_model_stable_root`` overrides only the per-user
+    # fallback root (mainly for hermetic tests).
+    voice_model_dir: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_VOICE_MODEL_DIR", "").strip())
+    voice_model_stable_root: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_VOICE_MODEL_STABLE_ROOT", "").strip())
     # Cross-cutting agent-harness policy.  Keep operational limits in
     # configuration rather than prompt prose so they are deterministic,
     # inspectable, and testable.
@@ -301,6 +323,8 @@ class AppConfig:
         self.state_file = self.state_dir / "runtime.json"
         if self.auth_mode not in {"users", "legacy_token", "disabled"}:
             self.auth_mode = "users"
+        if self.registration_mode not in {"closed", "approval", "open"}:
+            self.registration_mode = "approval"
         # If the user set QGIS_ROOT but not WEBGIS_AI_QGIS_PYTHON, auto-derive
         # the QGIS-bundled interpreter at <QGIS_ROOT>/bin/python.exe (OSGeo4W
         # layout used by every official Windows installer). The worker
@@ -515,6 +539,10 @@ class AppConfig:
         if basemap_id:
             known_ids = {item["id"] for item in self.basemap_catalog()["items"]}
             if basemap_id in known_ids:
+                # 密钥被移除后，历史项目里保存的天气底图回落到默认底图，
+                # 而不是渲染一个只会显示高德参考层的“伪天气”状态。
+                if basemap_id.startswith(WEATHER_BASEMAP_PREFIX) and not self.weather_basemap_enabled():
+                    return self.default_basemap()
                 return self.basemap_by_id(basemap_id)
             if basemap_id == LEGACY_WEATHER_BASEMAP_ID or basemap_id.startswith(WEATHER_BASEMAP_PREFIX):
                 return self.default_basemap()
@@ -608,7 +636,10 @@ class AppConfig:
     def weather_tile_upstream_url(self, layer: str, z: int | str, x: int | str, y: int | str) -> str:
         api_key = self.openweathermap_api_key.strip()
         if not api_key:
-            raise ValueError("OpenWeatherMap API key is not configured")
+            # 503 文案会透出到前端天气状态面板，必须可直接指导教师配置。
+            raise ValueError(
+                "天气叠加未配置：请在后端环境变量设置 WEBGIS_AI_OPENWEATHERMAP_API_KEY 并重启服务。"
+            )
         layer = (layer or self.openweathermap_layer or OPENWEATHER_DEFAULT_LAYER).strip() or OPENWEATHER_DEFAULT_LAYER
         return (
             OPENWEATHER_TILE_TEMPLATE.replace("{layer}", layer)

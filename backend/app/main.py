@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import secrets
 import time
@@ -44,8 +45,19 @@ PUBLIC_AUTH_PATHS = {
     "/auth/bootstrap-status",
     "/auth/bootstrap",
     "/auth/login",
+    "/auth/register",
 }
+# 天气瓦片由 OpenLayers 以 <img crossorigin="anonymous"> 加载：跨端口部署
+# （前端 5173 / 后端 18999）时该请求模式不携带会话 cookie，若要求登录态，
+# 每块瓦片都会 401 并被前端静默吞掉。瓦片代理只暴露 z/x/y 公共网格坐标，
+# OpenWeatherMap 密钥始终留在服务端，因此允许匿名 GET。
+WEATHER_TILE_PATH_PREFIX = "/tiles/weather/"
+REGISTRATION_MAX_BODY_BYTES = 8192
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+def _is_public_weather_tile(path: str) -> bool:
+    return path.startswith(WEATHER_TILE_PATH_PREFIX) and path.endswith(".png")
 
 
 def _extract_access_token(request: Request) -> str:
@@ -60,6 +72,16 @@ def _extract_access_token(request: Request) -> str:
 
 def _client_ip(request: Request) -> str:
     return request.client.host if request.client else ""
+
+
+def _registration_client_ip(request: Request) -> str:
+    # CF-Connecting-IP is only honored when the deployment explicitly opts in;
+    # the header is trivially forgeable everywhere else.
+    if config.trust_proxy_headers:
+        forwarded = request.headers.get("CF-Connecting-IP", "").strip()
+        if forwarded:
+            return forwarded.split(",")[0].strip()[:128]
+    return _client_ip(request)
 
 
 def _local_user() -> Dict[str, Any]:
@@ -91,7 +113,7 @@ async def require_access_token(request: Request, call_next):
         return await call_next(request)
 
     if config.auth_mode == "legacy_token":
-        if request.url.path in config.auth_exempt_path_set():
+        if request.url.path in config.auth_exempt_path_set() or _is_public_weather_tile(request.url.path):
             return await call_next(request)
         supplied = _extract_access_token(request)
         if not supplied or not secrets.compare_digest(supplied, config.auth_token.strip()):
@@ -106,7 +128,9 @@ async def require_access_token(request: Request, call_next):
         )
         return await call_next(request)
 
-    if request.url.path in PUBLIC_AUTH_PATHS:
+    if request.url.path in PUBLIC_AUTH_PATHS or (
+        request.method in SAFE_METHODS and _is_public_weather_tile(request.url.path)
+    ):
         return await call_next(request)
 
     service = auth_service
@@ -334,6 +358,18 @@ class AuthBootstrapRequest(BaseModel):
 class AuthLoginRequest(BaseModel):
     email: str
     password: str
+
+
+class AuthRegisterRequest(BaseModel):
+    email: str = Field(max_length=254)
+    nickname: str = Field(default="", max_length=80)
+    organization: str = Field(default="", max_length=120)
+    application_note: str = Field(default="", max_length=300)
+    password: str = Field(max_length=128)
+
+
+class AdminRegistrationReviewRequest(BaseModel):
+    decision: str = Field(pattern="^(approved|rejected)$")
 
 
 class PasswordChangeRequest(BaseModel):
@@ -652,13 +688,83 @@ def auth_bootstrap_status() -> Dict[str, Any]:
         return {
             "status": "success",
             "auth_mode": config.auth_mode,
+            "registration_mode": "closed",
             "required": False,
         }
     return {
         "status": "success",
         "auth_mode": "users",
+        "registration_mode": config.registration_mode,
         "required": not auth_service.has_users(),
     }
+
+
+@app.post("/auth/register")
+def auth_register(request: Request, payload: AuthRegisterRequest) -> Response:
+    """Public self-registration endpoint.
+
+    Answers duplicate emails and internal failures with the same stable
+    response as a fresh submission so the endpoint cannot be used to probe
+    accounts; the real reason is only in the admin-visible audit log.
+    Never creates a session or sets a cookie, in any mode.
+    """
+    if config.auth_mode != "users" or auth_service is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "AUTH_MODE_DISABLED", "message": "当前未启用用户模式。"},
+        )
+    if config.registration_mode == "closed":
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "REGISTRATION_CLOSED", "message": "当前未开放注册。"},
+        )
+    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if content_type != "application/json":
+        raise HTTPException(
+            status_code=415,
+            detail={"code": "UNSUPPORTED_MEDIA_TYPE", "message": "请求内容类型不受支持。"},
+        )
+    try:
+        content_length = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        content_length = 0
+    if content_length > REGISTRATION_MAX_BODY_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail={"code": "PAYLOAD_TOO_LARGE", "message": "请求内容过大。"},
+        )
+    client_ip = _registration_client_ip(request)
+    user_agent = request.headers.get("User-Agent", "")
+    try:
+        if config.registration_mode == "open":
+            outcome = auth_service.register_open(
+                payload.email,
+                payload.nickname,
+                payload.password,
+                organization=payload.organization,
+                application_note=payload.application_note,
+                ip_address=client_ip,
+                user_agent=user_agent,
+            )
+            message = "注册完成，请使用新账号登录。"
+            status = "created"
+        else:
+            outcome = auth_service.submit_registration(
+                payload.email,
+                payload.nickname,
+                payload.password,
+                organization=payload.organization,
+                application_note=payload.application_note,
+                ip_address=client_ip,
+                user_agent=user_agent,
+            )
+            message = "注册申请已提交，管理员审核通过后方可登录。"
+            status = "submitted"
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+    # Same body for fresh submissions and duplicates: the specific outcome is
+    # recorded in the audit log, never on the public wire.
+    return JSONResponse({"status": status, "message": message})
 
 
 @app.post("/auth/bootstrap")
@@ -867,6 +973,43 @@ def admin_update_user(
     except AuthError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
     return {"status": "success", "user": user}
+
+
+@app.get("/admin/registration-requests")
+def admin_registration_requests(
+    request: Request,
+    status: str = "",
+    query: str = "",
+) -> Dict[str, Any]:
+    _require_admin(request)
+    if auth_service is None:
+        return {"status": "success", "items": [], "pending_count": 0}
+    return {
+        "status": "success",
+        "items": auth_service.list_registration_requests(query=query, status=status),
+        "pending_count": auth_service.count_pending_registration_requests(),
+    }
+
+
+@app.post("/admin/registration-requests/{request_id}/review")
+def admin_review_registration_request(
+    request_id: str,
+    request: Request,
+    payload: AdminRegistrationReviewRequest,
+) -> Dict[str, Any]:
+    context = _require_admin(request)
+    if auth_service is None:
+        raise HTTPException(status_code=409, detail="User management is unavailable")
+    try:
+        reviewed = auth_service.review_registration_request(
+            request_id,
+            payload.decision,
+            actor_user_id=str(context.user["user_id"]),
+            ip_address=_client_ip(request),
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+    return {"status": "success", "request": reviewed}
 
 
 @app.post("/admin/users/{user_id}/reset-password")
@@ -1129,9 +1272,11 @@ def get_weather_tile(layer: str, z: int, x: int, y: int) -> Response:
     try:
         content, content_type = runtime.fetch_weather_tile(layer, z, x, y)
     except ValueError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        # 503：密钥未配置。文案直接可操作，前端据此提示教师；错误结果不缓存。
+        raise HTTPException(status_code=503, detail=str(exc), headers={"Cache-Control": "no-store"}) from exc
     except ConnectionError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        # 502：密钥已配置但上游不可用（配额、网络、无效密钥等）。
+        raise HTTPException(status_code=502, detail=f"天气瓦片上游不可用：{exc}", headers={"Cache-Control": "no-store"}) from exc
     return Response(content=content, media_type=content_type, headers={"Cache-Control": "public, max-age=300"})
 
 
@@ -1375,6 +1520,29 @@ def _websocket_authorized(websocket: "WebSocket") -> bool:
     return auth_service.authenticate(websocket.cookies.get(SESSION_COOKIE, "")) is not None
 
 
+async def _reject_voice_stream(
+    websocket: "WebSocket",
+    state: str,
+    detail: str,
+    code: int = 4403,
+    *,
+    accepted: bool = False,
+) -> None:
+    """Accept, explain why the stream cannot start, then close.
+
+    The JSON event arrives before the close so the frontend can show the
+    actionable reason (model missing / load failed / permission) instead of a
+    bare close code.
+    """
+    if not accepted:
+        await websocket.accept()
+    try:
+        await websocket.send_text(json.dumps({"type": "error", "reason": state, "detail": detail}, ensure_ascii=False))
+    except Exception:  # client already gone
+        pass
+    await websocket.close(code=code)
+
+
 @app.websocket("/assistant/voice/stream")
 async def assistant_voice_stream(websocket: "WebSocket") -> None:
     # Not authorized: close with 4401 so the frontend can fall back to
@@ -1383,11 +1551,24 @@ async def assistant_voice_stream(websocket: "WebSocket") -> None:
         await websocket.close(code=4401)
         return
     engine = runtime.voice_asr
-    if not engine.available():
-        await websocket.close(code=4403)
+    status = engine.status()
+    if not status["available"] and status.get("state") == "initializing":
+        # The recognizer is warming up in the background; wait briefly so a
+        # browser that connects right after backend start still gets audio.
+        for _ in range(100):  # up to ~10s
+            await asyncio.sleep(0.1)
+            status = engine.status()
+            if status["available"] or status.get("state") != "initializing":
+                break
+    if not status["available"]:
+        await _reject_voice_stream(websocket, str(status.get("state") or "unavailable"), str(status.get("reason") or ""))
         return
     await websocket.accept()
-    session = engine.create_session()
+    try:
+        session = engine.create_session()
+    except Exception as exc:  # lazy recognizer load failed between checks
+        await _reject_voice_stream(websocket, "load_failed", str(exc), accepted=True)
+        return
     try:
         while True:
             message = await websocket.receive()
