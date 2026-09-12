@@ -152,6 +152,10 @@ MATCH_STOP_WORDS = {
     "how",
 }
 
+# 短追问（“那上海呢？”“从图上怎么看？”）的开头标志，用于把当前问题
+# 与上一问合并后再分类和检索。
+FOLLOWUP_OPENERS = ("那", "那么", "从图上", "图上", "为什么", "怎么", "还有")
+
 TEACHING_TASKS = ("teaching_explain", "teaching_question", "teaching_action", "teaching_reflect", "teaching_prepare")
 TEACHING_PREPARE_HINTS = ("共创教案", "教案共创", "备一节课", "生成整节教案", "逐步设计教案", "教案助手", "完整教案")
 TEACHING_QUESTION_HINTS = ("追问", "提问", "设计问题", "出几道题", "几个问题", "还有什么问题", "进一步问", "follow-up")
@@ -572,6 +576,7 @@ class KnowledgeEngine:
         map_context: Optional[Dict[str, Any]] = None,
         teaching_task: str = "",
         layer_evidence: Optional[List[Dict[str, Any]]] = None,
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         map_context = map_context or {}
         brainstorm_request = question.lstrip().startswith("GeoBot 头脑风暴：")
@@ -580,6 +585,11 @@ class KnowledgeEngine:
         intent_question = (question.split("【课堂参考材料】", 1)[0].strip()
                            if brainstorm_request and "【本次探究任务】" in question and "【课堂参考材料】" in question
                            else question)
+        followup_question = "" if brainstorm_request else self._merged_followup_question(
+            intent_question, conversation_history
+        )
+        if followup_question:
+            intent_question = followup_question
         answer_type = "map_reading" if map_context.get("image_attachment") else self._classify(intent_question)
         if answer_type in {"assistant_identity", "assistant_model", "assistant_capability"}:
             return self._meta_answer(answer_type)
@@ -675,7 +685,14 @@ class KnowledgeEngine:
 
         # --- Phase 3: LLM-powered answer (primary path) ---
         llm_used = False
-        population_guardrail_answer = "" if brainstorm_request else self._population_guardrail_answer(question)
+        population_guardrail_answer = (
+            "" if brainstorm_request
+            else self._population_guardrail_answer(
+                intent_question,
+                image_attached=bool(map_context.get("image_attachment")),
+                verified_web=web_evidence_available,
+            )
+        )
         verification_guardrail_answer = (
             self._unverified_timely_answer(intent_question, entry) if web_verification_failed and not population_guardrail_answer else ""
         )
@@ -693,8 +710,11 @@ class KnowledgeEngine:
             )
         elif self.minimax_client is not None and self.config.minimax_enabled():
             try:
+                # Brainstorm prompts must keep their full embedded materials;
+                # only resolved follow-ups replace the raw question.
+                llm_question = followup_question or question
                 llm_answer = self._llm_answer(
-                    question,
+                    llm_question,
                     entry,
                     answer_type,
                     map_context,
@@ -729,13 +749,13 @@ class KnowledgeEngine:
                 "我可以先按地理学的一般分析框架给出解释。"
             )
             if answer_type == "map_reading":
-                direct_answer = self._map_reading_direct_answer(question, map_context)
+                direct_answer = self._map_reading_direct_answer(intent_question, map_context)
             elif answer_type == "timely_fact":
                 direct_answer = (
                     "这个问题具有时效性，但当前没有取得可核验的在线资料，"
                     "因此我不能把未经核实的数据当作当前结论。你可以明确要求联网核实后再问。"
                 )
-            mechanism_explanation = self._mechanism_text(question, entry, answer_type)
+            mechanism_explanation = self._mechanism_text(intent_question, entry, answer_type)
             teaching_points = list(entry.get("teaching_points", [])) if entry else self._default_teaching_points(answer_type)
             confidence = 0.92 if entry else (0.45 if answer_type == "timely_fact" else 0.68)
             if brainstorm_request:
@@ -1405,7 +1425,9 @@ class KnowledgeEngine:
             return "timely_fact"
         if _contains_any(lowered, ("遥感", "gis", "rs", "空间分析", "buffer", "overlay")):
             return "gis_method"
-        if _contains_any(lowered, MAP_READING_HINTS):
+        if _contains_any(lowered, MAP_READING_HINTS) and not _contains_any(
+            lowered, ("为什么", "原因", "解释", "因素", "只用", "能不能说明")
+        ):
             return "map_reading"
         if _contains_any(lowered, ("地区", "区域", "沿海", "中国", "亚洲")):
             return "regional_geography"
@@ -1417,19 +1439,56 @@ class KnowledgeEngine:
         )
 
     @staticmethod
+    def _merged_followup_question(
+        question: str,
+        conversation_history: Optional[List[Dict[str, Any]]],
+    ) -> str:
+        """Resolve a short follow-up turn against the previous user question.
+
+        Questions such as “那上海呢？” or “从图上怎么看？” carry no standalone
+        subject. Merging them with the last user turn lets classification,
+        retrieval and the deterministic guardrails keep working on the
+        combined question instead of degrading to the generic fallback.
+        Self-contained questions (longer than a short follow-up, or without a
+        follow-up opener) are returned unchanged.
+        """
+        q = (question or "").strip()
+        if not conversation_history or not q or len(q) > 16:
+            return ""
+        if not (
+            q.startswith(FOLLOWUP_OPENERS) or q.endswith(("呢", "呢？")) or "呢？" in q
+        ):
+            return ""
+        for item in reversed(list(conversation_history)):
+            if not isinstance(item, dict) or str(item.get("role") or "") != "user":
+                continue
+            previous = str(item.get("text") or "").strip()
+            if previous and previous != q:
+                return f"{q}（承接上一问：{previous[:120]}）"
+        return ""
+
+    @staticmethod
     def _is_conceptual_light_question(question: str) -> bool:
         task = question.split("【课堂参考材料】", 1)[0]
         return ("灯光" in task and "人口" in task
                 and not re.search(r"(?:19|20)\d{2}|这张|当前图|根据图|依据图|读图|图中|提供.*数据|最新", task))
 
     @staticmethod
-    def _population_guardrail_answer(question: str) -> str:
+    def _population_guardrail_answer(
+        question: str,
+        image_attached: bool = False,
+        verified_web: bool = False,
+    ) -> str:
         """Return concise, deterministic answers for common population misconceptions.
 
         These concepts are frequently misanswered by swapping absolute and
         relative indicators or by treating a one-way flow as net migration.
         Keeping the core distinction deterministic prevents a fluent model
         response from contradicting its own numbers or the map legend.
+
+        ``image_attached`` keeps map-reading questions on the vision path;
+        ``verified_web`` lets an explicitly verified online result answer a
+        timely question instead of the census-baseline fallback.
         """
         text = question or ""
         if "人口密度" in text and _contains_any(text, ("人口总量", "总人口", "人口数量", "总量")):
@@ -1477,7 +1536,7 @@ class KnowledgeEngine:
             )
 
         if _contains_any(text.lower(), ("top", "排名", "排行")) and "人口" in text and _contains_any(
-            text, ("年份", "行政范围", "统计口径", "可比")
+            text, ("年份", "行政范围", "统计口径", "可比", "注意", "怎么做", "怎样做", "如何", "步骤", "规范")
         ):
             return (
                 "人口排名要先统一比较对象，再进行排序。所有城市应使用同一统计年份、同一人口口径和同一行政范围，"
@@ -1500,6 +1559,162 @@ class KnowledgeEngine:
                 "讲解时可以先用七普数据比较区域分布，再单独提醒学生：格局判断有明确的数据时点，后续人口变化需要另找更新的官方统计。"
                 "课件、图例和口播都应同时标注年份、常住人口或户籍人口口径、统计单位和来源；没有完成最新核验时，不补写现时人口数。"
             )
+
+        # --- 人口概念：机械增长与自然增长率 ---
+        if "机械增长" in text:
+            answer = (
+                "人口机械增长指一个地区因人口迁入、迁出带来的增减，计算上是迁入人数减去迁出人数；"
+                "自然增长由出生和死亡决定，是出生人数减去死亡人数。"
+            )
+            if "自然增长" in text:
+                answer += (
+                    "两者不能混用：自然增长取决于出生率与死亡率，机械增长取决于迁移。"
+                    "一个地区常住人口的变化，通常可以概括为“自然增长加机械增长”。"
+                )
+            return answer
+
+        if "自然增长率" in text and _contains_any(
+            text, ("怎么计算", "如何计算", "怎么算", "公式", "怎么求", "定义为", "是什么意思")
+        ):
+            return (
+                "自然增长率＝（一定时期内的出生人数－死亡人数）÷该时期平均总人口，常用千分率（‰）表示，"
+                "也等于出生率减去死亡率。对应的机械增长率等于迁入率减去迁出率；"
+                "判断一个地区人口总量的变化，要把自然增长和机械增长合起来看。"
+            )
+
+        # --- 区域比较：上海与西藏的人口总量 ---
+        if "上海" in text and "西藏" in text and _contains_any(
+            text, ("哪个", "谁", "更多", "更大", "多还是少", "比较")
+        ):
+            return (
+                "先直接回答：上海的人口更多。按2020年第七次全国人口普查的常住人口口径，"
+                "上海约2487万人，西藏约365万人，上海明显更多。"
+                "但人口密度正好相反且差距更悬殊：上海面积小、人口高度稠密，"
+                "西藏面积超过120万平方公里、人口稀疏。"
+                "这组比较说明人口总量和人口密度是两个不同指标，回答前必须分清问的是哪一个。"
+            )
+
+        # --- 时效：现时人口数必须有可核验资料，不能补造 ---
+        if not verified_web and _contains_any(text, ("现在", "目前", "当前", "最新", "今年", "如今")) and _contains_any(
+            text, ("全国", "中国", "我国")
+        ) and _contains_any(
+            text, ("人口多少", "有多少人口", "多少人口", "人口有多少", "人口是多少", "总人口", "人口总量", "人口规模")
+        ):
+            return (
+                "我暂时没有可核验的最新全国人口数据，不能给出“当前”人口数。"
+                "可以作为资料事实引用的是：2020年第七次全国人口普查全国人口约14.1亿。"
+                "课堂引用时务必带上“2020年普查”这个时点和口径，不要说成当前数据；"
+                "如需更新数字，请以国家统计局最新公报为准。"
+            )
+
+        if not verified_web and "上海" in text and "人口" in text and _contains_any(
+            text, ("最新", "现在", "目前", "当前", "今年")
+        ):
+            return (
+                "我暂时没有可核验的上海最新人口数，不能补造现时数字。"
+                "可以作为资料事实引用的是：2020年第七次全国人口普查上海常住人口约2487万。"
+                "引用时标注“2020年普查、常住人口”口径；如需更新数据，请查上海市统计局或国家统计局最新公报。"
+            )
+
+        # --- 原因分析：沿海与内陆、东南与西北，避免单因果 ---
+        if "沿海" in text and "内陆" in text and _contains_any(text, ("为什么", "原因", "解释", "密集", "更多")):
+            return (
+                "沿海人口比内陆密集，是自然条件和社会经济条件共同作用的结果，不能用单一原因解释。"
+                "自然条件方面：沿海多以平原、丘陵为主，地势较低，降水较丰富，气候适宜，宜耕宜居；"
+                "社会经济方面：沿海交通便利、港口与对外联系条件好，工商业和城市密集，"
+                "就业与公共服务机会更多，长期吸引人口集聚。"
+                "同时注意：内陆并非处处稀疏，河谷、绿洲和交通干线沿线也有人口密集区，比较时要避免以偏概全。"
+            )
+
+        # --- 证据边界：一张图能观察什么、不能推断什么 ---
+        if "密度" in text and _contains_any(text, ("经济", "发达", "富裕", "贫困", "贫穷")) and _contains_any(
+            text, ("看出", "判断", "说明", "能不能", "能否", "推断")
+        ):
+            return (
+                "不能直接看出。人口密度图只能观察人口疏密这一项图上事实；"
+                "人口密度与经济水平有关联但不一一对应：有的地区人口稠密而以农业为主，"
+                "有的地区人口不多而产值很高。判断经济发达程度需要另用人均GDP、产业结构、城镇化率等社会经济资料。"
+                "把“图上观察”和“资料事实”分开，是读图推断的基本边界。"
+            )
+
+        if _contains_any(text, ("增长率", "增长速度", "增速")) and _contains_any(
+            text, ("分布图", "人口图", "图上", "读出", "看出")
+        ):
+            return (
+                "读不出。单期人口分布图只反映某一个时点的疏密格局，本身不包含时间变化；"
+                "人口增长率要用同一地区两个以上时点的数据（如两次人口普查）计算，或直接使用增长率专题图。"
+                "从一张静态分布图上最多能观察哪里人多、哪里人少，不能据此推断变化趋势。"
+            )
+
+        # --- 地图读图方法：未附图时给出图上事实与读图步骤 ---
+        if not image_attached:
+            if "胡焕庸线" in text and _contains_any(text, ("图上", "从图", "图中", "看出", "怎么看")):
+                return (
+                    "在人口分布图上沿黑河—腾冲连线对比两侧：东南侧颜色深、等级高，人口明显密集；"
+                    "西北侧颜色浅、等级低，人口稀疏。读图时注意三点：先看图例确认指标是人口密度还是人口总量；"
+                    "这条线是人口地理格局的统计参照，不是行政边界；"
+                    "两侧面积份额和人口份额差异很大，资料没有给出具体比例时，只描述疏密差异，不要引用编造的百分比。"
+                )
+
+            if "人口分布" in text and _contains_any(
+                text, ("图上", "从图", "图中", "有什么特点", "特点是什么", "怎么看")
+            ):
+                return (
+                    "图上可以直接观察到的资料事实是：我国人口分布显著不均，东南部人口密集、西北部人口稀疏，"
+                    "东部沿海、平原和城市群地区人口尤为集中；以黑河—腾冲一线（胡焕庸线）为参照，两侧疏密对比明显。"
+                    "注意：这是图面观察；具体比例数字要看图例或资料是否标注，没有标注就不要引用。"
+                    "图上观察本身不能回答成因，原因需要另用自然条件和社会经济资料解释。"
+                )
+
+            if "人口" in text and "图例" in text and _contains_any(text, ("怎么", "如何", "应该")):
+                return (
+                    "看人口专题图图例分三步：第一步看图名和单位，确认画的是人口总量还是人口密度，"
+                    "单位是万人还是人/平方千米；第二步看分级数值，分级统计图把数值分成若干区间，"
+                    "每个区间对应一种颜色，先找到最深色和最浅色对应的区间；"
+                    "第三步把颜色对应回地图，深色代表数值更高的等级，据此描述哪里密集、哪里稀疏。"
+                    "注意：深浅只代表图例标明的指标高低，不能换成其他指标解读。"
+                )
+
+            if "人口" in text and _contains_any(text, ("颜色越深", "颜色更深", "颜色深", "深色")) and _contains_any(
+                text, ("是不是", "是否", "越多", "代表", "吗")
+            ):
+                return (
+                    "不一定，要先看图例再回答。分级统计图上颜色越深，代表图例标明的数值越高；"
+                    "但这个指标是什么必须由图例说明：如果图例是人口密度，深色只说明人口密度高，"
+                    "密度高不等于人口总量大——面积很小的地区密度高、总量未必大；"
+                    "如果图例是人口总量，深色才直接说明总人口更多。"
+                    "所以正确的顺序是先读图例的指标和单位，再判断颜色的含义。"
+                )
+
+            if "人口" in text and "图" in text and _contains_any(
+                text, ("步骤", "怎么读", "如何读", "按什么顺序", "读图方法", "方法是什么")
+            ):
+                return (
+                    "读人口专题图建议按“图名—图例—格局—异常—验证”的顺序："
+                    "先看图名和区域范围，明确地图画的是哪项指标；再看图例的分级数值、单位和颜色深浅的对应关系；"
+                    "然后整体描述空间格局，说出哪里密集、哪里稀疏；接着指出与整体格局不一致的异常区域；"
+                    "最后把图上观察与自然、社会经济资料对照验证，不要只凭颜色下结论。"
+                )
+
+        if (
+            ("东南" in text and "西北" in text)
+            or "东多西少" in text
+            or "东密西疏" in text
+        ) and _contains_any(text, ("为什么", "原因", "解释", "因素")):
+            answer = (
+                "我国人口分布东南多、西北少，是自然条件和社会经济条件长期共同作用的结果。"
+                "自然条件方面：东南部大部分属季风区，降水较多、热量充足，以平原和丘陵为主，宜耕宜居；"
+                "西北部深居内陆，干旱、高寒，生态承载力有限。"
+                "社会经济方面：东南部农业开发历史悠久，工业、城市和交通网络密集，"
+                "就业与公共服务机会更多，进一步吸引人口集聚。"
+                "胡焕庸线（黑河—腾冲线）是描述这一格局的著名统计参照线，但它是格局参照而不是行政边界。"
+            )
+            if _contains_any(text, ("只用", "只靠", "仅用", "单用", "是不是只")):
+                answer += (
+                    "因此只用某一项因素（如只用地形）不足以解释：单一因素只能解释局部，"
+                    "需要把自然条件与社会经济条件结合起来，并区分图上观察与资料事实。"
+                )
+            return answer
 
         return ""
 
@@ -3054,7 +3269,18 @@ class AssistantSessionEngine:
                 "retrieval_mode": "none",
             }
         else:
-            knowledge = self.knowledge.answer(message, map_context=map_context, teaching_task=teaching_task, layer_evidence=layer_evidence)
+            knowledge = self.knowledge.answer(
+                message,
+                map_context=map_context,
+                teaching_task=teaching_task,
+                layer_evidence=layer_evidence,
+                # 当前用户消息已先行入列，排除后剩下的就是可承接的上一问。
+                conversation_history=[
+                    {"role": str(item.get("role") or ""), "text": str(item.get("text") or "")}
+                    for item in list(conversation.raw_messages)[:-1]
+                    if isinstance(item, dict)
+                ],
+            )
         retrieval_mode = str(knowledge.get("retrieval_mode") or "none")
         stage_label = {
             "local": "正在查找项目知识库",

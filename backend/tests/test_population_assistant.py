@@ -452,8 +452,10 @@ The legend shows these exact values:
         client = CapturingClient("中国人口分布受自然和社会经济因素共同影响。")
         engine = KnowledgeEngine(config, minimax_client=client)
 
+        # “东南多西北少”一类高频成因问题已由确定性护栏直接回答；这里用
+        # 不触发护栏的开放成因问题，守护课前普通问答的紧凑 LLM 提示词。
         engine.answer(
-            "为什么我国人口东南多、西北少？不要只归因于自然条件。",
+            "我国人口分布为什么这么不均匀？请从自然和社会经济两方面说明。",
             {"teaching_context": {"phase": "course_prep"}},
             teaching_task="teaching_explain",
         )
@@ -477,6 +479,96 @@ The legend shows these exact values:
 
         system_prompt = client.calls[0]["messages"][0]["content"]
         self.assertIn("可以组织问题阶梯", system_prompt)
+
+
+class PopulationQARegressionTest(unittest.TestCase):
+    """回归集：人口专题智能问答的 26 个真实课堂问题。
+
+    覆盖七类路径：概念辨析、地图读图、比较问题、原因分析、时效问题、
+    连续追问、证据边界。全部走无 LLM 的确定性路径，答案必须直接回答
+    核心问题，不输出内部元数据，不在缺少资料时编造现时人口数字。
+    """
+
+    def build_engine(self) -> KnowledgeEngine:
+        config = AppConfig(root_dir=Path(__file__).resolve().parents[2])
+        config.llm_provider = "minimax"
+        config.minimax_api_key = ""
+        return KnowledgeEngine(config)
+
+    CASES = [
+        # (编号, 类别, 问题, map_context, 上一问, 必含短语)
+        (1, "concept", "人口总量和人口密度有什么区别？", {}, "", ["人口总量回答", "单位面积", "不能互相替代"]),
+        (2, "concept", "什么是机械增长？它和自然增长有什么不同？", {}, "", ["迁入", "迁出", "出生", "死亡", "自然增长加机械增长"]),
+        (3, "concept", "自然增长率是怎么计算的？", {}, "", ["出生人数", "死亡人数", "出生率减去死亡率"]),
+        (4, "concept", "自然增长率下降，为什么人口总量还可能继续增加？", {}, "", ["净迁移", "增长率已经为零"]),
+        (5, "concept", "比较两个城市的人口规模时，常住人口和户籍人口能混用吗？", {}, "", ["不能直接混用", "统一年份"]),
+        (6, "map", "从图上看，我国人口分布有什么特点？", {"visible_layers": [{"name": "中国人口分布"}]}, "", ["东南", "西北", "胡焕庸线"]),
+        (7, "map", "从图上怎么看出胡焕庸线两侧的差异？", {"visible_layers": [{"name": "中国人口分布"}]}, "", ["黑河", "腾冲", "行政边界"]),
+        (8, "map", "人口密度图的图例应该怎么看？", {"visible_layers": [{"name": "人口密度图"}]}, "", ["分级", "单位", "图例"]),
+        (9, "map", "地图上颜色越深是不是人口越多？", {}, "", ["图例", "总量", "密度"]),
+        (10, "map", "读人口分布图时应该按什么步骤来看？", {}, "", ["图名", "图例", "密集"]),
+        (11, "compare", "人口密度高是否等于人口总量大？以上海和西藏为例。", {}, "", ["上海的人口总量和人口密度都高于西藏", "不能用来证明"]),
+        (12, "compare", "上海和西藏哪个人口更多？", {}, "", ["2487", "365", "2020年第七次全国人口普查", "总量", "密度"]),
+        (13, "compare", "为什么沿海地区人口比内陆地区密集？", {}, "", ["自然", "社会经济"]),
+        (14, "compare", "做中国城市人口Top20排名要注意什么？", {}, "", ["同一统计年份", "行政范围"]),
+        (15, "cause", "为什么我国人口分布东南多、西北少？", {}, "", ["自然", "社会经济", "胡焕庸线"]),
+        (16, "cause", "我国人口东多西少，只用地形能解释吗？", {}, "", ["单一", "降水", "社会经济"]),
+        (17, "cause", "自然增长和机械增长如何共同影响一个城市的人口变化？", {}, "", ["迁入", "出生", "自然增长加机械增长"]),
+        (18, "timely", "我国现在有多少人口？", {}, "", ["暂时没有可核验", "14.1亿", "2020年第七次全国人口普查"]),
+        (19, "timely", "2020年七普数据能直接说成当前最新数据吗？", {}, "", ["2020年第七次全国人口普查数据", "当前人口数据"]),
+        (20, "timely", "上海最新的人口是多少？", {}, "", ["暂时没有可核验", "2487", "2020"]),
+        (21, "followup", "那上海呢？", {}, "人口密度高是不是等于人口总量大？以上海和西藏为例。", ["总量", "密度"]),
+        (22, "followup", "从图上怎么看？", {"visible_layers": [{"name": "中国人口分布"}]}, "为什么我国人口分布东南多、西北少？", ["东南", "胡焕庸线"]),
+        (23, "followup", "那它和自然增长加起来是什么？", {}, "什么是人口机械增长？", ["自然增长", "机械增长", "迁入"]),
+        (24, "boundary", "能不能从人口密度图直接看出一个地区经济发达程度？", {}, "", ["不能直接", "图上观察", "资料事实"]),
+        (25, "boundary", "从人口分布图上能读出人口增长率吗？", {}, "", ["读不出", "时点", "普查"]),
+        (26, "boundary", "人口迁移流线越粗，能不能说明净迁入越多？", {}, "", ["必须先看图例", "不能判断净迁入"]),
+    ]
+
+    def test_regression_set_answers_directly_without_metadata_leak(self) -> None:
+        engine = self.build_engine()
+        for number, category, question, map_context, previous, expected in self.CASES:
+            with self.subTest(category=category, number=number, question=question):
+                history = (
+                    [
+                        {"role": "user", "text": previous},
+                        {"role": "assistant", "text": "（上一轮回答）"},
+                    ]
+                    if previous
+                    else None
+                )
+                result = engine.answer(
+                    question,
+                    map_context=dict(map_context) if map_context else None,
+                    conversation_history=history,
+                )
+                answer = result["direct_answer"]
+                for phrase in expected:
+                    self.assertIn(phrase, answer)
+                self.assertFalse(result["llm_used"], f"case {number} must stay deterministic")
+                self.assertNotIn("这个问题属于地理相关范围", answer)
+                self.assertNotIn("知识库认为", answer)
+                self.assertNotRegex(answer, r"\d+(?:\.\d+)?\s*°")
+                self.assertNotIn("retrieval_mode", answer)
+                self.assertNotIn("answer_type", answer)
+
+    def test_regression_timely_answers_never_invent_current_figures(self) -> None:
+        engine = self.build_engine()
+        for question in ("我国现在有多少人口？", "上海最新的人口是多少？"):
+            with self.subTest(question=question):
+                result = engine.answer(question)
+                answer = result["direct_answer"]
+                self.assertIn("2020年第七次全国人口普查", answer)
+                self.assertRegex(answer, r"不能[^。]*当前|暂时没有可核验")
+                # 时效回答必须把普查数字标注为 2020 年资料事实，而不是当前值。
+                self.assertNotIn("当前人口约为", answer)
+                self.assertNotIn("目前常住人口为", answer)
+
+    def test_followup_without_history_still_answers_the_visible_map(self) -> None:
+        engine = self.build_engine()
+        result = engine.answer("从图上怎么看？", map_context={"visible_layers": [{"name": "中国人口分布"}]})
+        # 没有上一问可承接时，至少保持地图读图路径，不退化为概念兜底。
+        self.assertNotIn("这个问题属于地理相关范围", result["direct_answer"])
 
 
 if __name__ == "__main__":
