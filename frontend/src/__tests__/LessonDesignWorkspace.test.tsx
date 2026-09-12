@@ -324,4 +324,205 @@ describe("LessonDesignWorkspace", () => {
     expect(createMock).not.toHaveBeenCalled();
     expect((await screen.findAllByText(/教学过程/)).length).toBeGreaterThan(0);
   });
+
+  it("generates a full draft from one requirement paragraph and shows the focus card", async () => {
+    const multiSectionDraft = {
+      title: "胡焕庸线与中国人口分布", topic: "胡焕庸线与中国人口分布", grade: "高一", duration_minutes: 45,
+      objectives: ["运用地图说出分布特征", "解释成因", "迁移方法"],
+      core_questions: { core: "为什么呈现东南密集西北稀疏？", sub_questions: ["格局？", "自然因素？", "人文因素？"] },
+      stages: [
+        { stage_id: "s1", title: "情境导入与地图观察", minutes: 9, questions: [] },
+        { stage_id: "s2", title: "胡焕庸线两侧对比与成因探究", minutes: 18, questions: [] },
+        { stage_id: "s3", title: "归纳迁移与课堂小结", minutes: 18, questions: [] }
+      ],
+      homework: { basic: ["基础练习"], inquiry: ["沿胡焕庸线比较省区"] }
+    };
+    turnMock.mockResolvedValue({
+      ...turnResult({
+        assistant_message: "已按你的完整需求生成初稿……以上内容全部为「待确认」。还缺：暂无阻断性缺口。",
+        next_step: "requirements",
+        draft: multiSectionDraft,
+        section_status: { requirements: "proposed", objectives: "proposed", stages: "proposed" },
+        review_sections: ["requirements", "objectives", "stages"]
+      }),
+      focus_summary: {
+        changed_labels: ["教学需求", "教学目标", "教学过程", "课题", "课时"],
+        confirmed_labels: [],
+        missing: [],
+        next_confirm_sections: ["教学需求", "课标解读"],
+        next_confirm_question: "这节课面向哪个年级？",
+        unverified_note: "初稿中未经核实的内容均为教学建议；发布前请核对数据、年份与来源。"
+      }
+    });
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+
+    await screen.findByTestId("ldw-active-question");
+    await waitFor(() => expect(screen.getByTestId("ldw-full-draft")).not.toBeDisabled());
+    fireEvent.change(
+      screen.getByLabelText("教案设计对话输入"),
+      { target: { value: "设计一节胡焕庸线与中国人口分布课，45分钟，重点分析东南密集西北稀疏。" } }
+    );
+    fireEvent.click(screen.getByTestId("ldw-full-draft"));
+
+    await waitFor(() =>
+      expect(turnMock).toHaveBeenCalledWith(
+        "design_1",
+        "生成完整初稿：设计一节胡焕庸线与中国人口分布课，45分钟，重点分析东南密集西北稀疏。",
+        0,
+        "requirements"
+      )
+    );
+    const focus = await screen.findByTestId("ldw-focus");
+    expect(focus.textContent).toContain("刚修改");
+    expect(focus.textContent).toContain("教学过程");
+    expect(focus.textContent).toContain("暂无阻断缺口");
+    expect(focus.textContent).toContain("下一步确认");
+    expect(focus.textContent).toContain("这节课面向哪个年级？");
+    expect(focus.textContent).toContain("教学建议");
+  });
+
+  it("shows the focus card immediately when resuming an old design", async () => {
+    fetchDesignMock.mockResolvedValue({
+      ...session({ current_step: "process", revision: 7 }),
+      focus_summary: {
+        changed_labels: [],
+        confirmed_labels: [],
+        missing: ["还缺少一个贯穿课堂的核心问题。"],
+        next_confirm_sections: ["教学过程", "板书设计"],
+        next_confirm_question: "教学过程从哪个情境或现象切入？",
+        unverified_note: "初稿中未经核实的内容均为教学建议；发布前请核对数据、年份与来源。"
+      }
+    });
+    render(<LessonDesignWorkspace projectId="p1" initialDesignId="design_9" onClose={vi.fn()} />);
+
+    const focus = await screen.findByTestId("ldw-focus");
+    expect(focus.textContent).toContain("还缺少一个贯穿课堂的核心问题。");
+    expect(focus.textContent).toContain("教学过程");
+  });
+
+  it("adopts the current suggestion and continues, then shows confirmed focus", async () => {
+    createMock.mockResolvedValue(
+      session({
+        current_step: "process",
+        revision: 5,
+        draft: {
+          title: "人口分布", topic: "人口分布", grade: "高一", duration_minutes: 40, objectives: [],
+          stages: [{ stage_id: "s1", title: "导入", minutes: 10 } as never],
+          board_design: "板书"
+        },
+        section_status: { stages: "proposed", board_design: "proposed" }
+      })
+    );
+    resolveMock.mockResolvedValue({
+      status: "success",
+      design: session({
+        current_step: "question_matching",
+        revision: 6,
+        section_status: { stages: "confirmed", board_design: "confirmed" }
+      }),
+      focus_summary: {
+        changed_labels: [],
+        confirmed_labels: ["教学过程", "板书设计"],
+        missing: ["还缺少一个贯穿课堂的核心问题。"],
+        next_confirm_sections: ["核心问题与问题链"],
+        next_confirm_question: "贯穿这节课的核心问题用一句话怎么说？",
+        unverified_note: "初稿中未经核实的内容均为教学建议；发布前请核对数据、年份与来源。"
+      }
+    });
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+    const adopt = await screen.findByTestId("ldw-adopt-continue");
+    await waitFor(() => expect(adopt).not.toBeDisabled());
+
+    fireEvent.click(adopt);
+    await waitFor(() => expect(resolveMock).toHaveBeenCalledWith("design_1", "process", "accept", "", 5));
+    const focus = await screen.findByTestId("ldw-focus");
+    expect(focus.textContent).toContain("已确认：教学过程、板书设计");
+  });
+
+  it("sends a scoped edit that only touches the current step, and disables it without input", async () => {
+    createMock.mockResolvedValue(
+      session({
+        current_step: "process",
+        revision: 4,
+        draft: {
+          title: "人口分布", topic: "人口分布", grade: "高一", duration_minutes: 40, objectives: [],
+          stages: [{ stage_id: "s1", title: "导入", minutes: 10 } as never]
+        },
+        section_status: { stages: "proposed" }
+      })
+    );
+    turnMock.mockResolvedValue({
+      ...turnResult({ revision: 5, next_step: "process" }),
+      focus_summary: {
+        changed_labels: ["教学过程"],
+        confirmed_labels: [],
+        missing: [],
+        next_confirm_sections: ["教学过程"],
+        next_confirm_question: "",
+        unverified_note: "初稿中未经核实的内容均为教学建议；发布前请核对数据、年份与来源。"
+      }
+    });
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+
+    expect(await screen.findByTestId("ldw-scoped-edit")).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("教案设计对话输入"), { target: { value: "把导入的提问改为胡焕庸线两侧差异" } });
+    expect(screen.getByTestId("ldw-scoped-edit")).not.toBeDisabled();
+    fireEvent.click(screen.getByTestId("ldw-scoped-edit"));
+
+    await waitFor(() =>
+      expect(turnMock).toHaveBeenCalledWith(
+        "design_1",
+        "只修改当前环节：把导入的提问改为胡焕庸线两侧差异",
+        4,
+        "process"
+      )
+    );
+    const focus = await screen.findByTestId("ldw-focus");
+    expect(focus.textContent).toContain("教学过程");
+  });
+
+  it("runs one-click smart optimization only when a draft exists", async () => {
+    createMock.mockResolvedValue(
+      session({
+        current_step: "process",
+        revision: 6,
+        draft: {
+          title: "人口分布", topic: "人口分布", grade: "高一", duration_minutes: 40, objectives: [],
+          stages: [{ stage_id: "s1", title: "导入", minutes: 10 } as never]
+        },
+        section_status: { stages: "proposed" }
+      })
+    );
+    turnMock.mockResolvedValue({
+      ...turnResult({ revision: 7, next_step: "process" }),
+      focus_summary: {
+        changed_labels: ["教学目标", "教学过程"],
+        confirmed_labels: [],
+        missing: [],
+        next_confirm_sections: ["教学目标", "教学过程"],
+        next_confirm_question: "",
+        unverified_note: "初稿中未经核实的内容均为教学建议；发布前请核对数据、年份与来源。"
+      }
+    });
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+
+    // 空稿时不可一键优化（当前 session 的章节均有内容，先验证可用）
+    const optimize = await screen.findByTestId("ldw-smart-optimize");
+    await waitFor(() => expect(optimize).not.toBeDisabled());
+    fireEvent.click(optimize);
+
+    await waitFor(() => expect(turnMock).toHaveBeenCalledWith("design_1", "一键智能优化", 6, "process"));
+    const focus = await screen.findByTestId("ldw-focus");
+    expect(focus.textContent).toContain("教学目标");
+    expect(screen.getByTestId("ldw-quick-hint").textContent).toContain("一键智能优化");
+  });
+
+  it("keeps one-click smart optimization disabled for an empty draft", async () => {
+    createMock.mockResolvedValue(session({ current_step: "requirements", revision: 0 }));
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+    await screen.findByTestId("ldw-active-question");
+    await waitFor(() => expect(screen.getByTestId("ldw-full-draft")).not.toBeDisabled());
+    expect(screen.getByTestId("ldw-smart-optimize")).toBeDisabled();
+    expect(turnMock).not.toHaveBeenCalled();
+  });
 });

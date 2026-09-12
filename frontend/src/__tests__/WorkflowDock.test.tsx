@@ -74,4 +74,68 @@ describe("WorkflowDock", () => {
     fireEvent.click(screen.getByTestId("workflow-primary-dataset-select"));
     expect(screen.getByTestId("workflow-primary-dataset-select-list")).toBeTruthy();
   });
+
+  it("renders a cancelled workflow as 已取消 instead of a failure", () => {
+    vi.mocked(useWorkflowStream).mockReturnValue({
+      workflowId: "wf_cancelled",
+      status: "cancelled",
+      intent: "胡焕庸线对比分析",
+      steps: [
+        { id: "s1", op: "load_layer", status: "success", outputs: {}, error: null, started_at: "", finished_at: "" },
+        {
+          id: "s4", op: "choropleth", status: "error", outputs: {}, started_at: "", finished_at: "",
+          error: { code: "STEP_CANCELLED", message: "cancelled", user_friendly: "已取消本次分析，未保存结果图层。可以调整参数后重新提交。" }
+        }
+      ],
+      artifacts: [],
+      error: { code: "STEP_CANCELLED", message: "cancelled", user_friendly: "已取消本次分析，未保存结果图层。可以调整参数后重新提交。" },
+      lastEvent: null
+    });
+    render(<WorkflowDock projectId="project_demo" mapRef={createRef<Map>()} />);
+
+    expect(screen.getByTestId("workflow-panel")).toHaveTextContent("已取消");
+    expect(screen.getByTestId("workflow-panel")).toHaveTextContent("[STEP_CANCELLED]");
+    expect(screen.getByTestId("workflow-panel")).toHaveTextContent("已取消本次分析，未保存结果图层。可以调整参数后重新提交。");
+    // A cancel is not a failure: the ❌ 失败 label must not appear.
+    expect(screen.getByTestId("workflow-panel")).not.toHaveTextContent("失败");
+  });
+
+  it("surfaces a preflight rejection as a toast while keeping the form filled", async () => {
+    const { submitWorkflow } = await import("../api");
+    vi.mocked(submitWorkflow).mockResolvedValue({
+      status: "error",
+      workflow_id: "wf_preflight",
+      workflow_status: "error",
+      intent: "制作人口密度分级设色图",
+      template_id: "population_choropleth",
+      parameters: { dataset: "builtin:one_map/population/does_not_exist.geojson" },
+      error: {
+        code: "VALIDATION_FAILED",
+        message: "workflow preflight failed",
+        user_friendly: "找不到数据集 builtin:one_map/population/does_not_exist.geojson（步骤 s1）。请确认数据已上传，或在数据集下拉里重新选择。",
+        details: {}
+      }
+    } as never);
+    const onToast = vi.fn();
+    render(
+      <WorkflowDock
+        projectId="project_demo"
+        mapRef={createRef<Map>()}
+        open
+        onToast={onToast}
+      />
+    );
+
+    fireEvent.change(screen.getByDisplayValue(""), { target: { value: "制作人口密度图" } });
+    fireEvent.click(screen.getByRole("button", { name: "提交工作流" }));
+
+    await waitFor(() => {
+      expect(onToast).toHaveBeenCalledWith(
+        "error",
+        "找不到数据集 builtin:one_map/population/does_not_exist.geojson（步骤 s1）。请确认数据已上传，或在数据集下拉里重新选择。"
+      );
+    });
+    // 保留已填参数：输入框内容在预检失败后不丢失，教师可直接修正后重跑。
+    expect(screen.getByDisplayValue("制作人口密度图")).toBeTruthy();
+  });
 });

@@ -5,6 +5,7 @@ manager with a stub that returns canned step results.
 """
 from __future__ import annotations
 
+import json
 import tempfile
 import time
 import unittest
@@ -76,6 +77,27 @@ def _make_config() -> AppConfig:
     return config
 
 
+_DEMO_GEOJSON = {
+    "type": "FeatureCollection",
+    "features": [
+        {
+            "type": "Feature",
+            "properties": {"name": "demo", "value": 1},
+            "geometry": {"type": "Point", "coordinates": [116.4, 39.9]},
+        }
+    ],
+}
+
+
+def _seed_demo_upload(config: AppConfig, project_id: str = "p1") -> None:
+    """Create a tiny real dataset so executor preflight can resolve `demo.geojson`."""
+    upload_dir = config.uploads_dir / project_id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    (upload_dir / "demo.geojson").write_text(
+        json.dumps(_DEMO_GEOJSON), encoding="utf-8"
+    )
+
+
 class WorkflowExecutorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.config = _make_config()
@@ -108,6 +130,7 @@ class WorkflowExecutorTests(unittest.TestCase):
     def test_success_path_emits_artifacts(self) -> None:
         # The stub returns geojson path under workflow dir, so we make sure to
         # resolve it correctly by writing a fake file.
+        _seed_demo_upload(self.config)
         manager = _StubWorkerManager(results={
             "s1": {"layer": "alias_s1", "path": "/x/s1.gpkg"},
             "s2": {"geojson": "", "path": ""},
@@ -143,6 +166,7 @@ class WorkflowExecutorTests(unittest.TestCase):
         self.assertIn("geojson", kinds)
 
     def test_step_failure_marks_workflow_error(self) -> None:
+        _seed_demo_upload(self.config)
         manager = _StubWorkerManager(fail_step="s1")
         executor = WorkflowExecutor(self.config, self.store, worker_manager=manager)
         record = WorkflowRecord.create(

@@ -219,7 +219,14 @@ function applyEvent(
     }
     case "workflow_error": {
       const err = (event.payload?.error as WorkflowError | undefined) || null;
-      next = { ...next, status: "error", error: err };
+      // The executor attaches the full record so a teacher-initiated cancel
+      // (record.status "cancelled") is distinguishable from a real failure.
+      const wfStatus = (event.payload?.workflow as Partial<WorkflowRecord> | undefined)?.status;
+      next = {
+        ...next,
+        status: (wfStatus as WorkflowStatus) || "error",
+        error: err
+      };
       break;
     }
     case "stream_idle_timeout": {

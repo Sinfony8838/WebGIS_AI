@@ -169,7 +169,8 @@ class ExecutorInterleaveTests(unittest.TestCase):
         cancelled = executor.cancel_workflow(record.workflow_id)
         self.assertEqual(cancelled, 1)
         final = self._wait_terminal(self.store, record.workflow_id)
-        self.assertEqual(final.status, "error")
+        # Cancels surface as the dedicated "cancelled" status (not a failure).
+        self.assertEqual(final.status, "cancelled")
         self.assertIsNotNone(final.error)
         self.assertEqual(final.error["code"], "STEP_CANCELLED")
         # The blocker workflow still completes successfully.
