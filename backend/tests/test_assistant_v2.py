@@ -398,6 +398,30 @@ class AssistantV2RuntimeTest(unittest.TestCase):
         self.assertIn("胡焕庸线", message)
         self.assertNotIn("这个问题属于地理相关范围", message)
 
+    def test_self_contained_short_question_does_not_inherit_previous_topic(self) -> None:
+        runtime, project_id = self.build_runtime(enable_v2=False)
+        runtime.session_engine.knowledge.minimax_client = None
+
+        first = runtime.submit_assistant_message(
+            project_id,
+            "为什么我国人口分布东南多、西北少？",
+            assistant_mode="teaching",
+        )
+        first_job = self.wait_for_job(runtime, first["job_id"])
+        conversation_id = str(first_job["result"]["conversation_id"])
+
+        second = runtime.submit_assistant_message(
+            project_id,
+            "为什么会下雨？",
+            assistant_mode="teaching",
+            conversation_id=conversation_id,
+        )
+        second_job = self.wait_for_job(runtime, second["job_id"])
+        message = second_job["result"]["assistant_message"]
+
+        self.assertNotIn("我国人口分布东南多、西北少", message)
+        self.assertNotIn("胡焕庸线", message)
+
     def test_interaction_mode_keeps_independent_conversation_and_intent(self) -> None:
         # interaction 模式：intent 固定 interaction、会话线程与 teaching 互不影响。
         runtime, project_id = self.build_runtime(enable_v2=True)

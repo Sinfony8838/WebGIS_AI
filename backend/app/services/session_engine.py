@@ -152,9 +152,18 @@ MATCH_STOP_WORDS = {
     "how",
 }
 
-# 短追问（“那上海呢？”“从图上怎么看？”）的开头标志，用于把当前问题
-# 与上一问合并后再分类和检索。
-FOLLOWUP_OPENERS = ("那", "那么", "从图上", "图上", "为什么", "怎么", "还有")
+# 只有真正缺少独立主语的省略式追问才继承上一问。不能仅凭“为什么/怎么”
+# 或句尾“呢”判断，否则教师切换主题时会把上一题错误拼入当前问题。
+FOLLOWUP_PATTERNS = (
+    re.compile(r"^(?:那|那么).{1,12}(?:呢|怎么样)[？?]?$"),
+    re.compile(r"^(?:那|那么)(?:它|这|这个|这种|两者|二者).{0,16}[？?]?$"),
+    re.compile(r"^(?:那|那么)(?:接下来|下一步|又)?(?:怎么办|怎么做|如何处理)[？?]?$"),
+    re.compile(r"^(?:从)?图上(?:怎么看|如何看|能看出什么|有什么表现)[？?]?$"),
+    re.compile(r"^(?:为什么|怎么|如何)(?:会)?(?:这样|那样|回事)(?:呢)?[？?]?$"),
+    re.compile(r"^(?:怎么|如何)(?:形成|发生)的?[？?]?$"),
+    re.compile(r"^(?:为什么|怎么|如何)呢[？?]?$"),
+    re.compile(r"^还有(?:呢|吗|什么|哪些(?:原因|表现|影响|例子|证据|特点|问题)?)?[？?]?$"),
+)
 
 TEACHING_TASKS = ("teaching_explain", "teaching_question", "teaching_action", "teaching_reflect", "teaching_prepare")
 TEACHING_PREPARE_HINTS = ("共创教案", "教案共创", "备一节课", "生成整节教案", "逐步设计教案", "教案助手", "完整教案")
@@ -1449,15 +1458,13 @@ class KnowledgeEngine:
         subject. Merging them with the last user turn lets classification,
         retrieval and the deterministic guardrails keep working on the
         combined question instead of degrading to the generic fallback.
-        Self-contained questions (longer than a short follow-up, or without a
-        follow-up opener) are returned unchanged.
+        Self-contained questions are returned unchanged even when they begin
+        with a question word or end in “呢”.
         """
         q = (question or "").strip()
-        if not conversation_history or not q or len(q) > 16:
+        if not conversation_history or not q or len(q) > 20:
             return ""
-        if not (
-            q.startswith(FOLLOWUP_OPENERS) or q.endswith(("呢", "呢？")) or "呢？" in q
-        ):
+        if not any(pattern.fullmatch(q) for pattern in FOLLOWUP_PATTERNS):
             return ""
         for item in reversed(list(conversation_history)):
             if not isinstance(item, dict) or str(item.get("role") or "") != "user":

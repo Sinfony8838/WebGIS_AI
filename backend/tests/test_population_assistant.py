@@ -552,6 +552,25 @@ class PopulationQARegressionTest(unittest.TestCase):
                 self.assertNotIn("retrieval_mode", answer)
                 self.assertNotIn("answer_type", answer)
 
+    def test_followup_resolution_requires_an_elliptical_reference(self) -> None:
+        history = [{"role": "user", "text": "为什么我国人口分布东南多、西北少？"}]
+
+        for question in ("那上海呢？", "从图上怎么看？", "为什么会这样？"):
+            with self.subTest(kind="followup", question=question):
+                merged = KnowledgeEngine._merged_followup_question(question, history)
+                self.assertIn("承接上一问", merged)
+
+        for question in (
+            "为什么会下雨？",
+            "怎么计算人口密度？",
+            "中国人口有多少呢？",
+            "还有哪些气候类型？",
+            "那么人口密度是什么？",
+            "那场雨为什么？",
+        ):
+            with self.subTest(kind="self_contained", question=question):
+                self.assertEqual(KnowledgeEngine._merged_followup_question(question, history), "")
+
     def test_regression_timely_answers_never_invent_current_figures(self) -> None:
         engine = self.build_engine()
         for question in ("我国现在有多少人口？", "上海最新的人口是多少？"):
