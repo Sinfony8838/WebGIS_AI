@@ -480,4 +480,49 @@ describe("LessonDesignWorkspace", () => {
     const focus = await screen.findByTestId("ldw-focus");
     expect(focus.textContent).toContain("教学过程");
   });
+
+  it("runs one-click smart optimization only when a draft exists", async () => {
+    createMock.mockResolvedValue(
+      session({
+        current_step: "process",
+        revision: 6,
+        draft: {
+          title: "人口分布", topic: "人口分布", grade: "高一", duration_minutes: 40, objectives: [],
+          stages: [{ stage_id: "s1", title: "导入", minutes: 10 } as never]
+        },
+        section_status: { stages: "proposed" }
+      })
+    );
+    turnMock.mockResolvedValue({
+      ...turnResult({ revision: 7, next_step: "process" }),
+      focus_summary: {
+        changed_labels: ["教学目标", "教学过程"],
+        confirmed_labels: [],
+        missing: [],
+        next_confirm_sections: ["教学目标", "教学过程"],
+        next_confirm_question: "",
+        unverified_note: "初稿中未经核实的内容均为教学建议；发布前请核对数据、年份与来源。"
+      }
+    });
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+
+    // 空稿时不可一键优化（当前 session 的章节均有内容，先验证可用）
+    const optimize = await screen.findByTestId("ldw-smart-optimize");
+    await waitFor(() => expect(optimize).not.toBeDisabled());
+    fireEvent.click(optimize);
+
+    await waitFor(() => expect(turnMock).toHaveBeenCalledWith("design_1", "一键智能优化", 6, "process"));
+    const focus = await screen.findByTestId("ldw-focus");
+    expect(focus.textContent).toContain("教学目标");
+    expect(screen.getByTestId("ldw-quick-hint").textContent).toContain("一键智能优化");
+  });
+
+  it("keeps one-click smart optimization disabled for an empty draft", async () => {
+    createMock.mockResolvedValue(session({ current_step: "requirements", revision: 0 }));
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+    await screen.findByTestId("ldw-active-question");
+    await waitFor(() => expect(screen.getByTestId("ldw-full-draft")).not.toBeDisabled());
+    expect(screen.getByTestId("ldw-smart-optimize")).toBeDisabled();
+    expect(turnMock).not.toHaveBeenCalled();
+  });
 });

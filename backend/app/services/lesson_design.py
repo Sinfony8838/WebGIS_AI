@@ -66,6 +66,7 @@ SECTION_LABELS = {
 # 前两者通过 turn 消息前缀识别；「采用当前建议并继续」复用 resolve(accept)。
 FULL_DRAFT_COMMAND = "生成完整初稿"
 SCOPED_EDIT_COMMAND = "只修改当前环节"
+SMART_OPTIMIZE_COMMAND = "一键智能优化"
 # 整段需求识别：出现「设计/共创/准备/生成 ……课」的设计意图即视为完整需求，
 # 在预演之前的步骤触发多环节预填（排除课件/课时/课表等非课题词）。
 FULL_DRAFT_INTENT_PATTERN = re.compile(
@@ -305,6 +306,10 @@ class LessonDesignService:
             full_draft_extra = message
         if full_draft_extra is not None:
             return self._full_draft_turn(design, message, full_draft_extra, current_step)
+        # 「一键智能优化」：用模型对整份非确认初稿做一次系统性优化；AI 不可用时规则补齐空缺。
+        optimize_focus = self._smart_optimize_focus(message)
+        if optimize_focus is not None:
+            return self._optimize_draft_turn(design, message, optimize_focus, current_step)
         generation_message = scoped_message or message
         schedule = self._requested_schedule(generation_message) if current_step == "process" else []
         result = self._ask_minimax(design, current_step, generation_message)
@@ -1038,9 +1043,20 @@ class LessonDesignService:
         skipped: List[str] = []
         for key in list(patch):
             # 课题/年级/课时等标量由下方 meta 逻辑决定；章节内容一律不覆盖已有/已确认项。
-            if key not in SECTION_KEYS or key == "requirements":
+            if key not in SECTION_KEYS:
                 continue
-            if design.section_status.get(key) == "confirmed" or self._section_has_content(design.draft.get(key)):
+            if design.section_status.get(key) == "confirmed":
+                patch.pop(key)
+                if key != "requirements":
+                    skipped.append(SECTION_LABELS.get(key, key))
+                continue
+            if key == "requirements":
+                new_raw = str((patch.get("requirements") or {}).get("raw") or "")
+                old_raw = str((design.draft.get("requirements") or {}).get("raw") or "")
+                if not new_raw or new_raw == old_raw:
+                    patch.pop(key)
+                continue
+            if self._section_has_content(design.draft.get(key)):
                 patch.pop(key)
                 skipped.append(SECTION_LABELS.get(key, key))
         if include_meta:
@@ -1162,6 +1178,139 @@ class LessonDesignService:
             questions = target.setdefault("questions", [])
             if not any(item.get("question_id") == question.get("question_id") for item in questions):
                 questions.append(question)
+
+    # ------------------------------------------------------------------
+    # 一键智能优化：模型整稿提升（非确认章节），AI 不可用时规则补齐空缺
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _smart_optimize_focus(message: str) -> Optional[str]:
+        """识别「一键智能优化」指令；返回教师附加的优化重点（无附加时为空字符串）。"""
+        clean = str(message or "").strip()
+        if clean == SMART_OPTIMIZE_COMMAND:
+            return ""
+        rest = clean[len(SMART_OPTIMIZE_COMMAND):] if clean.startswith(SMART_OPTIMIZE_COMMAND) else ""
+        if rest[:1] in {"：", ":", "\n", "\r", " ", "\t"}:
+            return rest.strip()
+        return None
+
+    def _optimize_draft_turn(
+        self, design: LessonDesignRecord, message: str, focus_text: str, current_step: str
+    ) -> Dict[str, Any]:
+        if not any(self._section_has_content(design.draft.get(key)) for key in SECTION_KEYS):
+            raise ValueError("当前还没有可优化的初稿内容。请先点「生成完整初稿」，或直接输入你的教学想法。")
+        generation_message = focus_text or message
+        result = self._ask_minimax(design, current_step, generation_message, optimize=True)
+        generation_mode = "model" if result is not None else "optimize_rules"
+        if result is None:
+            result = self._rules_optimize_fallback(design, generation_message)
+        patch = result.get("section_patch") if isinstance(result, dict) else {}
+        patch = patch if isinstance(patch, dict) else {}
+        # 一键优化是「建议升级」，不是「修改指令」：已确认章节保持稳定，不重开。
+        patch = {key: value for key, value in patch.items()
+                 if design.section_status.get(key) != "confirmed"}
+        result["section_patch"] = patch
+        protected_questions = self._questions_to_preserve(design.draft, generation_message)
+        if "stages" in patch and not self._preserves_questions(patch["stages"], protected_questions):
+            raise ValueError("本次优化改动或遗漏了需保留的题目，原草稿已保留。题目调整请通过题目编辑入口修改。")
+        if "stages" in patch:
+            self._enforce_stage_minutes(design.draft, patch["stages"])
+        self._merge_patch(design.draft, patch)
+        for key in patch:
+            if key in SECTION_KEYS:
+                design.section_status[key] = "proposed"
+        if "capabilities" in patch:
+            design.capability_bindings = self._validate_bindings(design.draft.get("capabilities") or [])
+            design.draft["capabilities"] = copy.deepcopy(design.capability_bindings)
+        design.revision += 1
+        retrieval_mode, retrieved_refs = self._retrieve(generation_message, design.owner_user_id)
+        design.source_refs = self._merge_refs(design.source_refs, retrieved_refs)
+        design.draft["references"] = copy.deepcopy(design.source_refs)
+        design.diff_summary = self._build_diff_summary(design)
+        changed_labels = "、".join(
+            SCALAR_LABELS.get(key, SECTION_LABELS.get(key, key)) for key in patch
+            if key in SECTION_KEYS or key in SCALAR_LABELS
+        ) or "（没有需要优化的章节，当前草稿保持不变）"
+        reply = str(result.get("reply") or "").strip()
+        if generation_mode == "model":
+            reply = f"已按「一键智能优化」更新：{changed_labels}。{reply}以上内容全部为「待确认」，请逐项核对后再采用。"
+        else:
+            reply = (
+                f"本轮 AI 未返回有效内容，以下为规则版补齐结果（只填空缺章节，不改已有内容），需逐项核对。"
+                f"本轮预填：{changed_labels}。以上内容全部为「待确认」。"
+                "也可以稍后重试「一键智能优化」，或逐段输入要求与助手一起打磨。"
+            )
+        design.turns.append({
+            "revision": design.revision, "step": design.current_step, "message": message,
+            "reply": reply, "section_patch": copy.deepcopy(patch), "generation_mode": generation_mode,
+        })
+        self.store.upsert_lesson_design(design)
+        return {
+            "status": "success", "assistant_message": reply, "generation_mode": generation_mode,
+            "next_step": design.current_step,
+            "step_label": STEP_LABELS.get(design.current_step, design.current_step),
+            "draft": copy.deepcopy(design.draft), "section_status": copy.deepcopy(design.section_status),
+            "source_refs": copy.deepcopy(design.source_refs),
+            "capability_bindings": copy.deepcopy(design.capability_bindings),
+            "revision": design.revision, "suggestions": [str(item) for item in result.get("suggestions") or []],
+            "retrieval": {"mode": retrieval_mode, "used": bool(retrieved_refs)},
+            "diff_summary": copy.deepcopy(design.diff_summary),
+            "review_sections": [key for key in patch if key in SECTION_KEYS],
+            "rehearsal_report": None,
+            "plan_items": self._plan_items(design),
+            "retrieval_candidates": [],
+            "auto_bound_questions": [],
+            "focus_summary": self._focus_summary(design, changed_keys=list(patch)),
+            "active_design_question": self._active_design_question(design),
+        }
+
+    def _rules_optimize_fallback(self, design: LessonDesignRecord, message: str) -> Dict[str, Any]:
+        """AI 不可用时的确定性兜底：复用完整初稿生成器，只补空缺、不动已有内容。"""
+        requirement_text = str((design.draft.get("requirements") or {}).get("raw") or "").strip() or message
+        parsed = self._parse_full_requirement(requirement_text, design.draft)
+        parsed["duration"] = max(10, int(design.draft.get("duration_minutes") or parsed["duration"]))
+        if str(design.draft.get("topic") or "").strip():
+            parsed["topic"] = str(design.draft.get("topic")).strip()
+        patch, _skipped = self._build_full_draft_patch(design, requirement_text, parsed, include_meta=False)
+        return {
+            "reply": "", "section_patch": patch, "next_step": "",
+            "source_refs": [], "capability_bindings": [], "suggestions": [],
+        }
+
+    @staticmethod
+    def _enforce_stage_minutes(draft: Dict[str, Any], stages: Any) -> None:
+        """优化后的环节分钟合计若与课时偏离，按比例校正回课时（保持相对节奏）。"""
+        try:
+            duration = int(draft.get("duration_minutes") or 0)
+        except (TypeError, ValueError):
+            return
+        if duration <= 0 or not isinstance(stages, list) or not stages:
+            return
+        total = 0
+        minutes: List[int] = []
+        for stage in stages:
+            try:
+                value = max(1, int((stage or {}).get("minutes") or 0))
+            except (TypeError, ValueError):
+                value = 1
+            minutes.append(value)
+            total += value
+        if total == duration:
+            return
+        scale = duration / total
+        distributed = [max(1, round(value * scale)) for value in minutes]
+        delta = duration - sum(distributed)
+        order = sorted(range(len(distributed)), key=lambda idx: distributed[idx], reverse=True)
+        cursor = 0
+        while delta != 0 and cursor < len(order) * 4:
+            idx = order[cursor % len(order)]
+            step = 1 if delta > 0 else -1
+            if distributed[idx] + step >= 1:
+                distributed[idx] += step
+                delta -= step
+            cursor += 1
+        for stage, value in zip(stages, distributed):
+            stage["minutes"] = value
 
     def rehearse(self, design_id: str) -> Dict[str, Any]:
         design = self.get(design_id)
@@ -1432,39 +1581,58 @@ class LessonDesignService:
                 logger.warning("Lesson dataset excerpt unavailable")
         return excerpts
 
-    def _ask_minimax(self, design: LessonDesignRecord, step: str, message: str) -> Optional[Dict[str, Any]]:
+    def _ask_minimax(self, design: LessonDesignRecord, step: str, message: str, optimize: bool = False) -> Optional[Dict[str, Any]]:
         if self.minimax_client is None:
             return None
-        system = (
-            "你是高中地理教案共创助手。默认简体中文，每轮只推进一个步骤，先复述教师意图，再给可修改建议，"
-            "回复末尾只提一个推进问题。"
-            "只输出 JSON，字段为 reply、section_patch、next_step、source_refs、capability_bindings、suggestions。"
-            'section_patch 必须是以章节名为键的对象，不是 JSON Patch 操作数组，不需要改动的章节请省略，不要填 null。'
-            '格式示例：{"reply":"本轮建议","section_patch":{"stages":[{"stage_id":"s1","title":"环节名","minutes":5,"material":"材料与来源或待补充说明","question_chain":["问题"],"teacher_activities":["教师操作"],"student_activities":["学生任务"],"knowledge_conclusion":"结论","design_intent":"意图","objective_refs":[1],"system_steps":["真实操作"],"scene":{"templates":[],"catalog_layers":[]},"questions":[]}],"board_design":"板书文字"},"next_step":"question_matching","source_refs":[],"capability_bindings":[],"suggestions":[]}。'
-            '当前为教学过程时只输出 stages 和 board_design，保持其他章节不变；每个活动字段简洁具体，避免重复长段落。'
-            "不要输出内部轨迹。当前步骤：" + STEP_LABELS.get(step, step) +
-            "。九个步骤依次是：需求确认→课标与学情→目标与重难点→核心问题与问题链→教学过程→题目匹配→GIS/AI能力→预演检查→确认发布。"
-            "核心章节要求：设计思路100-150字；3-4个可观察教学目标；1个核心问题+2-4个递进子问题；"
-            "每环节包含 material/question_chain/teacher_activities/student_activities/knowledge_conclusion/"
-            "design_intent/minutes/system_steps/objective_refs（1-based目标序号）；板书设计；基础作业+探究作业；预设教学反思。"
-            'objectives 必须是字符串数组；core_questions 必须为 {"core":"核心问题文字","sub_questions":["子问题文字"]}，不要把条目写成对象。'
-            "教师明确指定的教学环节名称、顺序和每环节分钟数是硬约束，必须逐一原样保留，不能合并或改成通用模板。"
-            "你的回复只说明本轮草稿修改，不得声称已发布、已生成文件、预演通过或全部步骤完成；这些状态由系统核验。"
-            "题目匹配只能引用题库检索给出的题目，不得编造题目内容。"
-            "草稿：" + json.dumps(design.draft, ensure_ascii=False)[:12000] +
-            "。真实能力目录：" + json.dumps(self.capability_catalog(), ensure_ascii=False)[:8000] +
-            "。当前引用图层的本地统计摘录（只是本地数据，不代表已独立核验来源；sampled=true 时只是部分记录）：" +
-            json.dumps(self._dataset_facts(design.draft, message) if step == "process" else [], ensure_ascii=False) +
-            "。涉及数字、大小关系或排名时必须与摘录一致；摘录未覆盖或单位未明确时说明需核对，不要补造数值或宣称统计口径相同。"
-        )
+        if optimize:
+            system = (
+                "你是高中地理教案共创助手，现在执行「一键智能优化」：对整份人口专题教案初稿做一次系统性润色与补强。"
+                "只输出需要新增或改进的章节（section_patch 以章节名为键），已经足够好的章节省略，不要填 null。"
+                "优化要求：教学目标 3-4 个可观察条目；1 个核心问题 + 2-4 个递进子问题；"
+                "每环节保持 material/question_chain/teacher_activities/student_activities/knowledge_conclusion/"
+                "design_intent/minutes/system_steps/objective_refs 结构完整且具体可执行；"
+                "不得改变教学环节的名称、顺序和分钟数；各环节分钟合计必须等于课时。"
+                "教师指定的重点表述必须保留；题目对象（questions）除非教师明确要求，原样保留，不得改写或删减。"
+                'objectives 必须是字符串数组；core_questions 必须为 {"core":"核心问题","sub_questions":["子问题"]}。'
+                "涉及数字、大小关系或排名时必须与数据摘录一致；摘录未覆盖时写明需核实，不要编造数值。"
+                "reply 用 2-4 句话说明本轮优化了哪些方面；不得声称已确认、已发布、预演通过或全部完成，这些状态由系统核验。"
+                "不要输出内部轨迹。只输出 JSON。"
+                "草稿：" + json.dumps(design.draft, ensure_ascii=False)[:12000] +
+                "。真实能力目录：" + json.dumps(self.capability_catalog(), ensure_ascii=False)[:8000] +
+                "。引用图层的本地统计摘录（只是本地数据，不代表已独立核验来源；sampled=true 时只是部分记录）：" +
+                json.dumps(self._dataset_facts(design.draft, message), ensure_ascii=False) + "。"
+            )
+        else:
+            system = (
+                "你是高中地理教案共创助手。默认简体中文，每轮只推进一个步骤，先复述教师意图，再给可修改建议，"
+                "回复末尾只提一个推进问题。"
+                "只输出 JSON，字段为 reply、section_patch、next_step、source_refs、capability_bindings、suggestions。"
+                'section_patch 必须是以章节名为键的对象，不是 JSON Patch 操作数组，不需要改动的章节请省略，不要填 null。'
+                '格式示例：{"reply":"本轮建议","section_patch":{"stages":[{"stage_id":"s1","title":"环节名","minutes":5,"material":"材料与来源或待补充说明","question_chain":["问题"],"teacher_activities":["教师操作"],"student_activities":["学生任务"],"knowledge_conclusion":"结论","design_intent":"意图","objective_refs":[1],"system_steps":["真实操作"],"scene":{"templates":[],"catalog_layers":[]},"questions":[]}],"board_design":"板书文字"},"next_step":"question_matching","source_refs":[],"capability_bindings":[],"suggestions":[]}。'
+                '当前为教学过程时只输出 stages 和 board_design，保持其他章节不变；每个活动字段简洁具体，避免重复长段落。'
+                "不要输出内部轨迹。当前步骤：" + STEP_LABELS.get(step, step) +
+                "。九个步骤依次是：需求确认→课标与学情→目标与重难点→核心问题与问题链→教学过程→题目匹配→GIS/AI能力→预演检查→确认发布。"
+                "核心章节要求：设计思路100-150字；3-4个可观察教学目标；1个核心问题+2-4个递进子问题；"
+                "每环节包含 material/question_chain/teacher_activities/student_activities/knowledge_conclusion/"
+                "design_intent/minutes/system_steps/objective_refs（1-based目标序号）；板书设计；基础作业+探究作业；预设教学反思。"
+                'objectives 必须是字符串数组；core_questions 必须为 {"core":"核心问题文字","sub_questions":["子问题文字"]}，不要把条目写成对象。'
+                "教师明确指定的教学环节名称、顺序和每环节分钟数是硬约束，必须逐一原样保留，不能合并或改成通用模板。"
+                "你的回复只说明本轮草稿修改，不得声称已发布、已生成文件、预演通过或全部步骤完成；这些状态由系统核验。"
+                "题目匹配只能引用题库检索给出的题目，不得编造题目内容。"
+                "草稿：" + json.dumps(design.draft, ensure_ascii=False)[:12000] +
+                "。真实能力目录：" + json.dumps(self.capability_catalog(), ensure_ascii=False)[:8000] +
+                "。当前引用图层的本地统计摘录（只是本地数据，不代表已独立核验来源；sampled=true 时只是部分记录）：" +
+                json.dumps(self._dataset_facts(design.draft, message) if step == "process" else [], ensure_ascii=False) +
+                "。涉及数字、大小关系或排名时必须与摘录一致；摘录未覆盖或单位未明确时说明需核对，不要补造数值或宣称统计口径相同。"
+            )
         messages = [{"role": "system", "content": system}, {"role": "user", "content": message[:6000]}]
         # One bounded correction for model formatting/content errors, never for network failures.
         for attempt in range(2):
             try:
                 content = self.minimax_client.chat_completion(
                     messages, temperature=0.2,
-                    extra_payload={"max_completion_tokens": 12288 if step == "process" else 2400},
-                    timeout=90.0 if step == "process" else 45.0,
+                    extra_payload={"max_completion_tokens": 12288 if (step == "process" or optimize) else 2400},
+                    timeout=90.0 if (step == "process" or optimize) else 45.0,
                 )
             except Exception as exc:
                 logger.warning("Lesson generation failed: step=%s error_type=%s", step, type(exc).__name__)
@@ -1475,7 +1643,7 @@ class LessonDesignService:
                 result = self._validate_model_payload(payload)
             except (json.JSONDecodeError, ValueError, TypeError):
                 result, reason = None, "invalid_json"
-            schedule = self._requested_schedule(message) if step == "process" else []
+            schedule = self._requested_schedule(message) if step == "process" and not optimize else []
             if result is not None and schedule and not self._matches_schedule(result["section_patch"].get("stages"), schedule):
                 result, reason = None, "schedule_mismatch"
             protected_questions = self._questions_to_preserve(design.draft, message)

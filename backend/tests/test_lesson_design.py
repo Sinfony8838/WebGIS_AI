@@ -659,6 +659,98 @@ class LessonDesignServiceTest(unittest.TestCase):
         self.assertTrue(required_confirmed)
         self.assertTrue(final_view["focus_summary"]["next_confirm_sections"] is not None)
 
+    def test_smart_optimize_uses_model_respects_confirmations_and_duration(self) -> None:
+        """一键智能优化：模型结果只落非确认章节，环节分钟合计被校正回课时。"""
+        service = self.runtime.classroom.lesson_design
+        design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
+        first = service.turn(
+            design["design_id"],
+            "设计一节胡焕庸线与中国人口分布课，40分钟，重点分析东南密集西北稀疏。",
+            design["revision"],
+        )
+        accepted = self.runtime.classroom.resolve_lesson_design(
+            design["design_id"], "requirements", "accept", "", first["revision"]
+        )["design"]
+        requirements_before = json.dumps(accepted["draft"]["requirements"], ensure_ascii=False, sort_keys=True)
+        optimized_objectives = ["优化目标一", "优化目标二", "优化目标三"]
+        fake = {
+            "reply": "重写了目标并强化了探究环节",
+            "section_patch": {
+                "requirements": {"raw": "越权改写已确认需求"},
+                "objectives": optimized_objectives,
+                "stages": [
+                    {"stage_id": "s1", "title": "读图", "minutes": 10, "questions": [],
+                     "material": "图", "question_chain": ["q"], "teacher_activities": ["t"],
+                     "student_activities": ["s"], "knowledge_conclusion": "c", "design_intent": "i"},
+                    {"stage_id": "s2", "title": "探究", "minutes": 15, "questions": [],
+                     "material": "图", "question_chain": ["q"], "teacher_activities": ["t"],
+                     "student_activities": ["s"], "knowledge_conclusion": "c", "design_intent": "i"},
+                ],
+            },
+            "next_step": "", "source_refs": [], "capability_bindings": [], "suggestions": [],
+        }
+        with patch.object(service, "_ask_minimax", return_value=fake) as ask:
+            result = service.turn(
+                design["design_id"], "一键智能优化", accepted["revision"],
+                accepted["current_step"],
+            )
+        ask.assert_called_once()
+        self.assertIs(ask.call_args.kwargs.get("optimize"), True)
+        self.assertEqual(result["generation_mode"], "model")
+        self.assertEqual(result["draft"]["objectives"], optimized_objectives)
+        # 已确认章节不被优化触碰
+        self.assertEqual(result["section_status"].get("requirements"), "confirmed")
+        self.assertEqual(
+            json.dumps(result["draft"]["requirements"], ensure_ascii=False, sort_keys=True),
+            requirements_before,
+        )
+        # 环节分钟合计被校正回课时
+        self.assertEqual(sum(int(stage["minutes"]) for stage in result["draft"]["stages"]), 40)
+        self.assertTrue(all(int(stage["minutes"]) >= 1 for stage in result["draft"]["stages"]))
+        self.assertEqual(result["section_status"].get("objectives"), "proposed")
+        self.assertIn("待确认", result["assistant_message"])
+        self.assertIn("objectives", result["review_sections"])
+        self.assertIn("教学过程", result["focus_summary"]["changed_labels"])
+
+    def test_smart_optimize_falls_back_to_rules_fill_without_model(self) -> None:
+        """AI 不可用时，一键优化退化为规则补齐：只填空缺，不改已有内容。"""
+        service = self.runtime.classroom.lesson_design
+        design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
+        first = service.turn(design["design_id"], "高一40分钟《人口分布》", design["revision"])
+        before_topic = first["draft"]["topic"]
+        with patch.object(service, "_ask_minimax", return_value=None):
+            result = service.turn(
+                design["design_id"], "一键智能优化", first["revision"], first["next_step"]
+            )
+        self.assertEqual(result["generation_mode"], "optimize_rules")
+        self.assertIn("AI 未返回有效内容", result["assistant_message"])
+        self.assertTrue(result["draft"]["stages"])
+        self.assertTrue(result["draft"]["curriculum_interpretation"])
+        self.assertTrue(result["draft"]["core_questions"]["core"])
+        self.assertEqual(result["draft"]["topic"], before_topic)
+        self.assertEqual(result["section_status"].get("stages"), "proposed")
+        # 需求章节已有内容，规则兜底不覆盖
+        self.assertNotIn("requirements", result["review_sections"])
+
+    def test_smart_optimize_requires_existing_draft(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
+        with self.assertRaisesRegex(ValueError, "生成完整初稿"):
+            service.turn(design["design_id"], "一键智能优化", design["revision"])
+
+    def test_optimize_prompt_has_full_draft_budget_and_guardrails(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        client = Mock()
+        client.chat_completion.return_value = '{"section_patch": {}}'
+        service.minimax_client = client
+        service._ask_minimax(design, "confirmation", "一键智能优化", optimize=True)
+        system_content = client.chat_completion.call_args.args[0][0]["content"]
+        self.assertIn("一键智能优化", system_content)
+        self.assertIn("不得改变教学环节的名称、顺序和分钟数", system_content)
+        self.assertEqual(client.chat_completion.call_args.kwargs["extra_payload"]["max_completion_tokens"], 12288)
+        self.assertEqual(client.chat_completion.call_args.kwargs["timeout"], 90.0)
+
 
 if __name__ == "__main__":
     unittest.main()

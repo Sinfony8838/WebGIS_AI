@@ -43,10 +43,16 @@
   font-size: 11px;
 }
 
-/* 快速操作：生成完整初稿 / 采用当前建议并继续 / 只修改当前环节 */
+/* 快速操作：生成完整初稿 / 一键智能优化 / 采用当前建议并继续 / 只修改当前环节 */
 .ldw-quick-actions {
   justify-content: flex-start;
 }
 .ldw-quick-actions .toolbar-button.compact {
   font-size: 12px;
+}
+.ldw-quick-hint {
+  margin: -2px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #64748b;
 }

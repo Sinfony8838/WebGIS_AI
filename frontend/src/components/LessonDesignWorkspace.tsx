@@ -204,10 +204,22 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [design, currentStep, draft]);
   const scopedEditAvailable = (STEP_SECTION_KEYS[currentStep] || []).length > 0 && design?.status !== "finalized";
+  // 一键智能优化仅在已有初稿内容时可用（空稿无内容可优化）。
+  const hasDraftContent = useMemo(() => {
+    if (!design || design.status === "finalized") return false;
+    const values = draft as Record<string, unknown>;
+    return Object.keys(SECTION_LABELS).some((key) => sectionHasContent(values[key]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [design, draft]);
 
   function generateFullDraft() {
     const requirement = input.trim();
     void runTurn(requirement ? `生成完整初稿：${requirement}` : "生成完整初稿", currentStep);
+  }
+
+  function smartOptimize() {
+    const requirement = input.trim();
+    void runTurn(requirement ? `一键智能优化：${requirement}` : "一键智能优化", currentStep);
   }
 
   function modifyCurrentStepOnly() {
@@ -725,6 +737,16 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
               </button>
               <button
                 type="button"
+                className="toolbar-button compact"
+                disabled={busy || !design || !hasDraftContent}
+                onClick={smartOptimize}
+                title="让 AI 对整份未确认初稿做一次系统性优化；已确认章节不会被改动"
+                data-testid="ldw-smart-optimize"
+              >
+                一键智能优化
+              </button>
+              <button
+                type="button"
                 className="toolbar-button compact primary"
                 disabled={busy || !design || !canAdoptCurrent}
                 onClick={() => void acceptStep(currentStep)}
@@ -744,6 +766,9 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
                 只修改当前环节
               </button>
             </div>
+            <p className="ldw-quick-hint" data-testid="ldw-quick-hint">
+              初稿生成后：可点「一键智能优化」整份提升；也可以在输入框写要求，用「发送」或「只修改当前环节」逐段与助手一起打磨。所有结果都需确认后才算采用。
+            </p>
             <div className="ldw-actions">
               <button type="button" className="toolbar-button compact" disabled={busy || !design} onClick={() => void runTurn("返回上一步，重新讨论上一部分")}>
                 返回上一步
