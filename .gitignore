@@ -46,7 +46,14 @@ _merge_backup_*/
 docs/
 !docs/
 docs/*
+!docs/README.md
+!docs/上线配置与安全核查.md
+!docs/knowledge_base_ingest.md
+!docs/智能体使用范例_人口分布.md
+!docs/当前功能说明与课程融合方案.md
 !docs/人口分布_40分钟全流程产品演示脚本_0902.md
+!docs/qa/
+!docs/qa/**
 TEACHING_AGENT_CLAUDE_HANDOFF.md
 专业教学智能体_最终调研与落地报告.md
 Agent设计/
