@@ -369,6 +369,59 @@ class AssistantV2RuntimeTest(unittest.TestCase):
         self.assertNotIn("正确率", message)
         self.assertIsNone(job["result"]["teaching_contract"])
 
+    def test_followup_question_carries_previous_turn_context(self) -> None:
+        # 连续追问：第二问“从图上怎么看？”必须承接上一问的“人口分布”主题，
+        # 不得退化为通用兜底或答非所问的知识库条目。
+        runtime, project_id = self.build_runtime(enable_v2=False)
+        runtime.session_engine.knowledge.minimax_client = None
+
+        first = runtime.submit_assistant_message(
+            project_id,
+            "为什么我国人口分布东南多、西北少？",
+            assistant_mode="teaching",
+        )
+        job = self.wait_for_job(runtime, first["job_id"])
+        conversation_id = str(job["result"]["conversation_id"])
+
+        second = runtime.submit_assistant_message(
+            project_id,
+            "从图上怎么看？",
+            assistant_mode="teaching",
+            conversation_id=conversation_id,
+            map_context={"visible_layers": [{"name": "中国人口分布"}]},
+        )
+        second_job = self.wait_for_job(runtime, second["job_id"])
+        self.assertEqual(str(second_job["result"]["conversation_id"]), conversation_id)
+
+        message = second_job["result"]["assistant_message"]
+        self.assertIn("东南", message)
+        self.assertIn("胡焕庸线", message)
+        self.assertNotIn("这个问题属于地理相关范围", message)
+
+    def test_self_contained_short_question_does_not_inherit_previous_topic(self) -> None:
+        runtime, project_id = self.build_runtime(enable_v2=False)
+        runtime.session_engine.knowledge.minimax_client = None
+
+        first = runtime.submit_assistant_message(
+            project_id,
+            "为什么我国人口分布东南多、西北少？",
+            assistant_mode="teaching",
+        )
+        first_job = self.wait_for_job(runtime, first["job_id"])
+        conversation_id = str(first_job["result"]["conversation_id"])
+
+        second = runtime.submit_assistant_message(
+            project_id,
+            "为什么会下雨？",
+            assistant_mode="teaching",
+            conversation_id=conversation_id,
+        )
+        second_job = self.wait_for_job(runtime, second["job_id"])
+        message = second_job["result"]["assistant_message"]
+
+        self.assertNotIn("我国人口分布东南多、西北少", message)
+        self.assertNotIn("胡焕庸线", message)
+
     def test_interaction_mode_keeps_independent_conversation_and_intent(self) -> None:
         # interaction 模式：intent 固定 interaction、会话线程与 teaching 互不影响。
         runtime, project_id = self.build_runtime(enable_v2=True)
