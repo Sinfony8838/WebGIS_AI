@@ -60,6 +60,12 @@ CENSUS_ALIAS_TERMS = frozenset(CENSUS_YEAR_ALIASES)
 # “NOUN的XXX怎么/什么…” 问句里，“的”后头名词才是真正要问的东西；语料
 # 缺失该名词时应如实说无资料，而不是用 NOUN 部分的字面重叠作答。
 _DE_HEAD_RE = re.compile(r"的([一-鿿]{2,6})(?=怎么|什么|如何|多少|是多少|吗|呢)")
+_RETRIEVAL_QUERY_PREFIX_RE = re.compile(
+    r"^(?:请\s*)?(?:(?:根据|结合|使用|利用|参考)\s*)?"
+    r"(?:(?:本地|当前)\s*)?(?:知识库|教材)\s*"
+    r"(?:(?:中的|里的|中|里)\s*)?(?:资料\s*)?(?:来\s*)?"
+    r"(?:解释|说明|介绍|回答)?\s*"
+)
 MATERIAL_ALIAS_TERMS = frozenset(
     {
         "地图",
@@ -75,8 +81,11 @@ MATERIAL_ALIAS_TERMS = frozenset(
     }
 )
 
-# 领域泛词：只说明“这是一份资料”，不指示主题，不作为证据。
-DOMAIN_STOP_TERMS = frozenset({"资料", "数据", "内容", "情况", "信息", "材料"})
+# 领域泛词和问答动作词不指示主题，不能把正文中的顺带提及抬成答案。
+# 它们仍参与同主题文档间排序，但不作为证据覆盖率或强字段命中的依据。
+DOMAIN_STOP_TERMS = frozenset(
+    {"资料", "数据", "内容", "情况", "信息", "材料", "解释", "形成", "原因", "成因"}
+)
 
 # 表述同义：同一地理格局方向一致的常见口头说法。相反表述（如
 # “西多东少”）描述相反的空间格局，不得映射为“东密西疏”——否则纠错、
@@ -85,6 +94,18 @@ PHRASE_SYNONYMS: dict[str, tuple[str, ...]] = {
     "东多西少": ("东密西疏",),
     "东南密集": ("东密西疏",),
 }
+
+# High-specificity qualifiers may not be discarded in favour of a nearby
+# generic population document. A group is triggered when any alias appears
+# in the query; every returned document must explicitly cover at least one
+# alias from that group. This remains corpus-driven: once a real matching
+# document is added it becomes retrievable without changing the query rule.
+REQUIRED_FOCUS_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("房价", "住房价格", "住宅价格"),
+    ("排名", "排行", "名次"),
+    ("老年人口", "老龄人口"),
+    ("小区", "社区", "街区"),
+)
 
 WEAK_FIELDS = frozenset({"summary", "canonical_answer", "materials"})
 
@@ -215,10 +236,16 @@ class RetrievalEngine:
         min_coverage: float = MIN_COVERAGE,
         constraints: QueryConstraints | None = None,
     ) -> RetrievalResult:
+        normalized_query = normalize_text(query)
+        # Retrieval instructions describe where/how to answer, not the
+        # subject. Removing only a leading wrapper prevents fragments such
+        # as “据知/识库” from overpowering the real target while leaving
+        # region, year and topic constraints in the content query intact.
+        content_query = _RETRIEVAL_QUERY_PREFIX_RE.sub("", normalized_query).strip()
         # 表述同义展开：让“东多西少”也能命中写作“东密西疏”的资料。
-        expanded_text = query
+        expanded_text = content_query or normalized_query
         for phrase, synonyms in PHRASE_SYNONYMS.items():
-            if phrase in normalize_text(query):
+            if phrase in normalized_query:
                 expanded_text = f"{expanded_text} {' '.join(synonyms)}"
         # “的”后头名词是问句真正的落点：全部不在语料词表内则如实无资料。
         # 捕获可能带入尾随动词（“分界线叫”），因此从最长候选逐步截短，
@@ -229,6 +256,16 @@ class RetrievalEngine:
                 "知识库中没有找到与该问题匹配的资料，请尝试更换关键词或放宽筛选条件。"
             )
         parsed = constraints or extract_constraints(query)
+        required_focus_groups = [
+            group
+            for group in REQUIRED_FOCUS_GROUPS
+            if any(alias in normalized_query for alias in group)
+        ]
+        required_focus_aliases = {
+            alias for group in required_focus_groups for alias in group
+        }
+        for group in required_focus_groups:
+            expanded_text = f"{expanded_text} {' '.join(group)}"
         raw_tokens = tokenize(expanded_text, self._lexicon)
         query_terms = [
             term
@@ -297,7 +334,11 @@ class RetrievalEngine:
         # Expansion terms are retrieval aids, not user-typed content:
         # missing siblings must not pollute the OOV penalty.
         oov_content = [
-            term for term in content_terms if term not in self._idf and term not in expanded_terms
+            term
+            for term in content_terms
+            if term not in self._idf
+            and term not in expanded_terms
+            and term not in required_focus_aliases
         ]
         if invocab_content:
             evidence_terms = invocab_content
@@ -319,6 +360,13 @@ class RetrievalEngine:
         strong_field_names = list(STRONG_FIELDS)
         for doc in self.docs:
             fields = self._fields[doc.doc_id]
+            if required_focus_groups:
+                document_text = " ".join(fields.values())
+                if any(
+                    not any(alias in document_text for alias in group)
+                    for group in required_focus_groups
+                ):
+                    continue
             matched_fields: dict[str, list[str]] = {}
             score = 0.0
             matched_evidence: list[str] = []

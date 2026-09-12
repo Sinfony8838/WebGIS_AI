@@ -147,25 +147,25 @@ def build_card_service(items: list[dict], root: Path) -> KnowledgeService:
 # --------------------------------------------------------------------------
 # 指标
 # --------------------------------------------------------------------------
-def rank_metrics(expected: list[str], got: list[str]) -> dict[str, float]:
+def rank_metrics(expected: list[str], got: list[str], top_k: int = TOP_K) -> dict[str, float]:
     if not expected:
         return {}
-    top5 = got[:TOP_K]
-    recall = len(set(expected) & set(top5)) / len(expected)
+    top_results = got[:top_k]
+    recall = len(set(expected) & set(top_results)) / len(expected)
     hit1 = 1.0 if got and got[0] in expected else 0.0
     mrr = 0.0
-    for index, doc_id in enumerate(got[:TOP_K]):
+    for index, doc_id in enumerate(top_results):
         if doc_id in expected:
             mrr = 1.0 / (index + 1)
             break
-    ideal = sum(1.0 / math.log2(rank + 2) for rank in range(min(len(expected), TOP_K)))
+    ideal = sum(1.0 / math.log2(rank + 2) for rank in range(min(len(expected), top_k)))
     dcg = sum(
         1.0 / math.log2(rank + 2)
-        for rank, doc_id in enumerate(top5)
+        for rank, doc_id in enumerate(top_results)
         if doc_id in expected
     )
     ndcg = dcg / ideal if ideal else 0.0
-    return {"recall5": recall, "hit1": hit1, "mrr": mrr, "ndcg5": ndcg}
+    return {f"recall{top_k}": recall, "hit1": hit1, "mrr": mrr, f"ndcg{top_k}": ndcg}
 
 
 def _mean(values: list[float]) -> float:
@@ -173,6 +173,8 @@ def _mean(values: list[float]) -> float:
 
 
 def evaluate_split(samples: list[dict], searcher, top_k: int = TOP_K) -> dict[str, Any]:
+    recall_key = f"recall{top_k}"
+    ndcg_key = f"ndcg{top_k}"
     per_category: dict[str, dict[str, list[float]]] = {}
     latencies: list[float] = []
     rows: list[dict] = []
@@ -186,7 +188,7 @@ def evaluate_split(samples: list[dict], searcher, top_k: int = TOP_K) -> dict[st
         latencies.append(elapsed_ms)
         category = sample["category"]
         bucket = per_category.setdefault(
-            category, {"recall5": [], "hit1": [], "mrr": [], "ndcg5": []}
+            category, {recall_key: [], "hit1": [], "mrr": [], ndcg_key: []}
         )
         if category == "no_answer":
             no_answer_total += 1
@@ -194,15 +196,15 @@ def evaluate_split(samples: list[dict], searcher, top_k: int = TOP_K) -> dict[st
                 no_answer_false_hit += 1
             rows.append({**sample, "got": got_ids, "false_hit": bool(got_ids)})
             continue
-        metrics = rank_metrics(expected, got_ids)
+        metrics = rank_metrics(expected, got_ids, top_k=top_k)
         for key, value in metrics.items():
             bucket[key].append(value)
         rows.append({**sample, "got": got_ids, **metrics})
 
     summary: dict[str, Any] = {
         "samples": len(samples),
-        "recall5": round(
-            _mean([value for bucket in per_category.values() for value in bucket["recall5"]]), 4
+        recall_key: round(
+            _mean([value for bucket in per_category.values() for value in bucket[recall_key]]), 4
         ),
         "hit1": round(
             _mean([value for bucket in per_category.values() for value in bucket["hit1"]]), 4
@@ -210,8 +212,8 @@ def evaluate_split(samples: list[dict], searcher, top_k: int = TOP_K) -> dict[st
         "mrr": round(
             _mean([value for bucket in per_category.values() for value in bucket["mrr"]]), 4
         ),
-        "ndcg5": round(
-            _mean([value for bucket in per_category.values() for value in bucket["ndcg5"]]), 4
+        ndcg_key: round(
+            _mean([value for bucket in per_category.values() for value in bucket[ndcg_key]]), 4
         ),
         "no_answer_total": no_answer_total,
         "no_answer_false_hit": no_answer_false_hit,
@@ -228,11 +230,11 @@ def evaluate_split(samples: list[dict], searcher, top_k: int = TOP_K) -> dict[st
     }
     for category, bucket in per_category.items():
         summary["categories"][category] = {
-            "samples": len(bucket["recall5"]),
-            "recall5": round(_mean(bucket["recall5"]), 4),
+            "samples": len(bucket[recall_key]),
+            recall_key: round(_mean(bucket[recall_key]), 4),
             "hit1": round(_mean(bucket["hit1"]), 4),
             "mrr": round(_mean(bucket["mrr"]), 4),
-            "ndcg5": round(_mean(bucket["ndcg5"]), 4),
+            ndcg_key: round(_mean(bucket[ndcg_key]), 4),
         }
     return {"summary": summary, "rows": rows}
 
@@ -406,11 +408,17 @@ def main() -> int:
         "baseline": baseline["summary"],
         "cards_knowledge_service": {
             **cards["summary"],
-            "no_answer_false_hit_rate": cards_no_answer["summary"]["no_answer_false_hit_rate"],
             "no_answer_total": cards_no_answer["summary"]["no_answer_total"],
+            "no_answer_false_hit": cards_no_answer["summary"]["no_answer_false_hit"],
+            "no_answer_false_hit_rate": cards_no_answer["summary"]["no_answer_false_hit_rate"],
         },
         "permission_and_freshness": permission,
-        "rows": {"candidate": candidate["rows"], "baseline": baseline["rows"]}
+        "rows": {
+            "candidate": candidate["rows"],
+            "baseline": baseline["rows"],
+            "cards": cards["rows"],
+            "cards_no_answer": cards_no_answer["rows"],
+        }
         if args.dump_rows
         else {},
     }

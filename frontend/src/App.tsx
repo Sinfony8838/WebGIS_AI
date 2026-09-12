@@ -52,6 +52,7 @@ import {
   fetchOutputs,
   fetchProject,
   fetchQuestionBanks,
+  deleteKbItem,
   deleteQuestionBank,
   loadOutputAsLayer,
   deleteOutput,
@@ -484,6 +485,7 @@ export default function App({
   const jobScopeEpochRef = useRef(0);
   const assistantSubmittingRef = useRef(false);
   const resourceSearchRequestRef = useRef(0);
+  const kbSearchRequestRef = useRef(0);
   const pendingEvidenceSnapshotRef = useRef<{ sessionId: string; stageId: string } | null>(null);
   const screenshotDocumentRef = useRef<{ projectId: string; document: SnapshotDocument; evidence: {sessionId:string;stageId:string} | null } | null>(null);
   const screenshotCaptureBusyRef = useRef(false);
@@ -858,6 +860,37 @@ export default function App({
       }
     },
     [kbQuery, pushToast]
+  );
+
+  const runDatabaseKnowledgeSearch = useCallback(
+    (query: string) => {
+      const trimmed = query.trim();
+      const requestId = ++kbSearchRequestRef.current;
+      if (!trimmed) {
+        setKbItems(kbAllItems);
+        setKbTotal(kbAllItems.length);
+        setKbLoading(false);
+        return;
+      }
+      setKbLoading(true);
+      searchKb({ query: trimmed, topic: "", region: "", tag: "", limit: 100 })
+        .then((response) => {
+          if (kbSearchRequestRef.current !== requestId) return;
+          setKbItems(response.items);
+          setKbTotal(response.total);
+        })
+        .catch((error: unknown) => {
+          if (kbSearchRequestRef.current === requestId) {
+            pushToast("error", "教学资料检索失败", error instanceof Error ? error.message : "检索接口调用失败");
+          }
+        })
+        .finally(() => {
+          if (kbSearchRequestRef.current === requestId) {
+            setKbLoading(false);
+          }
+        });
+    },
+    [kbAllItems, pushToast]
   );
 
     const loadKnowledgeBase = useCallback(async () => {
@@ -1971,6 +2004,29 @@ export default function App({
       pushToast("info", item.title || "知识条目", item.summary || "该条目暂无可展示的资料");
     }
   }, [pushToast]);
+
+  const handleDatabaseDeleteKnowledgeItem = useCallback(
+    async (item: KnowledgeBaseItem) => {
+      if (!item.owner_user_id) return;
+      if (!window.confirm(`确定删除知识条目“${item.title || item.id}”吗？其关联素材记录也会一并移除。`)) {
+        return;
+      }
+      setKbLoading(true);
+      try {
+        await deleteKbItem(item.id);
+        if (kbEditingItem?.id === item.id) {
+          setKbEditingItem(null);
+        }
+        await loadKnowledgeBase();
+        pushToast("success", "知识条目已删除", item.title || item.id);
+      } catch (error) {
+        pushToast("error", "知识条目删除失败", error instanceof Error ? error.message : "请求失败");
+      } finally {
+        setKbLoading(false);
+      }
+    },
+    [kbEditingItem?.id, loadKnowledgeBase, pushToast]
+  );
 
   const handleDatabaseOpenMaterial = useCallback((title: string, materials: TeachingMaterial[]) => {
     setMaterialViewerTitle(title);
@@ -4049,6 +4105,9 @@ export default function App({
           onClose={() => setDatabaseViewerOpen(false)}
           onUpload={() => setUploadOpen(true)}
           knowledgeItems={kbAllItems}
+          knowledgeSearchItems={kbItems}
+          knowledgeSearchLoading={kbLoading}
+          onKnowledgeSearch={runDatabaseKnowledgeSearch}
           layers={layerState?.items || []}
           outputs={outputs}
           lessonResourceSets={lessonResourceSets}
@@ -4058,6 +4117,7 @@ export default function App({
           activeTeachingMapIds={activeTeachingMapIds}
           activeLessonResourceSetId={activeLessonResourceSetId}
           onOpenKnowledgeItem={handleDatabaseOpenKnowledgeItem}
+          onDeleteKnowledgeItem={(item) => void handleDatabaseDeleteKnowledgeItem(item)}
           onOpenMaterial={handleDatabaseOpenMaterial}
           onToggleLayer={(layerId, visible) => void handleDatabaseToggleLayer(layerId, visible)}
           onFocusLayer={(layerId) => void handleDatabaseFocusLayer(layerId)}

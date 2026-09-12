@@ -29,11 +29,11 @@ STOP_TERMS = frozenset(
     }
 )
 
-# Interrogative/copula/preposition characters: bigrams containing one of
-# them are segmentation fragments of function phrases (条什/么线/图在/在冬)
-# and carry no retrieval meaning. Applied after bigram merging. Deliberately
-# excludes 对 (对比/对策 are real terms).
-STOP_CHARS = frozenset("的吗呢吧啊哪怎样是有了呀嘛啦么什在就都")
+# Interrogative/copula/preposition/classifier characters: bigrams containing
+# one of them are segmentation fragments of function phrases
+# (条什/么线/图在/某个/个小) and carry no retrieval meaning. Applied after
+# bigram merging. Deliberately excludes 对 (对比/对策 are real terms).
+STOP_CHARS = frozenset("的吗呢吧啊哪怎样是有了呀嘛啦么什在就都个")
 
 
 def tokenize(text: str, lexicon: frozenset[str] | set[str] | None = None) -> list[str]:

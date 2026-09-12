@@ -190,6 +190,19 @@ class DatabasePanelBackendTest(unittest.TestCase):
         self.assertEqual([item["id"] for item in owned], [first["kb_item_id"]])
         self.assertEqual(owned[0]["materials"][0]["description"], "摘要")
 
+    def test_runtime_delete_knowledge_item_removes_owned_entry(self) -> None:
+        runtime, _store, _project_id = self.build_runtime()
+        item = runtime.kb_upsert_item(
+            {"title": "待删除私有资料", "summary": "仅供本人使用"},
+            owner_user_id="teacher-a",
+        )["item"]
+
+        deleted = runtime.kb_delete_item(item["id"], owner_user_id="teacher-a")
+
+        self.assertEqual(deleted["item"]["id"], item["id"])
+        remaining = runtime.kb_manifest(owner_user_id="teacher-a")["items"]
+        self.assertNotIn(item["id"], {row["id"] for row in remaining})
+
 
 if __name__ == "__main__":
     unittest.main()

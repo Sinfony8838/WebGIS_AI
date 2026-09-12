@@ -7,6 +7,7 @@ type DatabaseViewerProps = ComponentProps<typeof DatabaseViewer>;
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
 });
 
 function createProps(overrides: Partial<DatabaseViewerProps> = {}): DatabaseViewerProps {
@@ -55,6 +56,9 @@ function createProps(overrides: Partial<DatabaseViewerProps> = {}): DatabaseView
         updated_at: "2026-06-12T10:00:00Z",
       },
     ],
+    knowledgeSearchItems: [],
+    knowledgeSearchLoading: false,
+    onKnowledgeSearch: vi.fn(),
     layers: [
       {
         layer_id: "layer_population",
@@ -77,6 +81,7 @@ function createProps(overrides: Partial<DatabaseViewerProps> = {}): DatabaseView
     activeTeachingMapIds: new Set(),
     activeLessonResourceSetId: "",
     onOpenKnowledgeItem: vi.fn(),
+    onDeleteKnowledgeItem: vi.fn(),
     onOpenMaterial: vi.fn(),
     onToggleLayer: vi.fn(),
     onFocusLayer: vi.fn(),
@@ -124,6 +129,50 @@ describe("DatabaseViewer", () => {
     expect(screen.queryByText("人口视频")).not.toBeInTheDocument();
     fireEvent.click(facets.getByRole("button", { name: /^网页链接/ }));
     expect(screen.getByText("参考网页")).toBeInTheDocument();
+  });
+
+  it("uses backend semantic results without applying a second literal filter", () => {
+    vi.useFakeTimers();
+    const semanticItem = {
+      ...createProps().knowledgeItems[0],
+      id: "kb_census_2020",
+      title: "第七次人口普查公报",
+      summary: "统计口径与区域分布说明",
+      retrieval_score: 8.5,
+    };
+    const props = createProps({
+      activeCategory: "materials",
+      knowledgeSearchItems: [semanticItem],
+    });
+    render(<DatabaseViewer {...props} />);
+
+    fireEvent.change(screen.getByLabelText("语义检索教学资料"), {
+      target: { value: "上海2020年人口普查资料" },
+    });
+    vi.advanceTimersByTime(250);
+
+    expect(props.onKnowledgeSearch).toHaveBeenCalledWith("上海2020年人口普查资料");
+    expect(screen.getByText("第七次人口普查公报")).toBeInTheDocument();
+  });
+
+  it("shows safe source links and only offers deletion for owned knowledge", () => {
+    const owned = {
+      ...createProps().knowledgeItems[0],
+      owner_user_id: "teacher-1",
+      time: "2020",
+      source: "区统计局",
+      citations: [{ title: "统计公报", url: "https://example.org/census" }],
+    };
+    const props = createProps({ activeCategory: "materials", knowledgeItems: [owned] });
+    render(<DatabaseViewer {...props} />);
+
+    expect(screen.getByText(/2020 \/ 区统计局/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "出处：统计公报" })).toHaveAttribute(
+      "href",
+      "https://example.org/census"
+    );
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    expect(props.onDeleteKnowledgeItem).toHaveBeenCalledWith(expect.objectContaining({ id: "kb_population" }));
   });
 
   it("keeps the database page open when import is requested", () => {

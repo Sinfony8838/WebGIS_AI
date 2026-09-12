@@ -259,6 +259,38 @@ class AuthApiTest(unittest.TestCase):
             admin["user_id"],
         )
 
+    def test_kb_delete_uses_authenticated_owner_and_admin_scope(self) -> None:
+        admin, csrf = self.bootstrap_admin()
+        deleted = {"status": "success", "item": {"id": "private_note"}}
+        with patch.object(app_main.runtime, "kb_delete_item", return_value=deleted) as delete:
+            response = self.client.delete(
+                "/kb/items/private_note",
+                headers={"X-WebGIS-CSRF": csrf},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), deleted)
+        delete.assert_called_once_with(
+            "private_note",
+            owner_user_id=admin["user_id"],
+            include_all=True,
+        )
+
+    def test_kb_delete_conceals_an_inaccessible_item_as_not_found(self) -> None:
+        _admin, csrf = self.bootstrap_admin()
+        with patch.object(
+            app_main.runtime,
+            "kb_delete_item",
+            side_effect=ValueError("Unknown knowledge item: private_note"),
+        ):
+            response = self.client.delete(
+                "/kb/items/private_note",
+                headers={"X-WebGIS-CSRF": csrf},
+            )
+
+        self.assertEqual(response.status_code, 404, response.text)
+        self.assertEqual(response.json()["detail"], "Unknown knowledge item: private_note")
+
     def test_population_version_compare_route_runs_after_login(self) -> None:
         self.bootstrap_admin()
         expected = {"status": "success", "changes": []}

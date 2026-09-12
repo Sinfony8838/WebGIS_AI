@@ -13,6 +13,7 @@ from pathlib import Path
 from backend.app.config import AppConfig
 from backend.app.services.knowledge import KnowledgeService
 from backend.app.services.knowledge_base import KnowledgeBaseService
+from backend.app.services.session_engine import KnowledgeEngine
 
 
 class KnowledgeRetrievalServiceTest(unittest.TestCase):
@@ -98,6 +99,42 @@ class KnowledgeRetrievalServiceTest(unittest.TestCase):
         self.assertEqual(payload["items"], [])
         self.assertTrue(payload["message"])
 
+    def test_explicit_filters_are_applied_before_ranking_and_limit(self) -> None:
+        target = {
+            "id": "zzz_filtered_target",
+            "title": "人口专题资料",
+            "topic": "target_topic",
+            "region": "shanghai",
+            "tags": ["target_tag"],
+            "keywords": ["上海", "人口专题"],
+            "summary": "上海人口专题资料。",
+        }
+        decoys = [
+            {
+                "id": f"decoy_{index}",
+                "title": f"上海人口专题资料精编版{index}",
+                "topic": "other_topic",
+                "region": "beijing",
+                "tags": ["other_tag"],
+                "keywords": ["上海", "人口专题", "资料"],
+                "summary": "用于制造全库排序竞争的非目标资料。",
+            }
+            for index in range(6)
+        ]
+        self.write_manifest([*decoys, target])
+
+        payload = self.service.search(
+            "上海人口专题资料",
+            topic="target_topic",
+            region="shanghai",
+            tag="target_tag",
+            limit=1,
+        )
+
+        self.assertFalse(payload["insufficient"])
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual([item["id"] for item in payload["items"]], ["zzz_filtered_target"])
+
     def test_private_items_isolated_across_users_and_cache(self) -> None:
         self.seed()
         self.service.upsert_item(
@@ -175,12 +212,101 @@ class KnowledgeRetrievalServiceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.service.delete_item("cn_density", owner_user_id="someone")
 
+    def test_delete_private_item_hides_other_owner_and_allows_admin(self) -> None:
+        item = self.service.upsert_item(
+            {
+                "id": "private_a",
+                "title": "教师 A 私有资料",
+                "summary": "只允许本人或管理员删除。",
+            },
+            owner_user_id="teacher-a",
+        )
+
+        with self.assertRaisesRegex(ValueError, "Unknown knowledge item"):
+            self.service.delete_item(item["id"], owner_user_id="teacher-b")
+        self.assertIn(
+            item["id"],
+            {row["id"] for row in self.service.get_manifest(owner_user_id="teacher-a")["items"]},
+        )
+
+        deleted = self.service.delete_item(
+            item["id"],
+            owner_user_id="admin-user",
+            include_all=True,
+        )
+        self.assertEqual(deleted["id"], item["id"])
+
     def test_provenance_fields_present(self) -> None:
         self.seed()
         item = self.service.search("全国人口密度", limit=1)["items"][0]
         for field in ("id", "title", "source", "time", "region"):
             self.assertIn(field, item)
         self.assertTrue(str(item["id"]))
+
+    def test_read_does_not_fabricate_missing_update_time(self) -> None:
+        self.write_manifest(
+            [
+                {
+                    "id": "legacy_item",
+                    "title": "旧版人口资料",
+                    "topic": "population",
+                    "keywords": ["旧版人口"],
+                    "summary": "导入时没有更新时间。",
+                }
+            ]
+        )
+
+        first = self.service.get_manifest()["items"][0]
+        second = KnowledgeBaseService(self.config).get_manifest()["items"][0]
+
+        self.assertEqual(first["updated_at"], "")
+        self.assertEqual(second["updated_at"], "")
+        created = self.service.upsert_item(
+            {
+                "id": "new_item",
+                "title": "新人口资料",
+                "topic": "population",
+                "keywords": ["新人口"],
+                "summary": "真实写入应记录时间。",
+            }
+        )
+        self.assertTrue(created["updated_at"])
+
+    def test_session_engine_refreshes_public_units_without_restart(self) -> None:
+        engine = KnowledgeEngine(self.config)
+        self.assertIsNone(engine._match_entry("长三角产业迁移专题"))
+        self.write_manifest(
+            [
+                {
+                    "id": "live_public_unit",
+                    "title": "长三角产业迁移专题",
+                    "topic": "regional_economy",
+                    "region": "china",
+                    "time": "2025",
+                    "keywords": ["长三角", "产业迁移"],
+                    "summary": "长三角产业迁移的课堂解释。",
+                    "canonical_answer": "产业迁移需要结合成本、交通和产业链分析。",
+                    "materials": [
+                        {
+                            "id": "migration_chart",
+                            "title": "产业迁移示意图",
+                            "type": "image",
+                            "description": "展示产业迁移方向。",
+                        }
+                    ],
+                }
+            ]
+        )
+        unit = next(item for item in self.service.build_engine_units() if item["id"] == "live_public_unit")
+        self.assertEqual(unit["topic"], "regional_economy")
+        self.assertEqual(unit["region"], "china")
+        self.assertEqual(unit["time"], "2025")
+        self.assertIn("产业迁移", unit["keywords"])
+        self.assertEqual(unit["summary"], "长三角产业迁移的课堂解释。")
+        self.assertEqual(unit["materials"][0]["id"], "migration_chart")
+        self.assertEqual(engine._match_entry("长三角产业迁移专题")["id"], "live_public_unit")
+        self.write_manifest([])
+        self.assertIsNone(engine._match_entry("长三角产业迁移专题"))
 
 
 class KnowledgeServiceRetrievalTest(unittest.TestCase):

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addCatalogDatasetLayer,
   confirmAssistantAction,
+  deleteKbItem,
   fetchDatasetCatalog,
   fetchKbManifest,
   fetchKbTopics,
@@ -281,6 +282,20 @@ describe("api.sendAssistantMessage", () => {
     await fetchKbManifest();
     const [url] = fetchMock.mock.calls[0];
     expect(String(url)).toContain("/kb/manifest");
+  });
+
+  it("deletes one knowledge item through the authenticated kb route", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ status: "success", item: { id: "owned item" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+
+    await deleteKbItem("owned item");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/kb/items/owned%20item");
+    expect(init?.method).toBe("DELETE");
   });
 
   it("requests one-map dataset catalog from /datasets/catalog", async () => {

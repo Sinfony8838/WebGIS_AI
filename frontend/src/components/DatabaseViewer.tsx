@@ -40,6 +40,7 @@ type DatabaseEntryBase = {
   tags: string[];
   updatedAt: string;
   thumbnailUrl?: string;
+  retrievalScore?: number;
 };
 
 type DatabaseEntry = DatabaseEntryBase & (
@@ -87,6 +88,9 @@ type Props = {
   open: boolean;
   onClose: () => void;
   knowledgeItems: KnowledgeBaseItem[];
+  knowledgeSearchItems: KnowledgeBaseItem[];
+  knowledgeSearchLoading: boolean;
+  onKnowledgeSearch: (query: string) => void;
   layers: LayerRecord[];
   outputs: ArtifactRecord[];
   lessonResourceSets: LessonResourceSet[];
@@ -96,6 +100,7 @@ type Props = {
   activeTeachingMapIds: Set<string>;
   activeLessonResourceSetId: string;
   onOpenKnowledgeItem: (item: KnowledgeBaseItem) => void;
+  onDeleteKnowledgeItem: (item: KnowledgeBaseItem) => void;
   onOpenMaterial: (title: string, materials: TeachingMaterial[]) => void;
   onToggleLayer: (layerId: string, visible: boolean) => void;
   onFocusLayer: (layerId: string) => void;
@@ -215,6 +220,11 @@ function compactTags(values: Array<string | undefined>): string[] {
   return values.filter((value): value is string => Boolean(value && value.trim())).slice(0, 4);
 }
 
+function safeCitationUrl(value: string): string {
+  const url = String(value || "").trim();
+  return /^https?:\/\//i.test(url) ? url : "";
+}
+
 function normalizeStatus(value: string): string {
   if (value === "knowledge_only") return "知识";
   if (value === "renderable_layer") return "可显示";
@@ -232,6 +242,9 @@ export function DatabaseViewer({
   open,
   onClose,
   knowledgeItems,
+  knowledgeSearchItems,
+  knowledgeSearchLoading,
+  onKnowledgeSearch,
   layers,
   outputs,
   lessonResourceSets,
@@ -241,6 +254,7 @@ export function DatabaseViewer({
   activeTeachingMapIds,
   activeLessonResourceSetId,
   onOpenKnowledgeItem,
+  onDeleteKnowledgeItem,
   onOpenMaterial,
   onToggleLayer,
   onFocusLayer,
@@ -280,6 +294,15 @@ export function DatabaseViewer({
   const facet = facetSelection.category === category ? facetSelection.value : "全部";
   const facetOptions = category === "map-data" ? MAP_TOPICS : category === "materials" ? MATERIAL_TYPES : [];
   const trimmedResourceQuery = resourceQuery.trim();
+  const trimmedKnowledgeQuery = query.trim();
+  const semanticKnowledgeSearch = category === "materials" && Boolean(trimmedKnowledgeQuery);
+  const displayedKnowledgeItems = semanticKnowledgeSearch ? knowledgeSearchItems : knowledgeItems;
+
+  useEffect(() => {
+    if (!open || category !== "materials") return;
+    const timeoutId = window.setTimeout(() => onKnowledgeSearch(query), 250);
+    return () => window.clearTimeout(timeoutId);
+  }, [category, onKnowledgeSearch, open, query]);
 
   const entries = useMemo<DatabaseEntry[]>(() => {
     const layerEntries: DatabaseEntry[] = layers.map((layer) => ({
@@ -370,21 +393,27 @@ export function DatabaseViewer({
         kind: "output" as const,
       }));
 
-    const knowledgeEntries: DatabaseEntry[] = knowledgeItems.map((item) => ({
+    const knowledgeEntries: DatabaseEntry[] = displayedKnowledgeItems.map((item) => ({
       id: `knowledge:${item.id}`,
       category: "materials",
       section: "knowledge",
       title: item.title || item.id,
-      subtitle: `${item.topic || "未分类"} / ${item.region || "未标注区域"}`,
+      subtitle: compactTags([
+        item.topic || "未分类",
+        item.region || "未标注区域",
+        item.time,
+        item.source,
+      ]).join(" / "),
       description: item.summary || item.canonical_answer || "",
       status: normalizeStatus(item.status || "knowledge_only"),
       tags: compactTags([item.source, item.grade_level, ...(item.tags || []), ...(item.keywords || [])]),
       updatedAt: item.updated_at,
+      retrievalScore: item.retrieval_score,
       raw: item,
       kind: "knowledge",
     }));
 
-    const materialEntries: DatabaseEntry[] = knowledgeItems.flatMap((item) =>
+    const materialEntries: DatabaseEntry[] = displayedKnowledgeItems.flatMap((item) =>
       (item.materials || []).map((material) => ({
         id: `material:${material.id}`,
         category: "materials" as const,
@@ -395,6 +424,7 @@ export function DatabaseViewer({
         status: material.type || "素材",
         tags: compactTags([material.source, material.region_binding?.name]),
         updatedAt: material.created_at,
+        retrievalScore: item.retrieval_score,
         raw: material,
         parentTitle: item.title || item.id,
         kind: "material" as const,
@@ -463,7 +493,7 @@ export function DatabaseViewer({
     activeLessonResourceSetId,
     activeTeachingMapIds,
     datasetCatalogItems,
-    knowledgeItems,
+    displayedKnowledgeItems,
     layers,
     lessonResourceSets,
     outputs,
@@ -472,19 +502,30 @@ export function DatabaseViewer({
     teachingMaps,
   ]);
 
+  const inventoryMaterialCount = useMemo(
+    () => knowledgeItems.reduce((count, item) => count + 1 + (item.materials || []).length, 0),
+    [knowledgeItems]
+  );
+  const displayedMaterialCount = useMemo(
+    () => displayedKnowledgeItems.reduce((count, item) => count + 1 + (item.materials || []).length, 0),
+    [displayedKnowledgeItems]
+  );
+
   const counts = useMemo(() => {
     const next = new Map<DatabaseCategory, number>();
     for (const entry of entries) {
       next.set(entry.category, (next.get(entry.category) || 0) + 1);
     }
     next.set("all", entries.filter((entry) => entry.category !== "resources").length);
+    next.set("materials", inventoryMaterialCount);
+    next.set("all", (next.get("all") || 0) - displayedMaterialCount + inventoryMaterialCount);
     // 检索与获取是工具类：以结果数参与计数，未搜索时为 0。
     next.set("resources", resourceResults.length);
     return next;
-  }, [entries, resourceResults.length]);
+  }, [displayedMaterialCount, entries, inventoryMaterialCount, resourceResults.length]);
 
   const filteredEntries = useMemo(() => {
-    const keyword = category === "resources" ? "" : query.trim().toLowerCase();
+    const keyword = category === "resources" || category === "materials" ? "" : query.trim().toLowerCase();
     const list = entries
       .filter((entry) => category === "all" ? entry.category !== "resources" : entry.category === category)
       .filter((entry) => !facetOptions.length || facet === "全部" || entryFacet(entry) === facet)
@@ -497,12 +538,15 @@ export function DatabaseViewer({
       // 「全部」与地图数据保持导航定义的分区顺序，时间排序会打散分区。
       return list;
     }
+    if (semanticKnowledgeSearch) {
+      return list.sort((left, right) => (right.retrievalScore || 0) - (left.retrievalScore || 0));
+    }
     return list.sort((left, right) => {
       const leftTime = Date.parse(left.updatedAt || "");
       const rightTime = Date.parse(right.updatedAt || "");
       return (Number.isNaN(rightTime) ? 0 : rightTime) - (Number.isNaN(leftTime) ? 0 : leftTime);
     });
-  }, [category, entries, query, facet, facetOptions.length]);
+  }, [category, entries, query, facet, facetOptions.length, semanticKnowledgeSearch]);
 
   const sectionGroups = useMemo(() => {
     if (category !== "map-data" && category !== "all") {
@@ -568,11 +612,11 @@ export function DatabaseViewer({
         </div>
         <div className="database-viewer-actions">
           {category !== "resources" && <label className="database-viewer-search">
-            <span>筛选已入库内容</span>
+            <span>{category === "materials" ? "语义检索教学资料" : "筛选已入库内容"}</span>
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="筛选名称、来源或关键词"
+              placeholder={category === "materials" ? "用自然语言检索教学资料" : "筛选名称、来源或关键词"}
             />
           </label>}
           <button type="button" className="database-secondary-action" aria-pressed={category === "resources"}
@@ -619,7 +663,7 @@ export function DatabaseViewer({
       <div className="database-viewer-body">
         <div className="database-results-heading">
           <h3>{CATEGORIES.find(item => item.key === category)?.label}{facet !== "全部" ? ` / ${facet}` : ""}</h3>
-          <span>{filteredEntries.length} 项</span>
+          <span>{category === "materials" && knowledgeSearchLoading ? "检索中" : `${filteredEntries.length} 项`}</span>
           <small>{category === "resources" ? "搜索结果，保存后进入数据库" : `已入库 ${counts.get("all") || 0} 项`}</small>
         </div>
 
@@ -697,6 +741,7 @@ export function DatabaseViewer({
                         activeLessonResourceSetId,
                         activeTeachingMapIds,
                         onOpenKnowledgeItem,
+                        onDeleteKnowledgeItem,
                         onOpenMaterial,
                         onToggleLayer,
                         onFocusLayer,
@@ -727,6 +772,7 @@ export function DatabaseViewer({
                     activeLessonResourceSetId,
                     activeTeachingMapIds,
                     onOpenKnowledgeItem,
+                    onDeleteKnowledgeItem,
                     onOpenMaterial,
                     onToggleLayer,
                     onFocusLayer,
@@ -751,7 +797,9 @@ export function DatabaseViewer({
             <div className="database-viewer-empty">
               {category === "resources" && !trimmedResourceQuery
                 ? "输入关键词后回车，检索知识库与权威联网入口"
-                : "没有匹配的数据"}
+                : semanticKnowledgeSearch
+                  ? `没有找到与“${trimmedKnowledgeQuery}”相关的教学资料，可更换说法后重试`
+                  : "没有匹配的数据"}
             </div>
           )}
         </div>
@@ -765,6 +813,7 @@ type RowHandlerProps = Pick<
   | "activeLessonResourceSetId"
   | "activeTeachingMapIds"
   | "onOpenKnowledgeItem"
+  | "onDeleteKnowledgeItem"
   | "onOpenMaterial"
   | "onToggleLayer"
   | "onFocusLayer"
@@ -814,12 +863,31 @@ function DatabaseRow({ entry, props }: { entry: DatabaseEntry; props: RowHandler
             ))}
           </div>
         ) : null}
+        {entry.kind === "knowledge" && entry.raw.citations?.length ? (
+          <div className="database-row-citations" aria-label={`${entry.title}出处`}>
+            {entry.raw.citations.slice(0, 3).map((citation, index) => {
+              const url = safeCitationUrl(citation.url);
+              return url ? (
+                <a key={`${url}:${index}`} href={url} target="_blank" rel="noopener noreferrer">
+                  出处：{citation.title || "原始来源"}
+                </a>
+              ) : null;
+            })}
+          </div>
+        ) : null}
       </div>
       <div className="database-row-actions">
         {entry.kind === "knowledge" ? (
-          <button type="button" onClick={() => props.onOpenKnowledgeItem(entry.raw)}>
-            查看详情
-          </button>
+          <>
+            <button type="button" onClick={() => props.onOpenKnowledgeItem(entry.raw)}>
+              查看详情
+            </button>
+            {entry.raw.owner_user_id ? (
+              <button type="button" className="database-danger-action" onClick={() => props.onDeleteKnowledgeItem(entry.raw)}>
+                删除
+              </button>
+            ) : null}
+          </>
         ) : null}
         {entry.kind === "material" ? (
           <button type="button" onClick={() => props.onOpenMaterial(entry.title, [entry.raw])}>

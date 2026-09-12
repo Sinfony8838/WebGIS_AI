@@ -1150,6 +1150,12 @@ export async function upsertKbItem(item: Partial<KnowledgeBaseItem>): Promise<Kn
   });
 }
 
+export async function deleteKbItem(itemId: string): Promise<KnowledgeLayerRegisterResponse> {
+  return requestJson<KnowledgeLayerRegisterResponse>(`/kb/items/${encodeURIComponent(itemId)}`, {
+    method: "DELETE"
+  });
+}
+
 export async function registerKbLayer(
   projectId: string,
   layerId: string,

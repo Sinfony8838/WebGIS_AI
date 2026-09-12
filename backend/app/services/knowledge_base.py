@@ -175,15 +175,23 @@ class KnowledgeBaseService:
         self.manifest_path = self.knowledge_dir / "kb_manifest.json"
         self._manifest_fingerprint: Tuple[int, int] | None = None
         self._cached_manifest: Dict[str, Any] | None = None
-        self._engine_cache: Dict[Tuple[str, bool], RetrievalEngine] = {}
+        self._engine_cache: Dict[Tuple[str, bool, str, str, str], RetrievalEngine] = {}
         self._result_cache: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
 
-    def _fingerprint(self) -> Tuple[int, int]:
+    @staticmethod
+    def _path_fingerprint(path: Path) -> Tuple[int, int]:
         try:
-            stat = self.manifest_path.stat()
+            stat = path.stat()
             return (stat.st_mtime_ns, stat.st_size)
         except OSError:
             return (0, 0)
+
+    def _fingerprint(self) -> Tuple[int, int]:
+        return self._path_fingerprint(self.manifest_path)
+
+    def engine_units_fingerprint(self) -> Tuple[Tuple[int, int], Tuple[int, int]]:
+        """Fingerprint every file that contributes public assistant evidence."""
+        return (self._fingerprint(), self._path_fingerprint(self.geo_path))
 
     def _invalidate_caches(self) -> None:
         self._manifest_fingerprint = None
@@ -191,13 +199,24 @@ class KnowledgeBaseService:
         self._engine_cache.clear()
         self._result_cache.clear()
 
-    def _engine_for(self, owner_user_id: str, include_all: bool) -> RetrievalEngine:
-        """Return an index built only from items this caller may access."""
-        key = (owner_user_id or "", bool(include_all))
+    def _engine_for(
+        self,
+        owner_user_id: str,
+        include_all: bool,
+        topic_lower: str = "",
+        region_lower: str = "",
+        tag_lower: str = "",
+    ) -> RetrievalEngine:
+        """Return an index built only from accessible, explicitly filtered items."""
+        key = (owner_user_id or "", bool(include_all), topic_lower, region_lower, tag_lower)
         self._manifest_items()  # refresh cache if the file changed on disk
         engine = self._engine_cache.get(key)
         if engine is None:
-            docs = [self._doc_from_item(item) for item in self._accessible_items(owner_user_id, include_all)]
+            docs = [
+                self._doc_from_item(item)
+                for item in self._accessible_items(owner_user_id, include_all)
+                if self._passes_explicit_filters(item, topic_lower, region_lower, tag_lower)
+            ]
             engine = RetrievalEngine(docs)
             self._engine_cache[key] = engine
         return engine
@@ -282,7 +301,16 @@ class KnowledgeBaseService:
         insufficient = False
         message = ""
         if query_tokens or _as_text(query).strip():
-            engine = self._engine_for(owner_user_id, include_all)
+            # Rank inside the explicitly filtered corpus. Ranking the full
+            # corpus first can fill Top-N with disallowed topics/regions and
+            # make a valid filtered item disappear during the later ID join.
+            engine = self._engine_for(
+                owner_user_id,
+                include_all,
+                topic_lower,
+                region_lower,
+                tag_lower,
+            )
             by_id = {str(item.get("id")): item for item in items}
             result: RetrievalResult = engine.search(query, limit=max(1, min(int(limit or 20), 100)))
             if result.insufficient:
@@ -388,6 +416,8 @@ class KnowledgeBaseService:
         item = self._normalize_manifest_item(raw_item)
         if not item["title"]:
             raise ValueError("Knowledge item requires title")
+        if not item["updated_at"]:
+            item["updated_at"] = _utc_now()
 
         existing = _safe_list(manifest.get("items"))
         replaced = False
@@ -438,6 +468,7 @@ class KnowledgeBaseService:
                 raise ValueError("Built-in knowledge items are read-only")
             existing = [entry for entry in item.get("materials", []) if entry.get("id") != material["id"]]
             item["materials"] = _normalize_materials([*existing, material])
+            item["updated_at"] = _utc_now()
             items[index] = item
             found = True
             break
@@ -458,8 +489,7 @@ class KnowledgeBaseService:
         """Remove one knowledge item and invalidate every derived cache.
 
         Built-in items (no owner) stay read-only, mirroring ``upsert_item``.
-        The HTTP route for deletion is not wired yet; callers today use the
-        service directly.
+        The authenticated HTTP route delegates here through the runtime layer.
         """
         manifest = self._load_manifest(create_if_missing=True)
         target_id = _as_text(item_id)
@@ -543,12 +573,17 @@ class KnowledgeBaseService:
                     "id": _as_text(item.get("id")),
                     "title": _as_text(item.get("title")),
                     "domain": _as_text(item.get("topic")) or "geo_concept",
+                    "topic": _as_text(item.get("topic")) or "geo_concept",
+                    "region": _as_text(item.get("region")),
+                    "time": _as_text(item.get("time")),
+                    "keywords": _normalize_keywords(item.get("keywords")) or _normalize_keywords(item.get("tags")),
                     "tags": _normalize_keywords(item.get("keywords")) or _normalize_keywords(item.get("tags")),
+                    "summary": _as_text(item.get("summary")),
                     "canonical_answer": _as_text(item.get("canonical_answer")) or _as_text(item.get("summary")),
                     "teaching_points": _safe_list(item.get("teaching_points")),
                     "citations": _normalize_citations(item.get("citations")),
                     "related_templates": _safe_list(item.get("related_templates")),
-                    "updated_at": _as_text(item.get("updated_at")) or _utc_now(),
+                    "updated_at": _as_text(item.get("updated_at")),
                     "materials": _normalize_materials(item.get("materials")),
                 }
             )
@@ -568,12 +603,18 @@ class KnowledgeBaseService:
                 "id": unit_id,
                 "title": title,
                 "domain": _as_text(row.get("domain")) or "geo_concept",
+                "topic": _as_text(row.get("topic")) or _as_text(row.get("domain")) or "geo_concept",
+                "region": _as_text(row.get("region")),
+                "time": _as_text(row.get("time")),
+                "keywords": _normalize_keywords(row.get("keywords")) or _normalize_keywords(row.get("tags")),
                 "tags": _normalize_keywords(row.get("tags")),
+                "summary": _as_text(row.get("summary")),
                 "canonical_answer": canonical,
                 "teaching_points": [str(item).strip() for item in _safe_list(row.get("teaching_points")) if str(item).strip()],
                 "citations": _normalize_citations(row.get("citations")),
                 "related_templates": _safe_list(row.get("related_templates")),
-                "updated_at": _as_text(row.get("updated_at")) or _utc_now(),
+                "updated_at": _as_text(row.get("updated_at")),
+                "materials": _normalize_materials(row.get("materials")),
             }
             if unit_id in index_by_id:
                 rows[index_by_id[unit_id]] = normalized
@@ -621,7 +662,9 @@ class KnowledgeBaseService:
             "dataset_refs": [entry for entry in _safe_list(item.get("dataset_refs")) if isinstance(entry, dict)],
             "materials": _normalize_materials(item.get("materials")),
             "related_templates": _safe_list(item.get("related_templates")),
-            "updated_at": _as_text(item.get("updated_at")) or _utc_now(),
+            # Reading legacy/imported rows must not fabricate a fresh edit
+            # time. Mutation paths add a real timestamp before writing.
+            "updated_at": _as_text(item.get("updated_at")),
             "owner_user_id": _as_text(item.get("owner_user_id")),
         }
 

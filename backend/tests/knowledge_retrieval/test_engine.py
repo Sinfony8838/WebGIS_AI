@@ -166,6 +166,17 @@ class RetrievalEngineBehaviourTest(unittest.TestCase):
         self.assertFalse(result.insufficient)
         self.assertEqual(result.ids[0], "kb_hu_line")
 
+    def test_retrieval_instruction_prefix_does_not_become_the_topic(self) -> None:
+        for query in (
+            "请根据知识库解释胡焕庸线",
+            "请根据知识库中的资料解释胡焕庸线",
+            "参考教材里的资料说明胡焕庸线",
+        ):
+            with self.subTest(query=query):
+                result = self.engine.search(query, limit=3)
+                self.assertFalse(result.insufficient)
+                self.assertIn(result.ids[0], {"kb_hu_line", "hu_huanyong_line"})
+
     def test_shanghai_question_prefers_shanghai_material(self) -> None:
         result = self.engine.search("上海的人口密度怎么样", limit=3)
         self.assertFalse(result.insufficient)
@@ -185,9 +196,54 @@ class RetrievalEngineBehaviourTest(unittest.TestCase):
         result = self.engine.search("中国的GDP是多少", limit=3)
         self.assertTrue(result.insufficient)
 
+    def test_generic_explanation_terms_do_not_promote_a_side_mention(self) -> None:
+        engine = RetrievalEngine(
+            [
+                RetrievalDoc.from_mapping(
+                    {
+                        "id": "population_pattern",
+                        "title": "人口分布特点与成因",
+                        "keywords": ["人口分布", "东密西疏"],
+                        "canonical_answer": "人口格局的原因包括东部季风区条件较好。",
+                        "teaching_points": ["结合图层解释人口分布。"],
+                    }
+                )
+            ]
+        )
+        result = engine.search("解释季风形成原因", limit=3)
+        self.assertTrue(result.insufficient)
+        self.assertEqual(result.hits, [])
+
     def test_de_head_missing_subject_abstains(self) -> None:
         result = self.engine.search("河流的航运价值怎么评价", limit=3)
         self.assertTrue(result.insufficient)
+
+    def test_high_specificity_qualifiers_must_be_covered(self) -> None:
+        for query in (
+            "七普的房价数据",
+            "上海2020年人口总数排名",
+            "上海老年人口比例资料",
+            "青浦区某个小区的常住人口",
+        ):
+            with self.subTest(query=query):
+                self.assertTrue(self.engine.search(query, limit=5).insufficient)
+
+    def test_high_specificity_alias_can_be_covered_by_equivalent_corpus_term(self) -> None:
+        engine = RetrievalEngine(
+            [
+                RetrievalDoc.from_mapping(
+                    {
+                        "id": "community_population",
+                        "title": "社区常住人口资料",
+                        "keywords": ["社区", "常住人口"],
+                        "summary": "社区尺度常住人口统计。",
+                    }
+                )
+            ]
+        )
+        result = engine.search("某个小区的常住人口", limit=3)
+        self.assertFalse(result.insufficient)
+        self.assertEqual(result.ids, ["community_population"])
 
     def test_region_only_query_returns_region_docs(self) -> None:
         result = self.engine.search("上海", limit=5)
