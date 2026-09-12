@@ -44,8 +44,9 @@ ALLOWED_OPS: Tuple[str, ...] = (
     "zonal_stats",
 )
 
-#: Operations that are reserved but not yet implemented; validator allows them
-#: to pass but the executor will report a clear "not implemented" error.
+#: Operations that are reserved but not yet implemented; the validator
+#: rejects them with a ``STEP_OP_NOT_IMPLEMENTED`` error so a workflow that
+#: can only fail in the worker never gets submitted.
 RESERVED_OPS: Tuple[str, ...] = (
     "heatmap",
     "add_label",
@@ -332,8 +333,19 @@ class WorkflowValidator:
             ))
             return errors  # cannot continue without op
         if op in self.reserved_ops:
-            # reserved but not implemented yet — not a hard error in validator
-            return errors  # short-circuit: param schema not yet defined here
+            # Reserved means designed but NOT implemented: reject up-front with
+            # a plain-language error so teachers never launch a workflow that
+            # can only fail halfway through in the worker.
+            errors.append(ValidationError(
+                code="STEP_OP_NOT_IMPLEMENTED",
+                message=f"op '{op}' is reserved but not implemented",
+                user_friendly=(
+                    f"操作「{op}」尚未实现，本次分析无法执行。"
+                    "请改用已实现的操作，或联系管理员启用该功能。"
+                ),
+                step_id=step_id,
+            ))
+            return errors
         if op not in self.allowed_ops:
             errors.append(ValidationError(
                 code="STEP_OP_NOT_ALLOWED",
