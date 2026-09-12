@@ -66,6 +66,30 @@ class AppConfigTest(unittest.TestCase):
             self.assertIn("WEBGIS_AI_OPENWEATHERMAP_API_KEY", weather_item["description"])
             self.assertEqual(catalog["default_id"], "amap_vector")
 
+    def test_weather_upstream_url_requires_key_with_actionable_error(self) -> None:
+        # 未配置密钥时必须显式失败（端点映射为 503），绝不静默降级。
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(os.environ, {}, clear=True):
+            config = AppConfig(root_dir=Path(temp_dir))
+            self.assertFalse(config.weather_basemap_enabled())
+            with self.assertRaises(ValueError) as raised:
+                config.weather_tile_upstream_url("precipitation_new", 4, 12, 9)
+            self.assertIn("WEBGIS_AI_OPENWEATHERMAP_API_KEY", str(raised.exception))
+
+    def test_saved_weather_basemap_degrades_only_when_key_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(os.environ, {}, clear=True):
+            config = AppConfig(root_dir=Path(temp_dir))
+            normalized = config.normalize_basemap({"id": "weather_precipitation"})
+            self.assertEqual(normalized["id"], "amap_vector")
+
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            os.environ,
+            {"WEBGIS_AI_OPENWEATHERMAP_API_KEY": "demo-weather-key"},
+            clear=True,
+        ):
+            config = AppConfig(root_dir=Path(temp_dir))
+            normalized = config.normalize_basemap({"id": "weather_precipitation"})
+            self.assertEqual(normalized["id"], "weather_precipitation")
+
     def test_weather_basemaps_use_backend_proxy_and_keep_key_server_side(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
             os.environ,

@@ -47,8 +47,17 @@ PUBLIC_AUTH_PATHS = {
     "/auth/login",
     "/auth/register",
 }
+# 天气瓦片由 OpenLayers 以 <img crossorigin="anonymous"> 加载：跨端口部署
+# （前端 5173 / 后端 18999）时该请求模式不携带会话 cookie，若要求登录态，
+# 每块瓦片都会 401 并被前端静默吞掉。瓦片代理只暴露 z/x/y 公共网格坐标，
+# OpenWeatherMap 密钥始终留在服务端，因此允许匿名 GET。
+WEATHER_TILE_PATH_PREFIX = "/tiles/weather/"
 REGISTRATION_MAX_BODY_BYTES = 8192
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+def _is_public_weather_tile(path: str) -> bool:
+    return path.startswith(WEATHER_TILE_PATH_PREFIX) and path.endswith(".png")
 
 
 def _extract_access_token(request: Request) -> str:
@@ -104,7 +113,7 @@ async def require_access_token(request: Request, call_next):
         return await call_next(request)
 
     if config.auth_mode == "legacy_token":
-        if request.url.path in config.auth_exempt_path_set():
+        if request.url.path in config.auth_exempt_path_set() or _is_public_weather_tile(request.url.path):
             return await call_next(request)
         supplied = _extract_access_token(request)
         if not supplied or not secrets.compare_digest(supplied, config.auth_token.strip()):
@@ -119,7 +128,9 @@ async def require_access_token(request: Request, call_next):
         )
         return await call_next(request)
 
-    if request.url.path in PUBLIC_AUTH_PATHS:
+    if request.url.path in PUBLIC_AUTH_PATHS or (
+        request.method in SAFE_METHODS and _is_public_weather_tile(request.url.path)
+    ):
         return await call_next(request)
 
     service = auth_service
@@ -1261,9 +1272,11 @@ def get_weather_tile(layer: str, z: int, x: int, y: int) -> Response:
     try:
         content, content_type = runtime.fetch_weather_tile(layer, z, x, y)
     except ValueError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        # 503：密钥未配置。文案直接可操作，前端据此提示教师；错误结果不缓存。
+        raise HTTPException(status_code=503, detail=str(exc), headers={"Cache-Control": "no-store"}) from exc
     except ConnectionError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        # 502：密钥已配置但上游不可用（配额、网络、无效密钥等）。
+        raise HTTPException(status_code=502, detail=f"天气瓦片上游不可用：{exc}", headers={"Cache-Control": "no-store"}) from exc
     return Response(content=content, media_type=content_type, headers={"Cache-Control": "public, max-age=300"})
 
 
