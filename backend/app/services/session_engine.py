@@ -20,6 +20,7 @@ from .agent_harness import (
 )
 from .assistant import ASSISTANT_TOOL_INPUT_SCHEMAS, ASSISTANT_TOOL_SCHEMA, AssistantService
 from .knowledge_base import KnowledgeBaseService
+from .knowledge_retrieval import RetrievalDoc, RetrievalEngine
 from .llm_planner import LLMPlanner
 from .map_layer_evidence import build_layer_evidence, visible_project_layers
 from .workflow_templates import INTERACTION_ALLOWED_TEMPLATES
@@ -133,24 +134,6 @@ IMAGE_WEB_RETRIEVAL_HINTS = (
     "verify latest",
 )
 IMAGE_FOLLOW_UP_HINTS = ("这张图", "这幅图", "刚才的图", "刚才的图片", "上一张图", "图里", "图中")
-MATCH_STOP_WORDS = {
-    "什么",
-    "怎么",
-    "为什么",
-    "当前",
-    "这个",
-    "那个",
-    "请问",
-    "分析",
-    "解释",
-    "说明",
-    "地图",
-    "图片",
-    "the",
-    "what",
-    "why",
-    "how",
-}
 
 # 只有真正缺少独立主语的省略式追问才继承上一问。不能仅凭“为什么/怎么”
 # 或句尾“呢”判断，否则教师切换主题时会把上一题错误拼入当前问题。
@@ -577,7 +560,12 @@ class KnowledgeEngine:
         self.config = config
         self.minimax_client = minimax_client
         self.resource_search = resource_search
-        self.knowledge_units = self._load_units()
+        self._knowledge_base = KnowledgeBaseService(self.config)
+        self._knowledge_units_fingerprint: tuple[tuple[int, int], tuple[int, int]] | None = None
+        self._knowledge_retrieval = RetrievalEngine([])
+        self._knowledge_units_by_id: Dict[str, Dict[str, Any]] = {}
+        self.knowledge_units: List[Dict[str, Any]] = []
+        self._refresh_knowledge_units(force=True)
 
     def answer(
         self,
@@ -1418,7 +1406,41 @@ class KnowledgeEngine:
         return scored
 
     def _load_units(self) -> List[Dict[str, Any]]:
-        return KnowledgeBaseService(self.config).build_engine_units()
+        return self._knowledge_base.build_engine_units()
+
+    @staticmethod
+    def _retrieval_doc_from_unit(unit: Dict[str, Any]) -> RetrievalDoc:
+        mapped = {
+            **unit,
+            "topic": unit.get("topic") or unit.get("domain") or "geo_concept",
+            "keywords": unit.get("keywords") or unit.get("tags") or [],
+            "summary": unit.get("summary") or unit.get("canonical_answer") or "",
+        }
+        materials = [
+            " ".join(
+                str(material.get(key) or "")
+                for key in ("title", "description")
+            ).strip()
+            for material in unit.get("materials", [])
+            if isinstance(material, dict)
+        ]
+        return RetrievalDoc.from_mapping(mapped, material_texts=materials)
+
+    def _refresh_knowledge_units(self, *, force: bool = False) -> None:
+        fingerprint = self._knowledge_base.engine_units_fingerprint()
+        if not force and fingerprint == self._knowledge_units_fingerprint:
+            return
+        units = self._load_units()
+        self.knowledge_units = units
+        self._knowledge_units_by_id = {
+            str(unit.get("id") or ""): unit
+            for unit in units
+            if str(unit.get("id") or "")
+        }
+        self._knowledge_retrieval = RetrievalEngine(
+            self._retrieval_doc_from_unit(unit) for unit in units
+        )
+        self._knowledge_units_fingerprint = fingerprint
 
     def _classify(self, question: str) -> str:
         lowered = (question or "").lower()
@@ -1740,6 +1762,7 @@ class KnowledgeEngine:
         )
 
     def _match_entry(self, question: str) -> Optional[Dict[str, Any]]:
+        self._refresh_knowledge_units()
         lowered = (question or "").lower()
         lowered = (
             lowered.replace("hu huanyong line", "胡焕庸线")
@@ -1747,32 +1770,20 @@ class KnowledgeEngine:
             .replace("heihe-tengchong line", "胡焕庸线")
             .replace("heihe-tengchong", "胡焕庸")
         )
-        def title_match_score(item: Dict[str, Any]) -> int:
-            title = str(item.get("title") or "").strip().lower()
-            if len(title) >= 2 and title in lowered:
-                return len(title)
-            return max((len(tag) for raw in item.get("tags", [])
-                        if len(tag := str(raw or "").strip().lower()) >= 2
-                        and tag not in MATCH_STOP_WORDS and tag in title and tag in lowered), default=0)
-
-        # A named region/topic in the title outranks a generic keyword in another card.
-        for item in sorted(self.knowledge_units, key=title_match_score, reverse=True):
-            title = str(item.get("title") or "").strip().lower()
-            tags = [str(tag or "").strip().lower() for tag in item.get("tags", [])]
-            meaningful_tags = [tag for tag in tags if len(tag) >= 2 and tag not in MATCH_STOP_WORDS]
-            if (len(title) >= 2 and title in lowered) or any(tag in lowered for tag in meaningful_tags):
-                return item
-            query_tokens = {
-                token
-                for token in re.findall(r"[a-z0-9_-]{3,}|[\u4e00-\u9fff]{2,}", lowered)
-                if token not in MATCH_STOP_WORDS
-            }
-            haystack_tokens = {
-                token
-                for token in re.findall(r"[a-z0-9_-]{3,}|[\u4e00-\u9fff]{2,}", " ".join([title, *meaningful_tags]))
-                if token not in MATCH_STOP_WORDS
-            }
-            if query_tokens and len(query_tokens & haystack_tokens) >= 2:
+        # A generic concept card is not evidence for a current population
+        # value. Keep these requests on the verified-online path unless the
+        # question names a stable concept such as the Hu line explicitly.
+        if _contains_any(lowered, TIME_SENSITIVE_HINTS) and _contains_any(
+            lowered,
+            ("人口总量", "人口数量", "人口数", "多少人口", "人口有多少", "人口排名", "人口比例"),
+        ):
+            return None
+        result = self._knowledge_retrieval.search(lowered, limit=3)
+        if result.insufficient:
+            return None
+        for hit in result.hits:
+            item = self._knowledge_units_by_id.get(hit.doc_id)
+            if item is not None:
                 return item
         return None
 

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { KnowledgeBaseItem, KnowledgeTopicSummary, RegionBinding, TeachingMaterial } from "../types";
 import { TeachingMaterialEditor } from "./TeachingMaterialEditor";
+import "./KnowledgePanel.css";
 
 export type KnowledgeQuery = {
   query: string;
@@ -97,6 +98,26 @@ function statusLabel(status?: string): string {
     return "仅存档";
   }
   return "知识条目";
+}
+
+function safeCitationUrl(url?: string): string {
+  const value = String(url || "").trim();
+  if (/^https?:\/\//i.test(value)) {
+    return value;
+  }
+  return "";
+}
+
+function openCitation(url: string): void {
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
+function emptyResultsMessage(query: KnowledgeQuery): string {
+  const parts = [query.query.trim(), query.topic.trim(), query.region.trim(), query.tag.trim()].filter(Boolean);
+  if (!parts.length) {
+    return "知识库暂无条目。可以新建条目，或从课堂图层一键登记资料。";
+  }
+  return `没有找到与「${parts.join("、")}」相关的资料。可以尝试更换关键词，或减少筛选条件后再检索。`;
 }
 
 function summaryPreview(value: string): string {
@@ -300,7 +321,8 @@ export function KnowledgePanel({
                           <div className="kb-result-main">
                             <strong>{item.title || "未命名条目"}</strong>
                             <small>
-                              {item.topic || "未分类"} · {item.region || "未标注区域"} · {formatDate(item.updated_at)}
+                              {item.topic || "未分类"} · {item.region || "未标注区域"}
+                              {item.time ? ` · ${item.time}` : " · 未标注年份"} · {formatDate(item.updated_at)}
                             </small>
                             <p>{summaryPreview(item.summary)}</p>
                           </div>
@@ -308,6 +330,7 @@ export function KnowledgePanel({
                         <div className="kb-result-footer">
                           <div className="kb-result-meta">
                             <span>{statusLabel(item.status)}</span>
+                            {item.source ? <span>来源：{item.source}</span> : null}
                             {item.keywords.slice(0, 3).map((keyword) => (
                               <span key={`${item.id}_${keyword}`}>{keyword}</span>
                             ))}
@@ -325,7 +348,9 @@ export function KnowledgePanel({
                     );
                   })
                 ) : (
-                  <div className="kb-empty">暂无知识库结果</div>
+                  <div className="kb-empty" data-testid="kb-empty">
+                    {loading ? "正在检索知识库…" : emptyResultsMessage(query)}
+                  </div>
                 )}
               </div>
             </div>
@@ -348,8 +373,30 @@ export function KnowledgePanel({
               <strong>{currentItem.title || "待整理条目"}</strong>
               <span>
                 {currentItem.topic || "未分类"} · {statusLabel(currentItem.status)}
+                {currentItem.time ? ` · ${currentItem.time}` : " · 未标注年份"}
+                {currentItem.source ? ` · 来源：${currentItem.source}` : ""}
               </span>
               <p>{summaryPreview(currentItem.summary)}</p>
+              {currentItem.citations?.length ? (
+                <div className="kb-citations" data-testid="kb-citations">
+                  <span>出处：</span>
+                  {currentItem.citations.map((citation, index) => {
+                    const url = safeCitationUrl(citation.url);
+                    return (
+                      <button
+                        key={`${citation.title}_${index}`}
+                        type="button"
+                        className="kb-citation-link"
+                        disabled={!url}
+                        title={url || "该出处未提供可打开的链接"}
+                        onClick={() => url && openCitation(url)}
+                      >
+                        {citation.title || citation.url}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
 
             {editOpen ? (

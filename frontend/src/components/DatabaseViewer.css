@@ -44,6 +44,9 @@
 .database-workbench .database-row-meta span { padding:0; background:transparent; font-size:11px; color:var(--text-dim); }
 .database-workbench .database-row-tags { gap:5px; }
 .database-workbench .database-row-tags span { border-radius:4px; padding:2px 5px; font-size:10px; color:var(--text-dim); background:var(--surface); max-width:100%; overflow-wrap:anywhere; }
+.database-workbench .database-row-citations { display:flex; flex-wrap:wrap; gap:8px; }
+.database-workbench .database-row-citations a { color:var(--accent); font-size:11px; text-decoration:none; overflow-wrap:anywhere; }
+.database-workbench .database-row-citations a:hover { text-decoration:underline; }
 .database-workbench .database-row-actions { align-self:center; flex-wrap:wrap; justify-content:flex-end; gap:6px; max-width:260px; }
 .database-workbench .database-row-actions button { min-width:48px; min-height:30px; padding:4px 9px; font-size:12px; font-weight:500; border-radius:6px; }
 .database-workbench .database-row-thumb { max-width:180px; max-height:110px; object-fit:contain; }

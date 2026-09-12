@@ -539,6 +539,8 @@ export type KnowledgeBaseItem = {
   materials: TeachingMaterial[];
   related_templates: unknown[];
   updated_at: string;
+  owner_user_id?: string;
+  retrieval_score?: number;
 };
 
 export type KnowledgeManifestResponse = {
@@ -557,6 +559,9 @@ export type KnowledgeSearchResponse = {
   tag: string;
   total: number;
   items: KnowledgeBaseItem[];
+  insufficient?: boolean;
+  message?: string;
+  from_cache?: boolean;
 };
 
 export type KnowledgeLayerRegisterResponse = {

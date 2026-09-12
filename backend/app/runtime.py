@@ -464,6 +464,19 @@ class WebGISRuntime:
         )
         return {"status": "success", "item": normalized}
 
+    def kb_delete_item(
+        self,
+        item_id: str,
+        owner_user_id: str = "",
+        include_all: bool = False,
+    ) -> Dict[str, Any]:
+        deleted = self.knowledge_base_service.delete_item(
+            item_id,
+            owner_user_id=owner_user_id,
+            include_all=include_all,
+        )
+        return {"status": "success", "item": deleted}
+
     def kb_register_layer(
         self,
         project_id: str,

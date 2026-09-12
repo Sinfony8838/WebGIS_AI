@@ -1173,6 +1173,21 @@ def upsert_kb_item(payload: KnowledgeItemRequest, request: Request) -> Dict[str,
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.delete("/kb/items/{item_id}")
+def delete_kb_item(item_id: str, request: Request) -> Dict[str, Any]:
+    context = _current_auth(request)
+    try:
+        return runtime.kb_delete_item(
+            item_id,
+            owner_user_id=str(context.user["user_id"]),
+            include_all=context.user.get("role") == "admin",
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if detail.startswith("Unknown knowledge item:") else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
 @app.post("/kb/layers/register")
 def register_kb_layer(payload: KnowledgeLayerRegisterRequest, request: Request) -> Dict[str, Any]:
     context = _current_auth(request)
