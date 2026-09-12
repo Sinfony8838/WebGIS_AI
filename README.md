@@ -16,7 +16,7 @@
 
 ### 1. 全屏课堂地图
 
-- 基于 OpenLayers 的全屏地图主舞台。
+- 默认进入 Cesium 3D 数字地球，并可切换到 OpenLayers 2D 全屏地图。
 - 支持高德标准、高德影像、高德浅灰和兼容 XYZ 底图。
 - 配置 OpenWeatherMap 后可叠加实时降水、云图、温度、风速、气压等天气瓦片。
 - 支持矢量图层、栅格覆盖层、POI 检索结果、课堂标注和测距结果。
@@ -72,7 +72,8 @@
 ### 6. 知识库与课程资料
 
 - 内置知识库 manifest 和地理知识条目。
-- 支持按关键词、主题、区域、标签检索。
+- 支持中文归一化、语义词组与区域/年份/指标约束检索，并可按主题、区域、标签显式筛选。
+- 普通教师只能查看公共条目和本人条目，管理员可查看全部；私有条目支持确认后删除，内置条目只读。
 - 支持将课堂图层注册为知识条目。
 - 支持上传或链接图片、视频、动画、文档、外部链接等教学素材。
 - 教学素材可绑定地区、图层、要素或行政编码。
@@ -86,7 +87,7 @@
 - 教学讲解：地理概念、区域地理、地图判读与 GIS 方法问答；默认使用自然、准确的中文回答，仅在用户明确需要教学设计时组织课堂提问等结构。
 - 课堂地图操作：切换底图、显示图层、应用模板、检索 POI、添加标注、读图讲解等；任何地图操作执行后都会附带教学解释。
 - 课堂追问与课后复盘：支持带上下文的连续追问，以及课后要点收束与下一步建议。
-- 文本输入和浏览器语音识别输入。
+- 文本输入，以及“智能交互”页签中的语音控制；本地流式 ASR 可用时优先使用，经 WebSocket 返回结果，不可用时在浏览器支持的情况下回退 Web Speech，否则使用文字输入。
 - 对话记忆、阶段状态展示和引用来源展示；高风险操作需教师确认后才执行。
 - 统一 Agent Harness：所有 assistant 模式共用可终止运行循环、结构化工具契约、执行前策略闸门、确认后重校验、停止前结果验证和隐私化追踪；详见 [AGENT_HARNESS.md](AGENT_HARNESS.md)。
 - 项目图片库：地图框选截图、本地图片和 AI 生成示意图都按项目保存，可加入助教进行连续识图问答。
@@ -94,12 +95,18 @@
 
 支持的 LLM / Vision 配置包括：
 
-- MiniMax：推荐 provider，走 Anthropic 兼容接口（`https://api.minimaxi.com/anthropic`，默认模型 `MiniMax-M2.7-highspeed`；若把 `WEBGIS_AI_MINIMAX_BASE_URL` 指到不含 `/anthropic` 的地址则回退 OpenAI Chat Completions 格式）。设置 `WEBGIS_AI_LLM_PROVIDER=minimax` + `WEBGIS_AI_MINIMAX_API_KEY` 启用；文档见 https://platform.minimaxi.com/docs/api-reference/text-anthropic-api 。
-- Xiaomi MiMo：旧默认 provider，兼容 OpenAI Chat Completions 风格接口（服务不可用时请切换到 MiniMax）。
+- MiniMax：当前唯一 LLM provider，走 Anthropic 兼容接口（`https://api.minimaxi.com/anthropic`，默认模型 `MiniMax-M2.7-highspeed`；若把 `WEBGIS_AI_MINIMAX_BASE_URL` 指到不含 `/anthropic` 的地址则回退 OpenAI Chat Completions 格式）。设置 `WEBGIS_AI_LLM_PROVIDER=minimax` + `WEBGIS_AI_MINIMAX_API_KEY` 启用；历史 `mimo` provider 值只会被归一为 `minimax`，MiMo 密钥变量不再生效。
 - MiniMax 图片理解 MCP：`understand_image` 视觉通道；可复用 `WEBGIS_AI_MINIMAX_API_KEY` 按量计费，旧的 `WEBGIS_AI_MINIMAX_TOKEN_PLAN_KEY` 名称继续兼容。
 - MiniMax 图片生成 API：普通余额直连 `https://api.minimaxi.com/v1/image_generation`，默认模型 `image-01`，复用 `WEBGIS_AI_MINIMAX_API_KEY`。
 
-### 8. GIS 分析工作流
+### 8. 教案设计、预演与课堂闭环
+
+- “共创教案”采用九步流程：需求确认、课标与学情、目标与重难点、核心问题与问题链、教学过程、题目匹配、GIS/AI 能力、预演检查、确认发布。
+- 可把一段完整需求生成整份待确认初稿，也可一键智能优化、采用当前建议并继续，或只修改当前环节；任何 AI 结果都不会自动替教师确认。
+- 正式教案可导出 DOCX，并可进入独立模拟测试，检查环节时长、题目答案、场景引用和教师确认结果。
+- 课堂会话记录环节推进、教师观察、口头提问和真实作答边界，课后可生成报告与练习卷。智能体的 `launch_question` 只在教师工作台呈现口头提问，不向学生端或投屏发布。
+
+### 9. GIS 分析工作流
 
 后端包含 PyQGIS worker 分析链路，前端通过“GIS 分析工作流”面板提交任务并通过 SSE 获取实时状态。
 
@@ -136,14 +143,15 @@
 
 ## 课程使用示例
 
-以《人口分布》为例，推荐使用“免配准依赖”的课堂流程：
+以《人口分布》为例，推荐使用“先设计、再预演、后上课”的免配准依赖流程：
 
-1. 使用高德浅灰底图作为主地图。
-2. 加载“人口专题包”，只使用内置人口矢量图层作为空间证据。
-3. 通过图层显隐对比人口分布、人口密度、人口迁移和胡焕庸线。
-4. 用标注工具标出东南稠密区、西北稀疏区、黑河、腾冲等关键位置。
-5. 让学生先描述，再用智能助教生成规范表达或追问。
-6. 最后导出带图层和标注的课堂截图，作为本节课的证据链。
+1. 在“共创教案”输入课题、年级、时长、学情和证据要求，生成完整待确认初稿。
+2. 逐步审核九个环节，完成题目匹配、GIS/AI 能力绑定和预演检查后再确认发布。
+3. 使用高德浅灰底图并加载“人口专题包”，只使用内置人口矢量图层作为空间证据。
+4. 通过图层显隐对比人口分布、人口密度、人口迁移和胡焕庸线。
+5. 用标注工具标出东南稠密区、西北稀疏区、黑河、腾冲等关键位置。
+6. 让学生先描述，再用智能助教生成规范表达或追问。
+7. 最后导出带图层和标注的课堂截图，并在课后报告中保留证据边界。
 
 更多课程场景：
 
@@ -158,7 +166,7 @@
 - 地图入口：默认进入 `Cesium` 3D 数字地球，并可切换为 `OpenLayers` 2D 地图
 - 后端：`FastAPI`
 - GIS 工作流：`PyQGIS worker`
-- 状态模型：`projects / layers / jobs / artifacts / conversations / workflows`
+- 状态模型：`projects / layers / lessons / lesson-designs / class-sessions / jobs / artifacts / conversations / workflows`
 - 实时状态：`SSE job stream` / `SSE workflow stream`
 
 ## 目录结构
@@ -182,6 +190,9 @@ frontend/
     lib/                    # 共享前端工具
 scripts/
   start_webgis_ai.ps1       # Windows 启动脚本
+docs/
+  README.md                  # 当前说明、QA 快照与历史材料索引
+.env.example                 # 常用无密钥配置示例
 start_webgis_ai.cmd         # 一键启动入口
 ```
 
@@ -195,10 +206,10 @@ start_webgis_ai.cmd         # 一键启动入口
 .\start_webgis_ai.cmd
 ```
 
-首次缺依赖时可自动安装并打开浏览器：
+该入口已经固定启用缺失依赖安装和浏览器打开，不要重复传入同名开关。需要指定 Python 或不希望自动打开浏览器时，直接调用 PowerShell 脚本：
 
 ```powershell
-.\start_webgis_ai.cmd -InstallIfMissing -OpenBrowser
+.\scripts\start_webgis_ai.ps1 -PythonExe "C:\Path\To\Python312\python.exe" -InstallIfMissing
 ```
 
 默认访问地址：
@@ -226,6 +237,10 @@ npm run dev
 
 ## 常用环境变量
 
+可把 [`.env.example`](.env.example) 作为常用配置示例；完整变量说明以本节和[上线配置与安全核查](docs/上线配置与安全核查.md)为准。示例不含真实密钥。当前启动器和后端不会自动读取仓库根目录的 `.env`：后端变量应写入当前进程或用户环境，前端 `VITE_*` 变量应在构建前设置，或写入不提交的 `frontend/.env.local`。
+
+一键启动器会采用 `WEBGIS_AI_HOST` 和 `WEBGIS_AI_PORT`。修改后端端口或让其他设备访问时，还必须把 `VITE_API_BASE_URL` 设置为浏览器可访问的同一后端地址；`0.0.0.0` 只能用于监听，不能作为其他设备的访问地址。
+
 基础服务：
 
 - `WEBGIS_AI_HOST`
@@ -240,14 +255,11 @@ npm run dev
 - `WEBGIS_AI_AMAP_WEB_SERVICE_KEY`
 - `WEBGIS_AI_AMAP_POI_POLYGON_URL`
 - `WEBGIS_AI_OPENWEATHERMAP_API_KEY`
-- `WEBGIS_AI_OPENWEATHERMAP_LAYER`
+- `WEBGIS_AI_OPENWEATHERMAP_LAYER`：兼容单层天气代理的默认 layer；菜单中的五个天气预设使用各自固定 layer
 
 LLM / Vision：
 
-- `WEBGIS_AI_LLM_PROVIDER`：`mimo` 或 `minimax`
-- `WEBGIS_AI_MIMO_API_KEY`
-- `WEBGIS_AI_MIMO_BASE_URL`
-- `WEBGIS_AI_MIMO_MODEL`
+- `WEBGIS_AI_LLM_PROVIDER`：仅支持 `minimax`；其他历史值会归一为 `minimax`
 - `WEBGIS_AI_MINIMAX_API_KEY`
 - `WEBGIS_AI_MINIMAX_BASE_URL`
 - `WEBGIS_AI_MINIMAX_MODEL`
@@ -271,6 +283,13 @@ GIS 工作流：
 - `QGIS_ROOT`
 - `WEBGIS_AI_QGIS_ROOT`
 - `WEBGIS_AI_QGIS_PREFIX_SUBPATH`
+- `WEBGIS_AI_QGIS_PYTHON`
+
+本地语音识别：
+
+- `WEBGIS_AI_VOICE_ASR_ENABLED`：默认开启；模型不可用时回退浏览器识别或文字输入
+- `WEBGIS_AI_VOICE_MODEL_DIR`：直接指定语音模型根目录
+- `WEBGIS_AI_VOICE_MODEL_STABLE_ROOT`：覆盖跨 worktree 共用的模型缓存根目录
 
 资料搜索：
 
@@ -278,14 +297,16 @@ GIS 工作流：
 
 教师账号与安全：
 
-- `WEBGIS_AI_AUTH_MODE`：默认 `users`；兼容模式可设为 `legacy_token` 或 `disabled`
+- `WEBGIS_AI_AUTH_MODE`：默认 `users`；后端兼容模式可设为 `legacy_token` 或 `disabled`。当前浏览器前端不会为普通 API 注入 legacy Bearer 令牌
 - `WEBGIS_AI_AUTH_DB`：可选的独立鉴权 SQLite 路径，默认 `backend/data/auth/auth.db`
 - `WEBGIS_AI_BOOTSTRAP_KEY`：非本机首次初始化管理员时必须提供
 - `WEBGIS_AI_COOKIE_SECURE`：HTTPS 部署时设为 `true`
 - `WEBGIS_AI_SESSION_IDLE_MINUTES`：会话空闲有效期，默认 480 分钟
 - `WEBGIS_AI_SESSION_MAX_HOURS`：会话绝对有效期，默认 24 小时
+- `WEBGIS_AI_REGISTRATION_MODE`：默认 `approval`；可设为 `closed`、`approval` 或仅受控环境使用的 `open`
+- `WEBGIS_AI_TRUST_PROXY_HEADERS`：默认 `false`；仅在可信代理覆盖 `CF-Connecting-IP` 时开启
 
-默认用户模式下，首次打开前端会进入管理员初始化页。账号使用邮箱登录，以昵称作为界面显示名；密码至少 8 位，并须包含字母、数字、特殊符号中的至少两种。系统不开放注册，之后仅管理员可以创建教师或其他管理员账号。项目、课时、课堂记录、工作流、产物和教师上传资料按教师隔离，管理员可查看全部。
+默认用户模式下，首次打开前端会进入管理员初始化页。账号使用邮箱登录，以昵称作为界面显示名；密码至少 8 位，并须包含字母、数字、特殊符号中的至少两种。默认 `approval` 模式允许提交教师注册申请，但必须经管理员审核后才能登录；设为 `closed` 才会关闭公开注册入口。项目、课时、课堂记录、工作流、产物和教师上传资料按教师隔离，管理员可查看全部。
 
 ## 关键接口
 
@@ -293,11 +314,14 @@ GIS 工作流：
 - `GET /auth/bootstrap-status`
 - `POST /auth/bootstrap`
 - `POST /auth/login`
+- `POST /auth/register`
 - `GET /auth/me`
 - `POST /auth/logout`
 - `POST /auth/change-password`
 - `GET /admin/users`
 - `GET /admin/audit-logs`
+- `GET /admin/registration-requests`
+- `POST /admin/registration-requests/{request_id}/review`
 - `GET /llm/status`
 - `GET /basemaps`
 - `GET /teaching-maps`
@@ -318,14 +342,26 @@ GIS 工作流：
 - `GET /kb/search`
 - `GET /kb/topics`
 - `POST /kb/items`
+- `DELETE /kb/items/{item_id}`
 - `POST /kb/layers/register`
 - `POST /kb/materials/upload`
 - `POST /kb/materials/link`
 - `GET /resources/search`
+- `GET /lesson-design/sessions`
+- `POST /lesson-design/sessions`
+- `POST /lesson-design/sessions/{design_id}/turns`
+- `POST /lesson-design/sessions/{design_id}/sections/{section_id}/resolve`
+- `POST /lesson-design/sessions/{design_id}/finalize`
+- `POST /lesson-rehearsals`
+- `GET /lesson-rehearsals/{rehearsal_id}/report`
+- `POST /lessons/{lesson_id}/exports/docx`
+- `POST /class-sessions`
+- `POST /class-sessions/{session_id}/end`
 - `GET /workflow/templates`
 - `POST /workflow/submit`
 - `GET /workflow/history`
 - `GET /workflow/{workflow_id}`
+- `POST /workflow/{workflow_id}/cancel`
 - `GET /workflow/{workflow_id}/stream`
 - `GET /workflow/{workflow_id}/artifacts`
 - `GET /outputs`
@@ -358,10 +394,14 @@ npm test -- src/__tests__/voiceStream.test.ts src/__tests__/CopilotWidget.test.t
 
 ## 当前边界
 
-分支集成与本轮实测见 [INTEGRATION_REVIEW.md](INTEGRATION_REVIEW.md)。GIS 验收脚本使用 `WEBGIS_TEST_BASE` 指定测试后端，`WEBGIS_TEST_PROJECT` 指定测试项目；矩阵和计时脚本未指定项目时会创建新测试项目。认证服务需要通过进程环境提供 `WEBGIS_TEST_EMAIL`、`WEBGIS_TEST_PASSWORD`，不要把账号密码写入脚本。无账号模式仅适用于显式关闭认证的本地隔离验收服务。`set_layer_visibility.py` 必须指定测试项目，会修改该项目所有图层的可见性。
+文档入口和时效边界见 [docs/README.md](docs/README.md)。[INTEGRATION_REVIEW.md](INTEGRATION_REVIEW.md) 是 2026-09-08 的历史集成复验记录，其中提交、测试数量、端口和运行状态不得当作当前结论复用。GIS 验收脚本使用 `WEBGIS_TEST_BASE` 指定测试后端，`WEBGIS_TEST_PROJECT` 指定测试项目；矩阵和计时脚本未指定项目时会创建新测试项目。认证服务需要通过进程环境提供 `WEBGIS_TEST_EMAIL`、`WEBGIS_TEST_PASSWORD`，不要把账号密码写入脚本。无账号模式仅适用于显式关闭认证的本地隔离验收服务。`set_layer_visibility.py` 必须指定测试项目，会修改该项目所有图层的可见性。
 
 - 图片覆盖层和课本地图依赖人工配准，`bounds` 不准时不应作为课堂证据主图层。
 - POI、天气、大模型和视觉读图均依赖外部 Key；未配置时系统会降级或提示不可用。
+- 默认 `users` 模式下 `/health` 是公开接口且包含本机运行目录；公网部署必须按[上线配置与安全核查](docs/上线配置与安全核查.md)在网关限制访问或修改响应内容。
 - GIS 工作流以模板化分析为主，适合课堂常见空间分析，不等同于完整桌面 GIS。
+- 工作流后端支持取消并能正确显示“已取消”，但当前前端尚未提供主动取消按钮。
+- 当前没有独立学生登录或作答提交端；报告可以处理 session 中已有的真实 responses，但这不代表仓库已完成学生端采集闭环。
+- 当前端到端教案、班课、报告与练习验收以人口地理单元为基线；气候、区域和城市示例复用的是地图、资料或工作流能力，不代表已经具备同等深度的完整课程包。
 - 当前主课堂入口默认使用 Cesium 3D 数字地球，同时保留 OpenLayers 2D 模式切换能力。
-- 项目不再维护旧的 Word / PPT 教案产物链路、Electron 桌面壳和 OpenClaw 教学蓝图链路。
+- 项目不再维护旧的 Word / PPT 批量产物链路、Electron 桌面壳和 OpenClaw 教学蓝图链路；当前教案工作台仍支持将已确认教案导出为 DOCX。

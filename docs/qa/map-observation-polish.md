@@ -60,7 +60,7 @@
 
 - 三维导出成图：`backend/data/outputs/project_dfecc94e6d6547c5839f1d5c47dc8772/snapshot_job_b2905e22bf3242fc91614e2c88fbdb9e.png`
 - 二维导出成图：同目录 `snapshot_job_ad8527d52d284118b03cbe2b850d8822.png`
-- 浏览器目视截图：`C:\Users\zcyxn\.zcode\cli\artifacts\sess_f1ccd48f-d56c-4f63-b6ca-65c6cae59b02\`（`call_67277652…` 陆家嘴浅色主题悬停与面板、`call_1be7c34f…` 笔迹锚定复核、`call_bae2703a…`/`call_8bf5d451…` 主界面与区域按钮）
+- 浏览器目视截图：原验收会话的本机 `.zcode/cli/artifacts/` 临时目录（未纳入仓库，后续检出无法据此复现；当次记录覆盖陆家嘴浅色主题悬停与面板、笔迹锚定、主界面与区域按钮）
 
 ## 3. 本轮修复（1 项，生产文件 2 个）
 

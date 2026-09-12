@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import os
 import tempfile
 import unittest
 from unittest.mock import Mock
@@ -12,10 +13,12 @@ from backend.app.runtime import WebGISRuntime
 from backend.app.store import RuntimeStore
 
 
-# 真实题库（私有资产，不入库）：目录不存在时跳过，而不是失败。
-REAL_BANK_DIR = (
-    Path(r"C:\Users\zcyxn\Desktop\WebGIS-AI") / "人口专题题库"
-    / "专题08 人口（全国通用）-【好题汇编】五年（2016-2025）高考地理真题分类汇编"
+# 真实题库（私有资产，不入库）：默认从仓库内忽略目录读取，也可用环境变量
+# 指向外部副本；目录不存在时跳过，而不是失败。
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+REAL_BANK_DIR = Path(
+    os.environ.get("WEBGIS_TEST_REAL_BANK_DIR")
+    or REPOSITORY_ROOT / "人口专题题库" / "专题08 人口（全国通用）-【好题汇编】五年（2016-2025）高考地理真题分类汇编"
 )
 REAL_BANK_ORIGINAL = REAL_BANK_DIR / "专题08 人口（全国通用）（原卷版）.docx"
 REAL_BANK_ANALYSIS = REAL_BANK_DIR / "专题08 人口（全国通用）（解析版）.docx"

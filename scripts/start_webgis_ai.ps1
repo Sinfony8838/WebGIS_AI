@@ -31,11 +31,18 @@ function Resolve-Python312 {
         $candidates.Add($RequestedPythonExe)
     }
 
+    $localPython312 = $null
+    if ($env:LOCALAPPDATA) {
+        $localPython312 = Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"
+    }
+
     @(
-        "C:\Users\zcyxn\AppData\Local\Programs\Python\Python312\python.exe",
+        $localPython312,
         "D:\Anaconda3\python.exe"
     ) | ForEach-Object {
-        $candidates.Add($_)
+        if ($_) {
+            $candidates.Add($_)
+        }
     }
 
     try {
@@ -258,42 +265,31 @@ $stateDir = Join-Path $repoRoot "backend\data\state"
 $stateFile = Join-Path $stateDir "startup_processes.json"
 
 $envNames = @(
+    "WEBGIS_AI_HOST",
+    "WEBGIS_AI_PORT",
+    "VITE_API_BASE_URL",
     "WEBGIS_AI_LLM_PROVIDER",
-    "WEBGIS_AI_MIMO_API_KEY",
-    "WEBGIS_AI_MIMO_BASE_URL",
-    "WEBGIS_AI_MIMO_MODEL",
     "WEBGIS_AI_MINIMAX_API_KEY",
     "WEBGIS_AI_MINIMAX_BASE_URL",
     "WEBGIS_AI_MINIMAX_MODEL",
     "WEBGIS_AI_VISION_PROVIDER",
     "WEBGIS_AI_VISION_ENABLED",
     "WEBGIS_AI_VISION_MODEL",
-    "MIMO_API_KEY",
-    "MIMO_BASE_URL",
-    "MIMO_MODEL",
-    "XIAOMI_MIMO_API_KEY",
     "MINIMAX_API_KEY",
-    "MINIMAX_ANTHROPIC_BASE_URL",
+    "MINIMAX_BASE_URL",
     "MINIMAX_MODEL",
     "QGIS_ROOT",
     "WEBGIS_AI_QGIS_ROOT",
     "WEBGIS_AI_QGIS_PYTHON"
 )
 foreach ($name in $envNames) {
+    if ([Environment]::GetEnvironmentVariable($name, "Process")) {
+        continue
+    }
     $value = [Environment]::GetEnvironmentVariable($name, "User")
     if ($value) {
         Set-Item -Path "Env:$name" -Value $value
     }
-}
-
-if (-not $env:MIMO_API_KEY -and $env:WEBGIS_AI_MIMO_API_KEY) {
-    $env:MIMO_API_KEY = $env:WEBGIS_AI_MIMO_API_KEY
-}
-if (-not $env:MIMO_BASE_URL -and $env:WEBGIS_AI_MIMO_BASE_URL) {
-    $env:MIMO_BASE_URL = $env:WEBGIS_AI_MIMO_BASE_URL
-}
-if (-not $env:MIMO_MODEL -and $env:WEBGIS_AI_MIMO_MODEL) {
-    $env:MIMO_MODEL = $env:WEBGIS_AI_MIMO_MODEL
 }
 
 function Resolve-QgisRoot {
@@ -351,7 +347,13 @@ if ($nodeCommand) {
 $nodeExe = $nodeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 
 if (-not $nodeExe) {
-    throw "Node.js was not found. Install Node.js 20+ and retry."
+    throw "Node.js was not found. Install Node.js 22+ and retry."
+}
+
+$nodeVersionText = ((& $nodeExe --version) | Select-Object -First 1).ToString().Trim().TrimStart("v")
+$nodeVersion = [version]"0.0"
+if (-not [version]::TryParse($nodeVersionText, [ref]$nodeVersion) -or $nodeVersion -lt [version]"22.0") {
+    throw "Node.js 22+ is required by the current frontend dependencies. Found: $nodeVersionText"
 }
 
 $npmCli = Join-Path (Split-Path -Parent $nodeExe) "node_modules\npm\bin\npm-cli.js"
@@ -379,13 +381,33 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host ""
 }
 
-$backendUrl = "http://127.0.0.1:18999"
+$backendHost = if ($env:WEBGIS_AI_HOST) { $env:WEBGIS_AI_HOST.Trim() } else { "127.0.0.1" }
+if ($backendHost -notmatch '^(?:[A-Za-z0-9.\-]+|::|\[::\])$') {
+    throw "WEBGIS_AI_HOST contains unsupported characters: $backendHost"
+}
+$backendBindHost = if ($backendHost -eq "[::]") { "::" } else { $backendHost }
+
+$backendPort = 18999
+if ($env:WEBGIS_AI_PORT) {
+    $parsedBackendPort = 0
+    if (-not [int]::TryParse($env:WEBGIS_AI_PORT.Trim(), [ref]$parsedBackendPort) -or $parsedBackendPort -lt 1 -or $parsedBackendPort -gt 65535) {
+        throw "WEBGIS_AI_PORT must be an integer from 1 to 65535: $env:WEBGIS_AI_PORT"
+    }
+    $backendPort = $parsedBackendPort
+}
+
+$backendHealthHost = $backendBindHost
+if ($backendBindHost -in @("0.0.0.0", "::")) {
+    $backendHealthHost = "127.0.0.1"
+}
+
+$backendUrl = "http://${backendHealthHost}:$backendPort"
 $frontendUrl = "http://127.0.0.1:5173"
 
-$backendCommand = "& '$pythonExe' -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 18999"
+$backendCommand = "& '$pythonExe' -m uvicorn backend.app.main:app --reload --host '$backendBindHost' --port $backendPort"
 $frontendCommand = "& '$nodeExe' '$npmCli' run dev"
 
-$backendProcess = Start-OrReuseService -Name "backend" -Title "WebGIS-AI Backend" -WorkingDirectory $repoRoot -Command $backendCommand -HealthUrl "$backendUrl/health" -Port 18999
+$backendProcess = Start-OrReuseService -Name "backend" -Title "WebGIS-AI Backend" -WorkingDirectory $repoRoot -Command $backendCommand -HealthUrl "$backendUrl/health" -Port $backendPort
 $frontendProcess = Start-OrReuseService -Name "frontend" -Title "WebGIS-AI Frontend" -WorkingDirectory $frontendRoot -Command $frontendCommand -HealthUrl $frontendUrl -Port 5173
 
 $backendProcessId = if ($backendProcess) { $backendProcess.Id } else { $null }
