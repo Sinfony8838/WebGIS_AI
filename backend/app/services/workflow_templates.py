@@ -274,6 +274,19 @@ def _template_hu_line_compare(message: str, params: Dict[str, Any]) -> TemplateM
     area_field = str(params.get("area_field") or "").strip()
     density_field = str(params.get("density_field") or "density")
     project_id = str(params.get("project_id") or "")
+    side_field = "hu_side"
+
+    # Classic Hu Line endpoints (黑河/爱辉 → 腾冲), lon/lat degrees. A province
+    # whose centroid is left of the directed line A→B counts as west side.
+    ax, ay = 127.5, 50.2
+    bx, by = 98.5, 24.7
+    dx = bx - ax
+    dy = by - ay
+    side_expression = (
+        f"CASE WHEN {dx} * ( y(centroid($geometry)) - {ay} ) "
+        f"- {dy} * ( x(centroid($geometry)) - {ax} ) > 0 "
+        f"THEN 'east' ELSE 'west' END"
+    )
 
     steps: List[Dict[str, Any]] = [
         {
@@ -326,16 +339,66 @@ def _template_hu_line_compare(message: str, params: Dict[str, Any]) -> TemplateM
             "output_bindings": {"geojson": "thematic_geojson", "style": "thematic_style"},
         },
         {
+            # Real east/west split: sign test of the province centroid against
+            # the directed Hu Line (A→B). cross > 0 = east (populous) side.
+            "id": "s6",
+            "op": "calculate_field",
+            "params": {
+                "input": f"${{{thematic_input_id}.layer}}",
+                "field": side_field,
+                "expression": side_expression,
+                "type": "string",
+            },
+            "depends_on": [thematic_input_id],
+            "output_bindings": {"layer": "provinces_with_side"},
+        },
+        {
+            "id": "s7e",
+            "op": "filter_features",
+            "params": {"input": "${s6.layer}", "expression": f"\"{side_field}\" = 'east'"},
+            "depends_on": ["s6"],
+            "output_bindings": {"layer": "hu_east"},
+        },
+        {
+            "id": "s7w",
+            "op": "filter_features",
+            "params": {"input": "${s6.layer}", "expression": f"\"{side_field}\" = 'west'"},
+            "depends_on": ["s6"],
+            "output_bindings": {"layer": "hu_west"},
+        },
+        {
+            "id": "s8e",
+            "op": "export_geojson",
+            "params": {"input": "${s7e.layer}", "name": "hu_east_side", "target_crs": "EPSG:4326"},
+            "depends_on": ["s7e"],
+            "output_bindings": {"geojson": "hu_east_geojson"},
+        },
+        {
+            "id": "s8w",
+            "op": "export_geojson",
+            "params": {"input": "${s7w.layer}", "name": "hu_west_side", "target_crs": "EPSG:4326"},
+            "depends_on": ["s7w"],
+            "output_bindings": {"geojson": "hu_west_geojson"},
+        },
+        {
+            # Per-side comparison travels in the stats rows: every province row
+            # is tagged with hu_side, and count/summary reflect both sides.
+            # "name" rides along so rows stay readable; the primary numeric
+            # field still drives the top-N ordering.
             "id": "s5",
             "op": "aggregate_stats",
             "params": {
-                "input": f"${{{thematic_input_id}.layer}}",
-                "fields": [population_field, thematic_field] if thematic_field != population_field else [population_field],
-                "label_field": "name",
-                "top": 10,
-                "title": "胡焕庸线两侧统计",
+                "input": "${s6.layer}",
+                "fields": (
+                    [population_field, thematic_field, "name"]
+                    if thematic_field != population_field
+                    else [population_field, "name"]
+                ),
+                "label_field": side_field,
+                "top": 40,
+                "title": "胡焕庸线两侧统计（每省标注东侧/西侧）",
             },
-            "depends_on": [thematic_input_id],
+            "depends_on": ["s6"],
             "output_bindings": {"stats": "stats"},
         },
     ])
@@ -349,6 +412,8 @@ def _template_hu_line_compare(message: str, params: Dict[str, Any]) -> TemplateM
             "geojson": "${s4.geojson}",
             "style": "${s4.style}",
             "stats": "${s5.stats}",
+            "hu_east_geojson": "${s8e.geojson}",
+            "hu_west_geojson": "${s8w.geojson}",
         },
     }
     return TemplateMatch(
@@ -360,6 +425,7 @@ def _template_hu_line_compare(message: str, params: Dict[str, Any]) -> TemplateM
             "population_field": population_field,
             "area_field": area_field,
             "density_field": density_field,
+            "hu_side_field": side_field,
         },
     )
 

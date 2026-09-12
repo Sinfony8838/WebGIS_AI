@@ -107,3 +107,17 @@ it("continues receiving events if the initial HTTP request fails", async () => {
   expect(result.current.status).toBe("error");
   expect(result.current.error?.code).toBe("FAILED");
 });
+
+it("shows a cancelled run as cancelled when the terminal event carries the record", async () => {
+  const snapshot = deferred<WorkflowRecord>();
+  vi.mocked(fetchWorkflow).mockReturnValue(snapshot.promise);
+  const { result } = renderHook(() => useWorkflowStream("wf1"));
+  await act(async () => snapshot.resolve(record("wf1")));
+  act(() => FakeEventSource.instances[0].emit("workflow_error", {
+    workflow_id: "wf1",
+    error: { code: "STEP_CANCELLED", message: "cancelled", user_friendly: "已取消本次分析。" },
+    workflow: { ...record("wf1"), status: "cancelled" }
+  }));
+  expect(result.current.status).toBe("cancelled");
+  expect(result.current.error?.code).toBe("STEP_CANCELLED");
+});
