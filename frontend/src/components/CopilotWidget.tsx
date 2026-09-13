@@ -77,19 +77,6 @@ const CAPABILITY_CHIPS: Array<{ key: string; label: string; prompt: string }> = 
   }
 ];
 
-// 智能交互 Tab 的控制快捷芯片：点击即以文字指令提交（interaction 模式），
-// 全部命中后端规则快速通道 —— 毫秒级响应，零 LLM 成本。
-const INTERACTION_CHIPS: Array<{ key: string; label: string; prompt: string }> = [
-  { key: "globe", label: "三维地球", prompt: "切换到三维地球" },
-  { key: "plane", label: "二维地图", prompt: "切换到二维平面地图" },
-  { key: "layers", label: "图层管理", prompt: "打开图层管理器" },
-  { key: "database", label: "数据库", prompt: "打开数据库面板" },
-  { key: "next-stage", label: "下一环节", prompt: "进入下一个教学环节" },
-  { key: "hu-line", label: "胡焕庸线分析", prompt: "做一个胡焕庸线对比分析" },
-  { key: "start-class", label: "开始上课", prompt: "开始上课" },
-  { key: "end-class", label: "结束上课", prompt: "结束上课" }
-];
-
 // planner 徽标：让教师看到本轮走的是快速通道还是 AI 规划。
 const PLANNER_BADGES: Record<string, { label: string; cls: string }> = {
   interaction_rule: { label: "快速通道", cls: "planner-rule" },
@@ -1045,7 +1032,7 @@ export function CopilotWidget({
 
   return (
     <section
-      className={`copilot-widget${compactLayout ? " compact" : ""}`}
+      className={`copilot-widget${compactLayout ? " compact" : ""}${interactionActive ? " interaction-active" : ""}`}
       style={{ left: panelRect.x, top: panelRect.y, width: panelRect.width, height: panelRect.height }}
     >
       <header className="copilot-widget-header" onPointerDown={(event) => startDrag("panel", event, panelRect)}>
@@ -1249,7 +1236,7 @@ export function CopilotWidget({
           </div>
         </div>
 
-        {imageGenOpen ? (
+        {imageGenOpen && !interactionActive ? (
 
           <form
 
@@ -1343,46 +1330,48 @@ export function CopilotWidget({
 
 
         <form
-          className={`copilot-widget-form${imageDragActive ? " image-drag-active" : ""}`}
-          onDragEnter={(event) => {
+          className={`copilot-widget-form${!interactionActive && imageDragActive ? " image-drag-active" : ""}`}
+          onDragEnter={interactionActive ? undefined : (event) => {
             event.preventDefault();
             if (!busy) setImageDragActive(true);
           }}
-          onDragOver={(event) => event.preventDefault()}
-          onDragLeave={(event) => {
+          onDragOver={interactionActive ? undefined : (event) => event.preventDefault()}
+          onDragLeave={interactionActive ? undefined : (event) => {
             if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
               setImageDragActive(false);
             }
           }}
-          onDrop={handleImageDrop}
+          onDrop={interactionActive ? undefined : handleImageDrop}
           onSubmit={(event) => {
             event.preventDefault();
             onSubmit();
           }}
         >
-          <div className="copilot-capability-chips" data-testid="copilot-capability-chips">
-            {(interactionActive ? INTERACTION_CHIPS : orderedChips).map((chip) => (
-              <button
-                key={chip.key}
-                type="button"
-                className="copilot-capability-chip"
-                data-testid={`copilot-chip-${chip.key}`}
-                onClick={() => {
-                  if (!interactionActive && chip.key === "generate-image") {
-                    setImageGenOpen((open) => !open);
-                    return;
-                  }
-                  if (onQuickPrompt) {
-                    onQuickPrompt(chip.prompt);
-                  }
-                }}
-                disabled={busy}
-              >
-                {chip.label}
-              </button>
-            ))}
-          </div>
-          {pendingImage ? (
+          {!interactionActive ? (
+            <div className="copilot-capability-chips" data-testid="copilot-capability-chips">
+              {orderedChips.map((chip) => (
+                <button
+                  key={chip.key}
+                  type="button"
+                  className="copilot-capability-chip"
+                  data-testid={`copilot-chip-${chip.key}`}
+                  onClick={() => {
+                    if (chip.key === "generate-image") {
+                      setImageGenOpen((open) => !open);
+                      return;
+                    }
+                    if (onQuickPrompt) {
+                      onQuickPrompt(chip.prompt);
+                    }
+                  }}
+                  disabled={busy}
+                >
+                  {chip.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {!interactionActive && pendingImage ? (
             <div className="copilot-image-preview" data-testid="copilot-image-preview">
               <img src={pendingImage.public_url} alt={pendingImage.title || "待发送图片"} />
               <div>
@@ -1401,35 +1390,39 @@ export function CopilotWidget({
               placeholder={inputPlaceholder}
               onChange={(event) => onInputChange(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && (inputValue.trim() || pendingImage) && !busy) {
+                if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && (inputValue.trim() || (!interactionActive && pendingImage)) && !busy) {
                   event.preventDefault();
                   onSubmit();
                 }
               }}
             />
             <div className="copilot-composer-actions">
-              <input
-                ref={imageInputRef}
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
-                className="copilot-image-input"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) onUploadImage(file);
-                  event.currentTarget.value = "";
-                }}
-              />
+              {!interactionActive ? (
+                <input
+                  ref={imageInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  className="copilot-image-input"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) onUploadImage(file);
+                    event.currentTarget.value = "";
+                  }}
+                />
+              ) : null}
               <div className="copilot-composer-tools">
-                <button
-                  type="button"
-                  className="copilot-attach-button"
-                  onClick={() => imageInputRef.current?.click()}
-                  disabled={busy}
-                  aria-label="上传图片"
-                  title="上传图片"
-                >
-                  ＋ 图片
-                </button>
+                {!interactionActive ? (
+                  <button
+                    type="button"
+                    className="copilot-attach-button"
+                    onClick={() => imageInputRef.current?.click()}
+                    disabled={busy}
+                    aria-label="上传图片"
+                    title="上传图片"
+                  >
+                    ＋ 图片
+                  </button>
+                ) : null}
                 {interactionActive ? (
                   <>
                     <button
@@ -1503,7 +1496,7 @@ export function CopilotWidget({
                 <span className="copilot-composer-hint" aria-hidden="true">
                   ⌘ / Ctrl + Enter 发送
                 </span>
-                <button type="submit" className="copilot-send-button" disabled={busy || (!inputValue.trim() && !pendingImage)}>
+                <button type="submit" className="copilot-send-button" disabled={busy || (!inputValue.trim() && (!pendingImage || interactionActive))}>
                   发送给助教
                 </button>
               </div>
