@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$RepoRoot = "",
     [string]$Domain = "webgisai.com",
@@ -54,6 +54,18 @@ function Wait-HttpReady {
     throw "服务未按时就绪：$Url"
 }
 
+function Test-HttpReady {
+    param([string]$Url)
+
+    try {
+        $response = Invoke-RestMethod -Uri $Url -Method Get -TimeoutSec 3
+        return $null -ne $response
+    }
+    catch {
+        return $false
+    }
+}
+
 function Convert-SecureStringToPlainText {
     param([Security.SecureString]$Value)
 
@@ -80,6 +92,7 @@ $frontendDir = Join-Path $repoRoot "frontend"
 $frontendDist = Join-Path $frontendDir "dist"
 $runtimeDir = Join-Path $repoRoot "backend\data\public-runtime"
 $caddyConfig = Join-Path $PSScriptRoot "Caddyfile"
+$cloudflaredRepairScript = Join-Path $PSScriptRoot "Repair-CloudflaredTunnel.ps1"
 
 $pythonCandidates = @(
     (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe")
@@ -148,6 +161,43 @@ if (-not ($env:QGIS_ROOT -or $env:WEBGIS_AI_QGIS_ROOT)) {
     }
 }
 
+$backendHealthUrl = "http://127.0.0.1:$BackendPort/health"
+$proxyHealthUrl = "http://127.0.0.1:$ProxyPort/health"
+$backendAlreadyReady = Test-HttpReady -Url $backendHealthUrl
+$proxyAlreadyReady = Test-HttpReady -Url $proxyHealthUrl
+
+$cloudflaredService = Get-Service -Name "cloudflared" -ErrorAction SilentlyContinue
+if ($cloudflaredService -and (Test-Path -LiteralPath $cloudflaredRepairScript)) {
+    $cloudflaredImagePath = [string](Get-ItemProperty -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\cloudflared" -Name ImagePath -ErrorAction SilentlyContinue).ImagePath
+    if ($cloudflaredImagePath -notmatch '(?i)--protocol\s+http2') {
+        Write-Host "首次启用稳定公网模式需要一次管理员确认。" -ForegroundColor Yellow
+        $repairProcess = Start-Process `
+            -FilePath "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" `
+            -Verb RunAs `
+            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"' + $cloudflaredRepairScript + '"')) `
+            -Wait `
+            -PassThru
+        if ($repairProcess.ExitCode -ne 0) {
+            throw "Cloudflared 稳定模式配置未完成。请在管理员确认窗口中点击是后重试。"
+        }
+    }
+    elseif ($cloudflaredService.Status -ne "Running") {
+        Write-Warning "Cloudflared 服务未运行，请以管理员身份启动该服务。"
+    }
+}
+
+if ($backendAlreadyReady -and $proxyAlreadyReady) {
+    Write-Host "WebGIS-AI 本地源站已经运行，已直接复用现有进程。" -ForegroundColor Green
+    Write-Host "本机检查：http://127.0.0.1:$ProxyPort"
+    Write-Host "公网入口：https://$Domain"
+    Write-Host "无需重复构建或占用端口；如果公网显示 Down，请检查 Cloudflared 服务状态。"
+    return
+}
+
+if ($backendAlreadyReady -or $proxyAlreadyReady) {
+    throw "检测到 WebGIS-AI 仅有部分服务仍在运行。请先运行桌面上的关闭网站，再重新启动。"
+}
+
 Assert-PortAvailable -Port $BackendPort
 Assert-PortAvailable -Port $ProxyPort
 New-Item -ItemType Directory -Path $runtimeDir -Force | Out-Null
@@ -207,7 +257,7 @@ try {
     }
     $backendProcess = Start-Process @backendStart
 
-    $health = Wait-HttpReady -Url "http://127.0.0.1:$BackendPort/health"
+    $health = Wait-HttpReady -Url $backendHealthUrl
     $bootstrap = Invoke-RestMethod -Uri "http://127.0.0.1:$BackendPort/auth/bootstrap-status" -Method Get -TimeoutSec 5
     if ($bootstrap.required) {
         Write-Host "首次公网运行需要先创建管理员。信息只提交到本机后端。" -ForegroundColor Yellow
@@ -248,7 +298,7 @@ try {
     }
     $caddyProcess = Start-Process @caddyStart
 
-    Wait-HttpReady -Url "http://127.0.0.1:$ProxyPort/health" | Out-Null
+    Wait-HttpReady -Url $proxyHealthUrl | Out-Null
     Set-Content -LiteralPath (Join-Path $runtimeDir "backend.pid") -Value $backendProcess.Id -Encoding ascii
     Set-Content -LiteralPath (Join-Path $runtimeDir "caddy.pid") -Value $caddyProcess.Id -Encoding ascii
 
