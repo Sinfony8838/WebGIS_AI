@@ -195,7 +195,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
     () => Object.values(design?.section_status || {}).filter((status) => status === "confirmed").length,
     [design?.section_status]
   );
-  // 「采用当前建议并继续」仅在当前步骤存在可确认内容时可用（空步骤不可冒充已审核）。
+  // 「下一步」仅在当前步骤存在可确认内容时可用（空步骤不可冒充已审核）。
   const canAdoptCurrent = useMemo(() => {
     if (!design || design.status === "finalized") return false;
     const sections = STEP_SECTION_KEYS[currentStep] || [];
@@ -582,6 +582,42 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
               </button>
             ) : null}
           </header>
+          <section className="ldw-whole-draft-tools" data-testid="ldw-draft-tools" aria-label="整份教案工具">
+            <div className="ldw-whole-draft-copy">
+              <span className="ldw-tool-eyebrow">全局操作</span>
+              <strong>整份教案工具</strong>
+              <p>用于整份起草或系统优化，不会自动确认步骤，也不会直接发布。</p>
+            </div>
+            <div className="ldw-draft-tool-grid">
+              <button
+                type="button"
+                className="ldw-draft-tool"
+                disabled={busy || !design || design.status === "finalized"}
+                onClick={generateFullDraft}
+                title="根据已填写的信息补齐尚未完成的步骤；右侧输入框有补充要求时会一并采用"
+                data-testid="ldw-full-draft"
+              >
+                <span>生成整份初稿</span>
+                <small>补齐尚未填写的步骤，生成内容仍需教师逐步确认</small>
+              </button>
+              <button
+                type="button"
+                className="ldw-draft-tool"
+                disabled={busy || !design || !hasDraftContent}
+                onClick={smartOptimize}
+                title="保留已确认章节，只系统优化整份教案中尚未确认的内容"
+                data-testid="ldw-smart-optimize"
+              >
+                <span>优化整份教案</span>
+                <small>保留已确认章节，只优化尚未确认的内容</small>
+              </button>
+            </div>
+            <p className="ldw-whole-draft-note" data-testid="ldw-draft-tools-hint">
+              {input.trim()
+                ? "将同时采用右侧输入框中的补充要求；处理完成后仍需逐步核对。"
+                : "当前未填写额外要求，将依据已有课题、年级、课时与已确认内容处理。"}
+            </p>
+          </section>
           <div className="ldw-mid-scroll" data-testid="ldw-plan">
             {viewStep === "rehearsal" ? <RehearsalCard design={design} report={checkedPlan?.designId === design?.design_id && checkedPlan?.revision === design?.revision ? checkedPlan?.report : null} onRun={() => void runPlanCheck()} busy={busy} /> : null}
             {viewSections.map((sectionId) => renderSectionEditor(sectionId))}
@@ -710,8 +746,10 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
           </div>
           {busy ? <ThinkingIndicator label={`正在处理${STEPS.find(([key]) => key === viewStep)?.[1] || "教案"}…`} testId="lesson-design-thinking" /> : null}
           {error ? <p className="lesson-design-error" data-testid="ldw-error">{error}</p> : null}
-          <div className="ldw-composer">
+          <div className="ldw-composer" data-testid="ldw-composer">
+            <label className="ldw-composer-label" htmlFor="lesson-design-input">给 AI 的修改要求</label>
             <textarea
+              id="lesson-design-input"
               value={input}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={(event) => {
@@ -720,67 +758,20 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
                   void runTurn(input);
                 }
               }}
-              placeholder={activeQuestion || "告诉我你的教学想法；Ctrl/⌘ + Enter 发送"}
+              placeholder={activeQuestion || "说明希望补充或修改的内容；Ctrl/⌘ + Enter 发送"}
               disabled={busy}
               aria-label="教案设计对话输入"
             />
-            <div className="ldw-actions ldw-quick-actions" data-testid="ldw-quick-actions">
-              <button
-                type="button"
-                className="toolbar-button compact"
-                disabled={busy || !design || design.status === "finalized"}
-                onClick={generateFullDraft}
-                title="按当前输入（可留空）一次预填全部空缺环节，生成后仍需逐项确认"
-                data-testid="ldw-full-draft"
-              >
-                生成完整初稿
-              </button>
-              <button
-                type="button"
-                className="toolbar-button compact"
-                disabled={busy || !design || !hasDraftContent}
-                onClick={smartOptimize}
-                title="让 AI 对整份未确认初稿做一次系统性优化；已确认章节不会被改动"
-                data-testid="ldw-smart-optimize"
-              >
-                一键智能优化
-              </button>
-              <button
-                type="button"
-                className="toolbar-button compact primary"
-                disabled={busy || !design || !canAdoptCurrent}
-                onClick={() => void acceptStep(currentStep)}
-                title="确认当前步骤的建议内容并进入下一步；下一章已有建议时可继续点按"
-                data-testid="ldw-adopt-continue"
-              >
-                采用当前建议并继续
-              </button>
+            <div className="ldw-composer-actions">
               <button
                 type="button"
                 className="toolbar-button compact"
                 disabled={busy || !design || !input.trim() || !scopedEditAvailable}
                 onClick={modifyCurrentStepOnly}
-                title="只把输入内容应用到当前环节，不覆盖其他章节"
+                title="只把输入内容应用到当前步骤，不覆盖其他章节"
                 data-testid="ldw-scoped-edit"
               >
-                只修改当前环节
-              </button>
-            </div>
-            <p className="ldw-quick-hint" data-testid="ldw-quick-hint">
-              初稿生成后：可点「一键智能优化」整份提升；也可以在输入框写要求，用「发送」或「只修改当前环节」逐段与助手一起打磨。所有结果都需确认后才算采用。
-            </p>
-            <div className="ldw-actions">
-              <button type="button" className="toolbar-button compact" disabled={busy || !design} onClick={() => void runTurn("返回上一步，重新讨论上一部分")}>
-                返回上一步
-              </button>
-              <button
-                type="button"
-                className="toolbar-button compact"
-                disabled={busy || !design || !STEP_SECTION_KEYS[viewStep]?.length}
-                onClick={() => void acceptStep()}
-                data-testid="ldw-accept-step"
-              >
-                接受本节
+                仅修改当前步骤
               </button>
               <button
                 type="button"
@@ -789,8 +780,40 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
                 onClick={() => void runTurn(input)}
                 data-testid="ldw-send"
               >
-                发送
+                发送给 AI
               </button>
+            </div>
+            <div className="ldw-step-navigation" data-testid="ldw-step-navigation">
+              <div className="ldw-step-navigation-copy">
+                <strong>确认与推进</strong>
+                <small>“下一步”会确认当前步骤内容并继续，不会直接发布教案。</small>
+              </div>
+              <div className="ldw-actions">
+                <button type="button" className="toolbar-button compact" disabled={busy || !design} onClick={() => void runTurn("返回上一步，重新讨论上一部分")}>
+                  重新讨论上一步
+                </button>
+                {focusStep && focusStep !== currentStep ? (
+                  <button
+                    type="button"
+                    className="toolbar-button compact"
+                    disabled={busy || !design || !STEP_SECTION_KEYS[viewStep]?.length}
+                    onClick={() => void acceptStep(viewStep)}
+                    data-testid="ldw-accept-step"
+                  >
+                    确认本节
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="toolbar-button compact primary"
+                  disabled={busy || !design || !canAdoptCurrent}
+                  onClick={() => void acceptStep(currentStep)}
+                  title={`确认“${STEPS.find(([key]) => key === currentStep)?.[1] || "当前步骤"}”并进入下一步`}
+                  data-testid="ldw-adopt-continue"
+                >
+                  下一步
+                </button>
+              </div>
             </div>
           </div>
         </aside>

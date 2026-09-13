@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { LessonDesignWorkspace } from "../components/LessonDesignWorkspace";
 import type { LessonDesignSession, LessonDesignTurnResult, LessonPlanProfile } from "../types";
 
@@ -148,11 +148,25 @@ describe("LessonDesignWorkspace", () => {
   });
 
   it("accepts the current step via resolve", async () => {
+    createMock.mockResolvedValue(
+      session({
+        draft: {
+          title: "人口分布",
+          topic: "人口分布",
+          grade: "高一",
+          duration_minutes: 40,
+          objectives: [],
+          stages: [],
+          requirements: { grade: "高一", topic: "人口分布", duration_minutes: 40 }
+        } as LessonPlanProfile
+      })
+    );
     resolveMock.mockResolvedValue({ status: "success", design: session({ current_step: "analysis", revision: 1 }) });
     render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
-    await screen.findByTestId("ldw-accept-step");
+    const next = await screen.findByTestId("ldw-adopt-continue");
+    await waitFor(() => expect(next).not.toBeDisabled());
 
-    fireEvent.click(screen.getByTestId("ldw-accept-step"));
+    fireEvent.click(next);
     await waitFor(() => expect(resolveMock).toHaveBeenCalledWith("design_1", "requirements", "accept", "", 0));
   });
 
@@ -357,6 +371,13 @@ describe("LessonDesignWorkspace", () => {
     render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
 
     await screen.findByTestId("ldw-active-question");
+    const draftTools = screen.getByTestId("ldw-draft-tools");
+    const composer = screen.getByTestId("ldw-composer");
+    expect(draftTools.textContent).toContain("不会自动确认步骤，也不会直接发布");
+    expect(within(draftTools).getByTestId("ldw-full-draft")).toBeTruthy();
+    expect(within(draftTools).getByTestId("ldw-smart-optimize")).toBeTruthy();
+    expect(within(composer).queryByTestId("ldw-full-draft")).toBeNull();
+    expect(within(composer).queryByTestId("ldw-smart-optimize")).toBeNull();
     await waitFor(() => expect(screen.getByTestId("ldw-full-draft")).not.toBeDisabled());
     fireEvent.change(
       screen.getByLabelText("教案设计对话输入"),
@@ -432,6 +453,8 @@ describe("LessonDesignWorkspace", () => {
     render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
     const adopt = await screen.findByTestId("ldw-adopt-continue");
     await waitFor(() => expect(adopt).not.toBeDisabled());
+    expect(adopt.textContent).toBe("下一步");
+    expect(screen.queryByText("采用当前建议并继续")).toBeNull();
 
     fireEvent.click(adopt);
     await waitFor(() => expect(resolveMock).toHaveBeenCalledWith("design_1", "process", "accept", "", 5));
@@ -514,7 +537,7 @@ describe("LessonDesignWorkspace", () => {
     await waitFor(() => expect(turnMock).toHaveBeenCalledWith("design_1", "一键智能优化", 6, "process"));
     const focus = await screen.findByTestId("ldw-focus");
     expect(focus.textContent).toContain("教学目标");
-    expect(screen.getByTestId("ldw-quick-hint").textContent).toContain("一键智能优化");
+    expect(screen.getByTestId("ldw-draft-tools-hint").textContent).toContain("已有课题、年级、课时与已确认内容");
   });
 
   it("keeps one-click smart optimization disabled for an empty draft", async () => {
