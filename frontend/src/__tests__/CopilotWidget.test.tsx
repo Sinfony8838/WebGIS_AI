@@ -797,7 +797,7 @@ describe("CopilotWidget", () => {
     expect(screen.getByTestId("copilot-thinking")).toHaveTextContent("正在思考");
   });
 
-  it("switches tabs through the callback and shows interaction quick chips", () => {
+  it("switches tabs and keeps interaction mode focused on direct control", () => {
     const onTabChange = vi.fn();
     const onQuickPrompt = vi.fn();
     renderWidget({ onTabChange, onQuickPrompt });
@@ -812,10 +812,27 @@ describe("CopilotWidget", () => {
     window.localStorage.clear();
     renderWidget({ onTabChange, onQuickPrompt, assistantTab: "interaction" });
 
-    // 智能交互 Tab：控制快捷芯片提交文字指令。
-    expect(screen.getByTestId("copilot-chip-globe")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("copilot-chip-globe"));
-    expect(onQuickPrompt).toHaveBeenCalledWith("切换到三维地球");
+    // 智能交互 Tab：不再显示功能提示快捷项，也不提供图片发送入口。
+    expect(screen.queryByTestId("copilot-capability-chips")).toBeNull();
+    expect(screen.queryByLabelText("上传图片")).toBeNull();
+    expect(document.querySelector(".copilot-image-input")).toBeNull();
+    expect(onQuickPrompt).not.toHaveBeenCalled();
+  });
+
+  it("does not expose or submit a pending image from interaction mode", () => {
+    renderWidget({
+      assistantTab: "interaction",
+      inputValue: "",
+      pendingImage: {
+        artifact_id: "artifact_hidden",
+        title: "不应进入操控模式的图片",
+        public_url: "/files/hidden.png",
+        mime_type: "image/png"
+      }
+    });
+
+    expect(screen.queryByTestId("copilot-image-preview")).toBeNull();
+    expect(screen.getByRole("button", { name: "发送给助教" })).toBeDisabled();
   });
 
   it("toggles TTS from the interaction tab header", () => {

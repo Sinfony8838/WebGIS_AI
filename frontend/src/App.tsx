@@ -3953,10 +3953,10 @@ export default function App({
           }}
           onSubmit={() => {
             const message = assistantInput.trim();
-            if (!message && !pendingImage) {
+            const image = assistantTabRef.current === "interaction" ? null : pendingImage;
+            if (!message && !image) {
               return;
             }
-            const image = pendingImage;
             void submitAssistantText(message, undefined, "webgis", "text", image).then((sent) => {
               if (!sent) return;
               setAssistantInput((current) => (current.trim() === message ? "" : current));
@@ -3968,7 +3968,7 @@ export default function App({
             if (!message) {
               return;
             }
-            const image = pendingImage;
+            const image = assistantTabRef.current === "interaction" ? null : pendingImage;
             void submitAssistantText(message, undefined, "webgis", "text", image).then((sent) => {
               if (sent) setPendingImage((current) => (current?.artifact_id === image?.artifact_id ? null : current));
             });
@@ -3981,7 +3981,7 @@ export default function App({
             if (!transcript) {
               return;
             }
-            const image = pendingImage;
+            const image = assistantTabRef.current === "interaction" ? null : pendingImage;
             void submitAssistantText(transcript, undefined, "webgis", "voice", image).then((sent) => {
               if (sent) setPendingImage((current) => (current?.artifact_id === image?.artifact_id ? null : current));
             });
@@ -3991,7 +3991,7 @@ export default function App({
           }}
           busy={busy}
           teachingPhase={teachingPhase}
-          pendingImage={pendingImage}
+          pendingImage={assistantTab === "interaction" ? null : pendingImage}
           openSignal={copilotOpenSignal}
           onAttachImage={handleAttachImage}
           onUploadImage={(file) => void handleUploadImage(file)}
