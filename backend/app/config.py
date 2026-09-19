@@ -12,6 +12,21 @@ def _default_root_dir() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def resolve_data_root(root_dir: Path) -> Path:
+    """Single source of truth for the data root, shared with the PyQGIS worker.
+
+    ``WEBGIS_AI_DATA_DIR`` relocates the whole data tree (state, auth, uploads,
+    outputs, workflows) to an isolated instance; unset keeps the historical
+    ``<root>/backend/data`` layout. The worker resolves the same variable in
+    ``pyqgis_worker/handlers/_common.py`` so the main process and the worker
+    never disagree about where uploads/builtin data live.
+    """
+    override = os.getenv("WEBGIS_AI_DATA_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path(root_dir) / "backend" / "data"
+
+
 LLM_PROVIDER_ENV_KEYS = ("WEBGIS_AI_LLM_PROVIDER", "LLM_PROVIDER", "MINIMAX_PROVIDER")
 MINIMAX_API_KEY_ENV_KEYS = ("WEBGIS_AI_MINIMAX_API_KEY", "MINIMAX_API_KEY")
 MINIMAX_BASE_URL_ENV_KEYS = ("WEBGIS_AI_MINIMAX_BASE_URL", "MINIMAX_BASE_URL")
@@ -311,7 +326,7 @@ class AppConfig:
             self.vision_provider = "minimax_mcp"
         self.backend_dir = self.root_dir / "backend"
         self.app_dir = self.backend_dir / "app"
-        self.data_dir = self.backend_dir / "data"
+        self.data_dir = resolve_data_root(self.root_dir)
         self.builtin_dir = self.app_dir / "data" / "builtin"
         self.knowledge_dir = self.builtin_dir / "knowledge"
         self.state_dir = self.data_dir / "state"

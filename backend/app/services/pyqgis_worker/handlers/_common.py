@@ -23,20 +23,34 @@ from ..workspace import Workspace
 
 
 def workspace_root() -> Path:
-    """Best-effort: locate the project's data dir from env. The worker stores
-    workflows under ``data/workflows/{wf_id}``; uploads live in
-    ``data/uploads/{project_id}/``. We need to be able to resolve a
-    user-supplied dataset id against either ``data/uploads`` or builtin folders.
+    """Locate the shared data root (uploads / builtin / workflows base).
+
+    The main process exports ``WEBGIS_AI_DATA_DIR`` (see
+    ``backend.app.config.resolve_data_root``), so an env value is authoritative.
+    Fallback walks up to the repository layout ``<repo>/backend/data``; the
+    ``backend`` component must be matched explicitly because
+    ``backend/app/data`` (builtin assets) otherwise shadows the real data dir.
     """
     candidate = os.environ.get("WEBGIS_AI_DATA_DIR", "")
     if candidate and Path(candidate).exists():
         return Path(candidate)
-    # Default: walk up two levels from this file to backend/, then data/
     here = Path(__file__).resolve()
     for parent in here.parents:
-        if (parent / "data").exists():
-            return parent / "data"
+        data_root = parent / "backend" / "data"
+        if data_root.exists():
+            return data_root
     return Path("data")
+
+
+def builtin_root() -> Path:
+    """Builtin teaching data lives under the repo source tree.
+
+    It is source-controlled content (``backend/app/data/builtin``), NOT
+    part of the mutable data root, so it must be derived from this module's
+    location instead of ``workspace_root().parent`` — otherwise a relocated
+    data root (``WEBGIS_AI_DATA_DIR``) would hide every builtin dataset.
+    """
+    return Path(__file__).resolve().parents[3] / "data" / "builtin"
 
 
 def resolve_dataset_path(workspace: Workspace, source: str, project_id: str = "") -> Path:
@@ -70,10 +84,10 @@ def resolve_dataset_path(workspace: Workspace, source: str, project_id: str = ""
 
     if cleaned.startswith("builtin:"):
         rest = cleaned.removeprefix("builtin:").lstrip("/").replace("\\", "/")
-        for builtin_root in (base_data / "builtin", workspace_root().parent / "app" / "data" / "builtin"):
-            candidate = (builtin_root / rest).resolve()
+        for builtin_root_dir in (base_data / "builtin", builtin_root()):
+            candidate = (builtin_root_dir / rest).resolve()
             try:
-                candidate.relative_to(builtin_root.resolve())
+                candidate.relative_to(builtin_root_dir.resolve())
             except ValueError:
                 continue
             if candidate.exists():
@@ -97,9 +111,9 @@ def resolve_dataset_path(workspace: Workspace, source: str, project_id: str = ""
             return candidate
 
     # Search builtin
-    for builtin_root in (base_data / "builtin", workspace_root().parent / "app" / "data" / "builtin"):
+    for builtin_root_dir in (base_data / "builtin", builtin_root()):
         try:
-            candidate = (builtin_root / cleaned).resolve()
+            candidate = (builtin_root_dir / cleaned).resolve()
             if candidate.exists():
                 return candidate
         except Exception:

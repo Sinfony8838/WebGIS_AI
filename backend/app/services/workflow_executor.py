@@ -83,8 +83,11 @@ def _resolve_dataset_for_preflight(
     """Resolve a ``load_layer`` source to an existing file path.
 
     Mirrors the worker's ``resolve_dataset_path`` (builtin:/upload:/bare name)
-    without importing QGIS. Returns None when nothing matches so the caller
-    can raise an accurate DATASET_NOT_FOUND preflight error.
+    and its authorization boundary: upload references are pinned to the
+    owning project and containment is checked on resolved paths — the same
+    policy ``pyqgis_worker/handlers/_common.py`` enforces at load time.
+    Returns None when nothing matches so the caller can raise an accurate
+    DATASET_NOT_FOUND preflight error.
     """
     cleaned = (source or "").strip()
     if not cleaned:
@@ -93,14 +96,25 @@ def _resolve_dataset_for_preflight(
         rest = cleaned.removeprefix("builtin:").lstrip("/").replace("\\", "/")
         for root in (config.data_dir / "builtin", config.builtin_dir):
             candidate = (root / rest).resolve()
-            if candidate.exists() and str(candidate).startswith(str(root.resolve())):
+            try:
+                candidate.relative_to(root.resolve())
+            except ValueError:
+                continue
+            if candidate.exists():
                 return candidate
         return None
     if cleaned.startswith("upload:"):
         rest = cleaned.removeprefix("upload:").lstrip("/").replace("\\", "/")
+        owner_project = (rest.split("/", 1) or [""])[0]
+        if project_id and owner_project != project_id:
+            return None
         uploads_root = config.uploads_dir.resolve()
         candidate = (uploads_root / rest).resolve()
-        if candidate.exists() and str(candidate).startswith(str(uploads_root)):
+        try:
+            candidate.relative_to(uploads_root)
+        except ValueError:
+            return None
+        if candidate.exists():
             return candidate
         return None
     # Bare file name: uploads/<project_id>/ first, then builtin roots.
