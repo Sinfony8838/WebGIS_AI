@@ -129,18 +129,27 @@ class WebGISRuntimeTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             runtime.kb_upload_material("upload_demo", "script.exe", b"bad")
 
-    def test_health_exposes_backend_gis_workflow_not_qgis_assistant(self) -> None:
+    def test_health_is_liveness_only_and_capabilities_expose_gis_workflow(self) -> None:
+        # Phase-1 audit (T3): the public health payload is liveness-only;
+        # feature info moved to capabilities()/diagnostics().
         runtime, _store, _project_id = self.build_runtime()
 
         health = runtime.health()
-
-        self.assertIn("gis_workflow", health)
-        self.assertEqual(health["gis_workflow"]["engine"], "pyqgis_worker")
-        self.assertTrue(health["ui"]["assistant_v2_enabled"])
-        self.assertEqual(health["ui"]["agent_harness"]["id"], "webgis-teaching-agent")
-        self.assertEqual(health["ui"]["agent_harness"]["version"], "3.0")
+        self.assertEqual(set(health.keys()), {"status"})
+        self.assertNotIn("gis_workflow", health)
         self.assertNotIn("qgis", health)
         self.assertNotIn("pyqgis_workflow", health)
+
+        capabilities = runtime.capabilities()
+        self.assertEqual(capabilities["gis_workflow"]["engine"], "pyqgis_worker")
+        self.assertTrue(capabilities["ui"]["assistant_v2_enabled"])
+        self.assertNotIn("qgis_root", capabilities["gis_workflow"])
+        self.assertNotIn("pyqgis_workflow", capabilities)
+
+        diagnostics = runtime.diagnostics()
+        self.assertEqual(diagnostics["gis_workflow"]["engine"], "pyqgis_worker")
+        self.assertIn("agent_harness", diagnostics["build"])
+        self.assertIn("git_sha", diagnostics["build"])
 
     def test_list_projects_returns_existing_projects(self) -> None:
         runtime, _store, project_id = self.build_runtime()
