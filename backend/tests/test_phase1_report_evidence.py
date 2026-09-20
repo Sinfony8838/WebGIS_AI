@@ -190,9 +190,15 @@ def test_llm_payload_is_aggregate_only(tmp_path: Path) -> None:
         assert "sample_texts" not in question and "text" not in question
     assert "notes" not in payload["observations"] and "records" not in payload["observations"]
     assert "participants" not in payload
-    # Aggregates the model MAY see.
+    # Aggregates the model MAY see — minimization must not gut informativeness:
+    # type, collection mode, sample counts, option distributions and rates stay.
+    question = payload["questions"][0]
+    assert question["response_count"] == 2 and question["text_count"] == 1
+    assert question["option_counts"] == [1, 0]
+    assert question["collection_mode"] == "student_response"
     assert payload["participant_count"] == 2
     assert payload["observations"]["misconception_tags"] == [["总量当密度", 1]]
+    assert payload["observations"]["verdict_counts"]["misconception"] == 1
 
 
 def test_recommendations_carry_evidence_refs_or_design_suggestion(tmp_path: Path) -> None:
@@ -206,12 +212,50 @@ def test_recommendations_carry_evidence_refs_or_design_suggestion(tmp_path: Path
     result = service.build_practice_recommendations(stats, lesson)
     review = [item for item in result if item["practice_id"] == "class_question_q"][0]
     assert "statistics.questions.q.correct_rate" in review["evidence_refs"]
+    # Every emitted ref resolves to evidence that exists in this session.
+    for item in result:
+        for ref in item["evidence_refs"]:
+            assert service.evidence_ref_exists(ref, stats, lesson), ref
     # No evidence at all → explicit design suggestion, not an invented claim.
     empty = service.build_practice_recommendations({"lesson_title": "人口", "response_data_collected": False}, None)
     assert empty[0]["evidence_refs"] == ["设计建议（证据不足）"]
+    assert service.evidence_ref_exists(empty[0]["evidence_refs"][0], {"questions": []}, None)
     assert "设计建议（证据不足）" in empty[0]["evidence_basis"]
     markdown = service.render_markdown(stats, {"text": "", "generator": "rules"}, result)
     assert "证据引用" in markdown
+
+
+def test_relaunched_same_question_merges_into_one_entry(tmp_path: Path) -> None:
+    """同一道题重复发起：统计合并为单题条目，口径保持一致。"""
+    session = _make_session()
+    session.events = [
+        _choice_question_event("q1", offset_seconds=10),
+        _choice_question_event("q1", offset_seconds=20),  # relaunch
+    ]
+    session.responses["q1"] = [
+        {"nickname": "甲", "choice_index": 1},
+        {"nickname": "乙", "choice_index": 1},
+    ]
+    service = ReportService(AppConfig(root_dir=tmp_path))
+    stats = service.build_statistics(session, None)
+    assert len(stats["questions"]) == 1
+    question = stats["questions"][0]
+    assert question["response_count"] == 2
+    assert question["valid_count"] == 2
+
+
+def test_real_label_is_not_treated_as_classroom_acceptance_proof(tmp_path: Path) -> None:
+    session = _make_session()
+    session.metadata["source"] = "real"
+    service = ReportService(AppConfig(root_dir=tmp_path))
+    stats = service.build_statistics(session, None)
+    assert stats["data_source"] == "real"
+    markdown = service.render_markdown(stats, {"text": "", "generator": "rules"})
+    assert "real" in markdown
+    assert "不等于已完成真实课堂验收" in markdown
+    # Non-real sources do not carry the acceptance disclaimer.
+    plain = service.render_markdown({"data_source": "unknown"}, {"text": "", "generator": "rules"})
+    assert "不等于已完成真实课堂验收" not in plain
 
 
 def test_no_answer_data_still_never_calls_the_model(tmp_path: Path) -> None:

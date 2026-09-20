@@ -282,6 +282,43 @@ class ReportService:
         return participants
 
     # ------------------------------------------------------------------
+    # Evidence-reference resolution (phase-1 acceptance D)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def evidence_ref_exists(ref: str, statistics: Dict[str, Any], lesson: Optional[LessonRecord]) -> bool:
+        """True when an evidence ref points at evidence that actually exists
+        in this session's statistics/lesson. The explicit design-suggestion
+        marker is a valid ref by definition (it claims no evidence)."""
+        if ref == "设计建议（证据不足）":
+            return True
+        if ref == "lesson.plan.homework":
+            plan = lesson.plan if lesson and isinstance(lesson.plan, dict) else {}
+            return bool(plan.get("homework"))
+        if ref == "lesson_snapshot":
+            return bool(statistics.get("lesson_snapshot_available"))
+        if ref == "lesson.current":
+            return lesson is not None
+        if ref.startswith("class_question:"):
+            qid = ref.split(":", 1)[1]
+            return any(q.get("question_id") == qid for q in statistics.get("questions") or [])
+        if ref.startswith("statistics.questions.") and ref.endswith(".correct_rate"):
+            qid = ref[len("statistics.questions."):-len(".correct_rate")]
+            return any(
+                q.get("question_id") == qid and isinstance(q.get("correct_rate"), (int, float))
+                for q in statistics.get("questions") or []
+            )
+        if ref.startswith("observations.records:"):
+            qid = ref.split(":", 1)[1]
+            records = (statistics.get("observations") or {}).get("records") or []
+            return any(
+                str(record.get("question_id") or "") == qid
+                and record.get("verdict") in {"partial", "misconception"}
+                for record in records
+            )
+        return False
+
+    # ------------------------------------------------------------------
     # Diagnosis (LLM preferred, rule fallback)
     # ------------------------------------------------------------------
 
@@ -530,7 +567,8 @@ class ReportService:
             f"- 会话经过时长：{statistics.get('duration_minutes', '—')} 分钟（自上课至结束的墙钟时间）",
             f"- 有效教学时长：未计算（{statistics.get('effective_teaching_note', '缺少暂停/恢复标记')}）",
             f"- 数据来源：{{{statistics.get('data_source', 'unknown')}}}"
-            "（test=测试 / rehearsal=预演 / real=真实课堂 / unknown=旧记录未标注）",
+            "（test=测试 / rehearsal=预演 / real=真实课堂 / unknown=旧记录未标注）"
+            + ("；real 标记来自会话元数据，不等于已完成真实课堂验收。" if statistics.get("data_source") == "real" else ""),
             f"- 课堂作答数据：{'已采集' if statistics.get('response_data_collected') else '未采集'}",
             f"- 参与作答：{statistics.get('participant_count', 0)} 人（{statistics.get('participant_count_basis', '按自报昵称去重，不代表实名学生人数。')}）",
             f"- 课堂事件：{statistics.get('event_count', 0)} 条"
