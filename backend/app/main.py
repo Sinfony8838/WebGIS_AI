@@ -1513,7 +1513,7 @@ async def upload_image_library_asset(
 ) -> Dict[str, Any]:
     _require_project_access(request, project_id)
     try:
-        raw = await file.read()
+        raw = await request_limits.read_upload_limited(file, config.max_image_upload_bytes)
         return runtime.upload_image_asset(
             project_id=project_id,
             filename=file.filename or "uploaded_image",
@@ -1522,6 +1522,8 @@ async def upload_image_library_asset(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except request_limits.PayloadTooLarge as exc:
+        raise HTTPException(status_code=413, detail="图片文件超过大小限制") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2137,7 +2139,13 @@ async def import_question_banks(
         raise HTTPException(status_code=400, detail="单次导入最多 4 个文件。")
     payload = []
     for upload in files:
-        raw = await upload.read()
+        try:
+            raw = await request_limits.read_upload_limited(upload, config.max_question_bank_upload_bytes)
+        except request_limits.PayloadTooLarge as exc:
+            raise HTTPException(
+                status_code=413,
+                detail=f"题库文件 {upload.filename or ''} 超过大小限制（单文件上限 {config.max_question_bank_upload_bytes // (1024 * 1024)} MB）",
+            ) from exc
         payload.append({"filename": upload.filename or "题库.docx", "raw": raw})
     context = _current_auth(request)
     return runtime.classroom.submit_question_bank_import(
@@ -2867,7 +2875,7 @@ async def generate_timeline(
 ) -> Dict[str, Any]:
     _require_project_access(request, project_id)
     try:
-        raw = await file.read()
+        raw = await request_limits.read_upload_limited(file, config.max_timeline_upload_bytes)
         return runtime.generate_timeline(
             project_id=project_id,
             filename=file.filename or "lesson.txt",
@@ -2875,6 +2883,8 @@ async def generate_timeline(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except request_limits.PayloadTooLarge as exc:
+        raise HTTPException(status_code=413, detail="教学时间线素材文件超过大小限制") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

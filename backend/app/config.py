@@ -289,6 +289,15 @@ class AppConfig:
     max_ppt_upload_bytes: int = field(
         default_factory=lambda: int(os.getenv("WEBGIS_AI_MAX_PPT_UPLOAD_BYTES", str(50 * 1024 * 1024)))
     )
+    max_image_upload_bytes: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_MAX_IMAGE_UPLOAD_BYTES", str(20 * 1024 * 1024)))
+    )
+    max_question_bank_upload_bytes: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_MAX_QUESTION_BANK_UPLOAD_BYTES", str(50 * 1024 * 1024)))
+    )
+    max_timeline_upload_bytes: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_MAX_TIMELINE_UPLOAD_BYTES", str(20 * 1024 * 1024)))
+    )
     voice_max_session_seconds: float = field(
         default_factory=lambda: float(os.getenv("WEBGIS_AI_VOICE_MAX_SESSION_SECONDS", "900"))
     )

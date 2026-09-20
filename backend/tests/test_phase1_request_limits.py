@@ -135,6 +135,55 @@ class PptUploadCeilingTest(unittest.TestCase):
             app_main.config.max_ppt_upload_bytes = original
 
 
+class RemainingUploadCeilingsTest(unittest.TestCase):
+    """C4 sweep: every remaining body-reading upload endpoint is capped by the
+    chunked reader BEFORE the payload is buffered (413, not a hang/OOM)."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.previous = (app_main.config, app_main.runtime, app_main.auth_service)
+        config = AppConfig(root_dir=Path(self.temp_dir.name), auth_mode="disabled")
+        config.ensure_dirs()
+        app_main.config = config
+        app_main.runtime = WebGISRuntime(config=config)
+        app_main.auth_service = None
+        self.client = TestClient(app_main.app)
+        project = app_main.runtime.create_project("预算测试")
+        self.project_id = project["project_id"]
+
+    def tearDown(self) -> None:
+        self.client.close()
+        app_main.config, app_main.runtime, app_main.auth_service = self.previous
+        self.temp_dir.cleanup()
+
+    def test_image_library_upload_413_before_buffering(self) -> None:
+        app_main.config.max_image_upload_bytes = 128
+        response = self.client.post(
+            f"/image-library/upload?project_id={self.project_id}",
+            files={"file": ("shot.png", b"\x89PNG\r\n\x1a\n" + b"z" * 512, "image/png")},
+            data={"project_id": self.project_id},
+        )
+        self.assertEqual(response.status_code, 413, response.text)
+
+    def test_question_bank_import_413_per_file(self) -> None:
+        app_main.config.max_question_bank_upload_bytes = 128
+        response = self.client.post(
+            f"/question-banks/import?project_id={self.project_id}",
+            files=[("files", ("bank.docx", b"PK\x03\x04" + b"z" * 512))],
+            data={"project_id": self.project_id},
+        )
+        self.assertEqual(response.status_code, 413, response.text)
+        self.assertIn("题库文件", response.text)
+
+    def test_timeline_generate_413_before_llm(self) -> None:
+        app_main.config.max_timeline_upload_bytes = 128
+        response = self.client.post(
+            f"/projects/{self.project_id}/timeline/generate",
+            files={"file": ("lesson.txt", b"z" * 512, "text/plain")},
+        )
+        self.assertEqual(response.status_code, 413, response.text)
+
+
 class AdmissionGateTest(unittest.TestCase):
     def test_gate_bounds_concurrency_and_times_out(self) -> None:
         gate = AdmissionGate(max_concurrent=1, timeout=0.2)
