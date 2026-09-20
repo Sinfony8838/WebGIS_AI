@@ -292,6 +292,9 @@ class AppConfig:
     voice_max_session_seconds: float = field(
         default_factory=lambda: float(os.getenv("WEBGIS_AI_VOICE_MAX_SESSION_SECONDS", "900"))
     )
+    voice_idle_timeout_seconds: float = field(
+        default_factory=lambda: float(os.getenv("WEBGIS_AI_VOICE_IDLE_TIMEOUT_SECONDS", "300"))
+    )
     voice_max_frame_bytes: int = field(
         default_factory=lambda: int(os.getenv("WEBGIS_AI_VOICE_MAX_FRAME_BYTES", str(256 * 1024)))
     )

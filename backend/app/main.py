@@ -1700,10 +1700,34 @@ async def assistant_voice_stream(websocket: "WebSocket") -> None:
             await _reject_voice_stream(websocket, "load_failed", "语音识别模型加载失败", accepted=True)
             return
         started = time.monotonic()
+        last_activity = started
         max_seconds = config.voice_max_session_seconds
+        max_idle = max(0.05, float(getattr(config, "voice_idle_timeout_seconds", 300)))
         max_frame = config.voice_max_frame_bytes
         while True:
-            message = await websocket.receive()
+            # Both budgets are enforced while WAITING for the next message,
+            # not only when one arrives: a silent client cannot hold a
+            # recognizer session open forever.
+            now = time.monotonic()
+            total_remaining = max_seconds - (now - started)
+            idle_remaining = max_idle - (now - last_activity)
+            wait_budget = min(total_remaining, idle_remaining)
+            if wait_budget <= 0:
+                reason, detail = (
+                    ("session_timeout", "语音会话达到时长上限")
+                    if total_remaining <= idle_remaining
+                    else ("session_idle", "语音会话空闲超时")
+                )
+                await websocket.send_text(
+                    json.dumps({"type": "error", "reason": reason, "detail": detail}, ensure_ascii=False)
+                )
+                await websocket.close(code=WS_CLOSE_SESSION_TIMEOUT)
+                break
+            try:
+                message = await asyncio.wait_for(websocket.receive(), timeout=wait_budget)
+            except asyncio.TimeoutError:
+                continue  # re-evaluate budgets; the branch above then closes
+            last_activity = time.monotonic()
             if message.get("type") == "websocket.disconnect":
                 break
             pcm = message.get("bytes")

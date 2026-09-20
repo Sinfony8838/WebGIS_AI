@@ -270,6 +270,30 @@ describe("VoiceSessionController", () => {
     expect(vi.mocked(createVoiceStream)).toHaveBeenCalledTimes(5);
   });
 
+  it("并发上限(4429)与强制改密(4407)：终态不自动重连，保留手动重试", async () => {
+    const { controller } = makeController();
+    controller.enterInteraction();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(vi.mocked(createVoiceStream)).toHaveBeenCalledTimes(1);
+
+    // 会话已 open 后撞并发上限：立即转不可用，不做退避重连。
+    handles[0].emit({ kind: "close", code: 4429 });
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(vi.mocked(createVoiceStream)).toHaveBeenCalledTimes(1);
+    expect(controller.snapshot().phase).toBe("unavailable");
+
+    // 手动重试仍可用（用户关闭其他会话后）。
+    controller.retry();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(vi.mocked(createVoiceStream)).toHaveBeenCalledTimes(2);
+
+    // 强制改密用户：同样不自动重连。
+    handles[1].emit({ kind: "close", code: 4407 });
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(vi.mocked(createVoiceStream)).toHaveBeenCalledTimes(2);
+    expect(controller.snapshot().phase).toBe("unavailable");
+  });
+
   it("一条最终转写只提交一次；重复投递与突发旧结果被丢弃", async () => {
     const { controller, submitted } = makeController();
     controller.enterInteraction();
