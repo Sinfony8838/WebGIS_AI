@@ -452,7 +452,9 @@ class WebGISRuntime:
             "status": "success",
             "build": {
                 "app_version": APP_VERSION,
-                "git_sha": os.getenv("WEBGIS_AI_BUILD_SHA", ""),
+                # Unknown when the deployment did not export a build SHA —
+                # never a guessed or fabricated commit id.
+                "git_sha": os.getenv("WEBGIS_AI_BUILD_SHA", "") or "unknown",
                 "agent_harness": {"id": HARNESS_ID, "version": HARNESS_VERSION},
             },
             "runtime": {

@@ -130,7 +130,9 @@ class HealthVoiceTest(unittest.TestCase):
         payload = admin.json()
         self.assertIn("build", payload)
         self.assertIn("app_version", payload["build"])
-        self.assertIn("git_sha", payload["build"])
+        # Build SHA is "unknown" when the deployment exports none — never a
+        # fabricated commit id.
+        self.assertEqual(payload["build"]["git_sha"], "unknown")
         self.assertIn("qgis_root", payload["gis_workflow"])
 
     # ------------------------------------------------------ voice websocket
@@ -187,23 +189,43 @@ class HealthVoiceTest(unittest.TestCase):
             app_main.runtime.voice_asr = previous_engine
             app_main.config.voice_max_frame_bytes = previous_frame
 
-    def test_ws_enforces_session_duration_cap(self) -> None:
+    def test_ws_enforces_session_duration_cap_while_client_silent(self) -> None:
+        """Total-duration budget is enforced while WAITING for messages —
+        a silent client cannot hold the recognizer session open."""
         origin = app_main.config.cors_origins()[0]
         previous_engine = app_main.runtime.voice_asr
         app_main.runtime.voice_asr = _FakeVoiceEngine()
         previous_seconds = app_main.config.voice_max_session_seconds
+        previous_idle = app_main.config.voice_idle_timeout_seconds
         try:
-            app_main.config.voice_max_session_seconds = 0.0
+            app_main.config.voice_max_session_seconds = 0.4
+            app_main.config.voice_idle_timeout_seconds = 30.0
             with self.client.websocket_connect("/assistant/voice/stream", headers={"Origin": origin}) as ws:
-                # Windows time.monotonic() has ~15ms granularity; let some
-                # wall time pass so the elapsed check is unambiguous.
-                time.sleep(0.1)
-                ws.send_bytes(b"x")
+                # Send nothing at all: the server must close on its own.
                 event = json_loads(ws.receive_text())
                 self.assertEqual(event["reason"], "session_timeout")
         finally:
             app_main.runtime.voice_asr = previous_engine
             app_main.config.voice_max_session_seconds = previous_seconds
+            app_main.config.voice_idle_timeout_seconds = previous_idle
+
+    def test_ws_enforces_idle_timeout(self) -> None:
+        origin = app_main.config.cors_origins()[0]
+        previous_engine = app_main.runtime.voice_asr
+        app_main.runtime.voice_asr = _FakeVoiceEngine()
+        previous_seconds = app_main.config.voice_max_session_seconds
+        previous_idle = app_main.config.voice_idle_timeout_seconds
+        try:
+            app_main.config.voice_max_session_seconds = 30.0
+            app_main.config.voice_idle_timeout_seconds = 0.4
+            with self.client.websocket_connect("/assistant/voice/stream", headers={"Origin": origin}) as ws:
+                ws.send_bytes(b"x")  # establish activity, then go silent
+                event = json_loads(ws.receive_text())
+                self.assertEqual(event["reason"], "session_idle")
+        finally:
+            app_main.runtime.voice_asr = previous_engine
+            app_main.config.voice_max_session_seconds = previous_seconds
+            app_main.config.voice_idle_timeout_seconds = previous_idle
 
     def test_ws_enforces_concurrent_session_cap(self) -> None:
         origin = app_main.config.cors_origins()[0]

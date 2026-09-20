@@ -632,20 +632,23 @@ export type KnowledgeTopicsResponse = {
 
 export type HealthResponse = {
   status: string;
+};
+
+/**
+ * /ui/capabilities——公共 /health 收窄为存活探针后，前端所需的脱敏能力集。
+ * 明确字段白名单：不含任何路径、base_url、密钥来源或异常文本
+ * （对应后端 WebGISRuntime.capabilities()）。
+ */
+export type UiCapabilities = {
+  status: string;
   ui: {
     mode: string;
-    assistant_tools: Array<{ name: string; description: string; parameters: Record<string, string> }>;
-    assistant_v2_enabled?: boolean;
+    assistant_v2_enabled: boolean;
   };
   llm?: {
     enabled: boolean;
-    configured?: boolean;
     provider: string;
     model: string;
-    base_url?: string;
-    provider_source?: string;
-    api_key_source?: string;
-    error?: string;
   };
   /** 本地流式语音识别（sherpa-onnx WebSocket）：available=false 时前端降级 Web Speech。 */
   voice_asr?: {
@@ -653,38 +656,28 @@ export type HealthResponse = {
     /** 就绪状态：ready / initializing / load_failed / incomplete / not_installed / disabled。 */
     state?: string;
     reason?: string;
-    model?: string;
-    model_dir?: string;
   };
   vision?: {
     enabled: boolean;
     configured?: boolean;
-    provider: string;
-    token_plan_key_source?: string;
-    api_key_source?: string;
-    billing?: string;
   };
   image_generation?: {
-    enabled: boolean;
     configured?: boolean;
-    provider: string;
-    model: string;
-    base_url?: string;
-    api_key_source?: string;
-    billing?: string;
-    error?: string;
+    model?: string;
   };
   gis_workflow?: {
     enabled: boolean;
     engine?: string;
-    qgis_root?: string;
-    init_warning?: Record<string, unknown> | null;
   };
   online_services: {
     amap_poi_enabled: boolean;
+    weather_basemap_enabled?: boolean;
   };
   basemaps: BasemapCatalog;
   templates: TemplateItem[];
+  knowledge_base?: {
+    item_count: number;
+  };
 };
 
 export type LlmStatusResponse = {
