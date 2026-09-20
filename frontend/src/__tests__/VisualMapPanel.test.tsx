@@ -37,6 +37,8 @@ describe("VisualMapPanel", () => {
     expect(screen.getByTestId("visual-map-scenes")).toBeTruthy();
     expect(screen.getByTestId("globe-scene-hu_density")).toBeTruthy();
     expect(screen.getByTestId("globe-theme-toggle-population_columns")).toBeTruthy();
+    expect(screen.getByTestId("urban-study-section")).toBeTruthy();
+    expect(screen.getByText("城市三维实景")).toBeTruthy();
     // 胡焕庸线既是主题组标题也是图层名，至少存在一处即可。
     expect(screen.getAllByText("胡焕庸线").length).toBeGreaterThanOrEqual(1);
   });

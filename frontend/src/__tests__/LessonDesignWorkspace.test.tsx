@@ -453,7 +453,7 @@ describe("LessonDesignWorkspace", () => {
     render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
     const adopt = await screen.findByTestId("ldw-adopt-continue");
     await waitFor(() => expect(adopt).not.toBeDisabled());
-    expect(adopt.textContent).toBe("下一步");
+    expect(adopt.textContent).toBe("确认“教学过程”并进入下一步");
     expect(screen.queryByText("采用当前建议并继续")).toBeNull();
 
     fireEvent.click(adopt);
