@@ -34,6 +34,25 @@ const weatherItems = [
   }
 ];
 
+const populationItems = [
+  {
+    id: "nasa_nightlights_2016",
+    title: "夜间灯光 · 2016",
+    description: "夜间灯光专题。",
+    type: "stack",
+    provider: "nasa",
+    layers: []
+  },
+  {
+    id: "nasa_population_2020",
+    title: "人口 · 2020",
+    description: "人口密度热力图。",
+    type: "stack",
+    provider: "nasa",
+    layers: []
+  }
+];
+
 describe("BasemapMenu", () => {
   it("renders grouped basemap sections and allows selecting nested options", async () => {
     const onSelect = vi.fn();
@@ -41,7 +60,7 @@ describe("BasemapMenu", () => {
     render(
       <BasemapMenu
         activeId="amap_vector"
-        items={[...basicItems, ...weatherItems]}
+        items={[...basicItems, ...weatherItems, ...populationItems]}
         onSelect={onSelect}
       />
     );
@@ -50,13 +69,32 @@ describe("BasemapMenu", () => {
 
     expect(screen.getByRole("menu", { name: "底图选择" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /基础底图/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /天气底图/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /专题底图/ })).toBeInTheDocument();
     expect(screen.queryByRole("menuitemradio", { name: /高德影像/ })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /基础底图/ }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: /高德影像/ }));
 
     expect(onSelect).toHaveBeenCalledWith("amap_imagery");
+  });
+
+  it("places weather and population inside thematic basemaps", () => {
+    const onSelect = vi.fn();
+    render(
+      <BasemapMenu
+        activeId="amap_vector"
+        items={[...basicItems, ...weatherItems, ...populationItems]}
+        onSelect={onSelect}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "底图 · 高德标准" }));
+    fireEvent.click(screen.getByRole("button", { name: /专题底图/ }));
+    expect(screen.getByRole("button", { name: /^天气/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^人口/ }));
+    expect(screen.getByRole("menuitemradio", { name: /夜间灯光/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /人口热力图/ }));
+    expect(onSelect).toHaveBeenCalledWith("nasa_population_2020");
   });
 
   it("keeps the current basemap and explains how to configure when weather is not enabled", async () => {
@@ -66,7 +104,7 @@ describe("BasemapMenu", () => {
     render(
       <BasemapMenu
         activeId="amap_vector"
-        items={[...basicItems, ...weatherItems]}
+        items={[...basicItems, ...weatherItems, ...populationItems]}
         weatherEnabled={false}
         onWeatherBlocked={onWeatherBlocked}
         onSelect={onSelect}
@@ -74,7 +112,8 @@ describe("BasemapMenu", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "底图 · 高德标准" }));
-    fireEvent.click(screen.getByRole("button", { name: /天气底图/ }));
+    fireEvent.click(screen.getByRole("button", { name: /专题底图/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^天气/ }));
 
     // 天气分组与选项都带有「未配置」徽标
     const weatherOption = screen.getByRole("menuitemradio", { name: /天气 · 降水/ });
@@ -100,7 +139,7 @@ describe("BasemapMenu", () => {
     render(
       <BasemapMenu
         activeId="amap_vector"
-        items={[...basicItems, ...weatherItems]}
+        items={[...basicItems, ...weatherItems, ...populationItems]}
         weatherEnabled={false}
         onSelect={vi.fn()}
       />
@@ -108,7 +147,25 @@ describe("BasemapMenu", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "底图 · 高德标准" }));
 
-    const groupToggle = screen.getByRole("button", { name: /天气底图/ });
+    fireEvent.click(screen.getByRole("button", { name: /专题底图/ }));
+    const groupToggle = screen.getByRole("button", { name: /^天气/ });
     expect(groupToggle).toHaveTextContent("未配置");
+  });
+
+  it("keeps population basemaps available when weather is unconfigured", () => {
+    const onSelect = vi.fn();
+    render(
+      <BasemapMenu
+        activeId="amap_vector"
+        items={[...basicItems, ...weatherItems, ...populationItems]}
+        weatherEnabled={false}
+        onSelect={onSelect}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "底图 · 高德标准" }));
+    fireEvent.click(screen.getByRole("button", { name: /专题底图/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^人口/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /夜间灯光/ }));
+    expect(onSelect).toHaveBeenCalledWith("nasa_nightlights_2016");
   });
 });

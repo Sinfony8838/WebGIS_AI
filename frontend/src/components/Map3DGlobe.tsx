@@ -450,6 +450,7 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
       urbanStatusRef.current?.("manifest");
       removeListeners.push(result.tileVisible.addEventListener(()=>urbanStatusRef.current?.("visible")));
       removeListeners.push(result.tileFailed.addEventListener(()=>urbanStatusRef.current?.("error")));
+      void viewer.zoomTo(result).catch(()=>{if(!cancelled)urbanStatusRef.current?.("error");});
       viewer.scene.requestRender();
     }).catch(()=>{if(!cancelled)urbanStatusRef.current?.("error");});
     return ()=>{

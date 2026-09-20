@@ -783,39 +783,39 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
                 发送给 AI
               </button>
             </div>
-            <div className="ldw-step-navigation" data-testid="ldw-step-navigation">
-              <div className="ldw-step-navigation-copy">
-                <strong>确认与推进</strong>
-                <small>“下一步”会确认当前步骤内容并继续，不会直接发布教案。</small>
-              </div>
-              <div className="ldw-actions">
-                <button type="button" className="toolbar-button compact" disabled={busy || !design} onClick={() => void runTurn("返回上一步，重新讨论上一部分")}>
-                  重新讨论上一步
-                </button>
-                {focusStep && focusStep !== currentStep ? (
+          </div>
+          <footer className="ldw-step-footer" data-testid="ldw-step-navigation">
+            {focusStep && focusStep !== currentStep ? (
+              <>
+                <span>正在回看：{STEPS.find(([key]) => key === viewStep)?.[1] || "历史步骤"}</span>
+                <div className="ldw-actions">
+                  <button type="button" className="toolbar-button compact" onClick={() => setFocusStep("")}>
+                    回到当前步骤
+                  </button>
                   <button
                     type="button"
-                    className="toolbar-button compact"
+                    className="toolbar-button compact primary"
                     disabled={busy || !design || !STEP_SECTION_KEYS[viewStep]?.length}
                     onClick={() => void acceptStep(viewStep)}
                     data-testid="ldw-accept-step"
                   >
                     确认本节
                   </button>
-                ) : null}
-                <button
-                  type="button"
-                  className="toolbar-button compact primary"
-                  disabled={busy || !design || !canAdoptCurrent}
-                  onClick={() => void acceptStep(currentStep)}
-                  title={`确认“${STEPS.find(([key]) => key === currentStep)?.[1] || "当前步骤"}”并进入下一步`}
-                  data-testid="ldw-adopt-continue"
-                >
-                  下一步
-                </button>
-              </div>
-            </div>
-          </div>
+                </div>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="toolbar-button compact primary ldw-next-step"
+                disabled={busy || !design || !canAdoptCurrent}
+                onClick={() => void acceptStep(currentStep)}
+                title={`确认“${STEPS.find(([key]) => key === currentStep)?.[1] || "当前步骤"}”并进入下一步`}
+                data-testid="ldw-adopt-continue"
+              >
+                确认“{STEPS.find(([key]) => key === currentStep)?.[1] || "当前步骤"}”并进入下一步
+              </button>
+            )}
+          </footer>
         </aside>
       </div>
     </section>

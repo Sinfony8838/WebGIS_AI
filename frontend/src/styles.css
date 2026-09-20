@@ -1097,6 +1097,45 @@ button {
   border-left: 1px solid rgba(217, 227, 237, 0.12);
 }
 
+.basemap-thematic-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(217, 227, 237, 0.12);
+}
+
+.basemap-subgroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.basemap-subgroup-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(217, 227, 237, 0.12);
+  border-radius: 12px;
+  color: var(--text-main);
+  background: rgba(36, 52, 70, 0.2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.basemap-subgroup-toggle:hover,
+.basemap-subgroup-toggle.active {
+  border-color: rgba(140, 222, 255, 0.35);
+  background: rgba(88, 199, 255, 0.1);
+}
+
+.basemap-subgroup .basemap-group-options {
+  margin-left: 8px;
+}
+
 .basemap-option {
   width: 100%;
   text-align: left;
@@ -4290,7 +4329,7 @@ button {
   font-size: 11.5px;
 }
 
-/* The selector is restricted to the active 2D/3D canvas. */
+/* The selector covers the visible WebGIS workspace; the frozen map canvas is composited into it. */
 .screenshot-selector {
   position: fixed;
   z-index: 1000;
@@ -4302,15 +4341,33 @@ button {
 
 .screenshot-selector-hint {
   position: absolute;
-  top: 84px;
+  top: 16px;
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  box-sizing: border-box;
   padding: 8px 14px;
-  border-radius: 999px;
+  border-radius: 14px;
   color: #eff9ff;
   background: rgba(5, 20, 38, 0.88);
   border: 1px solid rgba(140, 222, 255, 0.42);
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: default;
+}
+
+.screenshot-selector-hint > span {
+  white-space: nowrap;
+}
+
+.screenshot-selector-hint > strong {
+  color: #ffd18d;
+  font-size: 12px;
 }
 
 .screenshot-selector-box {
@@ -4319,6 +4376,45 @@ button {
   background: rgba(88, 199, 255, 0.12);
   box-shadow: 0 0 0 9999px rgba(2, 8, 18, 0.2);
   pointer-events: none;
+}
+
+.screenshot-destination-tray {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) repeat(2, minmax(100px, auto));
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(140, 222, 255, 0.42);
+  border-radius: 14px;
+  background: rgba(5, 20, 38, 0.9);
+  cursor: default;
+}
+
+.screenshot-drag-source,
+.screenshot-drop-target {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+  border: 1px dashed rgba(140, 222, 255, 0.45);
+  border-radius: 10px;
+  color: #eff9ff;
+  background: rgba(88, 199, 255, 0.08);
+  font: inherit;
+}
+
+.screenshot-drag-source { cursor: grab; }
+.screenshot-drag-source:active { cursor: grabbing; }
+.screenshot-drop-target { font-weight: 700; }
+.screenshot-selector.is-dragging .screenshot-drop-target { border-style: solid; background: rgba(88, 199, 255, 0.2); }
+
+@media (max-width: 700px) {
+  .screenshot-destination-tray { left: 10px; right: 10px; grid-template-columns: 1fr 1fr; }
+  .screenshot-drag-source { grid-column: 1 / -1; }
 }
 
 @media (max-width: 680px) {
