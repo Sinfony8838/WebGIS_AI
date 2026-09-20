@@ -275,6 +275,63 @@ class ResourceAuthorizationMatrixTest(unittest.TestCase):
         bank_b_image.write_bytes(b"PNG")
         self.assertFalse(app_main.auth_service.can_access_file(self.a_user["user_id"], bank_b_image))
 
+    def test_admin_preview_does_not_reassign_teacher_file_grants(self) -> None:
+        """Phase-1 acceptance B: an admin previewing a teacher's bank must not
+        steal the teacher's grant rows (the old ON CONFLICT DO UPDATE
+        reassigned ownership to the latest grantor, locking the teacher out
+        of their own question-bank images)."""
+        image = Path(app_main.config.uploads_dir) / "question_banks" / "bank_a" / "images" / "q.png"
+        image.parent.mkdir(parents=True, exist_ok=True)
+        image.write_bytes(b"PNG")
+        roots = resource_access.bank_grant_roots(app_main.config, ["bank_a"])
+        url = "/files/uploads/question_banks/bank_a/images/q.png"
+        payload = {"image_url": url}
+
+        teacher_request = self._fabricated_request(self.a_user["user_id"])
+        app_main._grant_response_files(teacher_request, payload, allowed_roots=roots)
+        self.assertTrue(app_main.auth_service.can_access_file(self.a_user["user_id"], image))
+
+        admin_request = self._fabricated_request(self._admin_user_id(), role="admin")
+        app_main._grant_response_files(admin_request, payload, allowed_roots=roots)
+        # Teacher A keeps access; unrelated teacher B still denied; repeated
+        # grants for the same owner are stable (重复导出不受影响).
+        self.assertTrue(app_main.auth_service.can_access_file(self.a_user["user_id"], image))
+        self.assertFalse(app_main.auth_service.can_access_file(self.b_user["user_id"], image))
+        app_main._grant_response_files(teacher_request, payload, allowed_roots=roots)
+        self.assertTrue(app_main.auth_service.can_access_file(self.a_user["user_id"], image))
+
+    def _admin_user_id(self) -> str:
+        me = self.client.get("/auth/me")
+        return me.json()["user"]["user_id"]
+
+    def test_same_teacher_two_projects_cannot_cross_use_uploads(self) -> None:
+        """同一教师的第二个项目不能通过客户端参数串用第一个项目的上传数据。"""
+        second_project = self._create_project(self.teacher_a_client, self.a_csrf, "A的第二个项目")
+        uploads_a = Path(app_main.config.uploads_dir) / self.project_a
+        uploads_a.mkdir(parents=True, exist_ok=True)
+        (uploads_a / "data.geojson").write_text(GEOJSON, encoding="utf-8")
+        # Workflow under project #2 referencing project #1's upload: rejected.
+        response = self.teacher_a_client.post(
+            "/workflow/submit",
+            json={
+                "project_id": second_project,
+                "message": "做一幅人口分布专题图",
+                "parameters": {"project_id": second_project},
+                "template_id": "population_choropleth",
+                "mode": "template",
+            },
+            headers={"X-WebGIS-CSRF": self.a_csrf},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        from backend.app.services.workflow_executor import _resolve_dataset_for_preflight
+
+        self.assertIsNone(
+            _resolve_dataset_for_preflight(app_main.config, f"upload:{self.project_a}/data.geojson", second_project)
+        )
+        workspace = Workspace("wf_same_teacher", Path(app_main.config.workflows_dir) / "wf_same_teacher")
+        with self.assertRaises(WorkflowExecutionError):
+            worker_common.resolve_dataset_path(workspace, f"upload:{self.project_a}/data.geojson", project_id=second_project)
+
     # --------------------------------------- workflow project context (T2.3)
 
     def test_workflow_submit_rejects_mismatched_nested_project_id(self) -> None:
