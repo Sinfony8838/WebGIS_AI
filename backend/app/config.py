@@ -316,6 +316,12 @@ class AppConfig:
     workflow_queue_timeout_seconds: float = field(
         default_factory=lambda: float(os.getenv("WEBGIS_AI_WORKFLOW_QUEUE_TIMEOUT_SECONDS", "120"))
     )
+    llm_max_concurrent: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_LLM_MAX_CONCURRENT", "4"))
+    )
+    llm_queue_timeout_seconds: float = field(
+        default_factory=lambda: float(os.getenv("WEBGIS_AI_LLM_QUEUE_TIMEOUT_SECONDS", "30"))
+    )
     llm_provider_source: str = field(init=False, default="default")
     minimax_api_key_source: str = field(init=False, default="unset")
     minimax_base_url_source: str = field(init=False, default="default")

@@ -17,6 +17,7 @@ import urllib.request
 from typing import Any, Dict, List, Optional
 
 from ..config import AppConfig
+from .request_limits import AdmissionGate
 
 
 class LLMClient:
@@ -24,6 +25,15 @@ class LLMClient:
 
     def __init__(self, config: AppConfig):
         self.config = config
+        # Outbound admission budget on the shared entry (both wire formats):
+        # bounded concurrent calls with an explicit queue timeout instead of
+        # unbounded parallel paid requests. Per-instance by design — the
+        # runtime owns exactly one client per process; multi-process
+        # deployments must size the limit per process.
+        self._admission = AdmissionGate(
+            max_concurrent=getattr(config, "llm_max_concurrent", 4),
+            timeout=getattr(config, "llm_queue_timeout_seconds", 30.0),
+        )
 
     # ------------------------------------------------------------------
     # Status / introspection
@@ -67,6 +77,26 @@ class LLMClient:
         if not self.config.llm_enabled():
             raise RuntimeError(self._provider_unconfigured_message())
 
+        if not self._admission.acquire():
+            raise RuntimeError(
+                f"{self._provider_label()} 并发请求已达上限（排队超时），请稍后重试。"
+            )
+        try:
+            return self._chat_completion_locked(
+                messages, temperature, model=model, extra_payload=extra_payload, timeout=timeout
+            )
+        finally:
+            self._admission.release()
+
+    def _chat_completion_locked(
+        self,
+        messages: List[Dict[str, Any]],
+        temperature: float = 0.2,
+        *,
+        model: Optional[str] = None,
+        extra_payload: Optional[Dict[str, Any]] = None,
+        timeout: float = 45.0,
+    ) -> str:
         if self._uses_anthropic_format():
             return self._anthropic_chat_completion(
                 messages,
