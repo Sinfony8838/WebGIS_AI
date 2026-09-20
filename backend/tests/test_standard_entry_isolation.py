@@ -1,0 +1,89 @@
+"""Standard-entry isolation guarantees (phase-1 acceptance task A).
+
+The root conftest scrubs inherited production overrides and refuses to
+collect when the checkout's default data root already holds a live
+instance. These tests pin that behavior using synthetic directories only
+(never a real production path).
+"""
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+from backend.tests.conftest import (
+    INHERITED_OVERRIDE_VARS,
+    default_data_root,
+    instance_marker_labels,
+    scrub_inherited_overrides,
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_conftest_scrub_removes_inherited_overrides() -> None:
+    for name in INHERITED_OVERRIDE_VARS:
+        os.environ[name] = "synthetic-sentinel"
+    try:
+        removed = scrub_inherited_overrides()
+        assert set(INHERITED_OVERRIDE_VARS) <= set(removed)
+        for name in INHERITED_OVERRIDE_VARS:
+            assert name not in os.environ
+    finally:
+        scrub_inherited_overrides()
+
+
+def test_instance_marker_labels_on_synthetic_directories(tmp_path: Path) -> None:
+    empty = tmp_path / "empty-instance"
+    empty.mkdir()
+    assert instance_marker_labels(empty) == []
+
+    with_auth = tmp_path / "with-auth"
+    (with_auth / "auth").mkdir(parents=True)
+    (with_auth / "auth" / "auth.db").write_bytes(b"synthetic")
+    assert instance_marker_labels(with_auth) == ["auth_db"]
+
+    with_state = tmp_path / "with-state"
+    (with_state / "state").mkdir(parents=True)
+    (with_state / "state" / "runtime.json").write_text("{}", encoding="utf-8")
+    assert instance_marker_labels(with_state) == ["state_file"]
+
+
+def test_default_data_root_points_inside_this_checkout() -> None:
+    root = default_data_root()
+    assert root == REPO_ROOT / "backend" / "data"
+
+
+def test_collection_refuses_when_live_instance_markers_exist(tmp_path: None = None) -> None:
+    """End-to-end guard: a populated default data root aborts collection.
+
+    The marker file is synthetic (created and removed around the run) in
+    this checkout's test-generated data dir.
+    """
+    marker = default_data_root() / "auth" / "auth.db"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_bytes(b"synthetic-guard-probe")
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", "backend/tests/test_phase1_data_isolation.py", "--collect-only", "-q"],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert result.returncode != 0, result.stdout + result.stderr
+        assert "Refusing to run tests" in result.stdout + result.stderr
+        assert "auth_db" in result.stdout + result.stderr
+    finally:
+        marker.unlink(missing_ok=True)
+        marker.parent.rmdir()
+    # With the marker gone, the same command collects normally.
+    clean = subprocess.run(
+        [sys.executable, "-m", "pytest", "backend/tests/test_phase1_data_isolation.py", "--collect-only", "-q"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert clean.returncode == 0, clean.stdout + clean.stderr
