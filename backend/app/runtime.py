@@ -1721,7 +1721,13 @@ class WebGISRuntime:
         """Build a workflow JSON from a template (or accept caller-built JSON)
         and hand it off to :class:`WorkflowExecutor`."""
         params = dict(parameters or {})
-        params.setdefault("project_id", project_id)
+        # Server-side project context: the trusted owner project is injected
+        # here and never taken from client parameters. A client-supplied
+        # nested project_id that disagrees with the validated one is rejected.
+        supplied = params.get("project_id")
+        if supplied is not None and str(supplied) != str(project_id):
+            raise ValueError("parameters.project_id 与请求项目不一致")
+        params["project_id"] = project_id
         chosen_template = template_id or detect_template(message) or "population_choropleth"
         try:
             match = expand_template(chosen_template, message, params)

@@ -53,6 +53,30 @@ def builtin_root() -> Path:
     return Path(__file__).resolve().parents[3] / "data" / "builtin"
 
 
+def _path_within(candidate: Path, root: Path) -> bool:
+    """Containment on resolved paths (symlink/junction aware)."""
+    try:
+        Path(candidate).resolve().relative_to(Path(root).resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def workspace_data_root(workspace: Workspace) -> Path:
+    """Data root for the given workflow workspace.
+
+    ``WorkflowExecutor`` hands the manager ``workflows_root = <data>/workflows``
+    and the worker builds ``Workspace(workflow_id, workflows_root/<id>)``, so
+    the workspace's grandparent is the data root. Deriving it per-workspace
+    keeps resolution independent of process-global state (env) and correct
+    for relocated data roots.
+    """
+    candidate = (Path(workspace.root_dir).parent.parent).resolve()
+    if (candidate / "workflows").exists():
+        return candidate
+    return workspace_root()
+
+
 def resolve_dataset_path(workspace: Workspace, source: str, project_id: str = "") -> Path:
     """Resolve a dataset identifier to a concrete file path.
 
@@ -69,12 +93,32 @@ def resolve_dataset_path(workspace: Workspace, source: str, project_id: str = ""
             user_friendly="数据集来源为空。",
         )
     cleaned = source.strip()
-    base_data = workspace_root()
+    base_data = workspace_data_root(workspace)
 
     if cleaned.startswith("upload:"):
         rest = cleaned.removeprefix("upload:").lstrip("/").replace("\\", "/")
+        # Upload references are pinned to the step's trusted project: the
+        # first path segment must name the project the workflow belongs to,
+        # so one project can never reach another project's uploads.
+        owner_project = (rest.split("/", 1) or [""])[0]
+        if project_id and owner_project != project_id:
+            raise WorkflowExecutionError(
+                code="DATASET_NOT_ALLOWED",
+                message=f"upload reference does not belong to project: {cleaned}",
+                user_friendly="上传数据引用不属于当前项目，已拒绝访问。",
+            )
+        uploads_root = (base_data / "uploads").resolve()
+        owner_root = (uploads_root / owner_project).resolve()
         candidate = (base_data / "uploads" / rest).resolve()
-        if str(candidate).startswith(str((base_data / "uploads").resolve())) and candidate.exists():
+        try:
+            candidate.relative_to(owner_root)
+        except ValueError:
+            raise WorkflowExecutionError(
+                code="DATASET_NOT_ALLOWED",
+                message=f"upload reference escapes the owning project directory: {cleaned}",
+                user_friendly="上传数据引用越界，已拒绝访问。",
+            )
+        if candidate.exists():
             return candidate
         raise WorkflowExecutionError(
             code="DATASET_NOT_FOUND",
@@ -98,9 +142,19 @@ def resolve_dataset_path(workspace: Workspace, source: str, project_id: str = ""
             user_friendly=f"未找到内置数据：{rest}",
         )
 
-    # Absolute / workflow-internal path passed through resolve_reference
+    # Absolute / workflow-internal path: only files generated inside the
+    # current workflow's own workspace (previous-step outputs and similar)
+    # may be passed as absolute paths. Anything else on the server is off
+    # limits, even when it exists and is readable.
     if cleaned.startswith("/") or re.match(r"^[A-Za-z]:[\\/]", cleaned):
         candidate = Path(cleaned)
+        workflow_root = Path(workspace.root_dir).resolve()
+        if not candidate.is_absolute() or not _path_within(candidate, workflow_root):
+            raise WorkflowExecutionError(
+                code="DATASET_NOT_ALLOWED",
+                message=f"absolute path outside the workflow workspace: {cleaned}",
+                user_friendly="绝对路径数据源不属于当前工作流，已拒绝访问。",
+            )
         if candidate.exists():
             return candidate
 

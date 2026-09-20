@@ -109,9 +109,10 @@ def _resolve_dataset_for_preflight(
         if project_id and owner_project != project_id:
             return None
         uploads_root = config.uploads_dir.resolve()
+        owner_root = (uploads_root / owner_project).resolve()
         candidate = (uploads_root / rest).resolve()
         try:
-            candidate.relative_to(uploads_root)
+            candidate.relative_to(owner_root)
         except ValueError:
             return None
         if candidate.exists():

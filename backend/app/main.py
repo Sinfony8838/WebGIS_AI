@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from .config import AppConfig
 from .runtime import WebGISRuntime
 from .services.minimax_image_client import MiniMaxImageError
+from .services import resource_access
 from .services.ppt_renderer import PptRenderError, render_pptx_to_images
 from .services.auth import AuthContext, AuthError, AuthService
 
@@ -320,12 +321,19 @@ def _clear_session_cookie(response: Response) -> None:
     )
 
 
-def _grant_response_files(request: Request, payload: Any) -> None:
+def _grant_response_files(request: Request, payload: Any, allowed_roots: tuple) -> None:
+    """Grant file access for ``/files/...`` URLs a response legitimately contains.
+
+    Only normalized references that resolve inside one of ``allowed_roots`` —
+    the roots this request already authorized — produce a grant. Any other
+    string (including user-controlled text that merely looks like a file URL)
+    is ignored, so a response can never mint new authorization.
+    """
     if auth_service is None:
         return
     context = _current_auth(request)
     user_id = str(context.user.get("user_id") or "")
-    if not user_id:
+    if not user_id or not allowed_roots:
         return
 
     def visit(value: Any) -> None:
@@ -336,12 +344,39 @@ def _grant_response_files(request: Request, payload: Any) -> None:
             for nested in value:
                 visit(nested)
         elif isinstance(value, str) and value.startswith("/files/"):
+            resolved = resource_access.resolve_public_reference(config, value)
+            if resolved is None:
+                return
+            if not any(resource_access.path_within(resolved, root) for root in allowed_roots):
+                return
             try:
-                auth_service.grant_file(user_id, config.resolve_public_path(value[len("/files/"):]))
+                auth_service.grant_file(user_id, resolved)
             except (AuthError, ValueError):
                 pass
 
     visit(payload)
+
+
+def _project_grant_roots(project_id: str) -> tuple:
+    return resource_access.project_grant_roots(config, project_id)
+
+
+def _project_bank_roots(project_id: str) -> tuple:
+    """Image roots of the question banks that belong to ``project_id``."""
+    try:
+        items = runtime.classroom.list_question_banks(project_id).get("items", [])
+    except Exception:
+        return ()
+    bank_ids = [
+        str(item.get("bank_id") or item.get("id") or "")
+        for item in items
+        if isinstance(item, dict)
+    ]
+    return resource_access.bank_grant_roots(config, bank_ids)
+
+
+def _lesson_design_grant_roots(design) -> tuple:
+    return _project_grant_roots(design.project_id) + _project_bank_roots(design.project_id)
 
 
 class CreateProjectRequest(BaseModel):
@@ -1061,16 +1096,14 @@ def llm_status() -> Dict[str, Any]:
 
 @app.get("/files/{file_path:path}")
 def get_public_file(file_path: str, request: Request) -> FileResponse:
-    try:
-        resolved = config.resolve_public_path(file_path)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    if not resolved.is_file():
+    resolved = resource_access.resolve_public_reference(config, file_path)
+    if resolved is None or not resolved.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     context = _current_auth(request)
     if context.user.get("role") != "admin":
-        relative = file_path.replace("\\", "/").lstrip("/")
-        globally_visible = relative.startswith("uploads/teaching_maps/")
+        # Shared teaching assets: decided on the normalized, resolved path —
+        # never on the raw URL text.
+        shared_public = resource_access.is_shared_public_asset(config, resolved)
         matching = [
             artifact
             for artifact in runtime.store.artifacts.values()
@@ -1088,7 +1121,7 @@ def get_public_file(file_path: str, request: Request) -> FileResponse:
             auth_service
             and auth_service.can_access_file(str(context.user["user_id"]), resolved)
         )
-        if not globally_visible and not project_owned and not explicitly_owned:
+        if not shared_public and not project_owned and not explicitly_owned:
             raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(resolved)
 
@@ -1233,7 +1266,7 @@ async def upload_kb_material(
             owner_user_id=str(context.user["user_id"]),
             include_all=context.user.get("role") == "admin",
         )
-        _grant_response_files(request, result)
+        _grant_response_files(request, result, allowed_roots=(config.uploads_dir / "kb_materials",))
         return result
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="region_binding must be valid JSON") from exc
@@ -1647,7 +1680,7 @@ async def upload_dataset(
             lon_field=lon_field,
             image_bounds=bounds or None,
         )
-        _grant_response_files(request, result)
+        _grant_response_files(request, result, allowed_roots=_project_grant_roots(project_id))
         return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1704,7 +1737,7 @@ async def render_ppt(request: Request, file: UploadFile = File(...)) -> Dict[str
     try:
         raw = await file.read()
         result = render_pptx_to_images(config, file.filename or "presentation.pptx", raw)
-        _grant_response_files(request, result)
+        _grant_response_files(request, result, allowed_roots=(config.outputs_dir / "ppt_previews",))
         return result
     except PptRenderError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.to_dict()) from exc
@@ -1784,10 +1817,10 @@ def create_lesson_design_session(payload: LessonDesignCreateRequest, request: Re
 
 @app.get("/lesson-design/sessions/{design_id}")
 def get_lesson_design_session(design_id: str, request: Request) -> Dict[str, Any]:
-    _require_lesson_design_access(request, design_id)
+    design = _require_lesson_design_access(request, design_id)
     try:
         result = runtime.classroom.get_lesson_design(design_id)
-        _grant_response_files(request, result)
+        _grant_response_files(request, result, allowed_roots=_lesson_design_grant_roots(design))
         return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1795,10 +1828,10 @@ def get_lesson_design_session(design_id: str, request: Request) -> Dict[str, Any
 
 @app.post("/lesson-design/sessions/{design_id}/turns")
 def turn_lesson_design(design_id: str, payload: LessonDesignTurnRequest, request: Request) -> Dict[str, Any]:
-    _require_lesson_design_access(request, design_id)
+    design = _require_lesson_design_access(request, design_id)
     try:
         result = runtime.classroom.turn_lesson_design(design_id, payload.message, payload.expected_revision, payload.step)
-        _grant_response_files(request, result)
+        _grant_response_files(request, result, allowed_roots=_lesson_design_grant_roots(design))
         return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1808,7 +1841,7 @@ def turn_lesson_design(design_id: str, payload: LessonDesignTurnRequest, request
 
 @app.post("/lesson-design/sessions/{design_id}/questions/bind")
 def bind_lesson_design_question(design_id: str, payload: LessonDesignQuestionBindRequest, request: Request) -> Dict[str, Any]:
-    _require_lesson_design_access(request, design_id)
+    design = _require_lesson_design_access(request, design_id)
     try:
         result = runtime.classroom.bind_lesson_design_question(
             design_id,
@@ -1819,7 +1852,7 @@ def bind_lesson_design_question(design_id: str, payload: LessonDesignQuestionBin
             position=payload.position,
             expected_revision=payload.expected_revision,
         )
-        _grant_response_files(request, result)
+        _grant_response_files(request, result, allowed_roots=_lesson_design_grant_roots(design))
         return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1829,10 +1862,10 @@ def bind_lesson_design_question(design_id: str, payload: LessonDesignQuestionBin
 
 @app.post("/lesson-design/sessions/{design_id}/sections/{section_id}/resolve")
 def resolve_lesson_design_section(design_id: str, section_id: str, payload: LessonDesignResolveRequest, request: Request) -> Dict[str, Any]:
-    _require_lesson_design_access(request, design_id)
+    design = _require_lesson_design_access(request, design_id)
     try:
         result = runtime.classroom.resolve_lesson_design(design_id, section_id, payload.decision, payload.teacher_note, payload.expected_revision, payload.value)
-        _grant_response_files(request, result)
+        _grant_response_files(request, result, allowed_roots=_lesson_design_grant_roots(design))
         return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1842,10 +1875,10 @@ def resolve_lesson_design_section(design_id: str, section_id: str, payload: Less
 
 @app.post("/lesson-design/sessions/{design_id}/finalize")
 def finalize_lesson_design(design_id: str, payload: LessonDesignFinalizeRequest, request: Request) -> Dict[str, Any]:
-    _require_lesson_design_access(request, design_id)
+    design = _require_lesson_design_access(request, design_id)
     try:
         result = runtime.classroom.finalize_lesson_design(design_id, payload.expected_revision, payload.apply_base)
-        _grant_response_files(request, result)
+        _grant_response_files(request, result, allowed_roots=_lesson_design_grant_roots(design))
         return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1932,10 +1965,15 @@ def lesson_rehearsal_report(rehearsal_id: str, request: Request) -> Dict[str, An
 
 @app.post("/lesson-rehearsals/{rehearsal_id}/complete")
 def complete_lesson_rehearsal(rehearsal_id: str, payload: LessonRehearsalCompleteRequest, request: Request) -> Dict[str, Any]:
-    _require_rehearsal_access(request, rehearsal_id)
+    rehearsal = _require_rehearsal_access(request, rehearsal_id)
     try:
         result = runtime.classroom.complete_lesson_rehearsal(rehearsal_id, expected_revision=payload.expected_revision)
-        _grant_response_files(request, result)
+        _grant_response_files(
+            request,
+            result,
+            allowed_roots=_project_grant_roots(rehearsal.project_id)
+            + _project_bank_roots(rehearsal.project_id),
+        )
         return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1987,7 +2025,7 @@ async def import_question_banks(
 def list_question_banks(project_id: str, request: Request) -> Dict[str, Any]:
     _require_project_access(request, project_id)
     result = runtime.classroom.list_question_banks(project_id)
-    _grant_response_files(request, result)
+    _grant_response_files(request, result, allowed_roots=_project_bank_roots(project_id))
     return result
 
 
@@ -2023,7 +2061,7 @@ def list_question_bank_questions(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    _grant_response_files(request, result)
+    _grant_response_files(request, result, allowed_roots=resource_access.bank_grant_roots(config, [bank_id]))
     return result
 
 
@@ -2034,7 +2072,7 @@ def get_question_bank_group(bank_id: str, group_key: str, request: Request) -> D
         result = runtime.classroom.get_question_bank_group(bank_id, group_key)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    _grant_response_files(request, result)
+    _grant_response_files(request, result, allowed_roots=resource_access.bank_grant_roots(config, [bank_id]))
     return result
 
 
@@ -2056,7 +2094,7 @@ def search_question_banks(payload: QuestionBankSearchRequest, request: Request) 
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    _grant_response_files(request, result)
+    _grant_response_files(request, result, allowed_roots=resource_access.bank_grant_roots(config, payload.bank_ids))
     return result
 
 
@@ -2603,6 +2641,8 @@ def submit_workflow(payload: WorkflowSubmitRequest, request: Request) -> Dict[st
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/workflow/history")
