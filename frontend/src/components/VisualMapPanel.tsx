@@ -7,6 +7,7 @@ import {
   type GlobeThemeId
 } from "../lib/globeThemes";
 import type { ViewMode } from "../lib/viewMode";
+import { UrbanStudyPanel, type UrbanSource, type UrbanStatus, type UrbanStop } from "./UrbanStudyPanel";
 
 /** 二维目录图层条目（原 TeachingMapPanel 的形状，兼容一张图目录数据集）。 */
 export interface TeachingMapEntry {
@@ -61,6 +62,12 @@ type Props = {
   /** True when the dataset catalog request failed (distinct from "loading"). */
   catalogError?: boolean;
   onRetryCatalog?: () => void;
+  urbanActive?: boolean;
+  urbanSource?: UrbanSource | null;
+  urbanStatus?: UrbanStatus;
+  onVisitUrbanStop?: (stop: UrbanStop) => void;
+  onChangeUrbanSource?: (source: UrbanSource | null) => void;
+  onExitUrbanStudy?: () => void;
 };
 
 export function VisualMapPanel({
@@ -73,7 +80,13 @@ export function VisualMapPanel({
   busy,
   onToggleTextbook,
   catalogError = false,
-  onRetryCatalog
+  onRetryCatalog,
+  urbanActive = false,
+  urbanSource = null,
+  urbanStatus = "idle",
+  onVisitUrbanStop = () => undefined,
+  onChangeUrbanSource = () => undefined,
+  onExitUrbanStudy = () => undefined
 }: Props) {
   const [collapsed, setCollapsed] = useState(true);
 
@@ -270,6 +283,15 @@ export function VisualMapPanel({
               ))}
             </div>
           ) : null}
+
+          <UrbanStudyPanel
+            active={urbanActive}
+            source={urbanSource}
+            status={urbanStatus}
+            onVisit={onVisitUrbanStop}
+            onSource={onChangeUrbanSource}
+            onExit={onExitUrbanStudy}
+          />
         </div>
       )}
     </section>

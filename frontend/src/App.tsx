@@ -1,6 +1,6 @@
 import Polygon from "ol/geom/Polygon";
 import MultiPolygon from "ol/geom/MultiPolygon";
-import { UrbanStudyPanel, type UrbanSource, type UrbanStatus } from "./components/UrbanStudyPanel";
+import type { UrbanSource, UrbanStatus } from "./components/UrbanStudyPanel";
 import { shanghaiAgeColor, shanghaiDensityColor, densityColor, densityRadius, rankColor } from "./lib/populationVisual";
 import { MapEvidenceLegend } from "./components/MapEvidenceLegend";
 import { JobActivity } from "./lib/jobActivity";
@@ -32,6 +32,7 @@ import { Circle as CircleStyle, Fill, RegularShape, Stroke, Style, Text } from "
 import { easeOut } from "ol/easing";
 import { getCenter } from "ol/extent";
 import { captureMapSnapshot } from "./mapScreenshot";
+import { captureWorkspaceSnapshot } from "./workspaceScreenshot";
 import { observePlaneView } from "./lib/planeViewState";
 import { collectLegendRows, composeSnapshotDocument, mergeSnapshotInk, plainAttribution, type SnapshotDocument } from "./lib/snapshotDocument";
 import {
@@ -98,7 +99,7 @@ import { MapToolRail } from "./components/MapToolRail";
 import { LessonWorkflowShell } from "./components/LessonWorkflowShell";
 import { RegionFocusOverlay } from "./components/RegionFocusOverlay";
 import { SearchResultsCard, StatsResultsCard } from "./components/HeaderResultCards";
-import { ScreenshotSelector, type ScreenshotSelection } from "./components/ScreenshotSelector";
+import { ScreenshotSelector, type ScreenshotDestination, type ScreenshotSelection } from "./components/ScreenshotSelector";
 import { TeachingMaterialViewer } from "./components/TeachingMaterialViewer";
 import { ToastStack, type ToastItem } from "./components/ToastStack";
 import { UploadDialog } from "./components/UploadDialog";
@@ -296,6 +297,17 @@ function cropSnapshot(dataUrl: string, selection: ScreenshotSelection): Promise<
   });
 }
 
+function downloadSnapshot(dataUrl: string): void {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "").replace("T", "-");
+  const link = document.createElement("a");
+  link.href = dataUrl;
+  link.download = `webgis-screenshot-${stamp}.png`;
+  link.rel = "noopener";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
 function formatFeatureSummary(properties: Record<string, unknown>): string {
   const entries = Object.entries(properties)
     .filter(([key, value]) => key !== "geometry" && !key.startsWith("__") && value !== undefined && value !== "")
@@ -450,6 +462,7 @@ export default function App({
   onLogout: () => void;
   onUserChanged: (user: AuthUser) => void;
 }) {
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
   const mapElementRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<Map | null>(null);
     const basemapLayersRef = useRef<RenderableLayer[]>([]);
@@ -490,6 +503,9 @@ export default function App({
   const screenshotDocumentRef = useRef<{ projectId: string; document: SnapshotDocument; evidence: {sessionId:string;stageId:string} | null } | null>(null);
   const screenshotCaptureBusyRef = useRef(false);
   const screenshotSavingRef = useRef(false);
+  const screenshotArtifactRef = useRef<ArtifactRecord | null>(null);
+  const screenshotPersistPromiseRef = useRef<Promise<ArtifactRecord> | null>(null);
+  const [screenshotCapturing, setScreenshotCapturing] = useState(false);
   const [screenshotSaving, setScreenshotSaving] = useState(false);
 
 
@@ -1581,11 +1597,27 @@ export default function App({
   const snapshotViewRef = useRef({projectId: project?.project_id, basemap: layerState?.base_map, mode: viewMode});
   snapshotViewRef.current = {projectId: project?.project_id, basemap: layerState?.base_map, mode: viewMode};
 
+  const clearScreenshotDraft = useCallback(() => {
+    pendingEvidenceSnapshotRef.current = null;
+    screenshotDocumentRef.current = null;
+    screenshotArtifactRef.current = null;
+    screenshotPersistPromiseRef.current = null;
+    setScreenshotSource("");
+    setScreenshotBounds(null);
+  }, []);
+
   const handleStartScreenshot = useCallback(async (): Promise<boolean> => {
-    if (!project || screenshotCaptureBusyRef.current || screenshotSavingRef.current || screenshotSource) return false;
+    if (!project) {
+      pushToast("info", "暂时无法截图", "项目尚未加载完成，请稍后重试。");
+      return false;
+    }
+    if (screenshotCaptureBusyRef.current || screenshotSavingRef.current || screenshotSource) return false;
     screenshotCaptureBusyRef.current = true;
+    screenshotArtifactRef.current = null;
+    screenshotPersistPromiseRef.current = null;
+    setScreenshotCapturing(true);
     const capturedProjectId = project.project_id;
-    const evidence = pendingEvidenceSnapshotRef.current ? {...pendingEvidenceSnapshotRef.current} : null;
+    const evidence = pendingEvidenceSnapshotRef.current ? { ...pendingEvidenceSnapshotRef.current } : null;
     const stageId = teachingContextRef.current?.stage_id;
     const freezeDetails = () => {
       const latest = snapshotViewRef.current;
@@ -1593,74 +1625,122 @@ export default function App({
       if (teachingContextRef.current?.stage_id !== stageId) throw new Error("课堂环节已变化，请重新截图。");
       brushRef.current?.exportImage();
       const basemap = latest.basemap;
-      const fallback = viewMode === "globe" && !basemap?.layers.some(layer => layer.kind === "xyz" && layer.usable_in_3d !== false && layer.urls.length);
+      const fallback = viewMode === "globe" && !basemap?.layers.some((layer) => layer.kind === "xyz" && layer.usable_in_3d !== false && layer.urls.length);
       screenshotDocumentRef.current = { projectId: capturedProjectId, evidence, document: {
-        title: document.querySelector(".class-stage-item.active .stage-item-title")?.textContent || "课堂地图",
+        title: document.querySelector(".class-stage-item.active .stage-item-title")?.textContent || "WebGIS 页面截图",
         capturedAt: new Date().toLocaleString("zh-CN"),
         basemap: fallback ? "高德参考底图（三维）" : basemap?.title || "当前底图",
-        attribution: fallback ? "© 高德地图" : [...new Set((basemap?.layers || []).map(layer => plainAttribution(layer.attribution || "")).filter(Boolean))].join("；"),
+        attribution: fallback ? "© 高德地图" : [...new Set((basemap?.layers || []).map((layer) => plainAttribution(layer.attribution || "")).filter(Boolean))].join("；"),
         rows: collectLegendRows(document.querySelector(".map-legend-content"))
       }};
     };
     try {
-      const rect = viewMode === "globe" ? globeRef.current?.getCanvasRect() || null : mapElementRef.current?.getBoundingClientRect() || null;
-      if (!rect || rect.width < 24 || rect.height < 24) throw new Error("当前地图区域尺寸无效。");
-      let imageDataUrl = "";
+      const root = workspaceRef.current;
+      const mapRect = viewMode === "globe" ? globeRef.current?.getCanvasRect() || null : mapElementRef.current?.getBoundingClientRect() || null;
+      if (!root || !mapRect || mapRect.width < 24 || mapRect.height < 24) throw new Error("当前页面或地图区域尺寸无效。");
+      let mapImageDataUrl = "";
       if (viewMode === "globe") {
-        imageDataUrl = globeRef.current?.captureImage() || "";
+        mapImageDataUrl = globeRef.current?.captureImage() || "";
         freezeDetails();
-        if (imageDataUrl) imageDataUrl = await mergeSnapshotInk(imageDataUrl, rect, document.querySelector<HTMLCanvasElement>('[data-testid="map-brush-overlay"]'));
-      } else if (mapRef.current) imageDataUrl = await captureMapSnapshot(mapRef.current, freezeDetails);
-      if (!imageDataUrl) throw new Error("当前地图画面尚未加载完成或无法读取，请稍后重试。");
+        if (mapImageDataUrl) mapImageDataUrl = await mergeSnapshotInk(mapImageDataUrl, mapRect, document.querySelector<HTMLCanvasElement>('[data-testid="map-brush-overlay"]'));
+      } else if (mapRef.current) {
+        mapImageDataUrl = await captureMapSnapshot(mapRef.current, freezeDetails);
+      }
+      if (!mapImageDataUrl) throw new Error("当前地图画面尚未加载完成或无法读取，请稍后重试。");
+      const imageDataUrl = await captureWorkspaceSnapshot({ root, mapImageDataUrl, target: viewMode });
+      const rect = root.getBoundingClientRect();
       setScreenshotSource(imageDataUrl);
-      setScreenshotBounds({left:rect.left,top:rect.top,width:rect.width,height:rect.height});
+      setScreenshotBounds({ left: rect.left, top: rect.top, width: rect.width, height: rect.height });
       return true;
     } catch (error) {
       screenshotDocumentRef.current = null;
-      pushToast("error", "截图失败", error instanceof Error ? error.message : "当前地图无法读取。");
+      pushToast("error", "截图失败", error instanceof Error ? error.message : "当前页面无法读取。");
       return false;
-    } finally { screenshotCaptureBusyRef.current = false; }
+    } finally {
+      screenshotCaptureBusyRef.current = false;
+      setScreenshotCapturing(false);
+    }
   }, [project, pushToast, viewMode, layerState?.base_map, screenshotSource]);
 
-  const handleCompleteScreenshot = useCallback(async (selection: ScreenshotSelection) => {
+  const buildSelectedScreenshot = useCallback(async (selection: ScreenshotSelection): Promise<string> => {
     const frozen = screenshotDocumentRef.current;
-    if (!project || !screenshotSource || !frozen || screenshotSavingRef.current) return;
-    screenshotSavingRef.current = true; setScreenshotSaving(true);
-    try {
-      if (project.project_id !== frozen.projectId) throw new Error("项目已切换，请重新截图。");
-      const cropped = await cropSnapshot(screenshotSource, selection);
-      const composed = await composeSnapshotDocument(cropped, frozen.document, selection.width);
-      const saved = await exportSnapshot(frozen.projectId, `地图截图 ${frozen.document.capturedAt}`, composed, "地图区域框选截图，附截图时图例、年份、来源与课堂笔迹");
-      const evidence = frozen.evidence;
-      let evidenceRecorded = true;
-      if (evidence) {
+    if (!project || !screenshotSource || !frozen) throw new Error("截图草稿已失效，请重新截图。");
+    if (project.project_id !== frozen.projectId) throw new Error("项目已切换，请重新截图。");
+    const cropped = await cropSnapshot(screenshotSource, selection);
+    return composeSnapshotDocument(cropped, frozen.document, selection.width);
+  }, [project, screenshotSource]);
+
+  const persistSelectedScreenshot = useCallback((selection: ScreenshotSelection): Promise<ArtifactRecord> => {
+    if (screenshotArtifactRef.current) return Promise.resolve(screenshotArtifactRef.current);
+    if (screenshotPersistPromiseRef.current) return screenshotPersistPromiseRef.current;
+    const frozen = screenshotDocumentRef.current;
+    const task = (async () => {
+      if (!frozen) throw new Error("截图草稿已失效，请重新截图。");
+      screenshotSavingRef.current = true;
+      setScreenshotSaving(true);
+      const composed = await buildSelectedScreenshot(selection);
+      const payload = composed.split(",", 2)[1] || "";
+      const estimatedBytes = Math.ceil(payload.length * 3 / 4);
+      if (estimatedBytes > 20 * 1024 * 1024) throw new Error("所选截图超过 20MB，请缩小框选范围后重试。");
+      const saved = await exportSnapshot(frozen.projectId, `页面截图 ${frozen.document.capturedAt}`, composed, "WebGIS 页面框选截图，附截图时图例、年份、来源与课堂笔迹");
+      screenshotArtifactRef.current = saved.artifact;
+      if (frozen.evidence) {
         try {
-          await logSessionEvent(evidence.sessionId, {
+          await logSessionEvent(frozen.evidence.sessionId, {
             event_type: "snapshot",
-            stage_id: evidence.stageId,
+            stage_id: frozen.evidence.stageId,
             payload: { artifact_id: saved.artifact.artifact_id, title: saved.artifact.title }
           });
         } catch (error) {
-          evidenceRecorded = false;
-          pushToast("error", "课堂存证未记录", error instanceof Error ? error.message : "图片已保存，但课堂事件写入失败。请重试存证。");
+          pushToast("error", "课堂存证未记录", error instanceof Error ? error.message : "图片已保存，但课堂事件写入失败。");
         }
       }
-      await refreshProjectState(project.project_id);
-      setDatabaseViewerOpen(true);
-      setDatabaseCategory("images");
-      if (evidenceRecorded) {
-        pushToast("success", "截图已保存", "可在图片库中预览，或加入智能助教进行识图问答。");
-      }
+      await refreshProjectState(frozen.projectId);
+      return saved.artifact;
+    })().finally(() => {
+      screenshotSavingRef.current = false;
+      screenshotPersistPromiseRef.current = null;
+      setScreenshotSaving(false);
+    });
+    screenshotPersistPromiseRef.current = task;
+    return task;
+  }, [buildSelectedScreenshot, pushToast, refreshProjectState]);
+
+  const handleSaveScreenshotLocally = useCallback(async (selection: ScreenshotSelection) => {
+    if (screenshotSavingRef.current) return;
+    screenshotSavingRef.current = true;
+    setScreenshotSaving(true);
+    try {
+      downloadSnapshot(await buildSelectedScreenshot(selection));
+      pushToast("success", "截图已下载", "PNG 已保存到本机，未写入项目数据库。");
+      clearScreenshotDraft();
     } catch (error) {
-      pushToast("error", "截图失败", error instanceof Error ? error.message : "截图保存失败。");
+      pushToast("error", "截图失败", error instanceof Error ? error.message : "截图下载失败。");
     } finally {
-      pendingEvidenceSnapshotRef.current = null;
-      screenshotDocumentRef.current = null;
-      screenshotSavingRef.current = false; setScreenshotSaving(false);
-      setScreenshotSource("");
-      setScreenshotBounds(null);
+      screenshotSavingRef.current = false;
+      setScreenshotSaving(false);
     }
-  }, [project, pushToast, refreshProjectState, screenshotSource]);
+  }, [buildSelectedScreenshot, clearScreenshotDraft, pushToast]);
+
+  const handleScreenshotDestination = useCallback(async (destination: ScreenshotDestination, selection: ScreenshotSelection) => {
+    try {
+      const artifact = await persistSelectedScreenshot(selection);
+      if (destination === "database") {
+        setDatabaseCategory("images");
+        setDatabaseViewerOpen(true);
+        pushToast("success", "截图已入库", "已保存到数据库的图片分类。");
+      } else {
+        const publicUrl = typeof artifact.metadata?.public_url === "string" ? artifact.metadata.public_url : "";
+        if (!publicUrl) throw new Error("截图已保存，但缺少可发送的图片地址。");
+        setPendingImage({ artifact_id: artifact.artifact_id, title: artifact.title || artifact.artifact_id, public_url: buildPublicFileUrl(publicUrl), mime_type: "image/png" });
+        setCopilotOpenSignal((value) => value + 1);
+        pushToast("success", "截图已加入智能助教", "请补充问题后发送，图片不会自动提交。");
+      }
+      clearScreenshotDraft();
+    } catch (error) {
+      pushToast("error", "截图保存失败", error instanceof Error ? error.message : "请稍后重试。");
+    }
+  }, [clearScreenshotDraft, persistSelectedScreenshot, pushToast]);
 
   const handleAttachImage = useCallback((image: ImageAttachment) => {
     setPendingImage((current) => {
@@ -3494,8 +3574,10 @@ export default function App({
 
   return (
     <div
+      ref={workspaceRef}
       className={`screen-shell screen-shell-classroom view-mode-${viewMode}`}
       data-interaction-mode={interactionMode}
+      data-testid="workspace-capture-root"
     >
       <div
         ref={mapElementRef}
@@ -3677,8 +3759,14 @@ export default function App({
           >
             {pptLoading ? "解析中…" : "导入 PPT"}
           </button>
-          <button type="button" className="toolbar-button" onClick={() => void handleStartScreenshot()}>
-            截图
+          <button
+            type="button"
+            className="toolbar-button"
+            data-testid="toolbar-screenshot"
+            disabled={!project || screenshotCapturing || screenshotSaving}
+            onClick={() => void handleStartScreenshot()}
+          >
+            {screenshotCapturing ? "截取中…" : screenshotSaving ? "处理中…" : "截图"}
           </button>
           {initError ? (
             <button
@@ -3885,12 +3973,31 @@ export default function App({
               }
               void handleToggleTextbookMap(id, visible);
             }}
+            urbanActive={urbanActive}
+            urbanSource={urbanSource}
+            urbanStatus={urbanStatus}
+            onVisitUrbanStop={(stop) => {
+              lessonGlobePinnedRef.current = false;
+              lessonGlobeRestoreRef.current = null;
+              setUrbanActive(true);
+              setViewMode("globe");
+              setGlobeThemeIds([]);
+              globeRef.current?.lookAtLocation(stop.lon, stop.lat, stop.range);
+            }}
+            onChangeUrbanSource={(source) => {
+              setUrbanSource(source);
+              setUrbanActive(Boolean(source));
+              if (source) {
+                setViewMode("globe");
+                setGlobeThemeIds([]);
+              }
+            }}
+            onExitUrbanStudy={() => {
+              setUrbanActive(false);
+              setUrbanSource(null);
+              globeRef.current?.resetView();
+            }}
           />
-
-          <UrbanStudyPanel active={urbanActive} source={urbanSource} status={urbanStatus}
-            onVisit={stop => { lessonGlobePinnedRef.current=false; lessonGlobeRestoreRef.current=null; setUrbanActive(true); setViewMode("globe"); setGlobeThemeIds([]); globeRef.current?.lookAtLocation(stop.lon,stop.lat,stop.range); }}
-            onSource={setUrbanSource}
-            onExit={() => {setUrbanActive(false);setUrbanSource(null);globeRef.current?.resetView();}} />
         </MapToolsDock>
         </main>
 
@@ -4009,13 +4116,9 @@ export default function App({
           bounds={screenshotBounds}
           preview={screenshotSource}
           busy={screenshotSaving}
-          onComplete={(selection) => void handleCompleteScreenshot(selection)}
-          onCancel={() => {
-            pendingEvidenceSnapshotRef.current = null;
-            screenshotDocumentRef.current = null;
-            setScreenshotSource("");
-            setScreenshotBounds(null);
-          }}
+          onSaveLocal={(selection) => void handleSaveScreenshotLocally(selection)}
+          onDestination={(destination, selection) => void handleScreenshotDestination(destination, selection)}
+          onCancel={clearScreenshotDraft}
         />
       ) : null}
 
