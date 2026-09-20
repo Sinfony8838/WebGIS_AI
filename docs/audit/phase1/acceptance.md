@@ -64,10 +64,11 @@
 
 | 项 | 状态 | 说明 |
 |---|---|---|
-| 全量 backend pytest（本工作树，排除需真实语音模型下载的 test_download_voice_models） | 见交付时记录 | 后台执行；结果与 skip 原因如实附于交付说明 |
+| 全量 backend pytest（最终轮，`pytest backend/tests -q -ra`，排除 test_download_voice_models） | **PASS** | **861 passed, 5 skipped, 7 deselected, 148 subtests passed in 298s, exit 0**（2026-09-19，本工作树，源码 SHA = fd30057+runtime 测试修复提交）。skip 明细：1× symlink 权限（T2 受限项，如实记录）；1× 真实题库目录不存在（私有资产不入库）；3× QGIS_ROOT 未配置。deselect 7 项均需真实语音模型下载 |
 | 真实 QGIS worker 用例 | **NOT_RUN** | 本机 D:\QGIS 不存在（`ls /d/QGIS` exit 2）；QGIS_ROOT 门控测试按仓库既有逻辑 skip，未当 PASS |
 | 隔离浏览器 E2E（教师 A/B / 完整课堂流 / 失败降级） | **BLOCKED** | 需浏览器验收授权与真实服务；未执行，不以健康页/单测替代 |
 | 真实设备（真麦克风中文/否定句/触控） | **BLOCKED** | 需真人设备授权 |
 | 人工无障碍 | **BLOCKED** | 需人工参与；不宣称 WCAG 合规 |
 | 线上只读/登录/写操作 | **BLOCKED** | 当前线上 SHA 无法确认（无 release 产物）；未执行任何线上验证 |
 | quality-gate.yml | 零改动 | backend job 已运行 `pytest backend/tests -q`，新增测试自动纳入；未添加部署步骤 |
+| 既有测试契约更新 | 2 处 | test_voice_ws_endpoint.py（patch 目标改名 + load_failed detail 脱敏固定标签）；test_runtime.py 的 health 契约测试改为断言 /health 最小化 + capabilities/diagnostics 承载能力信息（全量轮发现后修复） |
