@@ -31,6 +31,7 @@ from ..models import WorkflowArtifact, WorkflowRecord, utc_now
 from ..store import RuntimeStore
 from .pyqgis_worker import PyQgisWorkerManager
 from .pyqgis_worker.errors import make_error
+from .request_limits import AdmissionGate
 from .workflow_validator import ValidationError, ValidationResult, validate_workflow
 
 
@@ -474,6 +475,13 @@ class WorkflowExecutor:
     ) -> None:
         self.config = config
         self.store = store
+        # Explicit admission budget for the QGIS pipeline: bounded queue with
+        # a configurable timeout instead of an unbounded wait when many
+        # workflows dispatch at once.
+        self.qgis_gate = AdmissionGate(
+            max_concurrent=getattr(config, "workflow_queue_max", 8),
+            timeout=getattr(config, "workflow_queue_timeout_seconds", 120.0),
+        )
         self.worker_manager = worker_manager or PyQgisWorkerManager(
             workflows_root=config.workflows_dir,
             qgis_root=config.qgis_root,
@@ -483,6 +491,12 @@ class WorkflowExecutor:
         self.bus = _EventBus()
         self._workers: Dict[str, threading.Thread] = {}
         self._workers_lock = threading.RLock()
+
+    def qgis_gate_timeout_hint(self) -> str:
+        seconds = float(self.qgis_gate.timeout)
+        if seconds >= 60:
+            return f"{seconds / 60:.0f} 分钟"
+        return f"{seconds:.0f} 秒"
 
     # ------------------------------------------------------------------
     # Registration / submission
@@ -648,7 +662,25 @@ class WorkflowExecutor:
                 "step_started", {"workflow_id": workflow_id, "step": dict(state)},
             ))
 
-            result = self.worker_manager.run_step(workflow_id, step)
+            if not self.qgis_gate.acquire():
+                error = make_error(
+                    "QGIS_BUSY",
+                    "qgis worker queue exhausted",
+                    f"地理处理排队已达上限，请稍后重试（排队上限 {self.qgis_gate_timeout_hint()}）。",
+                    step_id=step_id,
+                )
+                state["status"] = "error"
+                state["error"] = error
+                self.store.save_workflow(record)
+                self.bus.publish(workflow_id, _Event(
+                    "step_error", {"workflow_id": workflow_id, "step": dict(state), "error": error},
+                ))
+                success = False
+                break
+            try:
+                result = self.worker_manager.run_step(workflow_id, step)
+            finally:
+                self.qgis_gate.release()
             timings = result.get("timings") if isinstance(result, dict) else None
             if timings:
                 logger.info(

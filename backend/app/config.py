@@ -275,6 +275,35 @@ class AppConfig:
         default_factory=lambda: int(os.getenv("WEBGIS_AI_AGENT_MAX_TRACE_EVENTS", "64"))
     )
     resource_search_endpoint: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_RESOURCE_SEARCH_ENDPOINT", ""))
+    # --- Phase-1 request budgets (audit T3). All values are configurable so
+    # deployments can tune them; defaults sized against legal classroom use.
+    max_json_body_bytes: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_MAX_JSON_BODY_BYTES", str(32 * 1024 * 1024)))
+    )
+    max_dataset_upload_bytes: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_MAX_DATASET_UPLOAD_BYTES", str(512 * 1024 * 1024)))
+    )
+    max_kb_upload_bytes: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_MAX_KB_UPLOAD_BYTES", str(50 * 1024 * 1024)))
+    )
+    max_ppt_upload_bytes: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_MAX_PPT_UPLOAD_BYTES", str(50 * 1024 * 1024)))
+    )
+    voice_max_session_seconds: float = field(
+        default_factory=lambda: float(os.getenv("WEBGIS_AI_VOICE_MAX_SESSION_SECONDS", "900"))
+    )
+    voice_max_frame_bytes: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_VOICE_MAX_FRAME_BYTES", str(256 * 1024)))
+    )
+    voice_max_sessions_per_user: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_VOICE_MAX_SESSIONS_PER_USER", "2"))
+    )
+    workflow_queue_max: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_WORKFLOW_QUEUE_MAX", "8"))
+    )
+    workflow_queue_timeout_seconds: float = field(
+        default_factory=lambda: float(os.getenv("WEBGIS_AI_WORKFLOW_QUEUE_TIMEOUT_SECONDS", "120"))
+    )
     llm_provider_source: str = field(init=False, default="default")
     minimax_api_key_source: str = field(init=False, default="unset")
     minimax_base_url_source: str = field(init=False, default="default")

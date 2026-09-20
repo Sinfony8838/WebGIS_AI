@@ -45,7 +45,6 @@ import {
   fetchDatasetCatalog,
   fetchJob,
   fetchLessonResources,
-  fetchHealth,
   fetchKbManifest,
   fetchKbTopics,
   fetchLayers,
@@ -81,6 +80,31 @@ import {
   fetchActiveTeachingMaps,
   type TeachingMapItem,
 } from "./api";
+
+// Phase-1 audit (T3): 公共 /health 只返回存活信息，前端能力配置改由
+// /ui/capabilities 提供（仅含功能开关、底图目录与可用性状态，无路径/
+// 端点/密钥来源）。api.ts 属集成保留文件，这里用本地等价实现迁移。
+type UiCapabilities = Pick<HealthResponse, "basemaps" | "templates"> & {
+  ui: Pick<HealthResponse["ui"], "assistant_v2_enabled">;
+  online_services: Pick<HealthResponse["online_services"], "amap_poi_enabled"> & {
+    weather_basemap_enabled?: boolean;
+  };
+  voice_asr?: Pick<NonNullable<HealthResponse["voice_asr"]>, "available" | "state" | "reason">;
+  image_generation?: Pick<NonNullable<HealthResponse["image_generation"]>, "configured" | "model">;
+};
+
+const CAPABILITIES_API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:18999";
+
+async function fetchUiCapabilities(): Promise<UiCapabilities> {
+  const response = await fetch(`${CAPABILITIES_API_BASE}/ui/capabilities`, {
+    credentials: "include",
+  });
+  if (!response.ok) {
+    throw new Error(`能力配置加载失败（${response.status}）`);
+  }
+  return (await response.json()) as UiCapabilities;
+}
+
 import { AnnotationDialog } from "./components/AnnotationDialog";
 import { BasemapMenu } from "./components/BasemapMenu";
 import { WeatherOverlayStatus } from "./components/WeatherOverlayStatus";
@@ -493,7 +517,7 @@ export default function App({
   const [screenshotSaving, setScreenshotSaving] = useState(false);
 
 
-  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [health, setHealth] = useState<UiCapabilities | null>(null);
   const [project, setProject] = useState<(ProjectRecord & { status: string }) | null>(null);
   const [layerState, setLayerState] = useState<LayersResponse | null>(null);
   const [outputs, setOutputs] = useState<ArtifactRecord[]>([]);
@@ -2901,7 +2925,7 @@ export default function App({
     let cancelled = false;
     (async () => {
       setInitError("");
-      const healthPayload = await fetchHealth();
+      const healthPayload = await fetchUiCapabilities();
       if (cancelled) {
         return;
       }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import secrets
 import time
 from pathlib import Path
@@ -15,7 +16,7 @@ from pydantic import BaseModel, Field
 from .config import AppConfig
 from .runtime import WebGISRuntime
 from .services.minimax_image_client import MiniMaxImageError
-from .services import resource_access
+from .services import request_limits, resource_access
 from .services.ppt_renderer import PptRenderError, render_pptx_to_images
 from .services.auth import AuthContext, AuthError, AuthService
 
@@ -39,10 +40,15 @@ LESSON_DESIGN_REQUEST_HINTS = (
 
 app = FastAPI(title="WebGIS-AI Runtime", version="1.1.0")
 
+# Outermost byte budget for JSON bodies: rejects oversized payloads while the
+# bytes are still being received, before any request-model deserialization.
+app.add_middleware(request_limits.BodySizeLimitMiddleware, max_json_body_bytes=config.max_json_body_bytes)
+
 
 SESSION_COOKIE = "webgis_ai_session"
 PUBLIC_AUTH_PATHS = {
     "/health",
+    "/ui/capabilities",
     "/auth/bootstrap-status",
     "/auth/bootstrap",
     "/auth/login",
@@ -717,6 +723,19 @@ def health() -> Dict[str, Any]:
     return runtime.health()
 
 
+@app.get("/ui/capabilities")
+def ui_capabilities() -> Dict[str, Any]:
+    """Sanitized capability set consumed by the frontend (replaces /health)."""
+    return runtime.capabilities()
+
+
+@app.get("/diagnostics")
+def diagnostics(request: Request) -> Dict[str, Any]:
+    """Operator diagnostics: runtime paths, provider details, build info."""
+    _require_admin(request)
+    return runtime.diagnostics()
+
+
 @app.get("/auth/bootstrap-status")
 def auth_bootstrap_status() -> Dict[str, Any]:
     if config.auth_mode != "users" or auth_service is None:
@@ -1254,7 +1273,7 @@ async def upload_kb_material(
         raw_binding = json.loads(region_binding or "{}")
         if not isinstance(raw_binding, dict):
             raise ValueError("region_binding must be an object")
-        raw = await file.read()
+        raw = await request_limits.read_upload_limited(file, config.max_kb_upload_bytes)
         result = runtime.kb_upload_material(
             kb_item_id=kb_item_id,
             filename=file.filename or "material.dat",
@@ -1270,6 +1289,8 @@ async def upload_kb_material(
         return result
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="region_binding must be valid JSON") from exc
+    except request_limits.PayloadTooLarge as exc:
+        raise HTTPException(status_code=413, detail="知识素材文件超过大小限制") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1550,29 +1571,63 @@ def get_assistant_conversation(conversation_id: str, request: Request) -> Dict[s
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-def _websocket_authorized(websocket: "WebSocket") -> bool:
+_VOICE_GATE = request_limits.VoiceSessionGate(max_per_user=config.voice_max_sessions_per_user)
+
+#: WebSocket close codes used by the voice stream contract.
+WS_CLOSE_UNAUTHORIZED = 4401
+WS_CLOSE_FORBIDDEN = 4403
+WS_CLOSE_PASSWORD_CHANGE_REQUIRED = 4407
+WS_CLOSE_SESSION_LIMIT = 4429
+WS_CLOSE_FRAME_TOO_LARGE = 1009
+WS_CLOSE_SESSION_TIMEOUT = 1000
+
+
+def _voice_origin_allowed(websocket: "WebSocket") -> bool:
+    """Browser handshakes must present a whitelisted Origin.
+
+    Cross-origin WebSocket handshakes are not subject to the browser same-
+    origin policy unless the server checks the header, so an explicit
+    whitelist mirrors the HTTP CORS configuration. Non-browser clients
+    (no Origin header) keep working and still pass authentication below.
+    """
+    origin = websocket.headers.get("origin", "").strip()
+    if not origin:
+        return True
+    if origin in config.cors_origins():
+        return True
+    extra = {item.strip() for item in os.getenv("WEBGIS_AI_WS_ALLOWED_ORIGINS", "").split(",") if item.strip()}
+    return origin in extra
+
+
+def _websocket_user(websocket: "WebSocket") -> tuple[Dict[str, Any] | None, int]:
     """Mirror of the HTTP auth middleware for the voice WebSocket.
 
-    HTTP middleware does not intercept WebSocket scopes, so the handshake is
-    authenticated here. CSRF is skipped because the handshake is a GET and
-    cannot carry custom headers; the session cookie (users mode) or the
-    ``access_token`` query parameter (legacy token mode) is checked instead.
+    Returns ``(user_dict, close_code)``: ``(user, 0)`` on success, or
+    ``(None, code)`` explaining the rejection — 4401 unauthenticated vs
+    4407 pending forced password change (matching the HTTP exemption list).
     """
     if config.auth_mode == "disabled":
-        return True
+        return _local_user(), 0
     if config.auth_mode == "legacy_token":
         supplied = websocket.query_params.get("access_token", "").strip()
-        return bool(supplied) and secrets.compare_digest(supplied, config.auth_token.strip())
+        if supplied and secrets.compare_digest(supplied, config.auth_token.strip()):
+            return {"user_id": "legacy", "role": "teacher", "must_change_password": False}, 0
+        return None, WS_CLOSE_UNAUTHORIZED
     if auth_service is None:
-        return False
-    return auth_service.authenticate(websocket.cookies.get(SESSION_COOKIE, "")) is not None
+        return None, WS_CLOSE_UNAUTHORIZED
+    context = auth_service.authenticate(websocket.cookies.get(SESSION_COOKIE, ""))
+    if context is None:
+        return None, WS_CLOSE_UNAUTHORIZED
+    if context.user.get("must_change_password"):
+        return None, WS_CLOSE_PASSWORD_CHANGE_REQUIRED
+    return context.user, 0
 
 
 async def _reject_voice_stream(
     websocket: "WebSocket",
     state: str,
     detail: str,
-    code: int = 4403,
+    code: int = WS_CLOSE_FORBIDDEN,
     *,
     accepted: bool = False,
 ) -> None:
@@ -1580,12 +1635,20 @@ async def _reject_voice_stream(
 
     The JSON event arrives before the close so the frontend can show the
     actionable reason (model missing / load failed / permission) instead of a
-    bare close code.
+    bare close code. Fixed enum reasons (models_not_downloaded etc.) pass
+    through; load-failure exception text is replaced by a fixed label so
+    absolute paths never reach the client.
     """
+    if state == "load_failed":
+        safe_detail = "voice_model_load_failed"
+    elif detail and not any(ch in detail for ch in ("\\", "/", ":")):
+        safe_detail = detail  # known fixed enum reason
+    else:
+        safe_detail = state
     if not accepted:
         await websocket.accept()
     try:
-        await websocket.send_text(json.dumps({"type": "error", "reason": state, "detail": detail}, ensure_ascii=False))
+        await websocket.send_text(json.dumps({"type": "error", "reason": state, "detail": safe_detail}, ensure_ascii=False))
     except Exception:  # client already gone
         pass
     await websocket.close(code=code)
@@ -1593,10 +1656,18 @@ async def _reject_voice_stream(
 
 @app.websocket("/assistant/voice/stream")
 async def assistant_voice_stream(websocket: "WebSocket") -> None:
-    # Not authorized: close with 4401 so the frontend can fall back to
-    # browser speech recognition instead of retrying forever.
-    if not _websocket_authorized(websocket):
-        await websocket.close(code=4401)
+    # Cross-origin browser handshakes are refused before authentication so
+    # unauthenticated probes learn nothing about the deployment.
+    if not _voice_origin_allowed(websocket):
+        await websocket.close(code=WS_CLOSE_FORBIDDEN)
+        return
+    # Not authorized: close with 4401 (unauthenticated) or 4407 (pending
+    # forced password change) so the frontend can fall back to browser
+    # speech recognition or route to the password screen instead of
+    # retrying forever.
+    user, ws_reject_code = _websocket_user(websocket)
+    if user is None:
+        await websocket.close(code=ws_reject_code)
         return
     engine = runtime.voice_asr
     status = engine.status()
@@ -1611,19 +1682,44 @@ async def assistant_voice_stream(websocket: "WebSocket") -> None:
     if not status["available"]:
         await _reject_voice_stream(websocket, str(status.get("state") or "unavailable"), str(status.get("reason") or ""))
         return
-    await websocket.accept()
-    try:
-        session = engine.create_session()
-    except Exception as exc:  # lazy recognizer load failed between checks
-        await _reject_voice_stream(websocket, "load_failed", str(exc), accepted=True)
+    user_key = str(user.get("user_id") or "anonymous")
+    if not _VOICE_GATE.enter(user_key):
+        await _reject_voice_stream(
+            websocket,
+            "session_limit",
+            "每个账号的并发语音会话数已达上限",
+            code=WS_CLOSE_SESSION_LIMIT,
+        )
         return
+    await websocket.accept()
+    session = None
     try:
+        try:
+            session = engine.create_session()
+        except Exception:  # lazy recognizer load failed between checks
+            await _reject_voice_stream(websocket, "load_failed", "语音识别模型加载失败", accepted=True)
+            return
+        started = time.monotonic()
+        max_seconds = config.voice_max_session_seconds
+        max_frame = config.voice_max_frame_bytes
         while True:
             message = await websocket.receive()
             if message.get("type") == "websocket.disconnect":
                 break
             pcm = message.get("bytes")
             if pcm:
+                if time.monotonic() - started > max_seconds:
+                    await websocket.send_text(
+                        json.dumps({"type": "error", "reason": "session_timeout", "detail": "语音会话达到时长上限"}, ensure_ascii=False)
+                    )
+                    await websocket.close(code=WS_CLOSE_SESSION_TIMEOUT)
+                    break
+                if len(pcm) > max_frame:
+                    await websocket.send_text(
+                        json.dumps({"type": "error", "reason": "frame_too_large", "detail": "音频帧超过大小上限"}, ensure_ascii=False)
+                    )
+                    await websocket.close(code=WS_CLOSE_FRAME_TOO_LARGE)
+                    break
                 for event in session.feed(pcm):
                     await websocket.send_text(json.dumps(event, ensure_ascii=False))
                 continue
@@ -1636,7 +1732,9 @@ async def assistant_voice_stream(websocket: "WebSocket") -> None:
     except WebSocketDisconnect:
         pass
     finally:
-        session.close()
+        if session is not None:
+            session.close()
+        _VOICE_GATE.leave(user_key)
 
 
 @app.post("/templates/{template_id}/run")
@@ -1670,7 +1768,7 @@ async def upload_dataset(
     _require_project_access(request, project_id)
     try:
         bounds = [float(value) for value in (west, south, east, north) if str(value).strip()]
-        raw = await file.read()
+        raw = await request_limits.read_upload_limited(file, config.max_dataset_upload_bytes)
         result = runtime.upload_dataset(
             project_id=project_id,
             filename=file.filename or "upload.dat",
@@ -1684,6 +1782,8 @@ async def upload_dataset(
         return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except request_limits.PayloadTooLarge as exc:
+        raise HTTPException(status_code=413, detail="数据集文件超过大小限制") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1735,10 +1835,12 @@ def summarize_dataset_catalog_layers(
 @app.post("/ppt/render")
 async def render_ppt(request: Request, file: UploadFile = File(...)) -> Dict[str, Any]:
     try:
-        raw = await file.read()
+        raw = await request_limits.read_upload_limited(file, config.max_ppt_upload_bytes)
         result = render_pptx_to_images(config, file.filename or "presentation.pptx", raw)
         _grant_response_files(request, result, allowed_roots=(config.outputs_dir / "ppt_previews",))
         return result
+    except request_limits.PayloadTooLarge:
+        raise HTTPException(status_code=413, detail="演示文稿超过大小限制") from None
     except PptRenderError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.to_dict()) from exc
 
