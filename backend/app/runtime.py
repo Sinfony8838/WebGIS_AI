@@ -4,6 +4,7 @@ import base64
 import csv
 import json
 import math
+import os
 import re
 import threading
 import urllib.error
@@ -15,7 +16,7 @@ from uuid import uuid4
 
 from .config import AppConfig
 from .models import LayerRecord, ProjectRecord, WorkflowRecord, build_assistant_v2_stages, build_workflow_stages, utc_now
-from .services.assistant import ASSISTANT_TOOL_SCHEMA, AssistantService
+from .services.assistant import AssistantService
 from .services.agent_harness import HARNESS_ID, HARNESS_VERSION, HarnessExecutionError
 from .services.classroom_workflow import ClassroomWorkflowRuntime
 from .services.datasets import DatasetService
@@ -40,6 +41,9 @@ from .store import RuntimeStore
 
 
 MAX_IMAGE_LIBRARY_BYTES = 20 * 1024 * 1024
+
+#: Application version surfaced only through the admin diagnostics endpoint.
+APP_VERSION = "1.1.0"
 
 # 1x1 透明 PNG。天气瓦片代理不再用它伪装成功（未配置密钥时返回 503），
 # 仅作为图像库/图像生成相关测试的通用最小 PNG 夹具保留。
@@ -372,26 +376,96 @@ class WebGISRuntime:
         return f"{fallback}\n\n知识参考（{card.get('title', '')}）：{canonical}"
 
     def health(self) -> Dict[str, Any]:
+        """Public liveness probe: minimal, unauthenticated, no internals.
+
+        Absolute paths, model directories, provider endpoints and tool
+        schemas deliberately stay out of this payload; the frontend consumes
+        :meth:`capabilities` and operators :meth:`diagnostics`.
+        """
+        return {"status": "success"}
+
+    @staticmethod
+    def _sanitize_voice_status(status: Dict[str, Any]) -> Dict[str, Any]:
+        """Keep availability fields, strip model identity and local paths.
+
+        ``reason`` for load failures may embed exception text with absolute
+        paths, so it is reduced to a fixed label.
+        """
+        reason = str(status.get("reason") or "")
+        state = str(status.get("state") or "")
+        if state == "load_failed":
+            reason = "voice_model_load_failed"
+        return {
+            "available": bool(status.get("available")),
+            "state": state,
+            "reason": reason,
+        }
+
+    def capabilities(self) -> Dict[str, Any]:
+        """Sanitized capability set the frontend needs after (or before) login.
+
+        Feature flags, the basemap catalog and availability states only — no
+        filesystem paths, provider endpoints, key sources, or exception text.
+        """
+        llm = self.minimax_client.status()
+        vision = self.vision_service.status()
+        image_generation = self.image_generation_service.status()
         return {
             "status": "success",
-            "runtime": {
-                "api": self.config.public_api_base_url(),
-                "workspace": str(self.config.root_dir),
-                "uploads": str(self.config.uploads_dir),
-                "outputs": str(self.config.outputs_dir),
-            },
             "ui": {
                 "mode": "single_teacher_live_demo",
-                "assistant_tools": ASSISTANT_TOOL_SCHEMA,
                 "assistant_v2_enabled": True,
-                "agent_harness": {"id": HARNESS_ID, "version": HARNESS_VERSION},
             },
             "online_services": {
                 "amap_poi_enabled": self.config.online_services_enabled(),
                 "weather_basemap_enabled": self.config.weather_basemap_enabled(),
             },
+            "llm": {
+                "enabled": bool(llm.get("enabled")),
+                "provider": llm.get("provider", ""),
+                "model": llm.get("model", ""),
+            },
+            "voice_asr": self._sanitize_voice_status(self.voice_asr.status()),
+            "vision": {
+                "enabled": bool(vision.get("enabled")),
+                "configured": bool(vision.get("configured")),
+            },
+            "image_generation": {
+                "configured": bool(image_generation.get("configured")),
+                "model": image_generation.get("model", ""),
+            },
+            "gis_workflow": {
+                "enabled": True,
+                "engine": "pyqgis_worker",
+            },
+            "basemaps": self.config.basemap_catalog(),
+            "templates": self.template_service.list_templates()["items"],
+            "knowledge_base": {
+                "item_count": len(self.knowledge_base_service.get_manifest().get("items", [])),
+            },
+        }
+
+    def diagnostics(self) -> Dict[str, Any]:
+        """Operator diagnostics (admin-only endpoint), including build info."""
+        voice_status = self.voice_asr.status()
+        return {
+            "status": "success",
+            "build": {
+                "app_version": APP_VERSION,
+                # Unknown when the deployment did not export a build SHA —
+                # never a guessed or fabricated commit id.
+                "git_sha": os.getenv("WEBGIS_AI_BUILD_SHA", "") or "unknown",
+                "agent_harness": {"id": HARNESS_ID, "version": HARNESS_VERSION},
+            },
+            "runtime": {
+                "api": self.config.public_api_base_url(),
+                "workspace": str(self.config.root_dir),
+                "data_root": str(self.config.data_dir),
+                "uploads": str(self.config.uploads_dir),
+                "outputs": str(self.config.outputs_dir),
+            },
             "llm": self.minimax_client.status(),
-            "voice_asr": self.voice_asr.status(),
+            "voice_asr": {**voice_status, "reason": str(voice_status.get("reason") or "")},
             "vision": self.vision_service.status(),
             "image_generation": self.image_generation_service.status(),
             "gis_workflow": {
@@ -400,8 +474,6 @@ class WebGISRuntime:
                 "qgis_root": self.config.qgis_root or "",
                 "init_warning": self.workflow_executor.init_warning() if hasattr(self, "workflow_executor") else None,
             },
-            "basemaps": self.config.basemap_catalog(),
-            "templates": self.template_service.list_templates()["items"],
             "knowledge_base": {
                 "manifest_path": str(self.knowledge_base_service.manifest_path),
                 "item_count": len(self.knowledge_base_service.get_manifest().get("items", [])),
@@ -1721,7 +1793,13 @@ class WebGISRuntime:
         """Build a workflow JSON from a template (or accept caller-built JSON)
         and hand it off to :class:`WorkflowExecutor`."""
         params = dict(parameters or {})
-        params.setdefault("project_id", project_id)
+        # Server-side project context: the trusted owner project is injected
+        # here and never taken from client parameters. A client-supplied
+        # nested project_id that disagrees with the validated one is rejected.
+        supplied = params.get("project_id")
+        if supplied is not None and str(supplied) != str(project_id):
+            raise ValueError("parameters.project_id 与请求项目不一致")
+        params["project_id"] = project_id
         chosen_template = template_id or detect_template(message) or "population_choropleth"
         try:
             match = expand_template(chosen_template, message, params)

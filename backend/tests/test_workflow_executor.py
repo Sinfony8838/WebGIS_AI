@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -209,6 +210,106 @@ class WorkflowExecutorTests(unittest.TestCase):
         executor.submit(record)
         final = self._wait_for_status(executor, record.workflow_id, timeout=10.0)
         self.assertEqual(final.status, "success")
+
+
+class _BlockingWorkerManager(_StubWorkerManager):
+    """run_step blocks until released, simulating a busy QGIS worker."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def run_step(self, workflow_id, step, timeout: float | None = None) -> Dict[str, Any]:
+        self.started.set()
+        self.release.wait(timeout=30)
+        return super().run_step(workflow_id, step, timeout)
+
+
+class QgisAdmissionGateTests(unittest.TestCase):
+    """C5: the admission gate keeps state consistent across success, failure,
+    timeout-busy and completion — a slot is held while the underlying step
+    runs and freed exactly once it finishes (never when the HTTP request
+    that started it returns)."""
+
+    def setUp(self) -> None:
+        self.config = _make_config()
+        self.config.workflow_queue_max = 1
+        self.config.workflow_queue_timeout_seconds = 0.4
+        self.store = RuntimeStore(self.config.state_file)
+        _seed_demo_upload(self.config)
+
+    def _record(self) -> WorkflowRecord:
+        return WorkflowRecord.create(
+            project_id="p1",
+            user_message="demo",
+            intent="demo",
+            template_id="",
+            mode="template",
+            workflow_json={
+                "version": "1.0",
+                "intent": "demo",
+                "steps": [
+                    {"id": "s1", "op": "load_layer", "params": {"source": "demo.geojson", "project_id": "p1"}},
+                ],
+                "outputs": {},
+            },
+        )
+
+    def _wait_for_status(self, executor: WorkflowExecutor, workflow_id: str, timeout: float = 5.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            record = self.store.get_workflow(workflow_id)
+            if record and record.status in {"success", "error"}:
+                return record
+            time.sleep(0.05)
+        return self.store.get_workflow(workflow_id)
+
+    def test_slot_held_while_step_runs_and_freed_after(self) -> None:
+        manager = _BlockingWorkerManager()
+        executor = WorkflowExecutor(self.config, self.store, worker_manager=manager)
+        first = self._record()
+        executor.submit(first)
+        self.assertTrue(manager.started.wait(timeout=5))
+        # The single slot is occupied while s1 is still running.
+        self.assertFalse(executor.qgis_gate.acquire(timeout=0.05))
+        manager.release.set()
+        final = self._wait_for_status(executor, first.workflow_id)
+        self.assertEqual(final.status, "success")
+        self.assertTrue(executor.qgis_gate.acquire(timeout=1))
+        executor.qgis_gate.release()
+
+    def test_busy_gate_marks_step_error_without_running_it(self) -> None:
+        manager = _BlockingWorkerManager()
+        executor = WorkflowExecutor(self.config, self.store, worker_manager=manager)
+        first = self._record()
+        executor.submit(first)
+        self.assertTrue(manager.started.wait(timeout=5))
+
+        second = self._record()
+        executor.submit(second)
+        final = self._wait_for_status(executor, second.workflow_id, timeout=5)
+        self.assertEqual(final.status, "error")
+        error = final.error or {}
+        self.assertEqual(error.get("code"), "QGIS_BUSY")
+        # The queued-out workflow never reached the worker.
+        self.assertEqual(manager.started.is_set(), True)  # still the first step only
+        manager.release.set()
+        self.assertEqual(self._wait_for_status(executor, first.workflow_id).status, "success")
+
+    def test_slot_freed_after_step_failure_allows_next_workflow(self) -> None:
+        manager = _StubWorkerManager(fail_step="s1")
+        executor = WorkflowExecutor(self.config, self.store, worker_manager=manager)
+        first = self._record()
+        executor.submit(first)
+        final = self._wait_for_status(executor, first.workflow_id)
+        self.assertEqual(final.status, "error")
+
+        manager_ok = _StubWorkerManager()
+        executor2 = WorkflowExecutor(self.config, self.store, worker_manager=manager_ok)
+        second = self._record()
+        executor2.submit(second)
+        self.assertEqual(self._wait_for_status(executor2, second.workflow_id).status, "success")
 
 
 if __name__ == "__main__":
