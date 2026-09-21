@@ -19,17 +19,17 @@
 }
 
 .upload-dialog-feedback--error {
-  background: rgba(220, 68, 55, 0.12);
-  border: 1px solid rgba(220, 68, 55, 0.45);
-  color: #b3261e;
+  background: var(--danger-soft);
+  border: 1px solid var(--danger);
+  color: var(--danger);
 }
 
 .upload-dialog-feedback--success {
-  background: rgba(46, 125, 50, 0.1);
-  border: 1px solid rgba(46, 125, 50, 0.4);
-  color: #1c5e20;
+  background: var(--success-soft);
+  border: 1px solid var(--success);
+  color: var(--success);
 }
 
 .upload-dialog-warning {
-  color: #9a6700;
+  color: var(--warning);
 }
