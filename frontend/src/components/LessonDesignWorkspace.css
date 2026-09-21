@@ -4,6 +4,10 @@
 /* 本轮焦点：刚修改 / 还缺 / 下一步确认 */
 .ldw-focus {
   display: flex;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 36vh;
+  overflow-y: auto;
   flex-direction: column;
   gap: 6px;
   margin: 6px 0 2px;
@@ -34,6 +38,30 @@
   display: block;
   margin-top: 2px;
   color: var(--text-soft);
+}
+.ldw-focus-missing {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ldw-focus-missing ul {
+  margin: 0;
+  padding-left: 1.2em;
+}
+.ldw-focus-missing li + li {
+  margin-top: 4px;
+}
+.ldw-focus-toggle {
+  margin-top: 4px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.ldw-shell .ldw-right {
+  overflow-y: auto;
 }
 .ldw-focus-note {
   margin: 2px 0 0;

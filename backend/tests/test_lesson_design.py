@@ -30,6 +30,81 @@ class LessonDesignServiceTest(unittest.TestCase):
         self.project = self.runtime.create_project()["project_id"]
         self.addCleanup(self.temp_dir.cleanup)
 
+    def test_legacy_workspace_marker_cannot_be_confirmed_as_requirements(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin", requirements={"trigger": "workspace"})
+        with self.assertRaisesRegex(ValueError, "还没有可确认的内容"):
+            service.resolve(design.design_id, "requirements", "accept", expected_revision=0)
+        self.assertEqual(service.get(design.design_id).revision, 0)
+        self.assertNotIn("教学需求", service.session_view(service.get(design.design_id))["focus_summary"]["next_confirm_sections"])
+
+    def test_recap_and_followup_do_not_replace_the_existing_topic_or_original_requirements(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        first = service.turn(design.design_id, "高一《人口分布》，40分钟，使用人教版必修二。", 0)
+        before = json.dumps(first["draft"], ensure_ascii=False, sort_keys=True)
+        recap = service.turn(design.design_id, "请用自然中文简短复述已记录的课题、年级、课时和教材。不要确认章节，也不要修改其他步骤。", first["revision"])
+        self.assertEqual(json.dumps(recap["draft"], ensure_ascii=False, sort_keys=True), before)
+        self.assertEqual(recap["next_step"], "requirements")
+        self.assertIn("人教版必修二", recap["assistant_message"])
+        followup = service.turn(design.design_id, "学生初中地理基础较薄弱，增加读图支架。", recap["revision"])
+        self.assertEqual(followup["draft"]["title"], "人口分布")
+        self.assertIn("人教版必修二", followup["draft"]["requirements"]["raw"])
+        self.assertIn("读图支架", followup["draft"]["requirements"]["raw"])
+        renamed = service.turn(design.design_id, "课题改为：城市化。", followup["revision"])
+        self.assertEqual(renamed["draft"]["title"], "城市化")
+
+    def test_feedback_keeps_complete_errors_without_double_punctuation(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        reply = service._full_draft_reply(design, {}, [], "")
+        self.assertIn("还缺少课题名称。", reply)
+        self.assertNotRegex(reply, r"[。；][。；]")
+        self.assertNotIn("采用当前建议并继续", reply)
+        result = service.turn(design.design_id, "运行预演", 0, "rehearsal")
+        self.assertNotRegex(result["assistant_message"], r"[。；][。；]")
+        for error in result["rehearsal_report"]["errors"]:
+            self.assertIn(error, result["assistant_message"])
+
+    def test_complete_requirements_are_confirmed_without_reasking_known_fields(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        result = service.turn(design.design_id, "生成完整初稿：高一《人口分布》，45分钟。", 0)
+        self.assertEqual(result["draft"]["requirements"]["raw"], "高一《人口分布》，45分钟。")
+        self.assertIn("高一《人口分布》", result["active_design_question"])
+        self.assertIn("45 分钟", result["active_design_question"])
+        self.assertNotIn("先告诉我", result["active_design_question"])
+        self.assertNotIn("固定为", result["active_design_question"])
+        design.status = "finalized"
+        self.assertEqual(service._active_design_question(design), "课时草稿已生成，可以下载 Word 或进入模拟测试。")
+
+    def test_confirming_another_step_preserves_current_progress(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        design.current_step = "process"
+        design.pending_next_step = "question_matching"
+        design.draft["requirements"] = {"raw": "高一人口分布，40分钟"}
+        design.draft["capabilities"] = [{"id": "map_2d"}]
+        self.store.upsert_lesson_design(design)
+        for step in ("requirements", "capabilities"):
+            with self.subTest(step=step):
+                result = service.resolve(design.design_id, step, "accept", expected_revision=service.get(design.design_id).revision)
+                self.assertEqual(result["design"]["current_step"], "process")
+                self.assertEqual(result["design"]["pending_next_step"], "question_matching")
+
+    def test_confirming_one_analysis_section_waits_for_the_other_required_sections(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        design.current_step = "analysis"
+        design.pending_next_step = "objectives"
+        for key in ("curriculum_interpretation", "student_analysis", "textbook_analysis"):
+            design.draft[key] = "教师已填写的内容"
+        self.store.upsert_lesson_design(design)
+        for index, key in enumerate(("curriculum_interpretation", "student_analysis", "textbook_analysis")):
+            result = service.resolve(design.design_id, key, "accept", expected_revision=index)
+            self.assertEqual(result["design"]["current_step"], "objectives" if index == 2 else "analysis")
+
+
     def test_shanghai_seed_keeps_old_draft_and_original_scenes_questions_homework(self) -> None:
         service = self.runtime.classroom.lesson_design
         old = service.create_or_resume(self.project, "local_admin")
