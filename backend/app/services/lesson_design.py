@@ -74,6 +74,9 @@ FULL_DRAFT_INTENT_PATTERN = re.compile(
 )
 FULL_DRAFT_INTENT_STEPS = frozenset(STEP_KEYS) - {"rehearsal", "confirmation"}
 SCALAR_LABELS = {"title": "课题", "topic": "课题主题", "grade": "年级", "duration_minutes": "课时", "subject": "学科"}
+EXPLICIT_TOPIC_PATTERN = re.compile(
+    r"(?:课题|标题)\s*(?:(?:改为|调整为|改成|为|是)\s*[:：]?|[:：])\s*[\"“]?([^，,。；;、\n”\"！？!?]{1,80})"
+)
 # 只修改当前环节：一轮补丁只允许落在当前步骤的章节内。
 STEP_PATCH_SCOPES = {step: set(STEP_SECTIONS.get(step, ())) for step in STEP_KEYS}
 STEP_PATCH_SCOPES["requirements"].update({"title", "topic", "grade", "duration_minutes", "subject"})
@@ -375,14 +378,14 @@ class LessonDesignService:
             unconfirmed = [SECTION_LABELS.get(key, key) for key in REQUIRED_SECTIONS
                            if design.section_status.get(key) != "confirmed"]
             if rehearsal_report["errors"]:
-                reply = "预演检查未通过：" + "；".join(rehearsal_report["errors"])
+                reply = "预演检查未通过：\n" + self._format_feedback(rehearsal_report["errors"])
             else:
                 reply = "教案结构检查通过。"
             if unconfirmed:
-                reply += " 尚待确认：" + "、".join(unconfirmed) + "。"
-            reply += " 当前尚未发布为课时草稿，也未生成 Word。"
+                reply += "\n尚待确认：" + "、".join(unconfirmed) + "。"
+            reply += "\n当前尚未发布为课时草稿，也未生成 Word。"
             if rehearsal_report["warnings"]:
-                reply += " 提醒：" + "；".join(rehearsal_report["warnings"])
+                reply += "\n提醒：\n" + self._format_feedback(rehearsal_report["warnings"])
             result["reply"] = reply
         if generation_mode == "rules":
             result["reply"] = "本轮 AI 未返回有效内容，以下为规则草稿与系统检查结果，需逐项核对。" + str(result.get("reply") or "")
@@ -485,10 +488,16 @@ class LessonDesignService:
                     accepted.append(key)
             if not accepted:
                 raise ValueError("这一部分还没有可确认的内容")
-            design.current_step = design.pending_next_step or self._next_step(design.current_step)
-            design.pending_next_step = ""
+            current_sections = STEP_SECTIONS.get(design.current_step, ())
+            required_here = [key for key in current_sections if key in REQUIRED_SECTIONS]
+            advances = bool(set(accepted).intersection(current_sections)) and all(
+                design.section_status.get(key) == "confirmed" for key in required_here
+            )
+            if advances:
+                design.current_step = design.pending_next_step or self._next_step(design.current_step)
+                design.pending_next_step = ""
             design.revision += 1
-            message = "已接受这一部分。"
+            message = "这一部分已确认，我们继续下一步。" if advances else "这一部分已确认，当前步骤进度保持不变。"
         else:
             for key in section_ids:
                 if design.section_status.get(key) == "proposed":
@@ -733,6 +742,8 @@ class LessonDesignService:
 
     def _active_design_question(self, design: LessonDesignRecord) -> str:
         """当前步骤的下一个推进问题——每轮只提一个。"""
+        if design.status == "finalized":
+            return "课时草稿已生成，可以下载 Word 或进入模拟测试。"
         draft = design.draft
         step = design.current_step
         if step == "requirements":
@@ -741,8 +752,9 @@ class LessonDesignService:
             if not str(draft.get("title") or draft.get("topic") or "").strip():
                 return "课题名称定为什么？"
             duration = int(draft.get("duration_minutes") or 0)
-            if duration != 40:
-                return "正式课堂固定为 40 分钟，按 40 分钟设计可以吗？"
+            if duration <= 0:
+                return "这节课安排多少分钟？"
+            return f"请确认：{draft['grade']}《{draft.get('title') or draft.get('topic')}》，{duration} 分钟，教学需求是否准确？"
         elif step == "analysis":
             if not str(draft.get("curriculum_interpretation") or "").strip():
                 return "这节课对应的课标条目原文是什么？"
@@ -780,7 +792,7 @@ class LessonDesignService:
             if not (draft.get("capabilities") or []):
                 return "这节课哪些环节需要地图、数据或 AI 能力？"
         elif step == "rehearsal":
-            return "预演检查发现的问题要现在调整，还是回到对应环节修改？"
+            return "请运行预演并核对检查结果；需要修改时可回到对应步骤，通过后进入确认发布。"
         elif step == "confirmation":
             if not str(draft.get("design_thinking") or "").strip():
                 return "确认发布前，先用 100-150 字概括这节课的设计思路好吗？"
@@ -826,7 +838,7 @@ class LessonDesignService:
             return ""
         rest = clean[len(FULL_DRAFT_COMMAND):] if clean.startswith(FULL_DRAFT_COMMAND) else ""
         if rest[:1] in {"：", ":", "\n", "\r", " ", "\t"}:
-            return rest.strip()
+            return rest.lstrip("：: \t\r\n")
         return None
 
     @classmethod
@@ -836,7 +848,7 @@ class LessonDesignService:
         topic = str(draft.get("topic") or draft.get("title") or "")
         book = re.search(r"《\s*([^》\r\n]{1,80}?)\s*》", clean)
         course = FULL_DRAFT_INTENT_PATTERN.search(clean)
-        explicit = re.search(r"(?:课题|标题)\s*(?:改为|调整为|改成|为|是)?\s*[:：]?\s*[\"“]?([^，,。；;\n”\"]{1,80})", clean)
+        explicit = EXPLICIT_TOPIC_PATTERN.search(clean)
         if book:
             topic = book.group(1).strip()
         elif course:
@@ -1138,6 +1150,11 @@ class LessonDesignService:
             "active_design_question": self._active_design_question(design),
         }
 
+    @staticmethod
+    def _format_feedback(items: List[str]) -> str:
+        """校验项已是完整句子，逐条展示，避免再拼接句末标点。"""
+        return "\n".join(f"• {item.strip()}" for item in items if item.strip())
+
     def _full_draft_reply(
         self, design: LessonDesignRecord, patch: Dict[str, Any], skipped: List[str], stages_note: str
     ) -> str:
@@ -1147,7 +1164,7 @@ class LessonDesignService:
         ) or "（本次没有可预填的空缺章节）"
         try:
             report = self.validate_plan(design.draft, design.source_refs)
-            missing = "；".join(report["errors"][:4]) or "暂无阻断性缺口"
+            missing = self._format_feedback(report["errors"][:4]) or "暂无阻断性缺口。"
         except Exception:
             missing = "请运行预演检查确认。"
         parts = [
@@ -1157,10 +1174,11 @@ class LessonDesignService:
             parts.append(f"这些章节已有内容，本轮未覆盖：{'、'.join(skipped)}。")
         if stages_note:
             parts.append(stages_note)
-        parts.append(f"还缺：{missing}。")
-        parts.append("下一步：从第 1 步开始逐项核对；确认无误的章节可连续点「采用当前建议并继续」。")
+        parts.append(f"还缺：\n{missing}")
+        label = STEP_LABELS.get(design.current_step, "当前步骤")
+        parts.append(f"下一步：核对「{label}」；确认无误后点「确认“{label}”并进入下一步」。")
         parts.append("提醒：初稿中的数据、年份与来源均为教学建议，未经核实，发布前请替换为已注册数据或教材资料。")
-        return "".join(parts)
+        return "\n".join(parts)
 
     @staticmethod
     def _reattach_protected_questions(new_stages: List[Dict[str, Any]], old_stages: List[Dict[str, Any]]) -> None:
@@ -1618,6 +1636,8 @@ class LessonDesignService:
                 'objectives 必须是字符串数组；core_questions 必须为 {"core":"核心问题文字","sub_questions":["子问题文字"]}，不要把条目写成对象。'
                 "教师明确指定的教学环节名称、顺序和每环节分钟数是硬约束，必须逐一原样保留，不能合并或改成通用模板。"
                 "你的回复只说明本轮草稿修改，不得声称已发布、已生成文件、预演通过或全部步骤完成；这些状态由系统核验。"
+                "教师点击确认前只能说已记录需求或已提出草稿，不能声称已确认。"
+                "reply 面向教师，只使用课题、年级、课时等自然中文，不展示 title、subject、grade、duration_minutes、topic、section_patch 等内部字段名或接口细节。"
                 "题目匹配只能引用题库检索给出的题目，不得编造题目内容。"
                 "草稿：" + json.dumps(design.draft, ensure_ascii=False)[:12000] +
                 "。真实能力目录：" + json.dumps(self.capability_catalog(), ensure_ascii=False)[:8000] +
@@ -1786,7 +1806,7 @@ class LessonDesignService:
             reply = "结合现有注册能力，我建议先用 2D 地图完成分布观察；如果你明确需要全球尺度，再加入 3D 地球。当前没有假造数据或图层。"
         elif step == "rehearsal":
             report = self.rehearse(design.design_id)
-            reply = "预演检查已完成。" + (f"目前有：{'；'.join(report['errors'])}" if report["errors"] else "主要结构已经齐全。") + " 你可以先接受这一版，或者告诉我希望调整的环节。"
+            reply = "预演检查已完成。" + (f"\n目前有：\n{self._format_feedback(report['errors'])}" if report["errors"] else "主要结构已经齐全。") + "\n请核对检查结果，或告诉我希望调整的环节。"
             return {"reply": reply, "section_patch": {}, "next_step": "confirmation", "suggestions": report["warnings"]}
         else:
             patch: Dict[str, Any] = {}
@@ -1798,18 +1818,17 @@ class LessonDesignService:
         return {"reply": reply, "section_patch": patch, "next_step": next_step, "source_refs": [], "capability_bindings": patch.get("capabilities", []), "suggestions": []}
 
     @staticmethod
-    def _extract_topic(message: str) -> str:
+    def _extract_topic(message: str, existing_topic: str = "") -> str:
         """Extract a short lesson topic from a natural multi-part requirement."""
         clean = str(message or "").strip()
         book_title = re.search(r"《\s*([^》\r\n]{1,80}?)\s*》", clean)
         if book_title:
             return book_title.group(1).strip()
-        explicit = re.search(
-            r"(?:课题|标题)\s*(?:改为|调整为|改成|为|是)?\s*[:：]?\s*[\"“]?([^，,。；;\n”\"]{1,80})",
-            clean,
-        )
+        explicit = EXPLICIT_TOPIC_PATTERN.search(clean)
         if explicit:
             return explicit.group(1).strip()
+        if existing_topic:
+            return existing_topic
         simplified = re.sub(r"(高[一二三]|初[一二三]|七年级|八年级|九年级|\d+\s*分钟|单课时)", "", clean)
         simplified = simplified.replace("我想上", "").replace("请设计", "").replace("共创", "")
         parts = [item.strip(" ：:，,。、") for item in re.split(r"[，,。；;\n、]", simplified)]
@@ -1824,9 +1843,20 @@ class LessonDesignService:
         normalized = copy.deepcopy(result) if isinstance(result, dict) else {}
         patch = normalized.get("section_patch")
         patch = patch if isinstance(patch, dict) else {}
-        topic = cls._extract_topic(message)
+        existing_topic = str(draft.get("topic") or draft.get("title") or "").strip()
+        topic = cls._extract_topic(message, existing_topic)
         duration_match = re.search(r"(\d+)\s*分钟", message)
         grade_match = re.search(r"(高[一二三]|初[一二三]|七年级|八年级|九年级)", message)
+        if existing_topic and topic == existing_topic and not duration_match and not grade_match and re.search(r"复述|重述|回顾|(?:不要|无需|不用)修改(?:内容|草稿|需求)", message):
+            # 只询问当前需求时，不让规则或模型把控制语句覆盖进教学草稿。
+            normalized["section_patch"] = {}
+            normalized["next_step"] = "requirements"
+            normalized["reply"] = (
+                f"已记录：{draft.get('grade') or '年级待定'}《{existing_topic}》，{draft.get('duration_minutes') or 40} 分钟。\n"
+                f"教学需求：{(draft.get('requirements') or {}).get('raw') or '尚未补充其他要求'}\n"
+                "当前草稿未修改，请核对后再确认。"
+            )
+            return normalized
         original_title = str(patch.get("title") or patch.get("topic") or "").strip()
         if topic:
             patch["title"] = topic
@@ -1838,7 +1868,11 @@ class LessonDesignService:
         requirements = patch.get("requirements")
         if not isinstance(requirements, dict):
             requirements = {}
-        requirements["raw"] = str(message or "").strip()
+        previous_requirements = draft.get("requirements") or {}
+        requirements = {**previous_requirements, **requirements}
+        previous_raw = str(previous_requirements.get("raw") or "").strip()
+        incoming_raw = str(message or "").strip()
+        requirements["raw"] = f"{previous_raw}\n{incoming_raw}" if previous_raw and incoming_raw not in previous_raw else previous_raw or incoming_raw
         patch["requirements"] = requirements
         normalized["section_patch"] = patch
         if topic and (len(original_title) > 60 or topic not in original_title):
@@ -1933,7 +1967,8 @@ class LessonDesignService:
     @staticmethod
     def _section_has_content(value: Any) -> bool:
         if isinstance(value, dict):
-            return any(LessonDesignService._section_has_content(item) for item in value.values())
+            # 旧工作台曾把入口标记写入 requirements；它不是教师填写的内容。
+            return any(LessonDesignService._section_has_content(item) for key, item in value.items() if key != "trigger")
         if isinstance(value, (list, tuple, set)):
             return any(LessonDesignService._section_has_content(item) for item in value)
         return bool(str(value or "").strip())

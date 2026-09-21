@@ -81,6 +81,85 @@ describe("LessonDesignWorkspace", () => {
 
   afterEach(cleanup);
 
+  it("clears the previous lesson and result when switching design sessions", async () => {
+    fetchDesignMock.mockResolvedValueOnce(session({ status: "finalized", current_step: "confirmation", final_lesson_id: "lesson_1" }));
+    const view = render(<LessonDesignWorkspace projectId="p1" initialDesignId="old_design" onClose={vi.fn()} />);
+    await screen.findByRole("button", { name: "下载教案 Word" });
+    fetchDesignMock.mockResolvedValueOnce(session({ design_id: "new_design", current_step: "requirements", draft: {} as never }));
+    view.rerender(<LessonDesignWorkspace projectId="p2" initialDesignId="new_design" onClose={vi.fn()} />);
+    await waitFor(() => expect(fetchDesignMock).toHaveBeenLastCalledWith("new_design"));
+    await screen.findByRole("heading", { name: "第 1 步 · 需求确认" });
+    fireEvent.click(screen.getByTestId("ldw-step-confirmation"));
+    expect(screen.queryByRole("button", { name: "下载教案 Word" })).toBeNull();
+    expect(screen.getByTestId("ldw-finalize-button")).toBeVisible();
+  });
+
+  it("continues to confirmation only after a check of the current revision passes", async () => {
+    createMock.mockResolvedValue(session({ current_step: "rehearsal", revision: 3 }));
+    fetchDesignMock.mockResolvedValue({ ...session({ current_step: "rehearsal", revision: 3 }), rehearsal_report: { ready: true, errors: [], warnings: [] } });
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+    expect(await screen.findByTestId("ldw-continue-to-confirmation")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("ldw-run-rehearsal"));
+    await waitFor(() => expect(screen.getByTestId("ldw-continue-to-confirmation")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("ldw-continue-to-confirmation"));
+    expect(screen.getByRole("heading", { name: "第 9 步 · 确认发布（查看）" })).toBeVisible();
+    expect(screen.getByTestId("ldw-finalize-button")).toBeVisible();
+    expect(finalizeMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves a manually entered question when saving fails", async () => {
+    createMock.mockResolvedValue(session({ current_step: "question_matching", draft: { stages: [{ stage_id: "s1", title: "导入", minutes: 8, questions: [] }] } as never }));
+    fetchBanksMock.mockResolvedValue({ status: "success", items: [{ bank_id: "qa_bank", title: "测试题库", question_count: 1, answer_coverage: 1 }] });
+    bindMock.mockRejectedValueOnce(new Error("网络暂时不可用"));
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByTestId("ldw-manual-toggle"));
+    fireEvent.change(screen.getByLabelText("手动题目题干"), { target: { value: "为什么人口分布不均？" } });
+    fireEvent.click(screen.getByTestId("ldw-manual-bind"));
+    await screen.findByText("网络暂时不可用");
+    expect(screen.getByLabelText("手动题目题干")).toHaveValue("为什么人口分布不均？");
+  });
+
+  it("does not treat a legacy workspace marker as teaching requirements", async () => {
+    createMock.mockResolvedValue(session({ draft: { requirements: { trigger: "workspace" } } as never }));
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId("ldw-full-draft")).toBeEnabled());
+    expect(createMock).toHaveBeenCalledWith("p1");
+    expect(screen.getByTestId("ldw-smart-optimize")).toBeDisabled();
+    expect(screen.getByTestId("ldw-adopt-continue")).toBeDisabled();
+  });
+
+  it("shows complete missing items as a list and allows expanding the remaining items", async () => {
+    const missing = ["还缺少课题名称。", "至少需要一个可观察的教学目标。", "还没有教学过程环节。", "各环节合计 0 分钟，与课堂时长 40 分钟不一致；请先调整环节时长，再定稿。"];
+    createMock.mockResolvedValue({ ...session(), focus_summary: { missing } });
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+    const focus = await screen.findByTestId("ldw-focus");
+    expect(within(focus).getAllByRole("listitem")).toHaveLength(3);
+    expect(focus.textContent).not.toMatch(/[。；][。；]/);
+    fireEvent.click(within(focus).getByText("展开其余 1 项"));
+    expect(within(focus).getAllByRole("listitem")).toHaveLength(4);
+    expect(within(focus).getByText(missing[3])).toBeVisible();
+  });
+
+  it("numbers and scopes edits to the step currently being viewed", async () => {
+    createMock.mockResolvedValue(session({ current_step: "process", revision: 4 }));
+    turnMock.mockResolvedValue(turnResult({ revision: 5, next_step: "analysis" }));
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId("ldw-full-draft")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("ldw-step-analysis"));
+    expect(screen.getByRole("heading", { name: "第 2 步 · 课标与学情（回看）" })).toBeVisible();
+    fireEvent.change(screen.getByLabelText("教案设计对话输入"), { target: { value: "补充学生已有基础" } });
+    fireEvent.click(screen.getByTestId("ldw-scoped-edit"));
+    await waitFor(() => expect(turnMock).toHaveBeenCalledWith("design_1", "只修改当前环节：补充学生已有基础", 4, "analysis"));
+  });
+
+  it("disables confirmation when the viewed step has no content", async () => {
+    createMock.mockResolvedValue(session({ current_step: "process" }));
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId("ldw-full-draft")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("ldw-step-analysis"));
+    expect(screen.getByTestId("ldw-accept-step")).toBeDisabled();
+  });
+
   it("asks for a topic locally when a blank draft has no requirement", async () => {
     const blank = session({ draft: { title: "", topic: "", requirements: { raw: "" }, stages: [] } });
     createMock.mockResolvedValue(blank);
@@ -316,6 +395,8 @@ describe("LessonDesignWorkspace", () => {
     await waitFor(() => expect(finalizeMock).toHaveBeenCalledWith("design_1", 9));
     expect(await screen.findByText("下载教案 Word")).toBeTruthy();
     expect(screen.getByText(/待模拟测试/)).toBeTruthy();
+    expect(screen.getByLabelText("教案设计对话输入")).toBeDisabled();
+    expect(screen.getByTestId("ldw-send")).toBeDisabled();
   });
 
   it("enters the rehearsal for the finalized lesson", async () => {
