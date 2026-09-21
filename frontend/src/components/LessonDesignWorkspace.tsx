@@ -103,9 +103,26 @@ type FocusSummary = {
 
 function sectionHasContent(value: unknown): boolean {
   if (Array.isArray(value)) return value.some((item) => sectionHasContent(item));
-  if (value && typeof value === "object") return Object.values(value).some((item) => sectionHasContent(item));
+  if (value && typeof value === "object") return Object.entries(value).some(([key, item]) => key !== "trigger" && sectionHasContent(item));
   if (typeof value === "string") return value.trim().length > 0;
   return value !== null && value !== undefined && value !== false && value !== 0;
+}
+
+function MissingFeedback({ items }: { items: string[] }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!items.length) return <span>暂无阻断缺口</span>;
+  return (
+    <div className="ldw-focus-missing">
+      <ul aria-label="待补充内容">
+        {(expanded ? items : items.slice(0, 3)).map((item, index) => <li key={index}>{item}</li>)}
+      </ul>
+      {items.length > 3 ? (
+        <button type="button" className="ldw-focus-toggle" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+          {expanded ? "收起其余内容" : `展开其余 ${items.length - 3} 项`}
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
 export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose, onFinalized, onEnterRehearsal }: Props) {
@@ -145,9 +162,25 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
     let cancelled = false;
     setBusy(true);
     setError("");
+    setDesign(null);
+    setFinalResult(null);
+    setFocusStep("");
+    setFocus(null);
+    setCheckedPlan(null);
+    setPlanItems([]);
+    setActiveQuestion("");
+    setCandidates([]);
+    setMessages([]);
+    setInput("");
+    setBanks([]);
+    setSearchResults([]);
+    setSearchText("");
+    setManualOpen(false);
+    setManualForm({ text: "", answer: "", explanation: "" });
+    setImportNote("");
     const load = initialDesignId
       ? fetchLessonDesign(initialDesignId)
-      : createLessonDesign(projectId, "", { trigger: "workspace" });
+      : createLessonDesign(projectId);
     load
       .then((payload) => {
         if (cancelled) return;
@@ -170,8 +203,12 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
             .catch(() => undefined);
         }
       })
-      .catch((exc) => setError(exc instanceof Error ? exc.message : String(exc)))
-      .finally(() => setBusy(false));
+      .catch((exc) => {
+        if (!cancelled) setError(exc instanceof Error ? exc.message : String(exc));
+      })
+      .finally(() => {
+        if (!cancelled) setBusy(false);
+      });
     fetchQuestionBanks(projectId)
       .then((result) => {
         if (!cancelled) setBanks(result.items || []);
@@ -187,10 +224,13 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
   }, [messages]);
 
   const draft = design?.draft || {};
+  const isFinalized = design?.status === "finalized";
   const currentStep = design?.current_step || "requirements";
   const viewStep = focusStep || currentStep;
   const currentLabel = STEPS.find(([key]) => key === viewStep)?.[1] || "需求确认";
-  const stepIndex = STEPS.findIndex(([key]) => key === currentStep);
+  const stepIndex = STEPS.findIndex(([key]) => key === viewStep);
+  const isReviewingEarlierStep = stepIndex < STEPS.findIndex(([key]) => key === currentStep);
+  const currentReport = checkedPlan?.designId === design?.design_id && checkedPlan?.revision === design?.revision ? checkedPlan?.report : null;
   const confirmedCount = useMemo(
     () => Object.values(design?.section_status || {}).filter((status) => status === "confirmed").length,
     [design?.section_status]
@@ -203,7 +243,10 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
     return sections.some((key) => sectionHasContent(values[key]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [design, currentStep, draft]);
-  const scopedEditAvailable = (STEP_SECTION_KEYS[currentStep] || []).length > 0 && design?.status !== "finalized";
+  const canAdoptViewed = !!design && design.status !== "finalized" && (STEP_SECTION_KEYS[viewStep] || []).some(
+    (key) => sectionHasContent((draft as Record<string, unknown>)[key])
+  );
+  const scopedEditAvailable = (STEP_SECTION_KEYS[viewStep] || []).length > 0 && design?.status !== "finalized";
   // 一键智能优化仅在已有初稿内容时可用（空稿无内容可优化）。
   const hasDraftContent = useMemo(() => {
     if (!design || design.status === "finalized") return false;
@@ -229,7 +272,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
   function modifyCurrentStepOnly() {
     const requirement = input.trim();
     if (!requirement) return;
-    void runTurn(`只修改当前环节：${requirement}`, currentStep);
+    void runTurn(`只修改当前环节：${requirement}`, viewStep);
   }
 
   function stepState(key: string): "done" | "active" | "todo" {
@@ -263,7 +306,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
   }
 
   async function runTurn(text: string, step = "") {
-    if (!design || !text.trim() || busy) return;
+    if (!design || isFinalized || !text.trim() || busy) return;
     setMessages((previous) => [...previous, { role: "teacher", text }]);
     setBusy(true);
     setError("");
@@ -314,7 +357,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
       setFocus(
         (result as { focus_summary?: FocusSummary }).focus_summary || null
       );
-      setMessages((previous) => [...previous, { role: "assistant", text: "这一部分已确认，我们继续下一步。" }]);
+      setMessages((previous) => [...previous, { role: "assistant", text: result.message || "这一部分已确认。" }]);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
@@ -340,7 +383,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
   }
 
   async function bindQuestion(stageId: string, questionId = "", manual?: Record<string, unknown>) {
-    if (!design) return;
+    if (!design) return false;
     setBusy(true);
     setError("");
     try {
@@ -352,8 +395,10 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
       });
       applySession(result.design);
       setCandidates([]);
+      return true;
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -482,7 +527,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
         <SectionBody
           sectionId={sectionId}
           design={design}
-          busy={busy}
+          busy={busy || isFinalized}
           onSave={(value) => void directEdit(sectionId, value)}
           onRemoveQuestion={(stageId, questionId) => void removeQuestion(stageId, questionId)}
           onBindCandidate={(stageId, questionId) => void bindQuestion(stageId, questionId)}
@@ -577,7 +622,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
           <header className="ldw-mid-head">
             <h3>
               第 {stepIndex < 0 ? 1 : stepIndex + 1} 步 · {currentLabel}
-              {focusStep && focusStep !== currentStep ? "（回看）" : ""}
+              {focusStep && focusStep !== currentStep ? (isReviewingEarlierStep ? "（回看）" : "（查看）") : ""}
             </h3>
             <span className="ldw-progress">已确认 {confirmedCount} 项</span>
             {focusStep && focusStep !== currentStep ? (
@@ -623,7 +668,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
             </p>
           </section>
           <div className="ldw-mid-scroll" data-testid="ldw-plan">
-            {viewStep === "rehearsal" ? <RehearsalCard design={design} report={checkedPlan?.designId === design?.design_id && checkedPlan?.revision === design?.revision ? checkedPlan?.report : null} onRun={() => void runPlanCheck()} busy={busy} /> : null}
+            {viewStep === "rehearsal" ? <RehearsalCard design={design} report={currentReport} onRun={() => void runPlanCheck()} busy={busy} /> : null}
             {viewSections.map((sectionId) => renderSectionEditor(sectionId))}
             {viewStep === "question_matching" ? (
               <QuestionMatchingCard
@@ -632,7 +677,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
                 candidates={candidates}
                 searchText={searchText}
                 searchResults={searchResults}
-                busy={busy}
+                busy={busy || isFinalized}
                 manualOpen={manualOpen}
                 manualForm={manualForm}
                 onSearchText={setSearchText}
@@ -643,7 +688,9 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
                   const manual: Record<string, unknown> = { text: manualForm.text };
                   if (manualForm.answer.trim()) manual.answer = manualForm.answer.trim();
                   if (manualForm.explanation.trim()) manual.explanation = manualForm.explanation.trim();
-                  void bindQuestion(stageId, "", manual).then(() => setManualForm({ text: "", answer: "", explanation: "" }));
+                  void bindQuestion(stageId, "", manual).then((saved) => {
+                    if (saved) setManualForm({ text: "", answer: "", explanation: "" });
+                  });
                 }}
                 onBindSearchResult={(stageId, questionId) => void bindQuestion(stageId, questionId)}
               />
@@ -727,7 +774,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
               </div>
               <div className="ldw-focus-row">
                 <span className="ldw-focus-label">还缺</span>
-                <span>{focus.missing?.length ? focus.missing.join("；") : "暂无阻断缺口"}</span>
+                <MissingFeedback key={`${design?.design_id}-${design?.revision}`} items={focus.missing || []} />
               </div>
               <div className="ldw-focus-row">
                 <span className="ldw-focus-label">下一步确认</span>
@@ -763,7 +810,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
                 }
               }}
               placeholder={activeQuestion || "说明希望补充或修改的内容；Ctrl/⌘ + Enter 发送"}
-              disabled={busy}
+              disabled={busy || isFinalized}
               aria-label="教案设计对话输入"
             />
             <div className="ldw-composer-actions">
@@ -780,7 +827,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
               <button
                 type="button"
                 className="toolbar-button compact primary"
-                disabled={busy || !input.trim()}
+                disabled={busy || !input.trim() || isFinalized}
                 onClick={() => void runTurn(input)}
                 data-testid="ldw-send"
               >
@@ -789,9 +836,19 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
             </div>
           </div>
           <footer className="ldw-step-footer" data-testid="ldw-step-navigation">
-            {focusStep && focusStep !== currentStep ? (
+            {viewStep === "rehearsal" ? (
+              <button
+                type="button"
+                className="toolbar-button compact primary ldw-next-step"
+                disabled={busy || !currentReport?.ready}
+                onClick={() => setFocusStep("confirmation")}
+                data-testid="ldw-continue-to-confirmation"
+              >
+                进入确认发布
+              </button>
+            ) : focusStep && focusStep !== currentStep ? (
               <>
-                <span>正在回看：{STEPS.find(([key]) => key === viewStep)?.[1] || "历史步骤"}</span>
+                <span>{isReviewingEarlierStep ? "正在回看" : "正在查看"}：{STEPS.find(([key]) => key === viewStep)?.[1] || "其他步骤"}</span>
                 <div className="ldw-actions">
                   <button type="button" className="toolbar-button compact" onClick={() => setFocusStep("")}>
                     回到当前步骤
@@ -799,7 +856,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
                   <button
                     type="button"
                     className="toolbar-button compact primary"
-                    disabled={busy || !design || !STEP_SECTION_KEYS[viewStep]?.length}
+                    disabled={busy || !canAdoptViewed}
                     onClick={() => void acceptStep(viewStep)}
                     data-testid="ldw-accept-step"
                   >

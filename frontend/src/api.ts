@@ -632,7 +632,7 @@ export async function resolveLessonDesignSection(
   teacherNote = "",
   revision?: number,
   value?: unknown
-): Promise<{ status: string; design: LessonDesignSession }> {
+): Promise<{ status: string; message?: string; design: LessonDesignSession }> {
   return requestJson(`/lesson-design/sessions/${encodeURIComponent(designId)}/sections/${encodeURIComponent(sectionId)}/resolve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
