@@ -74,6 +74,9 @@ FULL_DRAFT_INTENT_PATTERN = re.compile(
 )
 FULL_DRAFT_INTENT_STEPS = frozenset(STEP_KEYS) - {"rehearsal", "confirmation"}
 SCALAR_LABELS = {"title": "课题", "topic": "课题主题", "grade": "年级", "duration_minutes": "课时", "subject": "学科"}
+EXPLICIT_TOPIC_PATTERN = re.compile(
+    r"(?:课题|标题)\s*(?:(?:改为|调整为|改成|为|是)\s*[:：]?|[:：])\s*[\"“]?([^，,。；;、\n”\"！？!?]{1,80})"
+)
 # 只修改当前环节：一轮补丁只允许落在当前步骤的章节内。
 STEP_PATCH_SCOPES = {step: set(STEP_SECTIONS.get(step, ())) for step in STEP_KEYS}
 STEP_PATCH_SCOPES["requirements"].update({"title", "topic", "grade", "duration_minutes", "subject"})
@@ -845,7 +848,7 @@ class LessonDesignService:
         topic = str(draft.get("topic") or draft.get("title") or "")
         book = re.search(r"《\s*([^》\r\n]{1,80}?)\s*》", clean)
         course = FULL_DRAFT_INTENT_PATTERN.search(clean)
-        explicit = re.search(r"(?:课题|标题)\s*(?:改为|调整为|改成|为|是)?\s*[:：]?\s*[\"“]?([^，,。；;\n”\"]{1,80})", clean)
+        explicit = EXPLICIT_TOPIC_PATTERN.search(clean)
         if book:
             topic = book.group(1).strip()
         elif course:
@@ -1815,18 +1818,17 @@ class LessonDesignService:
         return {"reply": reply, "section_patch": patch, "next_step": next_step, "source_refs": [], "capability_bindings": patch.get("capabilities", []), "suggestions": []}
 
     @staticmethod
-    def _extract_topic(message: str) -> str:
+    def _extract_topic(message: str, existing_topic: str = "") -> str:
         """Extract a short lesson topic from a natural multi-part requirement."""
         clean = str(message or "").strip()
         book_title = re.search(r"《\s*([^》\r\n]{1,80}?)\s*》", clean)
         if book_title:
             return book_title.group(1).strip()
-        explicit = re.search(
-            r"(?:课题|标题)\s*(?:改为|调整为|改成|为|是)?\s*[:：]?\s*[\"“]?([^，,。；;\n”\"]{1,80})",
-            clean,
-        )
+        explicit = EXPLICIT_TOPIC_PATTERN.search(clean)
         if explicit:
             return explicit.group(1).strip()
+        if existing_topic:
+            return existing_topic
         simplified = re.sub(r"(高[一二三]|初[一二三]|七年级|八年级|九年级|\d+\s*分钟|单课时)", "", clean)
         simplified = simplified.replace("我想上", "").replace("请设计", "").replace("共创", "")
         parts = [item.strip(" ：:，,。、") for item in re.split(r"[，,。；;\n、]", simplified)]
@@ -1841,9 +1843,20 @@ class LessonDesignService:
         normalized = copy.deepcopy(result) if isinstance(result, dict) else {}
         patch = normalized.get("section_patch")
         patch = patch if isinstance(patch, dict) else {}
-        topic = cls._extract_topic(message)
+        existing_topic = str(draft.get("topic") or draft.get("title") or "").strip()
+        topic = cls._extract_topic(message, existing_topic)
         duration_match = re.search(r"(\d+)\s*分钟", message)
         grade_match = re.search(r"(高[一二三]|初[一二三]|七年级|八年级|九年级)", message)
+        if existing_topic and topic == existing_topic and not duration_match and not grade_match and re.search(r"复述|重述|回顾|(?:不要|无需|不用)修改(?:内容|草稿|需求)", message):
+            # 只询问当前需求时，不让规则或模型把控制语句覆盖进教学草稿。
+            normalized["section_patch"] = {}
+            normalized["next_step"] = "requirements"
+            normalized["reply"] = (
+                f"已记录：{draft.get('grade') or '年级待定'}《{existing_topic}》，{draft.get('duration_minutes') or 40} 分钟。\n"
+                f"教学需求：{(draft.get('requirements') or {}).get('raw') or '尚未补充其他要求'}\n"
+                "当前草稿未修改，请核对后再确认。"
+            )
+            return normalized
         original_title = str(patch.get("title") or patch.get("topic") or "").strip()
         if topic:
             patch["title"] = topic
@@ -1855,7 +1868,11 @@ class LessonDesignService:
         requirements = patch.get("requirements")
         if not isinstance(requirements, dict):
             requirements = {}
-        requirements["raw"] = str(message or "").strip()
+        previous_requirements = draft.get("requirements") or {}
+        requirements = {**previous_requirements, **requirements}
+        previous_raw = str(previous_requirements.get("raw") or "").strip()
+        incoming_raw = str(message or "").strip()
+        requirements["raw"] = f"{previous_raw}\n{incoming_raw}" if previous_raw and incoming_raw not in previous_raw else previous_raw or incoming_raw
         patch["requirements"] = requirements
         normalized["section_patch"] = patch
         if topic and (len(original_title) > 60 or topic not in original_title):

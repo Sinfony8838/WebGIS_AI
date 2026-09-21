@@ -38,6 +38,22 @@ class LessonDesignServiceTest(unittest.TestCase):
         self.assertEqual(service.get(design.design_id).revision, 0)
         self.assertNotIn("教学需求", service.session_view(service.get(design.design_id))["focus_summary"]["next_confirm_sections"])
 
+    def test_recap_and_followup_do_not_replace_the_existing_topic_or_original_requirements(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        first = service.turn(design.design_id, "高一《人口分布》，40分钟，使用人教版必修二。", 0)
+        before = json.dumps(first["draft"], ensure_ascii=False, sort_keys=True)
+        recap = service.turn(design.design_id, "请用自然中文简短复述已记录的课题、年级、课时和教材。不要确认章节，也不要修改其他步骤。", first["revision"])
+        self.assertEqual(json.dumps(recap["draft"], ensure_ascii=False, sort_keys=True), before)
+        self.assertEqual(recap["next_step"], "requirements")
+        self.assertIn("人教版必修二", recap["assistant_message"])
+        followup = service.turn(design.design_id, "学生初中地理基础较薄弱，增加读图支架。", recap["revision"])
+        self.assertEqual(followup["draft"]["title"], "人口分布")
+        self.assertIn("人教版必修二", followup["draft"]["requirements"]["raw"])
+        self.assertIn("读图支架", followup["draft"]["requirements"]["raw"])
+        renamed = service.turn(design.design_id, "课题改为：城市化。", followup["revision"])
+        self.assertEqual(renamed["draft"]["title"], "城市化")
+
     def test_feedback_keeps_complete_errors_without_double_punctuation(self) -> None:
         service = self.runtime.classroom.lesson_design
         design = service.create_or_resume(self.project, "local_admin")
