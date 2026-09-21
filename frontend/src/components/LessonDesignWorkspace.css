@@ -8,10 +8,10 @@
   gap: 6px;
   margin: 6px 0 2px;
   padding: 10px 12px;
-  border: 1px solid #bfdbfe;
+  border: 1px solid var(--panel-border-strong);
   border-radius: 10px;
-  background: #f8fbff;
-  color: #0f172a;
+  background: var(--surface);
+  color: var(--text-main);
   font-size: 12px;
   line-height: 1.55;
 }
@@ -23,7 +23,7 @@
 .ldw-focus-label {
   flex: 0 0 auto;
   font-weight: 600;
-  color: #1e3a8a;
+  color: var(--accent);
   white-space: nowrap;
 }
 .ldw-focus-row > span:last-child {
@@ -33,13 +33,13 @@
 .ldw-focus-question {
   display: block;
   margin-top: 2px;
-  color: #475569;
+  color: var(--text-soft);
 }
 .ldw-focus-note {
   margin: 2px 0 0;
   padding-top: 6px;
-  border-top: 1px dashed #dbe4f0;
-  color: #92400e;
+  border-top: 1px dashed var(--panel-border);
+  color: var(--warning);
   font-size: 11px;
 }
 
@@ -51,9 +51,9 @@
   align-items: center;
   margin: 12px 16px 2px;
   padding: 12px 14px;
-  border: 1px solid #cfe0f2;
+  border: 1px solid var(--panel-border);
   border-radius: 12px;
-  background: linear-gradient(135deg, #f8fbff 0%, #f2f8ff 100%);
+  background: var(--surface);
 }
 .ldw-whole-draft-copy {
   min-width: 0;
@@ -61,20 +61,20 @@
 .ldw-tool-eyebrow {
   display: block;
   margin-bottom: 2px;
-  color: #2563eb;
+  color: var(--accent);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.12em;
 }
 .ldw-whole-draft-copy strong {
   display: block;
-  color: #0f172a;
+  color: var(--text-main);
   font-size: 14px;
 }
 .ldw-whole-draft-copy p,
 .ldw-whole-draft-note {
   margin: 3px 0 0;
-  color: #64748b;
+  color: var(--text-dim);
   font-size: 11px;
   line-height: 1.45;
 }
@@ -88,16 +88,16 @@
   gap: 2px;
   min-width: 0;
   padding: 9px 10px;
-  border: 1px solid #bfd4eb;
+  border: 1px solid var(--panel-border);
   border-radius: 9px;
-  background: #fff;
-  color: #0f172a;
+  background: var(--surface-raised);
+  color: var(--text-main);
   text-align: left;
   cursor: pointer;
   transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
 }
 .ldw-draft-tool:hover:not(:disabled) {
-  border-color: #60a5fa;
+  border-color: var(--accent);
   box-shadow: 0 5px 14px rgba(37, 99, 235, 0.1);
   transform: translateY(-1px);
 }
@@ -110,14 +110,14 @@
   font-weight: 700;
 }
 .ldw-draft-tool small {
-  color: #64748b;
+  color: var(--text-dim);
   font-size: 10px;
   line-height: 1.4;
 }
 .ldw-whole-draft-note {
   grid-column: 1 / -1;
   padding-top: 7px;
-  border-top: 1px dashed #d8e4f1;
+  border-top: 1px dashed var(--panel-border);
 }
 
 /* 右栏只承担当前步骤共创与确认推进，避免全局/局部操作混杂。 */
@@ -131,11 +131,11 @@
   flex: 0 0 auto;
   gap: 7px;
   padding-top: 10px;
-  border-top: 1px solid #e2e8f0;
-  background: #f8fafc;
+  border-top: 1px solid var(--panel-border);
+  background: var(--surface);
 }
 .ldw-composer-label {
-  color: #334155;
+  color: var(--text-soft);
   font-size: 11px;
   font-weight: 700;
 }
@@ -156,12 +156,12 @@
   justify-content: space-between;
   gap: 8px;
   padding-top: 10px;
-  border-top: 1px solid #d8e4f1;
-  background: #f8fafc;
+  border-top: 1px solid var(--panel-border);
+  background: var(--surface);
 }
 .ldw-step-footer > span {
   min-width: 0;
-  color: #64748b;
+  color: var(--text-dim);
   font-size: 11px;
 }
 .ldw-step-footer .ldw-actions {

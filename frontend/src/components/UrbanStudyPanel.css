@@ -17,7 +17,7 @@
 .urban-study-stops button { border:1px solid var(--panel-border); background:transparent; color:var(--text-main); padding:7px 9px; border-radius:7px; cursor:pointer; }
 .urban-study-stops { display:flex; flex-wrap:wrap; gap:5px; }
 .urban-study-stops button[aria-pressed="true"] { background:rgba(40,139,135,.2); color:var(--accent); border-color:#288b87; }
-.urban-study-warning { color:#f4c77d !important; }
+.urban-study-warning { color:var(--warning) !important; }
 .urban-study-status { display:grid; gap:5px; padding:8px; border-left:3px solid #288b87; background:rgba(40,139,135,.08); font-size:11px; }
 .urban-study-status small { color:var(--text-dim); line-height:1.4; }
 .urban-study-panel a { color:var(--accent); font-size:11px; }

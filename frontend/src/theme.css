@@ -1,19 +1,43 @@
 /* Theme tokens and shared interaction polish. Map/slide/image content keeps
    its own colors; changing the UI theme never changes the geographic data. */
 :root {
-  --surface: #102037;
-  --surface-raised: #172c45;
-  --input-bg: rgba(5, 16, 30, .6);
+  /* Slate surfaces stay dark, with enough separation for classroom reading. */
+  --surface: #253749;
+  --surface-raised: #30465b;
+  --input-bg: #203244;
+  --panel-bg: rgba(40, 59, 78, .96);
+  --panel-bg-strong: rgba(37, 55, 73, .98);
+  --panel-bg-soft: rgba(191, 216, 239, .08);
+  --panel-border: #60788e;
+  --panel-border-strong: #8099af;
+  --glass-bg: linear-gradient(180deg, rgba(48, 70, 91, .97), rgba(37, 55, 73, .96));
+  --glass-border: var(--panel-border);
+  --text-main: #f1f6fc;
+  --text-soft: #d0deeb;
+  --text-dim: #b4c7d9;
+  --accent: #8cd8ff;
+  --accent-strong: #6bc8f4;
+  --accent-soft: rgba(120, 200, 240, .12);
+  --accent-iris: #bdc9ff;
+  --danger: #ffa7ae;
+  --text-secondary: var(--text-soft);
+  --button-primary-bg: #126990;
+  --button-primary-text: #fff;
+  --success-soft: #244b42;
+  --warning-soft: #51442f;
+  --danger-soft: #593942;
   --text: var(--text-main);
   --focus-ring: #58c7ff;
+  color: var(--text-main);
+  background: var(--surface);
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
   color: #18334b;
   background: #eef3f8;
-  --accent: #0676a8;
-  --accent-strong: #056a98;
+  --accent: #075d83;
+  --accent-strong: #075678;
   --accent-soft: rgba(2, 119, 171, .1);
   --accent-glow: rgba(2, 119, 171, .2);
   --accent-iris: #4b58b8;
@@ -36,9 +60,46 @@
   --input-bg: #fff;
   --text-main: #18334b;
   --text-soft: #496278;
-  --text-dim: #61778b;
+  --text-dim: #536a7e;
+  --button-primary-bg: #096e9b;
   --focus-ring: #087aa9;
 }
+
+/* Theme the interface surfaces, never the map, slide or image pixels. */
+body, .screen-shell.screen-shell-qgis { background: var(--surface); }
+.app-header, .drawer-panel, .copilot-widget, .dialog-panel,
+.lesson-workflow-launcher, .visual-query-popup, .qgis-card {
+  background: var(--glass-bg);
+  color: var(--text-main);
+}
+.ldw-shell { color: var(--text-main); }
+.qpm-shell { background: var(--surface); color: var(--text-main); }
+.qpm-header, .qpm-timer, .qpm-footer { background: var(--surface-raised); }
+.qpm-timer.revealed { background: var(--success-soft); color: var(--success); }
+.ldw-whole-draft-tools { background: var(--surface); }
+.toolbar-button.primary, .lesson-primary { background: var(--button-primary-bg); color: var(--button-primary-text); }
+:is(input, textarea)::placeholder { color: var(--text-dim); opacity: 1; }
+
+/* Status text must keep its semantic contrast even inside generic light panels. */
+:root :is(.qpm-answer-main, .qpm-sub-answer strong, .qpm-ontime,
+  .rehearsal-complete p, .upload-dialog-feedback--success) { color: var(--success); }
+:root :is(.qpm-overtime, .qpm-timer.overtime .qpm-timer-clock,
+  .lesson-design-error, .upload-dialog-feedback--error) { color: var(--danger); }
+:root :is(.upload-dialog-warning, .ldw-focus-note) { color: var(--warning); }
+.qpm-options li.correct .option-label { background: var(--success); color: var(--surface); }
+:root[data-theme="light"] .qpm-options li.correct .option-label { color: #fff; }
+:root[data-theme="light"] :is(.class-stage-guidance, .basic-knowledge-launcher,
+  .class-brainstorm-card, .class-oral-prompt, .population-prep-box,
+  .copilot-image-gen, .copilot-plan-card, .copilot-confirm-card, .copilot-thinking,
+  .copilot-teaching-block, .copilot-tool-trace, .copilot-citation-list,
+  .drawer-stat-strip, .drawer-tabs, .annotation-dialog-location) { background: var(--surface); }
+:root[data-theme="light"] :is(.brainstorm-region-wheel, .class-brainstorm-mark) {
+  background: var(--accent-soft); color: var(--accent-iris);
+}
+:root[data-theme="light"] .brainstorm-region-wheel::before,
+:root[data-theme="light"] .brainstorm-region-wheel::after { background: none; }
+:root[data-theme="light"] .class-stage-item.active .stage-item-title { color: var(--accent-strong); }
+:root[data-theme="light"] .class-stage-item.done .stage-item-dot { color: var(--success); }
 
 .theme-toggle {
   display: inline-flex;
@@ -217,49 +278,7 @@ button:disabled { cursor: not-allowed; }
 :root[data-theme="light"] .workflow-panel__status--error { color: var(--danger); }
 :root[data-theme="light"] .workflow-panel__status--running { color: var(--warning); }
 :root[data-theme="light"] .database-viewer { background: #f1f5f9; }
-:root[data-theme="light"] .database-viewer .database-primary-action,
-:root[data-theme="light"] .screen-shell .toolbar-button.primary { background: #096e9b; color: #fff; border-color: #096e9b; }
-:root[data-theme="light"] .screen-shell .toolbar-button.danger { background: #ad3341; color: #fff; }
-
-/* Previously the database and lesson-design workbench were always white.
-   Their paper-like surfaces now share the selected application theme. */
-:root[data-theme="dark"] :is(.database-viewer, .ldw-shell, .qpm-shell) {
-  background: var(--surface); color: var(--text-main);
-}
-:root[data-theme="dark"] :is(.database-viewer-header, .database-viewer-summary small) { border-color: var(--panel-border); }
-:root[data-theme="dark"] .lesson-design-message > span { color: var(--text-dim); }
-:root[data-theme="dark"] :is(.database-viewer, .ldw-shell, .qpm-shell)
-  :is(h1, h2, h3, h4, strong, label, input, textarea, select, button, summary, dd, .qpm-stem) { color: var(--text-main); }
-:root[data-theme="dark"] :is(.database-viewer, .ldw-shell, .qpm-shell)
-  :is(p, small, dt, .ldw-progress, .ldw-sub, .ldw-hint, .database-viewer-heading span,
-    .database-viewer-search span, .database-viewer-summary span, .qpm-meta, .qpm-task, .qpm-timer-sub) { color: var(--text-soft); }
-:root[data-theme="dark"] :is(.database-viewer-tabs, .database-viewer-summary,
-  .database-viewer-list, .database-row, .database-resource-search, .ldw-left, .ldw-mid,
-  .ldw-right, .ldw-banks, .ldw-card, .ldw-stage, .ldw-question-list li,
-  .ldw-candidate-list li, .lesson-design-message p, .rehearsal-question, .rehearsal-checklist,
-  .qpm-header, .qpm-timer, .qpm-material, .qpm-options li, .qpm-feedback) {
-  background: var(--surface-raised); border-color: var(--panel-border);
-}
-:root[data-theme="dark"] :is(.database-viewer, .ldw-shell, .qpm-shell) :is(input, textarea, select, .toolbar-button),
-:root[data-theme="dark"] :is(.database-viewer-actions button, .database-viewer-tabs button, .database-row-actions button) {
-  background: var(--input-bg); border-color: var(--panel-border-strong); color: var(--text-main);
-}
-:root[data-theme="dark"] :is(.database-row-title span, .database-row-tags span, .database-row-meta span,
-  .database-viewer-tabs em, .ldw-step-no, .ldw-status-pending, .qpm-options .option-label) {
-  background: var(--accent-soft); color: var(--text-soft);
-}
-:root[data-theme="dark"] :is(.database-row:hover, .database-viewer-tabs button.active,
-  .ldw-step.active, .ldw-active-question, .ldw-finalize-card, .lesson-design-message.teacher p) {
-  background: #1b3b55; color: var(--text-main); border-color: var(--panel-border-strong);
-}
-:root[data-theme="dark"] :is(.database-viewer, .ldw-shell, .qpm-shell) .toolbar-button.primary,
-:root[data-theme="dark"] .database-viewer .database-primary-action { background: #137daa; color: #fff; }
-:root[data-theme="dark"] :is(.ldw-report.ok, .rehearsal-complete, .rehearsal-check-state.ok, .qpm-options li.correct) {
-  background: #173d31; color: var(--success); border-color: #357b60;
-}
-:root[data-theme="dark"] :is(.ldw-report.bad, .rehearsal-check-state.bad) {
-  background: #49242e; color: var(--danger); border-color: #94495b;
-}
+:root[data-theme="light"] .database-viewer .database-primary-action { background: #096e9b; color: #fff; border-color: #096e9b; }
 
 @media (min-width: 1121px) and (max-width: 1500px) {
   .app-header { grid-template-columns: auto minmax(210px, 1fr) auto; }
@@ -345,3 +364,37 @@ button:disabled { cursor: not-allowed; }
   box-shadow: 0 6px 22px rgba(22, 47, 70, .2);
 }
 :root[data-theme="light"] .screen-shell .globe-theme-tooltip strong { color: #096e9b; }
+
+/* Keep filled actions distinguishable in dialogs mounted outside screen-shell. */
+:root[data-theme] .toolbar-button.primary {
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  border-color: var(--button-primary-bg);
+}
+:root[data-theme] .toolbar-button.danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.database-workbench .database-viewer-tabs em { opacity: 1; background: transparent; }
+.question-type-badge.open { background: var(--warning-soft); color: var(--warning); }
+.question-type-badge.choice { background: var(--accent-soft); color: var(--accent); }
+.auth-entry-card { background: var(--surface-raised); }
+.auth-entry-card .auth-field input::placeholder,
+.auth-entry-card .auth-field textarea::placeholder { color: var(--text-dim); }
+:root[data-theme="light"] .auth-entry-card .auth-field input::placeholder,
+:root[data-theme="light"] .auth-entry-card .auth-field textarea::placeholder { color: #526e72; }
+
+/* Unavailable actions are muted by their surface, not by fading the label. */
+:root[data-theme] :is(.screen-shell, .qpm-shell, .ldw-shell) button:disabled {
+  opacity: 1;
+  color: var(--text-dim);
+  background: var(--surface);
+  border-color: var(--panel-border);
+  box-shadow: none;
+}
+
+/* Outline data-colored bars without changing their map legend colors. */
+:root:not([data-theme="light"]) .visual-query-bar-fill {
+  box-shadow: inset 0 0 0 1px var(--text-dim);
+}

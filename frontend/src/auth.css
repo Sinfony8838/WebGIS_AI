@@ -92,7 +92,7 @@
 .auth-card > form > .auth-primary { width: 100%; min-height: 46px; margin-top: 10px; border-radius: 13px; }
 .auth-primary:disabled { opacity: .6; }
 .auth-error { margin: 12px 0; border: 1px solid rgba(255, 116, 116, .35); border-radius: 10px; padding: 10px 12px; color: #ffd1d1; background: rgba(129, 26, 42, .24); }
-.auth-hint { margin: -7px 0 10px; color: #ffcf80; font-size: 12px; }
+.auth-hint { margin: -7px 0 10px; color: var(--warning); font-size: 12px; }
 .auth-loading { position: relative; color: #aeeaff; letter-spacing: .06em; }
 .auth-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 .auth-actions button { min-height: 40px; border: 1px solid rgba(125, 176, 215, .32); border-radius: 10px; padding: 0 16px; color: #dcefff; background: #102b45; }
@@ -192,44 +192,44 @@ body:has(.class-run-panel) .account-dock {
   .account-dock .user-menu-label strong { max-width: 110px; }
 }
 
-.admin-panel { position: relative; display: flex; flex-direction: column; width: min(1050px, calc(100vw - 44px)); max-height: calc(100vh - 44px); overflow: hidden; border: 1px solid rgba(110, 190, 239, .34); border-radius: 24px; color: #edf8ff; background: #091c30; box-shadow: 0 28px 90px rgba(0, 0, 0, .6); }
+.admin-panel { position: relative; display: flex; flex-direction: column; width: min(1050px, calc(100vw - 44px)); max-height: calc(100vh - 44px); overflow: hidden; border: 1px solid rgba(110, 190, 239, .34); border-radius: 24px; color: var(--text-main); background: var(--surface); box-shadow: 0 28px 90px rgba(0, 0, 0, .6); }
 .admin-panel > header { display: flex; justify-content: space-between; align-items: center; padding: 22px 24px 14px; }
 .admin-panel h2 { margin: 5px 0 0; }
 .admin-panel .auth-eyebrow { margin: 0; }
-.admin-close { width: 40px; height: 40px; border: 1px solid rgba(125, 176, 215, .3); border-radius: 12px; color: #e8f7ff; background: #102b45; font-size: 25px; }
+.admin-close { width: 40px; height: 40px; border: 1px solid rgba(125, 176, 215, .3); border-radius: 12px; color: var(--text-main); background: var(--surface-raised); font-size: 25px; }
 .admin-tabs { display: flex; gap: 8px; padding: 0 24px 14px; }
-.admin-tabs button { border: 0; border-radius: 9px; padding: 9px 15px; color: #9fb8cc; background: transparent; }
-.admin-tabs button.active { color: #eafaff; background: rgba(79, 182, 239, .16); }
+.admin-tabs button { border: 0; border-radius: 9px; padding: 9px 15px; color: var(--text-soft); background: transparent; }
+.admin-tabs button.active { color: var(--accent); background: var(--accent-soft); }
 .admin-panel > .auth-error, .temporary-password { margin: 0 24px 14px; }
 .admin-toolbar { display: grid; grid-template-columns: minmax(220px, 1fr) 145px 145px auto; gap: 10px; padding: 0 24px 16px; }
 .admin-toolbar .auth-primary { min-height: 44px; border-radius: 11px; padding: 0 18px; }
 .admin-table-wrap { overflow: auto; padding: 0 24px 24px; }
 .admin-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.admin-table th { position: sticky; top: 0; z-index: 1; padding: 11px 10px; color: #8eabc1; background: #0b223a; text-align: left; }
+.admin-table th { position: sticky; top: 0; z-index: 1; padding: 11px 10px; color: var(--text-soft); background: var(--surface-raised); text-align: left; }
 .admin-table td { border-top: 1px solid rgba(124, 172, 207, .14); padding: 12px 10px; vertical-align: middle; }
 .admin-table td:first-child { min-width: 190px; }
 .admin-table td:first-child strong, .admin-table td:first-child span { display: block; }
-.admin-table td:first-child span { margin-top: 4px; color: #829db3; font-size: 11px; }
+.admin-table td:first-child span { margin-top: 4px; color: var(--text-dim); font-size: 11px; }
 .admin-table select { min-height: 36px; padding: 0 8px; }
 .status-chip { border: 1px solid; border-radius: 999px; padding: 5px 9px; font-size: 11px; }
-.status-chip.active { border-color: rgba(92, 225, 176, .42); color: #8cf0c8; background: rgba(21, 116, 83, .22); }
-.status-chip.disabled { border-color: rgba(255, 139, 139, .35); color: #ffb5b5; background: rgba(126, 38, 52, .22); }
-.status-chip.reg-pending { border-color: rgba(255, 197, 99, .45); color: #ffd98f; background: rgba(115, 75, 15, .22); }
-.status-chip.reg-approved { border-color: rgba(92, 225, 176, .42); color: #8cf0c8; background: rgba(21, 116, 83, .22); }
-.status-chip.reg-rejected { border-color: rgba(255, 139, 139, .35); color: #ffb5b5; background: rgba(126, 38, 52, .22); }
+.status-chip.active { border-color: rgba(92, 225, 176, .42); color: var(--success); background: var(--success-soft); }
+.status-chip.disabled { border-color: rgba(255, 139, 139, .35); color: var(--danger); background: var(--danger-soft); }
+.status-chip.reg-pending { border-color: rgba(255, 197, 99, .45); color: var(--warning); background: var(--warning-soft); }
+.status-chip.reg-approved { border-color: rgba(92, 225, 176, .42); color: var(--success); background: var(--success-soft); }
+.status-chip.reg-rejected { border-color: rgba(255, 139, 139, .35); color: var(--danger); background: var(--danger-soft); }
 .admin-badge { display: inline-grid; place-items: center; min-width: 19px; height: 19px; margin-left: 7px; border-radius: 999px; padding: 0 5px; color: #091d28; background: #ffd98f; font-size: 11px; font-weight: 800; vertical-align: 1px; }
 .admin-toolbar-registrations { grid-template-columns: minmax(220px, 1fr) 145px auto; align-items: center; }
-.admin-pending-hint { color: #9fb8cc; font-size: 12px; white-space: nowrap; }
+.admin-pending-hint { color: var(--text-soft); font-size: 12px; white-space: nowrap; }
 .admin-notice { margin: 0 24px 14px; }
-.admin-note-cell { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: #9fb8cc; }
+.admin-note-cell { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-soft); }
 .admin-row-actions { display: flex; flex-wrap: wrap; gap: 7px; min-width: 230px; }
-.admin-row-actions button, .temporary-password button { border: 1px solid rgba(125, 176, 215, .28); border-radius: 8px; padding: 6px 8px; color: #cdeaff; background: #102a43; }
-.temporary-password { display: flex; align-items: center; gap: 14px; border: 1px solid rgba(255, 197, 99, .36); border-radius: 12px; padding: 12px 14px; background: rgba(115, 75, 15, .22); }
+.admin-row-actions button, .temporary-password button { border: 1px solid rgba(125, 176, 215, .28); border-radius: 8px; padding: 6px 8px; color: var(--text-main); background: var(--surface-raised); }
+.temporary-password { display: flex; align-items: center; gap: 14px; border: 1px solid rgba(255, 197, 99, .36); border-radius: 12px; padding: 12px 14px; background: var(--warning-soft); }
 .temporary-password > div { display: grid; gap: 3px; }
-.temporary-password span { color: #c9b98f; font-size: 11px; }
-.temporary-password code { margin-left: auto; color: #ffe099; font-size: 15px; user-select: all; }
+.temporary-password span { color: var(--text-soft); font-size: 11px; }
+.temporary-password code { margin-left: auto; color: var(--warning); font-size: 15px; user-select: all; }
 .admin-subdialog { position: absolute; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(2, 10, 20, .76); backdrop-filter: blur(5px); }
-.admin-subdialog form { width: min(420px, 100%); border: 1px solid rgba(115, 194, 240, .34); border-radius: 18px; padding: 24px; background: #0b2238; }
+.admin-subdialog form { width: min(420px, 100%); border: 1px solid rgba(115, 194, 240, .34); border-radius: 18px; padding: 24px; background: var(--surface-raised); }
 .admin-subdialog h3 { margin: 0 0 14px; }
 
 @media (max-width: 760px) {
@@ -250,7 +250,7 @@ body:has(.class-run-panel) .account-dock {
 /* Geography teaching entry. Scoped to keep account dialogs unchanged. */
 .auth-entry {
   --entry-ink: #e6f4f4;
-  --entry-soft: #a0b9c5;
+  --entry-soft: var(--text-dim);
   --entry-line: rgba(140,198,198,.2);
   --auth-pointer-x: 50%;
   --auth-pointer-y: 35%;
@@ -267,7 +267,7 @@ body:has(.class-run-panel) .account-dock {
     radial-gradient(ellipse at 44% 48%, #15526470, transparent 42%),
     radial-gradient(ellipse at 78% 16%, #43316a45, transparent 42%),
     radial-gradient(ellipse at 8% 85%, #163c634d, transparent 40%),
-    #060e1c;
+    #1b2e40;
 }
 .auth-entry .auth-map-grid, .auth-entry .auth-population-points { display: none; }
 .auth-entry-layout { position: relative; width: min(1280px,100%); display: grid; grid-template-columns: minmax(520px,1.5fr) minmax(360px,.85fr); align-items: center; gap: clamp(40px,5vw,72px); }
