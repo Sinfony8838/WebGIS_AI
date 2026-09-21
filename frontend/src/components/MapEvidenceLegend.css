@@ -36,3 +36,10 @@
 }
 
 .map-precipitation-key { display:inline-block; width:22px; border-top:3px dashed #8b3db0; vertical-align:middle; margin-right:6px; }
+
+/* Classroom reading takes precedence over the assistant's saved drag position. */
+@media (min-width:961px) {
+  .screen-shell-classroom:has(.class-run-panel):has(.map-evidence-legend:not(.is-collapsed)) .copilot-orb-shell {
+    left:clamp(656px, var(--copilot-orb-x), calc(100vw - var(--right-rail-width) - 128px)) !important;
+  }
+}

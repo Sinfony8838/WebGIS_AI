@@ -1,4 +1,5 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
+import { readMapInk, writeMapInk } from "../lib/mapInkStorage";
 import type { BrushOverlayHandle, BrushSettings } from "./BrushOverlay";
 import { anchorPaths, eraseInk, shapePaths, type InkPoint, type MapInkProjection, type MapInkStroke } from "../lib/mapInk";
 
@@ -9,12 +10,17 @@ export const MapBrushOverlay = forwardRef<BrushOverlayHandle, Props>(function Ma
   { active, settings, projection, scope, onWheelZoom, onContentChange }, ref
 ) {
   const canvasRef=useRef<HTMLCanvasElement>(null);
+  const loadedScope = useRef("");
+  const [saveFailed, setSaveFailed] = useState(false);
   const strokes=useRef<MapInkStroke[]>([]), history=useRef<MapInkStroke[][]>([]);
   const draft=useRef<MapInkStroke|null>(null);
   const gesture=useRef<{ start:InkPoint; last:InkPoint; settings:BrushSettings; pointer:number }|null>(null);
   const latest=useRef({projection,onContentChange});
   latest.current={projection,onContentChange};
-  const notify=useCallback(() => latest.current.onContentChange?.(strokes.current.length>0),[]);
+  const notify=useCallback(() => {
+    latest.current.onContentChange?.(strokes.current.length>0);
+    setSaveFailed(!writeMapInk(loadedScope.current, strokes.current));
+  },[]);
   const snapshot=useCallback(() => { history.current.push(strokes.current); if(history.current.length>30) history.current.shift(); },[]);
   const renderInk=useCallback(() => {
     const canvas=canvasRef.current, ctx=canvas?.getContext("2d");
@@ -57,7 +63,10 @@ export const MapBrushOverlay = forwardRef<BrushOverlayHandle, Props>(function Ma
     // Raster imports have no geographic reference. Only PPT uses loadImage.
     loadImage:() => { throw new Error("地图笔迹需要地理坐标，不能从无定位的图片恢复。"); }
   }),[finish,snapshot,notify,renderInk]);
-  useLayoutEffect(() => { strokes.current=[]; history.current=[]; draft.current=null; gesture.current=null; notify(); renderInk(); },[scope,notify,renderInk]);
+  useLayoutEffect(() => {
+    loadedScope.current = scope; strokes.current=readMapInk(scope); history.current=[];
+    draft.current=null; gesture.current=null; notify(); renderInk();
+  },[scope,notify,renderInk]);
   useLayoutEffect(() => {
     finish();
     let unsubscribe:(() => void)|undefined, frame=0;
@@ -72,7 +81,7 @@ export const MapBrushOverlay = forwardRef<BrushOverlayHandle, Props>(function Ma
     const wheel=(event:WheelEvent) => { if(active) { finish(); onWheelZoom?.(event); } };
     canvas.addEventListener("wheel",wheel,{passive:false}); return () => canvas.removeEventListener("wheel",wheel);
   },[active,finish,onWheelZoom]);
-  return <canvas ref={canvasRef} className={`brush-overlay ${active?"brush-overlay--active":""}`}
+  return <>{saveFailed && <p role="alert" style={{position:"absolute",left:"40%",top:80,zIndex:60}}>笔迹暂未保存到本机，请先截图存证再刷新。</p>}<canvas ref={canvasRef} className={`brush-overlay ${active?"brush-overlay--active":""}`}
     aria-label="地理定位的课堂笔迹" data-testid="map-brush-overlay"
     style={{width:"100%",height:"100%",touchAction:"none",cursor:settings.tool==="eraser"?"cell":"crosshair"}}
     onPointerDown={event => {
@@ -99,5 +108,5 @@ export const MapBrushOverlay = forwardRef<BrushOverlayHandle, Props>(function Ma
       g.last=point; renderInk();
     }}
     onPointerUp={finish} onPointerCancel={finish} onLostPointerCapture={finish}
-  />;
+  /></>;
 });

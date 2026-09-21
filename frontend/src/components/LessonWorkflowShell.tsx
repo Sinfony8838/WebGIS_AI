@@ -11,6 +11,7 @@ import {
   endClassSession,
   enterSessionStage,
   fetchClassSessions,
+  logSessionEvent,
   fetchJob,
   fetchLesson,
   fetchLessons,
@@ -354,6 +355,11 @@ export function LessonWorkflowShell({
         if (cancelled) return;
         setActiveSession(running);
         setActiveLesson(lesson);
+        // A reload starts App in its default globe mode. Restore the opening
+        // snapshot's view mode as well as the stage, without replaying the
+        // backend scene or resetting annotations and question timers.
+        const restoredStage = lesson.stages.find(stage => stage.stage_id === running.current_stage_id);
+        if (restoredStage) onApplyGlobeScene?.(restoredStage.scene?.globe || { enabled: false });
         setLessons((previous) => previous.some((item) => item.lesson_id === lesson.lesson_id)
           ? previous.map((item) => (item.lesson_id === lesson.lesson_id ? lesson : item))
           : [lesson, ...previous]);
@@ -763,6 +769,12 @@ export function LessonWorkflowShell({
           collapsed={panelCollapsed}
           onToggleCollapsed={() => setPanelCollapsed((value) => !value)}
           onEnterStage={(stageId) => void applyScene(stageId, true)}
+          onSaveInquiryNote={async (payload) => {
+            await logSessionEvent(activeSession.session_id, { event_type: "note", stage_id: activeSession.current_stage_id, payload });
+            const { items } = await fetchClassSessions({ projectId: activeSession.project_id });
+            const saved = items.find(item => item.session_id === activeSession.session_id);
+            if (saved) setActiveSession(saved);
+          }}
           onPresentScene={async (target) => {
             const response = await presentClassroomScene(activeSession.session_id, activeSession.current_stage_id, target);
             onApplyGlobeScene?.(response.scene.globe || {});

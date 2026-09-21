@@ -117,6 +117,22 @@ afterEach(() => {
 });
 
 describe("ReportPanel", () => {
+  it("keeps inquiry examples and confirmed conclusions readable after class without creating a report", async () => {
+    const payload = structuredClone(await fetchClassSessions({ projectId: "fixture" }));
+    payload.items[0].events = [
+      { type: "note", stage_id: "china_inquiry", payload: { kind: "population_inquiry_record", record_kind: "initial", source: "preset_example", text: "演练中的原始判断" } },
+      { type: "note", stage_id: "china_explain", payload: { kind: "population_inquiry_record", record_kind: "conclusion", source: "teacher_confirmed", text: "总体格局与局地条件应分别说明" } },
+      { type: "note", stage_id: "china_explain", payload: { kind: "inquiry_navigation", text: "导航不是学习表现" } }
+    ] as typeof payload.items[0]["events"];
+    vi.mocked(fetchClassSessions).mockResolvedValueOnce(payload);
+    render(<ReportPanel projectId="project_1" onClose={() => undefined} />);
+    expect(await screen.findByText("演练中的原始判断")).toBeInTheDocument();
+    expect(screen.getByText("初始观点 · 预设示例，非学生参与")).toBeInTheDocument();
+    expect(screen.getByText("教师确认归纳")).toBeInTheDocument();
+    expect(screen.getByText("总体格局与局地条件应分别说明")).toBeInTheDocument();
+    expect(screen.queryByText("导航不是学习表现")).not.toBeInTheDocument();
+    expect(generateSessionReport).not.toHaveBeenCalled();
+  });
   it("marks student response data as uncollected and renders teacher oral evidence", async () => {
     render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
 

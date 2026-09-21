@@ -2,6 +2,25 @@ import unittest
 
 
 class PopulationReferenceLessonTest(unittest.TestCase):
+    def test_inquiry_notes_and_guide_remain_bound_to_the_opening_snapshot(self):
+        from copy import deepcopy
+        runtime, store, project_id = self.build_runtime()
+        lesson_id = "lesson_builtin_population_shanghai_world"
+        session = runtime.classroom.create_class_session(lesson_id, project_id)["session"]
+        sid = session["session_id"]
+        original = deepcopy(session["metadata"]["lesson_snapshot"]["metadata"]["china_inquiry_guide"])
+        runtime.classroom.enter_session_stage(sid, "china_inquiry")
+        runtime.classroom.log_session_event(sid, "note", "china_inquiry", {
+            "kind": "population_inquiry_record", "record_kind": "initial", "source": "preset_example", "text": "演练示例"})
+        runtime.classroom.lesson_service.update_lesson(lesson_id, {"metadata": {"china_inquiry_guide": {"conclusion": "later edit"}}})
+        runtime.classroom.enter_session_stage(sid, "china_explain")
+        runtime.classroom.enter_session_stage(sid, "china_inquiry")
+        restored = runtime.classroom.get_class_session(sid)["session"]
+        self.assertEqual(restored["metadata"]["lesson_snapshot"]["metadata"]["china_inquiry_guide"], original)
+        self.assertTrue(any(e["payload"].get("source") == "preset_example" for e in restored["events"]))
+        self.assertEqual(restored["responses"], {})
+        self.assertFalse(any(e["type"] == "observation" for e in restored["events"]))
+
     def build_runtime(self):
         from tests.test_lessons import LessonServiceTest
         return LessonServiceTest.build_runtime(self)
@@ -79,7 +98,7 @@ class PopulationReferenceLessonTest(unittest.TestCase):
     def test_inquiry_regions_follow_the_current_geographical_scale(self):
         runtime, store, _ = self.build_runtime()
         lesson = store.get_lesson("lesson_builtin_population_shanghai_world")
-        self.assertEqual(lesson.metadata["builtin_version"], "5")
+        self.assertEqual(lesson.metadata["builtin_version"], "6")
         self.assertEqual(lesson.find_stage("shanghai_inquiry")["brainstorm"]["regions"], ["黄浦区", "崇明区"])
         self.assertIn("塔里木盆地", lesson.find_stage("china_explain")["brainstorm"]["regions"])
         # Do not interrupt the student-first line-drawing activity with AI answers.
@@ -95,12 +114,13 @@ class PopulationReferenceLessonTest(unittest.TestCase):
         student_text = "\n".join(question["text"] for question in questions)
         discussions = [question for question in questions if question["text"].startswith("【小组讨论")]
         case_materials = [question for question in questions if "案例：" in question.get("material", "")]
-        self.assertEqual(lesson.metadata["curriculum_standard"], "运用资料，描述人口分布的特点及其影响因素。")
+        self.assertIn("2.1", lesson.metadata["curriculum_standard"])
+        self.assertIn("不是课标逐字原文", lesson.metadata["curriculum_standard"])
         self.assertEqual([question["question_id"] for question in discussions], ["sh_factors_q", "china_reason_q"])
         self.assertEqual(sum(bool(stage.get("brainstorm")) for stage in lesson.stages), 2)
         self.assertEqual([question["question_id"] for question in case_materials], ["concept_q", "sh_factors_q"])
         self.assertTrue(all(question.get("knowledge_points") for question in questions))
-        self.assertIn("中国人口分布有什么特点", student_text)
+        self.assertIn("中国人口分布的总体特点", lesson.find_stage("china_inquiry")["questions"][1]["text"])
         self.assertIn("世界人口分布有什么特点", student_text)
         self.assertIn("画一条大致分开", student_text)
         for awkward in ("哪两个指标", "增加哪一项资料", "分母口径", "能否由此推出"):
