@@ -490,6 +490,8 @@ class ClassroomWorkflowRuntime:
     def _session_public_view(self, session: ClassSessionRecord) -> Dict[str, Any]:
         """会话对外视图：投屏计时改为实时计算值，前端拿到即可直接倒计时。"""
         data = session.to_dict()
+        project = self.store.get_project(session.project_id)
+        data["metadata"] = {**(data.get("metadata") or {}), "project_title": project.name if project else ""}
         active = data.get("active_question")
         if isinstance(active, dict) and isinstance(active.get("timer"), dict):
             active["timer"] = self._timer_view(active["timer"])
