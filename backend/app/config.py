@@ -12,6 +12,21 @@ def _default_root_dir() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def resolve_data_root(root_dir: Path) -> Path:
+    """Single source of truth for the data root, shared with the PyQGIS worker.
+
+    ``WEBGIS_AI_DATA_DIR`` relocates the whole data tree (state, auth, uploads,
+    outputs, workflows) to an isolated instance; unset keeps the historical
+    ``<root>/backend/data`` layout. The worker resolves the same variable in
+    ``pyqgis_worker/handlers/_common.py`` so the main process and the worker
+    never disagree about where uploads/builtin data live.
+    """
+    override = os.getenv("WEBGIS_AI_DATA_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path(root_dir) / "backend" / "data"
+
+
 LLM_PROVIDER_ENV_KEYS = ("WEBGIS_AI_LLM_PROVIDER", "LLM_PROVIDER", "MINIMAX_PROVIDER")
 MINIMAX_API_KEY_ENV_KEYS = ("WEBGIS_AI_MINIMAX_API_KEY", "MINIMAX_API_KEY")
 MINIMAX_BASE_URL_ENV_KEYS = ("WEBGIS_AI_MINIMAX_BASE_URL", "MINIMAX_BASE_URL")
@@ -260,6 +275,53 @@ class AppConfig:
         default_factory=lambda: int(os.getenv("WEBGIS_AI_AGENT_MAX_TRACE_EVENTS", "64"))
     )
     resource_search_endpoint: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_RESOURCE_SEARCH_ENDPOINT", ""))
+    # --- Phase-1 request budgets (audit T3). All values are configurable so
+    # deployments can tune them; defaults sized against legal classroom use.
+    max_json_body_bytes: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_MAX_JSON_BODY_BYTES", str(32 * 1024 * 1024)))
+    )
+    max_dataset_upload_bytes: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_MAX_DATASET_UPLOAD_BYTES", str(512 * 1024 * 1024)))
+    )
+    max_kb_upload_bytes: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_MAX_KB_UPLOAD_BYTES", str(50 * 1024 * 1024)))
+    )
+    max_ppt_upload_bytes: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_MAX_PPT_UPLOAD_BYTES", str(50 * 1024 * 1024)))
+    )
+    max_image_upload_bytes: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_MAX_IMAGE_UPLOAD_BYTES", str(20 * 1024 * 1024)))
+    )
+    max_question_bank_upload_bytes: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_MAX_QUESTION_BANK_UPLOAD_BYTES", str(50 * 1024 * 1024)))
+    )
+    max_timeline_upload_bytes: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_MAX_TIMELINE_UPLOAD_BYTES", str(20 * 1024 * 1024)))
+    )
+    voice_max_session_seconds: float = field(
+        default_factory=lambda: float(os.getenv("WEBGIS_AI_VOICE_MAX_SESSION_SECONDS", "900"))
+    )
+    voice_idle_timeout_seconds: float = field(
+        default_factory=lambda: float(os.getenv("WEBGIS_AI_VOICE_IDLE_TIMEOUT_SECONDS", "300"))
+    )
+    voice_max_frame_bytes: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_VOICE_MAX_FRAME_BYTES", str(256 * 1024)))
+    )
+    voice_max_sessions_per_user: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_VOICE_MAX_SESSIONS_PER_USER", "2"))
+    )
+    workflow_queue_max: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_WORKFLOW_QUEUE_MAX", "8"))
+    )
+    workflow_queue_timeout_seconds: float = field(
+        default_factory=lambda: float(os.getenv("WEBGIS_AI_WORKFLOW_QUEUE_TIMEOUT_SECONDS", "120"))
+    )
+    llm_max_concurrent: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_LLM_MAX_CONCURRENT", "4"))
+    )
+    llm_queue_timeout_seconds: float = field(
+        default_factory=lambda: float(os.getenv("WEBGIS_AI_LLM_QUEUE_TIMEOUT_SECONDS", "30"))
+    )
     llm_provider_source: str = field(init=False, default="default")
     minimax_api_key_source: str = field(init=False, default="unset")
     minimax_base_url_source: str = field(init=False, default="default")
@@ -311,7 +373,7 @@ class AppConfig:
             self.vision_provider = "minimax_mcp"
         self.backend_dir = self.root_dir / "backend"
         self.app_dir = self.backend_dir / "app"
-        self.data_dir = self.backend_dir / "data"
+        self.data_dir = resolve_data_root(self.root_dir)
         self.builtin_dir = self.app_dir / "data" / "builtin"
         self.knowledge_dir = self.builtin_dir / "knowledge"
         self.state_dir = self.data_dir / "state"

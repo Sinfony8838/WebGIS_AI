@@ -30,7 +30,9 @@ export type VoiceStreamErrorKind =
   | "no_device"
   | "connect_timeout"
   | "unauthorized"
+  | "password_change_required"
   | "asr_unavailable"
+  | "session_limit"
   | "audio_worklet_unsupported"
   | "connection_failed"
   | "unknown";
@@ -40,7 +42,9 @@ const ERROR_MESSAGES: Record<VoiceStreamErrorKind, string> = {
   no_device: "没有检测到可用麦克风。请连接或选择录音设备后重试。",
   connect_timeout: "连接本地语音识别服务超时，请确认后端已启动后重试。",
   unauthorized: "登录状态已失效，请重新登录后再使用语音。",
+  password_change_required: "请先完成密码修改后再使用语音。",
   asr_unavailable: "本地语音识别不可用（模型未就绪）。可在服务端运行 scripts/download_voice_models.py，或改用文字输入。",
+  session_limit: "每个账号的并发语音会话数已达上限，请关闭其他语音会话后重试。",
   audio_worklet_unsupported: "当前浏览器不支持音频采集（AudioWorklet），请使用桌面版 Chrome 或 Edge。",
   connection_failed: "本地语音识别连接中断。",
   unknown: "语音识别出现未知错误，可重试或改用文字输入。"
@@ -306,7 +310,15 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
       closeInfo = { code: event.code, reason: event.reason || "" };
       if (state === "connecting") {
         const kind: VoiceStreamErrorKind =
-          event.code === 4401 ? "unauthorized" : event.code === 4403 ? "asr_unavailable" : "connection_failed";
+          event.code === 4401
+            ? "unauthorized"
+            : event.code === 4407
+              ? "password_change_required"
+              : event.code === 4403
+                ? "asr_unavailable"
+                : event.code === 4429
+                  ? "session_limit"
+                  : "connection_failed";
         fail(new VoiceStreamError(kind));
         return;
       }

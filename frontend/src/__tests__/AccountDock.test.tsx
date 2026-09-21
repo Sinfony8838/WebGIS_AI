@@ -77,14 +77,14 @@ vi.mock("../components/MapBrushOverlay", async () => {
   return { MapBrushOverlay: forwardRef(() => null) };
 });
 
-// Let the init effect fail fast at fetchHealth so no project / layer state is
-// created and the project-gated map effects never run. The account dock
-// renders regardless of init state.
+// Let the init effect fail fast at fetchUiCapabilities so no project / layer
+// state is created and the project-gated map effects never run. The account
+// dock renders regardless of init state.
 vi.mock("../api", async () => {
   const actual = await vi.importActual<typeof import("../api")>("../api");
   return {
     ...actual,
-    fetchHealth: vi.fn().mockRejectedValue(new Error("backend unavailable")),
+    fetchUiCapabilities: vi.fn().mockRejectedValue(new Error("backend unavailable")),
     fetchCurrentUser: vi.fn().mockResolvedValue(undefined)
   };
 });

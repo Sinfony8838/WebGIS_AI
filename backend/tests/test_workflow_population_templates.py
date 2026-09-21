@@ -660,6 +660,20 @@ class RealQgisPopulationRunTests(unittest.TestCase):
         self.assertLessEqual(max(class_values), 4)
         self.assertGreaterEqual(min(class_values), 0)
 
+    def test_facility_buffer_real_run(self) -> None:
+        """Phase-1 acceptance V: real buffer workflow on builtin centroids."""
+        final = self._run_template("facility_buffer", {})
+        geojson_artifact = next(a for a in final.artifacts if a["kind"] == "geojson")
+        path = self.config.workflow_dir(final.workflow_id) / geojson_artifact["relative_path"]
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        self.assertGreater(len(payload.get("features", [])), 0)
+        # Buffering points must yield (multi)polygons, not pass-through points.
+        geometry_types = {f.get("geometry", {}).get("type") for f in payload["features"][:10]}
+        self.assertTrue(
+            all(str(t).endswith("Polygon") for t in geometry_types if t),
+            msg=f"unexpected buffered geometry types: {geometry_types}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

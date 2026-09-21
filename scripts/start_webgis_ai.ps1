@@ -404,7 +404,9 @@ if ($backendBindHost -in @("0.0.0.0", "::")) {
 $backendUrl = "http://${backendHealthHost}:$backendPort"
 $frontendUrl = "http://127.0.0.1:5173"
 
-$backendCommand = "& '$pythonExe' -m uvicorn backend.app.main:app --reload --host '$backendBindHost' --port $backendPort"
+# --log-config：访问日志剥离 query string（语音 legacy token 走 query 参数，
+# 默认 uvicorn 访问日志会把 token 完整写入日志文件；见 backend/uvicorn-log-config.json）。
+$backendCommand = "& '$pythonExe' -m uvicorn backend.app.main:app --reload --host '$backendBindHost' --port $backendPort --log-config '$repoRoot\backend\uvicorn-log-config.json'"
 $frontendCommand = "& '$nodeExe' '$npmCli' run dev"
 
 $backendProcess = Start-OrReuseService -Name "backend" -Title "WebGIS-AI Backend" -WorkingDirectory $repoRoot -Command $backendCommand -HealthUrl "$backendUrl/health" -Port $backendPort

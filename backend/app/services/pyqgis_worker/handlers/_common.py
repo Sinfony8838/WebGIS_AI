@@ -23,20 +23,58 @@ from ..workspace import Workspace
 
 
 def workspace_root() -> Path:
-    """Best-effort: locate the project's data dir from env. The worker stores
-    workflows under ``data/workflows/{wf_id}``; uploads live in
-    ``data/uploads/{project_id}/``. We need to be able to resolve a
-    user-supplied dataset id against either ``data/uploads`` or builtin folders.
+    """Locate the shared data root (uploads / builtin / workflows base).
+
+    The main process exports ``WEBGIS_AI_DATA_DIR`` (see
+    ``backend.app.config.resolve_data_root``), so an env value is authoritative.
+    Fallback walks up to the repository layout ``<repo>/backend/data``; the
+    ``backend`` component must be matched explicitly because
+    ``backend/app/data`` (builtin assets) otherwise shadows the real data dir.
     """
     candidate = os.environ.get("WEBGIS_AI_DATA_DIR", "")
     if candidate and Path(candidate).exists():
         return Path(candidate)
-    # Default: walk up two levels from this file to backend/, then data/
     here = Path(__file__).resolve()
     for parent in here.parents:
-        if (parent / "data").exists():
-            return parent / "data"
+        data_root = parent / "backend" / "data"
+        if data_root.exists():
+            return data_root
     return Path("data")
+
+
+def builtin_root() -> Path:
+    """Builtin teaching data lives under the repo source tree.
+
+    It is source-controlled content (``backend/app/data/builtin``), NOT
+    part of the mutable data root, so it must be derived from this module's
+    location instead of ``workspace_root().parent`` — otherwise a relocated
+    data root (``WEBGIS_AI_DATA_DIR``) would hide every builtin dataset.
+    """
+    return Path(__file__).resolve().parents[3] / "data" / "builtin"
+
+
+def _path_within(candidate: Path, root: Path) -> bool:
+    """Containment on resolved paths (symlink/junction aware)."""
+    try:
+        Path(candidate).resolve().relative_to(Path(root).resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def workspace_data_root(workspace: Workspace) -> Path:
+    """Data root for the given workflow workspace.
+
+    ``WorkflowExecutor`` hands the manager ``workflows_root = <data>/workflows``
+    and the worker builds ``Workspace(workflow_id, workflows_root/<id>)``, so
+    the workspace's grandparent is the data root. Deriving it per-workspace
+    keeps resolution independent of process-global state (env) and correct
+    for relocated data roots.
+    """
+    candidate = (Path(workspace.root_dir).parent.parent).resolve()
+    if (candidate / "workflows").exists():
+        return candidate
+    return workspace_root()
 
 
 def resolve_dataset_path(workspace: Workspace, source: str, project_id: str = "") -> Path:
@@ -55,12 +93,32 @@ def resolve_dataset_path(workspace: Workspace, source: str, project_id: str = ""
             user_friendly="数据集来源为空。",
         )
     cleaned = source.strip()
-    base_data = workspace_root()
+    base_data = workspace_data_root(workspace)
 
     if cleaned.startswith("upload:"):
         rest = cleaned.removeprefix("upload:").lstrip("/").replace("\\", "/")
+        # Upload references are pinned to the step's trusted project: the
+        # first path segment must name the project the workflow belongs to,
+        # so one project can never reach another project's uploads.
+        owner_project = (rest.split("/", 1) or [""])[0]
+        if project_id and owner_project != project_id:
+            raise WorkflowExecutionError(
+                code="DATASET_NOT_ALLOWED",
+                message=f"upload reference does not belong to project: {cleaned}",
+                user_friendly="上传数据引用不属于当前项目，已拒绝访问。",
+            )
+        uploads_root = (base_data / "uploads").resolve()
+        owner_root = (uploads_root / owner_project).resolve()
         candidate = (base_data / "uploads" / rest).resolve()
-        if str(candidate).startswith(str((base_data / "uploads").resolve())) and candidate.exists():
+        try:
+            candidate.relative_to(owner_root)
+        except ValueError:
+            raise WorkflowExecutionError(
+                code="DATASET_NOT_ALLOWED",
+                message=f"upload reference escapes the owning project directory: {cleaned}",
+                user_friendly="上传数据引用越界，已拒绝访问。",
+            )
+        if candidate.exists():
             return candidate
         raise WorkflowExecutionError(
             code="DATASET_NOT_FOUND",
@@ -70,10 +128,10 @@ def resolve_dataset_path(workspace: Workspace, source: str, project_id: str = ""
 
     if cleaned.startswith("builtin:"):
         rest = cleaned.removeprefix("builtin:").lstrip("/").replace("\\", "/")
-        for builtin_root in (base_data / "builtin", workspace_root().parent / "app" / "data" / "builtin"):
-            candidate = (builtin_root / rest).resolve()
+        for builtin_root_dir in (base_data / "builtin", builtin_root()):
+            candidate = (builtin_root_dir / rest).resolve()
             try:
-                candidate.relative_to(builtin_root.resolve())
+                candidate.relative_to(builtin_root_dir.resolve())
             except ValueError:
                 continue
             if candidate.exists():
@@ -84,23 +142,34 @@ def resolve_dataset_path(workspace: Workspace, source: str, project_id: str = ""
             user_friendly=f"未找到内置数据：{rest}",
         )
 
-    # Absolute / workflow-internal path passed through resolve_reference
+    # Absolute / workflow-internal path: only files generated inside the
+    # current workflow's own workspace (previous-step outputs and similar)
+    # may be passed as absolute paths. Anything else on the server is off
+    # limits, even when it exists and is readable.
     if cleaned.startswith("/") or re.match(r"^[A-Za-z]:[\\/]", cleaned):
         candidate = Path(cleaned)
+        workflow_root = Path(workspace.root_dir).resolve()
+        if not candidate.is_absolute() or not _path_within(candidate, workflow_root):
+            raise WorkflowExecutionError(
+                code="DATASET_NOT_ALLOWED",
+                message=f"absolute path outside the workflow workspace: {cleaned}",
+                user_friendly="绝对路径数据源不属于当前工作流，已拒绝访问。",
+            )
         if candidate.exists():
             return candidate
 
     # Search under uploads/<project_id>/
     if project_id:
-        candidate = (base_data / "uploads" / project_id / cleaned).resolve()
-        if candidate.exists():
+        project_root = base_data / "uploads" / project_id
+        candidate = (project_root / cleaned).resolve()
+        if _path_within(candidate, project_root) and candidate.exists():
             return candidate
 
     # Search builtin
-    for builtin_root in (base_data / "builtin", workspace_root().parent / "app" / "data" / "builtin"):
+    for builtin_root_dir in (base_data / "builtin", builtin_root()):
         try:
-            candidate = (builtin_root / cleaned).resolve()
-            if candidate.exists():
+            candidate = (builtin_root_dir / cleaned).resolve()
+            if _path_within(candidate, builtin_root_dir) and candidate.exists():
                 return candidate
         except Exception:
             continue

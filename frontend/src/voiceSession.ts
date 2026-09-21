@@ -418,6 +418,7 @@ export class VoiceSessionController {
       this.emit();
     }
 
+    let serverBudgetEnded = false;
     try {
       const handle = await createVoiceStream(this.options.apiBase(), {
         onOpen: () => {
@@ -438,6 +439,7 @@ export class VoiceSessionController {
         onServerError: (payload) => {
           if (myEpoch !== this.epoch) return;
           this.phaseDetail = payload.detail || payload.reason;
+          serverBudgetEnded = ["session_timeout", "session_idle", "frame_too_large"].includes(payload.reason);
         },
         onClose: (info) => {
           if (myEpoch !== this.epoch) return;
@@ -445,8 +447,19 @@ export class VoiceSessionController {
           this.setListening(false);
           if (info.code === 4401) {
             this.unavailableKind = "unauthorized";
+          } else if (info.code === 4407) {
+            // 强制改密用户：终态，不自动重连（与 HTTP 豁免策略一致）。
+            this.unavailableKind = "unauthorized";
+            this.options.callbacks.onNotice?.("error", "需要修改密码", "请先完成密码修改后再使用语音。");
           } else if (info.code === 4403) {
             this.unavailableKind = "asr_unavailable";
+          } else if (info.code === 4429) {
+            // 并发上限：立即重连只会再次撞限，保留手动重试入口。
+            this.unavailableKind = "connection_failed";
+            this.options.callbacks.onNotice?.("error", "语音会话数已达上限", "每个账号的并发语音会话有限，请关闭其他语音会话后点击重试。");
+          } else if (info.code === 1009 || serverBudgetEnded) {
+            this.unavailableKind = "connection_failed";
+            this.options.callbacks.onNotice?.("info", "语音会话已停止", "语音达到时长、空闲或音频大小限制；需要继续时请手动重试。");
           } else if (this.shouldListen()) {
             this.scheduleReconnect();
             return;
@@ -479,6 +492,10 @@ export class VoiceSessionController {
         this.unavailableKind = "no_device";
       } else if (kind === "unauthorized") {
         this.unavailableKind = "unauthorized";
+      } else if (kind === "password_change_required") {
+        this.unavailableKind = "unauthorized";
+      } else if (kind === "session_limit") {
+        this.unavailableKind = "connection_failed";
       } else if (kind === "asr_unavailable") {
         this.unavailableKind = "asr_unavailable";
       } else if (kind === "audio_worklet_unsupported") {
