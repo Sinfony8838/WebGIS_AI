@@ -511,6 +511,25 @@ class LessonDesignServiceTest(unittest.TestCase):
         self.assertIn("WebGIS-AI", core_xml)
         self.assertNotIn("张珂", path.read_bytes().decode("latin1", errors="ignore"))
 
+    def test_empty_full_draft_command_never_becomes_a_lesson_topic(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        before = json.dumps(design.to_dict(), ensure_ascii=False, sort_keys=True)
+        with patch.object(service, "_ask_minimax") as model:
+            with self.assertRaisesRegex(ValueError, "课题"):
+                service.turn(design.design_id, "生成完整初稿", design.revision)
+            model.assert_not_called()
+        self.assertEqual(json.dumps(service.get(design.design_id).to_dict(), ensure_ascii=False, sort_keys=True), before)
+
+    def test_full_draft_command_can_reuse_existing_topic(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        design.draft["topic"] = design.draft["title"] = "人口分布"
+        self.store.upsert_lesson_design(design)
+        result = service.turn(design.design_id, "生成完整初稿", design.revision)
+        self.assertEqual(result["draft"]["title"], "人口分布")
+        self.assertNotIn("生成完整初稿", result["draft"]["requirements"].get("raw", ""))
+
     def test_full_requirement_paragraph_prefills_multiple_sections(self) -> None:
         """验收：一段完整需求一次生成多环节初稿，且全部保持待确认。"""
         service = self.runtime.classroom.lesson_design

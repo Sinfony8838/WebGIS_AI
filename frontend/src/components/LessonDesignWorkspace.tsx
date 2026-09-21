@@ -214,6 +214,10 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
 
   function generateFullDraft() {
     const requirement = input.trim();
+    if (!requirement && !asText(draft.topic || draft.title).trim() && !asText((draft.requirements as { raw?: unknown } | undefined)?.raw).trim()) {
+      setError("请先填写课题或教学需求，再生成整份初稿。");
+      return;
+    }
     void runTurn(requirement ? `生成完整初稿：${requirement}` : "生成完整初稿", currentStep);
   }
 

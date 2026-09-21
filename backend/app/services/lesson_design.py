@@ -1079,7 +1079,7 @@ class LessonDesignService:
         self, design: LessonDesignRecord, message: str, extra: str, current_step: str
     ) -> Dict[str, Any]:
         """一次生成多环节初稿：全部标记待确认，已有内容不覆盖，题目快照保留。"""
-        requirement_text = extra or str((design.draft.get("requirements") or {}).get("raw") or "").strip() or message
+        requirement_text = extra or str((design.draft.get("requirements") or {}).get("raw") or "").strip()
         parsed = self._parse_full_requirement(requirement_text, design.draft)
         if not parsed["topic"]:
             raise ValueError("还无法从需求中识别课题。请补一句课题或主题（例如：课题是胡焕庸线与中国人口分布），再生成完整初稿。")

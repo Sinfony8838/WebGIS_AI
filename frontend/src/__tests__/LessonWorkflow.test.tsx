@@ -115,6 +115,23 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("keeps TOP20 optional at the population summary and submits an explicit total-population query", () => {
+  const lesson = makeLesson();
+  lesson.metadata = { china_inquiry_guide: {} };
+  lesson.stages[0].stage_id = "summary";
+  const onAssistantPrompt = vi.fn();
+  render(<ClassRunPanel lesson={lesson} session={makeSession()} currentStageId="summary" stageEnteredAt={null}
+    busy={false} quizActive={false} collapsed={false} onToggleCollapsed={vi.fn()} onEnterStage={vi.fn()}
+    onLaunchQuestion={vi.fn()} onLaunchAdhocQuestion={vi.fn()} onObservation={vi.fn()} onSnapshot={vi.fn()}
+    onEndSession={vi.fn()} onAssistantPrompt={onAssistantPrompt} />);
+  const summary = screen.getByText("选用拓展 · 人口总量比较");
+  expect(summary.closest("details")).not.toHaveAttribute("open");
+  expect(onAssistantPrompt).not.toHaveBeenCalled();
+  fireEvent.click(summary);
+  fireEvent.click(screen.getByRole("button", {name:"查询人口总量 TOP20"}));
+  expect(onAssistantPrompt).toHaveBeenCalledWith("查询2020年常住人口最多的前20个地级市并生成排名图层", "选用拓展：2020年常住人口总量 TOP20");
+});
+
 describe("LessonPanel", () => {
   it("renders stages and fires scene apply with the stage id", () => {
     const onApplyScene = vi.fn();

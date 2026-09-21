@@ -81,6 +81,17 @@ describe("LessonDesignWorkspace", () => {
 
   afterEach(cleanup);
 
+  it("asks for a topic locally when a blank draft has no requirement", async () => {
+    const blank = session({ draft: { title: "", topic: "", requirements: { raw: "" }, stages: [] } });
+    createMock.mockResolvedValue(blank);
+    fetchDesignMock.mockResolvedValue(blank);
+    render(<LessonDesignWorkspace projectId="blank-project" onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId("ldw-full-draft")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("ldw-full-draft"));
+    expect(screen.getByText("请先填写课题或教学需求，再生成整份初稿。")).toBeTruthy();
+    expect(turnMock).not.toHaveBeenCalled();
+  });
+
   it("shows the same read-only report from both buttons and clears it after a draft edit", async () => {
     createMock.mockResolvedValue(session({ current_step: "rehearsal", revision: 3 }));
     fetchDesignMock.mockResolvedValue({ ...session({ current_step: "rehearsal", revision: 3 }), rehearsal_report: {
