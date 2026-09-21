@@ -64,6 +64,12 @@ def run_preflight() -> None:
     scrub_inherited_overrides()
     if os.environ.get("WEBGIS_AI_ALLOW_EXISTING_DATA", "").strip() in {"1", "true", "yes", "on"}:
         return
+    # The guard protects the moment the app modules are first imported. Once
+    # ``backend.app.main`` is loaded in this process the data root is already
+    # open, so a re-run (e.g. importing this conftest as a plain module from
+    # a test) must not abort mid-collection.
+    if "backend.app.main" in sys.modules:
+        return
     markers = instance_marker_labels(default_data_root())
     if markers:
         pytest.exit(
