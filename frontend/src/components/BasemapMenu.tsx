@@ -16,7 +16,14 @@ const WEATHER_BLOCKED_MESSAGE =
   "天气底图未配置：请在后端设置 WEBGIS_AI_OPENWEATHERMAP_API_KEY 环境变量并重启服务。当前底图保持不变。";
 
 type BasemapGroup = {
-  id: "basic" | "weather";
+  id: "basic" | "thematic";
+  title: string;
+  description: string;
+  items: BasemapPreset[];
+};
+
+type ThematicGroup = {
+  id: "weather" | "population";
   title: string;
   description: string;
   items: BasemapPreset[];
@@ -32,10 +39,20 @@ function isWeatherBasemap(item: BasemapPreset): boolean {
   );
 }
 
+function isPopulationBasemap(item: BasemapPreset): boolean {
+  return ["nasa_nightlights_2016", "nasa_population_2020"].includes(item.id);
+}
+
+function displayTitle(item: BasemapPreset): string {
+  if (item.id === "nasa_population_2020") return "人口热力图 · 2020";
+  return item.title;
+}
+
 export function BasemapMenu({ items, activeId, disabled = false, weatherEnabled = true, onWeatherBlocked, onSelect }: Props) {
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const [expandedGroup, setExpandedGroup] = useState<BasemapGroup["id"] | null>(null);
+  const [expandedThematicGroup, setExpandedThematicGroup] = useState<ThematicGroup["id"] | null>(null);
   const [weatherBlockedHint, setWeatherBlockedHint] = useState(false);
 
   const activeItem = useMemo(
@@ -44,8 +61,8 @@ export function BasemapMenu({ items, activeId, disabled = false, weatherEnabled 
   );
 
   const groups = useMemo<BasemapGroup[]>(() => {
-    const basicItems = items.filter((item) => !isWeatherBasemap(item));
-    const weatherItems = items.filter((item) => isWeatherBasemap(item));
+    const basicItems = items.filter((item) => !isWeatherBasemap(item) && !isPopulationBasemap(item));
+    const thematicItems = items.filter((item) => isWeatherBasemap(item) || isPopulationBasemap(item));
     const nextGroups: BasemapGroup[] = [];
 
     if (basicItems.length > 0) {
@@ -57,26 +74,43 @@ export function BasemapMenu({ items, activeId, disabled = false, weatherEnabled 
       });
     }
 
-    if (weatherItems.length > 0) {
+    if (thematicItems.length > 0) {
       nextGroups.push({
-        id: "weather",
-        title: "天气底图",
-        description: "降水、云图、温度、风速与气压叠加",
-        items: weatherItems
+        id: "thematic",
+        title: "专题底图",
+        description: "天气与人口专题可视化",
+        items: thematicItems
       });
     }
 
     return nextGroups;
   }, [items]);
 
+  const thematicGroups = useMemo<ThematicGroup[]>(() => {
+    const nextGroups: ThematicGroup[] = [{
+      id: "weather",
+      title: "天气",
+      description: "降水、云图、温度、风速与气压叠加",
+      items: items.filter(isWeatherBasemap)
+    },
+    {
+      id: "population",
+      title: "人口",
+      description: "夜间灯光与人口热力图",
+      items: items.filter(isPopulationBasemap)
+    }];
+    return nextGroups.filter((group) => group.items.length > 0);
+  }, [items]);
+
   const closeMenu = () => {
     setOpen(false);
     setExpandedGroup(null);
+    setExpandedThematicGroup(null);
     setWeatherBlockedHint(false);
   };
 
-  const handleWeatherSelect = (item: BasemapPreset) => {
-    if (!weatherEnabled) {
+  const handleSelect = (item: BasemapPreset) => {
+    if (isWeatherBasemap(item) && !weatherEnabled) {
       setWeatherBlockedHint(true);
       onWeatherBlocked?.(item.title, WEATHER_BLOCKED_MESSAGE);
       return;
@@ -110,6 +144,7 @@ export function BasemapMenu({ items, activeId, disabled = false, weatherEnabled 
   const handleTriggerClick = () => {
     setOpen((current) => !current);
     setExpandedGroup(null);
+    setExpandedThematicGroup(null);
   };
 
   return (
@@ -122,7 +157,7 @@ export function BasemapMenu({ items, activeId, disabled = false, weatherEnabled 
         disabled={disabled || !items.length}
         onClick={handleTriggerClick}
       >
-        {`底图 · ${activeItem?.title || "未连接"}`}
+        {`底图 · ${activeItem ? displayTitle(activeItem) : "未连接"}`}
       </button>
 
       {open ? (
@@ -145,18 +180,15 @@ export function BasemapMenu({ items, activeId, disabled = false, weatherEnabled 
                   <span className="basemap-group-copy">
                     <strong>
                       {group.title}
-                      {group.id === "weather" && !weatherEnabled ? (
-                        <em className="basemap-weather-badge">未配置</em>
-                      ) : null}
                     </strong>
-                    <small>{activeChild?.title || group.description}</small>
+                    <small>{activeChild ? displayTitle(activeChild) : group.description}</small>
                   </span>
                   <span className="basemap-group-arrow" aria-hidden="true">
                     {expanded ? "−" : "+"}
                   </span>
                 </button>
 
-                {expanded ? (
+                {expanded && group.id === "basic" ? (
                   <div
                     id={`basemap-group-${group.id}`}
                     className="basemap-group-options"
@@ -165,7 +197,7 @@ export function BasemapMenu({ items, activeId, disabled = false, weatherEnabled 
                   >
                     {group.items.map((item) => {
                       const selected = item.id === activeId;
-                      const blocked = group.id === "weather" && !weatherEnabled;
+                      const blocked = false;
 
                       return (
                         <button
@@ -175,14 +207,63 @@ export function BasemapMenu({ items, activeId, disabled = false, weatherEnabled 
                           aria-checked={selected}
                           aria-disabled={blocked || undefined}
                           className={`basemap-option ${selected ? "active" : ""}`}
-                          onClick={() => handleWeatherSelect(item)}
+                          onClick={() => handleSelect(item)}
                         >
                           <strong>
-                            {item.title}
-                            {blocked ? <em className="basemap-weather-badge">未配置</em> : null}
+                            {displayTitle(item)}
                           </strong>
                           <span>{item.description}</span>
                         </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {expanded && group.id === "thematic" ? (
+                  <div className="basemap-thematic-groups" role="group" aria-label="专题底图">
+                    {thematicGroups.map((thematicGroup) => {
+                      const thematicExpanded = expandedThematicGroup === thematicGroup.id;
+                      const thematicActive = thematicGroup.items.find((item) => item.id === activeId) || null;
+                      return (
+                        <div key={thematicGroup.id} className={`basemap-subgroup ${thematicExpanded ? "expanded" : ""}`}>
+                          <button
+                            type="button"
+                            className={`basemap-subgroup-toggle ${thematicExpanded ? "active" : ""}`}
+                            aria-expanded={thematicExpanded}
+                            aria-controls={`basemap-subgroup-${thematicGroup.id}`}
+                            onClick={() => setExpandedThematicGroup((current) => current === thematicGroup.id ? null : thematicGroup.id)}
+                          >
+                            <span className="basemap-group-copy">
+                              <strong>
+                                {thematicGroup.title}
+                                {thematicGroup.id === "weather" && !weatherEnabled ? <em className="basemap-weather-badge">未配置</em> : null}
+                              </strong>
+                              <small>{thematicActive ? displayTitle(thematicActive) : thematicGroup.description}</small>
+                            </span>
+                            <span className="basemap-group-arrow" aria-hidden="true">{thematicExpanded ? "−" : "+"}</span>
+                          </button>
+                          {thematicExpanded ? (
+                            <div id={`basemap-subgroup-${thematicGroup.id}`} className="basemap-group-options" role="group" aria-label={thematicGroup.title}>
+                              {thematicGroup.items.map((item) => {
+                                const selected = item.id === activeId;
+                                const blocked = thematicGroup.id === "weather" && !weatherEnabled;
+                                return (
+                                  <button
+                                    key={item.id}
+                                    type="button"
+                                    role="menuitemradio"
+                                    aria-checked={selected}
+                                    aria-disabled={blocked || undefined}
+                                    className={`basemap-option ${selected ? "active" : ""}`}
+                                    onClick={() => handleSelect(item)}
+                                  >
+                                    <strong>{displayTitle(item)}{blocked ? <em className="basemap-weather-badge">未配置</em> : null}</strong>
+                                    <span>{item.description}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : null}
+                        </div>
                       );
                     })}
                   </div>
