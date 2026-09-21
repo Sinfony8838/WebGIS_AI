@@ -271,6 +271,9 @@ describe("AuthGate registration", () => {
     expect(svg).not.toBeNull();
     const beforeLon = svg?.getAttribute("data-rotation-lon");
     const beforeLat = svg?.getAttribute("data-rotation-lat");
+    const equator = globe.querySelector(".auth-globe-equator");
+    const beforeEquator = equator?.getAttribute("d");
+    expect(beforeEquator).toBeTruthy();
 
     fireEvent.pointerDown(globe, { pointerId: 7, button: 0, clientX: 100, clientY: 100 });
     fireEvent.pointerMove(globe, { pointerId: 7, clientX: 150, clientY: 125 });
@@ -278,5 +281,8 @@ describe("AuthGate registration", () => {
 
     expect(svg?.getAttribute("data-rotation-lon")).not.toBe(beforeLon);
     expect(svg?.getAttribute("data-rotation-lat")).not.toBe(beforeLat);
+    expect(equator?.getAttribute("d")).not.toBe(beforeEquator);
+    fireEvent.doubleClick(globe);
+    expect(equator?.getAttribute("d")).toBe(beforeEquator);
   });
 });

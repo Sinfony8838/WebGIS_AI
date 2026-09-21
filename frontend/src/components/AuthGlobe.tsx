@@ -8,6 +8,10 @@ type Rotation = [number, number, number];
 const INITIAL_ROTATION: Rotation = [-105, -30, 0];
 const AUTO_ROTATION_DEGREES_PER_SECOND = 2.4;
 const GRATICULE = geoGraticule().step([30, 30])();
+const EQUATOR = {
+  type: "LineString" as const,
+  coordinates: Array.from({ length: 361 }, (_, i) => [i - 180, 0])
+};
 
 function clampLatitude(value: number): number {
   return Math.max(-75, Math.min(75, value));
@@ -77,6 +81,7 @@ export function AuthGlobe({ reducedMotion }: { reducedMotion: boolean }) {
     return {
       sphere: path({ type: "Sphere" }) || "",
       graticule: path(GRATICULE) || "",
+      equator: path(EQUATOR) || "",
       land: path(land) || ""
     };
   }, [rotation]);
@@ -146,13 +151,11 @@ export function AuthGlobe({ reducedMotion }: { reducedMotion: boolean }) {
           <circle cx="260" cy="260" r="218" />
           <circle cx="260" cy="260" r="232" />
         </g>
-        <g className="auth-globe-orbit" fill="none" transform="rotate(-18 260 260)">
-          <ellipse cx="260" cy="260" rx="246" ry="66" />
-        </g>
         <g filter="url(#auth-globe-shadow)">
           <path className="auth-globe-ocean" d={paths.sphere} />
           <path className="auth-globe-grid" d={paths.graticule} />
           <path className="auth-globe-land" d={paths.land} />
+          <path className="auth-globe-equator" d={paths.equator} />
           <path className="auth-globe-rim" d={paths.sphere} />
         </g>
       </svg>

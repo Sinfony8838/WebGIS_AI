@@ -146,6 +146,20 @@ describe("LessonWorkflowShell globe scene orchestration", () => {
     fireEvent.click(screen.getByText("截图存证"));
     expect(onCaptureEvidence).toHaveBeenCalledWith("session_running", "s4");
   });
+
+  it("restores the snapshot's 2D map on refresh without re-entering or clearing the scene", async () => {
+    const current = lesson();
+    const snapshot = lesson();
+    snapshot.stages[0].scene.globe = { enabled: false };
+    const running = { session_id: "snapshot_2d", lesson_id: snapshot.lesson_id, project_id: "project_1", status: "running", current_stage_id: "s4", started_at: "2026-09-21T00:00:00Z", events: [], active_question: {}, responses: {}, metadata: { lesson_snapshot: snapshot } };
+    apiMocks.fetchLessons.mockResolvedValue({ items: [current] });
+    apiMocks.fetchClassSessions.mockResolvedValue({ items: [running] });
+    const onApplyGlobeScene = vi.fn();
+    render(<LessonWorkflowShell project={{ project_id: "project_1" } as never} layerState={null} onRefresh={vi.fn()} onApplyGlobeScene={onApplyGlobeScene} />);
+    await waitFor(() => expect(onApplyGlobeScene).toHaveBeenCalledWith({ enabled: false }));
+    expect(apiMocks.enterSessionStage).not.toHaveBeenCalled();
+    expect(apiMocks.applyLessonScene).not.toHaveBeenCalled();
+  });
 });
 
 it("adopts assistant classroom results without starting a second class", async () => {

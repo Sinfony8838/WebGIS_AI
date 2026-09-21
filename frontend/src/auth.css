@@ -258,9 +258,16 @@ body:has(.class-run-panel) .account-dock {
   --auth-parallax-y: 0px;
   box-sizing: border-box;
   padding: 40px;
+  /* Static stars keep the entry lightweight and respect reduced motion. */
   background:
-    radial-gradient(circle at var(--auth-pointer-x) var(--auth-pointer-y), rgba(74, 196, 188, .12), transparent 28%),
-    #091d28;
+    radial-gradient(1.3px 1.3px at 47px 68px, #dbeeffa8 80%, transparent 100%) 0 0 / 311px 263px,
+    radial-gradient(1px 1px at 113px 29px, #bcd6ed70 80%, transparent 100%) 0 0 / 197px 211px,
+    radial-gradient(.8px .8px at 29px 107px, #cedff759 80%, transparent 100%) 0 0 / 149px 163px,
+    radial-gradient(2px 2px at 187px 113px, #e6f5ffb0 25%, #badcff30 60%, transparent 100%) 0 0 / 607px 431px,
+    radial-gradient(ellipse at 44% 48%, #15526470, transparent 42%),
+    radial-gradient(ellipse at 78% 16%, #43316a45, transparent 42%),
+    radial-gradient(ellipse at 8% 85%, #163c634d, transparent 40%),
+    #060e1c;
 }
 .auth-entry .auth-map-grid, .auth-entry .auth-population-points { display: none; }
 .auth-entry-layout { position: relative; width: min(1280px,100%); display: grid; grid-template-columns: minmax(520px,1.5fr) minmax(360px,.85fr); align-items: center; gap: clamp(40px,5vw,72px); }
@@ -304,11 +311,9 @@ body:has(.class-run-panel) .account-dock {
 .auth-globe-rim { fill: none; stroke: #9adfff; stroke-width: 1.5; stroke-opacity: .58; }
 .auth-globe-halo circle:first-child { stroke: #69d8ff; stroke-width: 10; stroke-opacity: .14; animation: auth-globe-breathe 7s ease-in-out infinite alternate; }
 .auth-globe-halo circle:last-child { stroke: #69d8ff; stroke-width: 2; stroke-opacity: .08; }
-.auth-globe-orbit { transform-origin: 260px 260px; animation: auth-globe-orbit 18s linear infinite; }
-.auth-globe-orbit ellipse { stroke: #79d9ff; stroke-width: 1.4; stroke-opacity: .34; stroke-dasharray: 3 9; stroke-linecap: round; }
+.auth-globe-equator { fill: none; stroke: #a9eeff; stroke-width: 1.6; stroke-opacity: .7; stroke-dasharray: 3 6; stroke-linecap: round; }
 .auth-globe-drag-hint { position: absolute; left: 50%; bottom: 22px; translate: -50% 5px; border: 1px solid var(--entry-line); border-radius: 999px; padding: 5px 10px; color: var(--entry-soft); background: rgba(9,29,40,.74); font-size: 10px; letter-spacing: .08em; white-space: nowrap; opacity: 0; transition: opacity .18s ease, translate .18s ease; pointer-events: none; }
 .auth-globe-wrap:hover .auth-globe-drag-hint, .auth-globe-wrap.is-dragging .auth-globe-drag-hint { opacity: 1; translate: -50% 0; }
-@keyframes auth-globe-orbit { to { transform: rotate(360deg); } }
 @keyframes auth-globe-breathe { from { opacity: .58; } to { opacity: 1; } }
 
 .auth-teaching-cycle { position: relative; display: grid; grid-template-columns: repeat(3,1fr); padding: 24px 0 0; margin: 0; border-top: 1px solid var(--entry-line); list-style: none; gap: 16px; }
@@ -361,7 +366,7 @@ body:has(.class-run-panel) .account-dock {
 :root[data-theme="light"] .auth-globe-land { fill: #3c8d80; stroke: #27655d; }
 :root[data-theme="light"] .auth-globe-rim { stroke: #2f7d86; }
 :root[data-theme="light"] .auth-globe-halo circle { stroke: #4db6c9; }
-:root[data-theme="light"] .auth-globe-orbit ellipse { stroke: #3c9fae; }
+:root[data-theme="light"] .auth-globe-equator { stroke: #195c67; }
 :root[data-theme="light"] .auth-globe-drag-hint { background: rgba(237,244,240,.82); }
 
 @media (max-width: 1180px) and (min-width: 901px) {
@@ -391,10 +396,9 @@ body:has(.class-run-panel) .account-dock {
 }
 
 .auth-screen[data-reduced-motion="true"] .auth-globe-svg { transform: none; transition: none; }
-.auth-screen[data-reduced-motion="true"] .auth-globe-orbit,
 .auth-screen[data-reduced-motion="true"] .auth-globe-halo circle { animation: none; }
 @media (prefers-reduced-motion: reduce) {
   .auth-entry { --auth-parallax-x: 0px; --auth-parallax-y: 0px; }
   .auth-globe-svg { transform: none; transition: none; }
-  .auth-globe-orbit, .auth-globe-halo circle { animation: none; }
+  .auth-globe-halo circle { animation: none; }
 }

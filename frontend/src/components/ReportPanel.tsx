@@ -197,6 +197,8 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
   }
 
   const statistics: SessionReportStatistics | null = report?.statistics || null;
+  const inquiryRecords = (sessions.find(item => item.session_id === selectedSessionId)?.events || [])
+    .filter(event => event.type === "note" && event.payload?.kind === "population_inquiry_record");
   const practiceRecommendations = report?.practice_recommendations || [];
 
   async function exportPractice() {
@@ -336,6 +338,17 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
         <button type="button" className="toolbar-button compact" onClick={() => setLoadAttempt(value => value + 1)}>重新加载课堂记录</button>
       </div> : null}
       {loadState === "ready" && !sessions.length ? <p className="lesson-empty">该项目还没有课堂记录。可先在「课堂模式」开始一节课。</p> : null}
+
+      {inquiryRecords.length > 0 && (
+        <section className="report-body" aria-label="探究观点与教师归纳">
+          <h3>探究观点与教师归纳</h3>
+          <p className="report-note">保留课堂原始记录；预设示例不计入学生参与，教师归纳不代表全班已掌握。</p>
+          {inquiryRecords.map((event, index) => <div key={String(event.event_id || index)}>
+              <strong>{event.payload.record_kind === "conclusion" ? "教师确认归纳" : `${event.payload.record_kind === "revision" ? "修正观点" : "初始观点"} · ${event.payload.source === "preset_example" ? "预设示例，非学生参与" : "教师代录"}`}</strong>
+              <p>{String(event.payload.text || "")}</p>
+            </div>)}
+        </section>
+      )}
 
       {statistics ? (
         <div className="report-body">

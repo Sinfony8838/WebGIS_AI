@@ -13,6 +13,7 @@ const projection:MapInkProjection={
   subscribe:callback=>{renderMap=callback;return vi.fn();}
 };
 beforeEach(()=>{
+  localStorage.clear();
   scale=1;offset=0;vi.clearAllMocks();
   vi.stubGlobal("ResizeObserver",class {observe(){} disconnect(){}});
   vi.stubGlobal("PointerEvent",MouseEvent);
@@ -21,6 +22,23 @@ beforeEach(()=>{
   Object.defineProperty(window,"devicePixelRatio",{configurable:true,value:2});
   vi.spyOn(HTMLElement.prototype,"clientWidth","get").mockReturnValue(400);
   vi.spyOn(HTMLElement.prototype,"clientHeight","get").mockReturnValue(300);
+});
+
+it("restores geographic ink after refresh and keeps projects separate",()=>{
+  const props={active:true,projection,scope:"refresh-project",settings:{tool:"line" as const,color:"red",lineWidth:4}};
+  const first=render(<MapBrushOverlay {...props}/>);
+  const canvas=first.getByTestId("map-brush-overlay");
+  fireEvent.pointerDown(canvas,{clientX:110,clientY:120,button:0});
+  fireEvent.pointerMove(canvas,{clientX:210,clientY:120});fireEvent.pointerUp(canvas);
+  first.unmount();vi.clearAllMocks();
+  const changed=vi.fn();
+  const next=render(<MapBrushOverlay {...props} onContentChange={changed}/>);
+  expect(changed).toHaveBeenLastCalledWith(true);
+  expect(context.lineTo).toHaveBeenLastCalledWith(200,100);
+  next.rerender(<MapBrushOverlay {...props} scope="different-project" onContentChange={changed}/>);
+  expect(changed).toHaveBeenLastCalledWith(false);
+  next.rerender(<MapBrushOverlay {...props} onContentChange={changed}/>);
+  expect(changed).toHaveBeenLastCalledWith(true);
 });
 afterEach(()=>{cleanup();vi.restoreAllMocks();vi.unstubAllGlobals();});
 

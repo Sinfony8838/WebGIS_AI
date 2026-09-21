@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ClassroomPresentationTarget } from "../api";
 import { ShanghaiPopulationInquiry } from "./ShanghaiPopulationInquiry";
+import { ChinaInquiryGuide, type ChinaInquiryContent } from "./ChinaInquiryGuide";
 import type { ClassSessionRecord, LessonQuestion, LessonRecord, LessonStage, ObservationVerdict } from "../types";
 
 type Props = {
@@ -14,6 +15,7 @@ type Props = {
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onEnterStage: (stageId: string) => void;
+  onSaveInquiryNote?: (payload: Record<string, unknown>) => Promise<void>;
   onPresentScene?: (target: ClassroomPresentationTarget) => Promise<void>;
   onLaunchQuestion: (questionId: string, stageId: string) => void;
   /** 全屏投屏本题：服务端计时 + 课堂大屏同步（题目投影模式）。 */
@@ -55,6 +57,7 @@ export function ClassRunPanel({
   collapsed,
   onToggleCollapsed,
   onEnterStage,
+  onSaveInquiryNote,
   onPresentScene,
   onLaunchQuestion,
   onProjectQuestion,
@@ -121,6 +124,8 @@ export function ClassRunPanel({
   );
   const shanghaiSupplement = currentStageId === "shanghai_intro" && lesson.title.includes("上海") && lesson.title.includes("人口");
   const shanghaiVerification = currentStageId === "shanghai_verify" && lesson.title.includes("上海") && lesson.title.includes("人口");
+  const inquiryContent = lesson.metadata?.china_inquiry_guide as ChinaInquiryContent | undefined;
+  const chinaInquiry = Boolean(inquiryContent && onSaveInquiryNote && ["china_inquiry", "china_explain"].includes(currentStageId));
   async function openMapPresentation(target: ClassroomPresentationTarget = "stage") {
     if (!onPresentScene || presentationBusy) return;
     const epoch = presentationEpoch.current;
@@ -309,6 +314,8 @@ export function ClassRunPanel({
         />
       </div>
 
+      <details className="class-stage-navigation" key={currentStageId}>
+        <summary>{currentStageIndex + 1}/{lesson.stages.length} · {currentStage?.title || "选择环节"} · 切换</summary>
       <nav className="class-panel-stages" aria-label="课堂环节">
         {lesson.stages.map((stage, index) => {
           const active = stage.stage_id === currentStageId;
@@ -338,9 +345,10 @@ export function ClassRunPanel({
           );
         })}
       </nav>
+      </details>
 
       <div className="class-panel-current">
-        {currentStage?.scene ? (
+        {currentStage?.scene && !chinaInquiry ? (
           <div className="basic-knowledge-launcher" data-testid="class-map-launcher">
             <div>
               <span className="question-detail-label">课堂地图</span>
@@ -365,6 +373,11 @@ export function ClassRunPanel({
           <small>参考点周边的景观样例，不代表全区；影像年份以提供方资料为准。</small>
         </div>}
         {presentationError && <p role="alert">{presentationError}</p>}
+        {chinaInquiry && <button type="button" className="toolbar-button compact" disabled={busy || presentationBusy} onClick={() => void openMapPresentation()}>恢复本环节视图</button>}
+        {chinaInquiry && inquiryContent && onSaveInquiryNote && <ChinaInquiryGuide
+          key={`${session.session_id}:${currentStageId}`} content={inquiryContent} session={session}
+          stageId={currentStageId as "china_inquiry" | "china_explain"} busy={busy}
+          onEnterStage={onEnterStage} onSave={onSaveInquiryNote} />}
         {shanghaiSupplement && onPresentScene && <div className="shanghai-supplement-launcher">
           <div><strong>基础讲完后 · 真题拓展</strong><small>2025 河南卷：人口分布与“年轻环”</small></div>
           <button className="toolbar-button compact" disabled={busy || presentationBusy} onClick={() => setInquiryOpen(true)}>进入补充探究</button>
@@ -402,7 +415,7 @@ export function ClassRunPanel({
           </div>
         ) : null}
 
-        {currentStage?.questions.length ? (
+        {!chinaInquiry && currentStage?.questions.length ? (
           <div className="class-panel-questions">
             {currentStage.questions.map((question) => {
               const expanded = expandedQuestionId === question.question_id;
@@ -495,7 +508,7 @@ export function ClassRunPanel({
           </div>
         ) : null}
 
-        <div className="class-panel-adhoc" data-testid="adhoc-question">
+        {!chinaInquiry && <div className="class-panel-adhoc" data-testid="adhoc-question">
           <span className="question-detail-label">临时口头提问</span>
           <input
             value={adhocText}
@@ -525,7 +538,8 @@ export function ClassRunPanel({
           </div>
         </div>
 
-        {hasBrainstorm && brainstorm && onAssistantPrompt ? (
+        }
+        {!chinaInquiry && hasBrainstorm && brainstorm && onAssistantPrompt ? (
           <div className="class-brainstorm-card" data-testid="stage-brainstorm">
             <div className="class-brainstorm-identity">
               <span className="class-brainstorm-mark" aria-hidden="true">✦</span>

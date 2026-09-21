@@ -1,0 +1,14 @@
+.china-inquiry-guide { padding: 12px; border-top: 1px solid var(--border-color, #52616c); }
+.inquiry-heading { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:8px; }
+.inquiry-heading button { white-space:nowrap; }
+.china-inquiry-guide p { line-height:1.7; margin:10px 0; }
+.inquiry-task { font-size:15px; }
+.inquiry-actions { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0; }
+.inquiry-teacher, .inquiry-records { margin:12px 0; }
+.china-inquiry-guide small { opacity:.8; line-height:1.6; }
+.china-inquiry-guide textarea { display:block; width:100%; min-height:76px; margin:6px 0; resize:vertical; color:inherit; background:var(--panel-bg, #1c2936); border:1px solid #778692; border-radius:6px; padding:8px; box-sizing:border-box; }
+.inquiry-saved { margin:10px 0; border-top:1px solid #77869255; padding-top:8px; }
+.inquiry-records summary, .inquiry-material summary { cursor:pointer; padding:6px 0; }
+.class-stage-navigation > summary { cursor:pointer; padding:8px 4px; font-size:13px; line-height:1.5; }
+.class-stage-navigation .class-panel-stages { max-height:190px; overflow-y:auto; }
+[data-theme="light"] .china-inquiry-guide textarea { background:#fff; }
