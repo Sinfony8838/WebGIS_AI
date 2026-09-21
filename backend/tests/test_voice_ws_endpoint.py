@@ -69,7 +69,7 @@ class VoiceStreamEndpointTest(unittest.TestCase):
         mock.patch.stopall()
 
     def test_unauthorized_close_4401(self) -> None:
-        with mock.patch.object(app_main, "_websocket_authorized", return_value=False):
+        with mock.patch.object(app_main, "_websocket_user", return_value=(None, 4401)):
             # 握手即被关闭：TestClient 在进入上下文时抛出断连。
             with self.assertRaises(WebSocketDisconnect) as ctx:
                 with self.client.websocket_connect("/assistant/voice/stream") as websocket:
@@ -109,6 +109,7 @@ class VoiceStreamEndpointTest(unittest.TestCase):
 
     def test_create_session_failure_returns_load_failed_and_4403(self) -> None:
         # 健康检查刚通过、真实懒加载随后失败：连接已 accept，不能二次握手。
+        # Phase-1 审计（T3）：异常文本可能包含本机路径，detail 固定为标签。
         engine = make_fake_engine(available=True)
         engine.create_session.side_effect = RuntimeError("recognizer_init_failed: boom")
         mock.patch.object(app_main.runtime, "voice_asr", engine).start()
@@ -116,7 +117,7 @@ class VoiceStreamEndpointTest(unittest.TestCase):
             payload = websocket.receive_json()
             self.assertEqual(payload["type"], "error")
             self.assertEqual(payload["reason"], "load_failed")
-            self.assertEqual(payload["detail"], "recognizer_init_failed: boom")
+            self.assertEqual(payload["detail"], "voice_model_load_failed")
             with self.assertRaises(WebSocketDisconnect) as ctx:
                 websocket.receive_text()
         self.assertEqual(ctx.exception.code, 4403)

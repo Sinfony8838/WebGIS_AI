@@ -31,6 +31,7 @@ from ..models import WorkflowArtifact, WorkflowRecord, utc_now
 from ..store import RuntimeStore
 from .pyqgis_worker import PyQgisWorkerManager
 from .pyqgis_worker.errors import make_error
+from .request_limits import AdmissionGate
 from .workflow_validator import ValidationError, ValidationResult, validate_workflow
 
 
@@ -83,8 +84,11 @@ def _resolve_dataset_for_preflight(
     """Resolve a ``load_layer`` source to an existing file path.
 
     Mirrors the worker's ``resolve_dataset_path`` (builtin:/upload:/bare name)
-    without importing QGIS. Returns None when nothing matches so the caller
-    can raise an accurate DATASET_NOT_FOUND preflight error.
+    and its authorization boundary: upload references are pinned to the
+    owning project and containment is checked on resolved paths — the same
+    policy ``pyqgis_worker/handlers/_common.py`` enforces at load time.
+    Returns None when nothing matches so the caller can raise an accurate
+    DATASET_NOT_FOUND preflight error.
     """
     cleaned = (source or "").strip()
     if not cleaned:
@@ -93,23 +97,38 @@ def _resolve_dataset_for_preflight(
         rest = cleaned.removeprefix("builtin:").lstrip("/").replace("\\", "/")
         for root in (config.data_dir / "builtin", config.builtin_dir):
             candidate = (root / rest).resolve()
-            if candidate.exists() and str(candidate).startswith(str(root.resolve())):
+            try:
+                candidate.relative_to(root.resolve())
+            except ValueError:
+                continue
+            if candidate.exists():
                 return candidate
         return None
     if cleaned.startswith("upload:"):
         rest = cleaned.removeprefix("upload:").lstrip("/").replace("\\", "/")
+        owner_project = (rest.split("/", 1) or [""])[0]
+        if project_id and owner_project != project_id:
+            return None
         uploads_root = config.uploads_dir.resolve()
+        owner_root = (uploads_root / owner_project).resolve()
         candidate = (uploads_root / rest).resolve()
-        if candidate.exists() and str(candidate).startswith(str(uploads_root)):
+        try:
+            candidate.relative_to(owner_root)
+        except ValueError:
+            return None
+        if candidate.exists():
             return candidate
         return None
     # Bare file name: uploads/<project_id>/ first, then builtin roots.
+    roots = [config.data_dir / "builtin", config.builtin_dir]
     if project_id:
-        candidate = (config.uploads_dir / project_id / cleaned).resolve()
-        if candidate.exists():
-            return candidate
-    for root in (config.data_dir / "builtin", config.builtin_dir):
+        roots.insert(0, config.uploads_dir / project_id)
+    for root in roots:
         candidate = (root / cleaned).resolve()
+        try:
+            candidate.relative_to(root.resolve())
+        except ValueError:
+            continue
         if candidate.exists():
             return candidate
     return None
@@ -459,6 +478,13 @@ class WorkflowExecutor:
     ) -> None:
         self.config = config
         self.store = store
+        # Explicit admission budget for the QGIS pipeline: bounded queue with
+        # a configurable timeout instead of an unbounded wait when many
+        # workflows dispatch at once.
+        self.qgis_gate = AdmissionGate(
+            max_concurrent=getattr(config, "workflow_queue_max", 8),
+            timeout=getattr(config, "workflow_queue_timeout_seconds", 120.0),
+        )
         self.worker_manager = worker_manager or PyQgisWorkerManager(
             workflows_root=config.workflows_dir,
             qgis_root=config.qgis_root,
@@ -468,6 +494,12 @@ class WorkflowExecutor:
         self.bus = _EventBus()
         self._workers: Dict[str, threading.Thread] = {}
         self._workers_lock = threading.RLock()
+
+    def qgis_gate_timeout_hint(self) -> str:
+        seconds = float(self.qgis_gate.timeout)
+        if seconds >= 60:
+            return f"{seconds / 60:.0f} 分钟"
+        return f"{seconds:.0f} 秒"
 
     # ------------------------------------------------------------------
     # Registration / submission
@@ -633,7 +665,25 @@ class WorkflowExecutor:
                 "step_started", {"workflow_id": workflow_id, "step": dict(state)},
             ))
 
-            result = self.worker_manager.run_step(workflow_id, step)
+            if not self.qgis_gate.acquire():
+                error = make_error(
+                    "QGIS_BUSY",
+                    "qgis worker queue exhausted",
+                    f"地理处理排队已达上限，请稍后重试（排队上限 {self.qgis_gate_timeout_hint()}）。",
+                    step_id=step_id,
+                )
+                state["status"] = "error"
+                state["error"] = error
+                self.store.save_workflow(record)
+                self.bus.publish(workflow_id, _Event(
+                    "step_error", {"workflow_id": workflow_id, "step": dict(state), "error": error},
+                ))
+                success = False
+                break
+            try:
+                result = self.worker_manager.run_step(workflow_id, step)
+            finally:
+                self.qgis_gate.release()
             timings = result.get("timings") if isinstance(result, dict) else None
             if timings:
                 logger.info(

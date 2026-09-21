@@ -1152,11 +1152,15 @@ class AuthService:
         resolved = str(Path(path).resolve())
         with self._lock, self._connect() as connection:
             self._get_user_row(connection, user_id)
+            # First legitimate grant wins: a later response that references the
+            # same file for another user (e.g. an admin previewing a teacher's
+            # question bank) must NOT reassign ownership and lock the original
+            # grantee out of their own resource.
             connection.execute(
                 """
                 INSERT INTO user_files(path, user_id, created_at)
                 VALUES (?, ?, ?)
-                ON CONFLICT(path) DO UPDATE SET user_id = excluded.user_id
+                ON CONFLICT(path) DO NOTHING
                 """,
                 (resolved, user_id, iso(utc_now())),
             )

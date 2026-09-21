@@ -210,9 +210,10 @@ class VisualQueryServiceTest(unittest.TestCase):
         runtime = WebGISRuntime(config=config, store=store)
         project_id = runtime.create_project()["project_id"]
         project = store.get_project(project_id)
-        plan = runtime.assistant_service.plan_actions(
-            "查询2020年地级市人口Top20", project
-        )
+        for message in ("查询2020年地级市人口Top20", "查询2020年常住人口最多的前20个地级市并生成排名图层"):
+            with self.subTest(message=message):
+                plan = runtime.assistant_service.plan_actions(message, project)
+                self.assertEqual([action["tool_name"] for action in plan["actions"]], ["run_visual_query"])
         actions = plan["actions"]
         self.assertTrue(any(a["tool_name"] == "run_visual_query" for a in actions))
         action = next(a for a in actions if a["tool_name"] == "run_visual_query")

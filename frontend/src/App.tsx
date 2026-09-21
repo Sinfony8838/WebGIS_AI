@@ -46,7 +46,7 @@ import {
   fetchDatasetCatalog,
   fetchJob,
   fetchLessonResources,
-  fetchHealth,
+  fetchUiCapabilities,
   fetchKbManifest,
   fetchKbTopics,
   fetchLayers,
@@ -133,7 +133,6 @@ import type {
   DatasetCatalogItem,
   DatasetStatsResponse,
   ExecutedAction,
-  HealthResponse,
   ImageAttachment,
   JobRecord,
   KnowledgeBaseItem,
@@ -151,7 +150,8 @@ import type {
   SlideContent,
   TeachingContext,
   TeachingContract,
-  TeachingMaterial
+  TeachingMaterial,
+  UiCapabilities
 } from "./types";
 import { speak, cancelSpeech } from "./speechSynthesis";
 import { AgentControlOverlay } from "./components/AgentControlOverlay";
@@ -509,7 +509,7 @@ export default function App({
   const [screenshotSaving, setScreenshotSaving] = useState(false);
 
 
-  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [health, setHealth] = useState<UiCapabilities | null>(null);
   const [project, setProject] = useState<(ProjectRecord & { status: string }) | null>(null);
   const [layerState, setLayerState] = useState<LayersResponse | null>(null);
   const [outputs, setOutputs] = useState<ArtifactRecord[]>([]);
@@ -716,12 +716,7 @@ export default function App({
   const onlinePoiEnabled = health?.online_services.amap_poi_enabled ?? false;
   const basemapItems = health?.basemaps.items || [];
   const activeBasemapId = layerState?.base_map.id || health?.basemaps.default_id || "";
-  // health.online_services.weather_basemap_enabled 由后端下发（types.ts 暂未
-  // 收录该字段，这里做窄化读取，避免改动共享类型文件）。
-  const weatherBasemapEnabled = Boolean(
-    (health as { online_services?: { weather_basemap_enabled?: boolean } } | null)?.online_services
-      ?.weather_basemap_enabled
-  );
+  const weatherBasemapEnabled = Boolean(health?.online_services.weather_basemap_enabled);
   const weatherBasemapActive = isWeatherBasemapId(activeBasemapId);
   const kbActiveLayerId = layerState?.active_layer_id || "";
   const hasVisibleOneMapLayer = Boolean(
@@ -2981,7 +2976,7 @@ export default function App({
     let cancelled = false;
     (async () => {
       setInitError("");
-      const healthPayload = await fetchHealth();
+      const healthPayload = await fetchUiCapabilities();
       if (cancelled) {
         return;
       }

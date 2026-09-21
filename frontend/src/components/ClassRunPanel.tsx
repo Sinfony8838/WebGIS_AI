@@ -348,6 +348,12 @@ export function ClassRunPanel({
       </details>
 
       <div className="class-panel-current">
+        {inquiryContent && currentStageId === "summary" && onAssistantPrompt ? <details>
+          <summary>选用拓展 · 人口总量比较</summary>
+          <p>比较人口总量最多的城市，不能把这一排名当作人口密度排名。请核对返回的数据年份和范围。</p>
+          <button type="button" className="toolbar-button compact" disabled={busy || assistantBusy}
+            onClick={() => onAssistantPrompt("查询2020年常住人口最多的前20个地级市并生成排名图层", "选用拓展：2020年常住人口总量 TOP20")}>查询人口总量 TOP20</button>
+        </details> : null}
         {currentStage?.scene && !chinaInquiry ? (
           <div className="basic-knowledge-launcher" data-testid="class-map-launcher">
             <div>

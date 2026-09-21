@@ -47,6 +47,7 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
 
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const [allProjects, setAllProjects] = useState(false);
   const scope = useRef(0);
   const reportRequest = useRef(0);
   const exportRequest = useRef(0);
@@ -55,14 +56,14 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
   useEffect(() => {
     let cancelled = false;
     setLoadState("loading");
-    void fetchClassSessions({ projectId }).then(payload => {
+    void fetchClassSessions(allProjects ? {} : { projectId }).then(payload => {
       if (cancelled) return;
       setSessions(payload.items);
       setSelectedSessionId(payload.items[0]?.session_id || "");
       setLoadState("ready");
     }).catch(() => { if (!cancelled) setLoadState("error"); });
     return () => { cancelled = true; };
-  }, [projectId, loadAttempt]);
+  }, [projectId, loadAttempt, allProjects]);
 
   function selectSession(sessionId: string) {
     scope.current += 1;
@@ -246,6 +247,11 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
       </header>
 
       <div className="report-toolbar">
+        <button type="button" className="toolbar-button compact" onClick={() => {
+          selectSession("");
+          setSessions([]);
+          setAllProjects(value => !value);
+        }}>{allProjects ? "仅看当前项目" : "查看全部可访问课堂"}</button>
         <select aria-label="选择课堂记录" disabled={loadState !== "ready" || !sessions.length}
           value={selectedSessionId} onChange={(event) => selectSession(event.target.value)}>
           <option value="" disabled>
@@ -254,7 +260,8 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
           {sessions.map((session) => (
             <option key={session.session_id} value={session.session_id}>
               {formatTime(session.started_at)} · {String(session.metadata?.lesson_title || session.lesson_id)}
-              {session.status === "running" ? "（进行中）" : ""}
+              {allProjects ? ` · ${String(session.metadata?.project_title || session.project_id)}` : ""}
+              {session.status === "running" ? "（进行中）" : "（已结束）"}
             </option>
           ))}
         </select>
@@ -337,7 +344,7 @@ function ProjectReportPanel({ projectId, onClose }: Props) {
         <p>课堂记录加载失败，请重试。</p>
         <button type="button" className="toolbar-button compact" onClick={() => setLoadAttempt(value => value + 1)}>重新加载课堂记录</button>
       </div> : null}
-      {loadState === "ready" && !sessions.length ? <p className="lesson-empty">该项目还没有课堂记录。可先在「课堂模式」开始一节课。</p> : null}
+      {loadState === "ready" && !sessions.length ? <p className="lesson-empty">{allProjects ? "当前账号没有可访问的课堂记录。" : "该项目还没有课堂记录。可查看全部可访问课堂，或在「课堂模式」开始一节课。"}</p> : null}
 
       {inquiryRecords.length > 0 && (
         <section className="report-body" aria-label="探究观点与教师归纳">

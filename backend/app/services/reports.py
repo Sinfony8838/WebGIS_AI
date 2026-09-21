@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 from typing import Any, Callable, Dict, List, Optional
@@ -25,9 +25,14 @@ VERDICT_LABELS = {"correct": "回答正确", "partial": "部分正确", "misconc
 
 def _parse_ts(value: str) -> Optional[datetime]:
     try:
-        return datetime.fromisoformat(str(value))
+        parsed = datetime.fromisoformat(str(value))
     except (TypeError, ValueError):
         return None
+    # Normalize naive timestamps to UTC so event times and session
+    # updated_at/ended_at (timezone-aware) always compare safely.
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 class ReportService:
@@ -71,17 +76,41 @@ class ReportService:
         if started and ended and ended > started:
             duration_minutes = round((ended - started).total_seconds() / 60.0, 1)
 
+        # Evidence-boundary accounting (phase-1 audit T4): wall-clock session
+        # time is NOT effective teaching time; without pause/resume or real
+        # classroom markers it is reported as unknown, never guessed.
+        anomalies: List[str] = []
+        if session.ended_at is None and started and ended and (ended - started).total_seconds() > 24 * 3600:
+            anomalies.append("session_still_running")
+
+        valid_choice_responses = sum(
+            int(question.get("valid_count") or 0) for question in questions
+        )
+        text_responses = sum(int(question.get("text_count") or 0) for question in questions)
+
         return {
             "session_id": session.session_id,
             "lesson_id": session.lesson_id,
             "lesson_title": lesson.title if lesson else session.metadata.get("lesson_title", ""),
             "lesson_snapshot_available": isinstance(session.metadata.get("lesson_snapshot"), dict),
+            # 会话记录来源：test / rehearsal / real / unknown。旧记录无标记，
+            # 如实保留 unknown，不推断。
+            "data_source": str(session.metadata.get("source") or "unknown"),
             "started_at": session.started_at,
             "ended_at": session.ended_at,
             "duration_minutes": duration_minutes,
+            "duration_semantics": "session_elapsed",
+            "effective_teaching_minutes": None,
+            "effective_teaching_note": "缺少暂停/恢复与实际课堂标记，无法计算有效教学时长。",
+            "anomalies": anomalies,
             "participant_count": len(participants),
             "participants": sorted(participants),
+            "participant_count_basis": "按自报昵称去重，不代表实名学生人数。",
+            "observation_count": observations.get("total", 0),
+            "valid_choice_responses": valid_choice_responses,
+            "text_response_count": text_responses,
             "response_data_collected": response_data_collected,
+            "planned_stage_count": len(lesson.stages) if lesson else 0,
             "stages": stages,
             "questions": questions,
             "observations": observations,
@@ -172,16 +201,22 @@ class ReportService:
             responses = list(session.responses.get(question_id, []))
             counts = [0] * len(options)
             texts: List[str] = []
+            valid_count = 0
+            text_count = 0
             for item in responses:
                 choice = item.get("choice_index")
                 if isinstance(choice, int) and 0 <= choice < len(counts):
                     counts[choice] += 1
+                    valid_count += 1
                 elif str(item.get("text") or "").strip():
                     texts.append(str(item.get("text")))
+                    text_count += 1
             total = len(responses)
+            # 正确率只以有效选项作答为分母；文本/无效/空提交单独计数，
+            # 不稀释也不冒充选择题样本。
             correct_rate = None
-            if isinstance(answer_index, int) and 0 <= answer_index < len(counts) and total:
-                correct_rate = round(counts[answer_index] / total, 4)
+            if isinstance(answer_index, int) and 0 <= answer_index < len(counts) and valid_count:
+                correct_rate = round(counts[answer_index] / valid_count, 4)
             results.append(
                 {
                     "question_id": question_id,
@@ -192,6 +227,8 @@ class ReportService:
                     "options": options,
                     "answer_index": answer_index if isinstance(answer_index, int) else None,
                     "response_count": total,
+                    "valid_count": valid_count,
+                    "text_count": text_count,
                     "option_counts": counts,
                     "correct_rate": correct_rate,
                     "sample_texts": texts[:10],
@@ -245,6 +282,43 @@ class ReportService:
         return participants
 
     # ------------------------------------------------------------------
+    # Evidence-reference resolution (phase-1 acceptance D)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def evidence_ref_exists(ref: str, statistics: Dict[str, Any], lesson: Optional[LessonRecord]) -> bool:
+        """True when an evidence ref points at evidence that actually exists
+        in this session's statistics/lesson. The explicit design-suggestion
+        marker is a valid ref by definition (it claims no evidence)."""
+        if ref == "设计建议（证据不足）":
+            return True
+        if ref == "lesson.plan.homework":
+            plan = lesson.plan if lesson and isinstance(lesson.plan, dict) else {}
+            return bool(plan.get("homework"))
+        if ref == "lesson_snapshot":
+            return bool(statistics.get("lesson_snapshot_available"))
+        if ref == "lesson.current":
+            return lesson is not None
+        if ref.startswith("class_question:"):
+            qid = ref.split(":", 1)[1]
+            return any(q.get("question_id") == qid for q in statistics.get("questions") or [])
+        if ref.startswith("statistics.questions.") and ref.endswith(".correct_rate"):
+            qid = ref[len("statistics.questions."):-len(".correct_rate")]
+            return any(
+                q.get("question_id") == qid and isinstance(q.get("correct_rate"), (int, float))
+                for q in statistics.get("questions") or []
+            )
+        if ref.startswith("observations.records:"):
+            qid = ref.split(":", 1)[1]
+            records = (statistics.get("observations") or {}).get("records") or []
+            return any(
+                str(record.get("question_id") or "") == qid
+                and record.get("verdict") in {"partial", "misconception"}
+                for record in records
+            )
+        return False
+
+    # ------------------------------------------------------------------
     # Diagnosis (LLM preferred, rule fallback)
     # ------------------------------------------------------------------
 
@@ -295,6 +369,7 @@ class ReportService:
                     "practice_id": f"lesson_homework_{key}_{index}", "level": label,
                     "title": guide.get("title") or f"教案预设作业 · {label}{index}", "suggested_minutes": guide.get("suggested_minutes"),
                     "prompt": text.strip(), "answer_points": guide.get("answer_points", []),
+                    "evidence_refs": ["lesson.plan.homework", "lesson_snapshot" if statistics.get("lesson_snapshot_available") else "lesson.current"],
                     "evidence_basis": lesson_source + "这是教案预设任务。" + progress + evidence,
                 })
 
@@ -326,12 +401,19 @@ class ReportService:
             if not answer and isinstance(answer_index, int) and 0 <= answer_index < len(options):
                 answer = f"{chr(65 + answer_index)}. {options[answer_index]}"
             points = [value for value in (answer, str(original.get("explanation") or "").strip()) if value]
+            refs = [f"class_question:{qid}"]
+            priority = priorities.get(qid)
+            if priority and "正确率" in priority:
+                refs.append(f"statistics.questions.{qid}.correct_rate")
+            elif priority:
+                refs.append(f"observations.records:{qid}")
             result.append({
                 "practice_id": f"class_question_{qid}", "level": "课堂回看",
                 "title": "回看课堂原题", "suggested_minutes": None,
                 "prompt": f"结合课堂原题的图表和材料，再回答：{q.get('text', '')}",
                 "answer_points": points,
-                "evidence_basis": priorities.get(qid, "本次课堂已呈现此题；作为复习安排，不代表学生答错。") + evidence,
+                "evidence_refs": refs,
+                "evidence_basis": (priority or "本次课堂已呈现此题；作为复习安排，不代表学生答错。") + evidence,
             })
         if not result:
             objectives = [str(v).strip() for v in (lesson.objectives if lesson else []) if str(v).strip()]
@@ -340,27 +422,67 @@ class ReportService:
                 "suggested_minutes": None,
                 "prompt": ("围绕本课目标“" + "；".join(objectives) + "”，选取课堂材料安排复习。"
                            if objectives else "尚无预设作业或已呈现的课堂题目，请先补充教学目标与材料再选题。"),
-                "answer_points": [], "evidence_basis": progress + evidence,
+                "answer_points": [],
+                "evidence_refs": ["设计建议（证据不足）"],
+                "evidence_basis": "设计建议（证据不足）：缺少课堂作答与观察证据支撑。" + progress + evidence,
             })
         return result
+
+    @staticmethod
+    def _llm_summary_payload(statistics: Dict[str, Any]) -> Dict[str, Any]:
+        """Aggregate-only payload for the model (phase-1 audit T4 privacy).
+
+        Raw student answer text, teacher free-text notes and the participant
+        nickname list never leave the server; the model works from counts,
+        option distributions and misconception tags.
+        """
+        questions = [
+            {
+                "question_id": question.get("question_id"),
+                "type": question.get("type"),
+                "collection_mode": question.get("collection_mode"),
+                "response_count": question.get("response_count", 0),
+                "valid_count": question.get("valid_count", 0),
+                "text_count": question.get("text_count", 0),
+                "option_counts": question.get("option_counts"),
+                "correct_rate": question.get("correct_rate"),
+                "misconceptions": [
+                    str(item) for item in (question.get("misconceptions") or [])
+                ],
+            }
+            for question in statistics.get("questions") or []
+            if isinstance(question, dict)
+        ]
+        observations = statistics.get("observations") or {}
+        return {
+            "lesson_title": statistics.get("lesson_title"),
+            "duration_minutes": statistics.get("duration_minutes"),
+            "participant_count": statistics.get("participant_count"),
+            "response_data_collected": statistics.get("response_data_collected"),
+            "data_source": statistics.get("data_source"),
+            "stages": [
+                {
+                    "stage_id": stage.get("stage_id"),
+                    "planned_minutes": stage.get("planned_minutes"),
+                    "actual_minutes": stage.get("actual_minutes"),
+                }
+                for stage in statistics.get("stages") or []
+                if isinstance(stage, dict)
+            ],
+            "questions": questions,
+            "observations": {
+                "total": observations.get("total", 0),
+                "verdict_counts": observations.get("verdict_counts") or {},
+                "misconception_tags": observations.get("misconception_tags") or [],
+            },
+            "snapshot_count": statistics.get("snapshot_count"),
+            "assistant_exchange_count": statistics.get("assistant_exchange_count"),
+        }
 
     def _diagnose_with_llm(self, statistics: Dict[str, Any]) -> str:
         if self.minimax_client is None:
             raise RuntimeError("LLM client unavailable")
-        compact = {
-            key: statistics.get(key)
-            for key in (
-                "lesson_title",
-                "duration_minutes",
-                "participant_count",
-                "response_data_collected",
-                "stages",
-                "questions",
-                "observations",
-                "snapshot_count",
-                "assistant_exchange_count",
-            )
-        }
+        compact = self._llm_summary_payload(statistics)
         system = (
             "你是一名地理教研员，请基于课堂数据 JSON 写一份课后教学证据复盘。"
             "输出 Markdown（不要代码块包裹），分三个小节：\n"
@@ -442,16 +564,30 @@ class ReportService:
             f"# 课堂报告：{statistics.get('lesson_title', '')}",
             "",
             f"- 上课时间：{statistics.get('started_at', '')} ~ {statistics.get('ended_at', '') or '进行中'}",
-            f"- 实际时长：{statistics.get('duration_minutes', '—')} 分钟",
+            f"- 会话经过时长：{statistics.get('duration_minutes', '—')} 分钟（自上课至结束的墙钟时间）",
+            f"- 有效教学时长：未计算（{statistics.get('effective_teaching_note', '缺少暂停/恢复标记')}）",
+            f"- 数据来源：{{{statistics.get('data_source', 'unknown')}}}"
+            "（test=测试 / rehearsal=预演 / real=真实课堂 / unknown=旧记录未标注）"
+            + ("；real 标记来自会话元数据，不等于已完成真实课堂验收。" if statistics.get("data_source") == "real" else ""),
             f"- 课堂作答数据：{'已采集' if statistics.get('response_data_collected') else '未采集'}",
+            f"- 参与作答：{statistics.get('participant_count', 0)} 人（{statistics.get('participant_count_basis', '按自报昵称去重，不代表实名学生人数。')}）",
             f"- 课堂事件：{statistics.get('event_count', 0)} 条"
-            f"（截图 {statistics.get('snapshot_count', 0)} 张，助教问答 {statistics.get('assistant_exchange_count', 0)} 次）",
+            f"（截图 {statistics.get('snapshot_count', 0)} 张，助教问答 {statistics.get('assistant_exchange_count', 0)} 次，教师观察 {statistics.get('observation_count', 0)} 条）",
             "",
+        ]
+        if statistics.get("anomalies"):
+            lines.append("> ⚠️ 异常标注：" + "、".join(statistics["anomalies"]) + "（仅标注，不改动原始记录）")
+            lines.append("")
+        planned = int(statistics.get("planned_stage_count") or 0)
+        if planned:
+            lines.append(f"- 教学进度：已进入 {len(statistics.get('stages') or [])}/{planned} 个教案环节（进入不等于完成学习）。")
+            lines.append("")
+        lines.extend([
             "## 教学环节时间线",
             "",
             "| 环节 | 计划(分) | 实际(分) |",
             "| --- | --- | --- |",
-        ]
+        ])
         for stage in statistics.get("stages") or []:
             lines.append(
                 f"| {stage.get('title', stage.get('stage_id', ''))} "
@@ -466,12 +602,25 @@ class ReportService:
             lines.append("本节课未记录教师提问。")
         for index, question in enumerate(questions, start=1):
             teacher_oral = question.get("collection_mode") == "teacher_observation"
-            collection_label = "教师口头呈现，表现由教师观察记录" if teacher_oral else (f"{question.get('response_count', 0)} 人作答" if question.get("response_count", 0) > 0 else "本题未采集作答数据")
+            valid_count = int(question.get("valid_count") or 0)
+            text_count = int(question.get("text_count") or 0)
+            response_count = int(question.get("response_count") or 0)
+            if teacher_oral:
+                collection_label = "教师口头呈现，表现由教师观察记录"
+            elif response_count == 0:
+                collection_label = "本题未采集作答数据"
+            elif valid_count == 0:
+                collection_label = (
+                    f"共 {response_count} 条提交，其中文本作答 {text_count} 条，无有效选择题作答，正确率不可计算"
+                )
+            else:
+                extra = f"，另有文本作答 {text_count} 条" if text_count else ""
+                collection_label = f"{valid_count} 份有效选择题作答{extra}"
             lines.append(f"**Q{index}. {question.get('text', '')}**（{collection_label}）")
             options = question.get("options") or []
             counts = question.get("option_counts") or []
-            total = max(question.get("response_count", 0), 1)
-            if not teacher_oral and question.get("response_count", 0) > 0:
+            total = max(valid_count, 1)
+            if not teacher_oral and valid_count > 0:
                 for option_index, option in enumerate(options):
                     count = counts[option_index] if option_index < len(counts) else 0
                     marker = " ✅" if question.get("answer_index") == option_index else ""
@@ -479,7 +628,7 @@ class ReportService:
             elif options:
                 lines.append("- 备选项：" + "；".join(f"{chr(65 + option_index)}. {option}" for option_index, option in enumerate(options)))
             if question.get("correct_rate") is not None and not teacher_oral:
-                lines.append(f"- 正确率：**{question['correct_rate']:.0%}**")
+                lines.append(f"- 正确率：**{question['correct_rate']:.0%}**（分母为 {valid_count} 份有效选择题作答）")
             for text in question.get("sample_texts") or []:
                 lines.append(f"- 「{text}」")
             lines.append("")
@@ -531,6 +680,7 @@ class ReportService:
                     "",
                     "- 参考要点：" + "；".join(str(point) for point in item["answer_points"]) if item.get("answer_points") else "- 开放任务或未附参考答案，请结合原题材料评阅。",
                     "- 推荐依据：" + str(item.get("evidence_basis") or ""),
+                    "- 证据引用：" + "；".join(str(ref) for ref in (item.get("evidence_refs") or ["设计建议（证据不足）"])),
                     "",
                 ]
             )

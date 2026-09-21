@@ -19,6 +19,7 @@ import type {
   DatasetUploadResponse,
   DatasetStatsResponse,
   HealthResponse,
+  UiCapabilities,
   ImageAttachment,
   JobRecord,
   KnowledgeBaseItem,
@@ -313,8 +314,14 @@ export function buildAuthenticatedUrl(path: string): string {
   return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
+/** 公共 /health 仅返回存活状态（phase-1 T3 收窄）。 */
 export async function fetchHealth(): Promise<HealthResponse> {
   return requestJson<HealthResponse>("/health");
+}
+
+/** 前端能力集（脱敏白名单字段；登录前后均可用）。 */
+export async function fetchUiCapabilities(): Promise<UiCapabilities> {
+  return requestJson<UiCapabilities>("/ui/capabilities");
 }
 
 export async function fetchLlmStatus(): Promise<LlmStatusResponse> {

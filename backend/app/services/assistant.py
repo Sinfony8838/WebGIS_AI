@@ -542,7 +542,7 @@ class AssistantService:
             actions.append({"tool_name": "explain_current_view", "tool_params": {"focus": message.strip()}})
             narrative_parts.append("然后我会根据当前画面给出可直接上课使用的讲解。")
 
-        if any(keyword in lowered for keyword in ["图层", "属性", "有哪些", "query"]) and "课堂" not in lowered:
+        if not visual_query_action and any(keyword in lowered for keyword in ["图层", "属性", "有哪些", "query"]) and "课堂" not in lowered:
             actions.append({"tool_name": "query_features", "tool_params": {"layer_id": target_layer["layer_id"] if target_layer else project.active_layer_id, "limit": 5}})
             narrative_parts.append("我会补充当前图层的要素摘要。")
 

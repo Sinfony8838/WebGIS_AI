@@ -250,6 +250,23 @@ it("separates pending, failure and empty history with a retry", async () => {
   expect(screen.queryByRole("status")).toBeNull();
 });
 
+it("can reopen an authorized historical classroom from an empty current project", async () => {
+  const older = structuredClone(await fetchClassSessions({projectId:"fixture"}));
+  older.items[0].metadata = {...older.items[0].metadata, project_title:"历史人口课堂"};
+  vi.mocked(fetchClassSessions).mockClear().mockResolvedValueOnce({status:"success",items:[]}).mockResolvedValueOnce(older);
+  render(<ReportPanel projectId="new-project" onClose={vi.fn()} />);
+  await screen.findByText(/该项目还没有课堂记录/);
+  fireEvent.click(screen.getByRole("button", {name:"查看全部可访问课堂"}));
+  await waitFor(() => expect(screen.getByTestId("generate-report")).toBeEnabled());
+  expect(fetchClassSessions).toHaveBeenLastCalledWith({});
+  expect(screen.getByRole("option", {name:/历史人口课堂.*已结束/})).toBeTruthy();
+  vi.mocked(fetchClassSessions).mockResolvedValueOnce({status:"success",items:[]});
+  fireEvent.click(screen.getByRole("button", {name:"仅看当前项目"}));
+  expect(screen.getByTestId("generate-report")).toBeDisabled();
+  await screen.findByText(/该项目还没有课堂记录/);
+  expect(fetchClassSessions).toHaveBeenLastCalledWith({projectId:"new-project"});
+});
+
 it("clears completed report and paper links immediately on session change without refetching history", async () => {
   await twoSessions();
   render(<ReportPanel projectId="project_1" onClose={vi.fn()} />);
