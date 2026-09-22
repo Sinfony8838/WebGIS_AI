@@ -48,6 +48,7 @@ type Props = {
   imageGenerationLoading?: boolean;
   imageGenerationConfigured?: boolean;
   imageGenerationModel?: string;
+  imageGenerationAdmin?: boolean;
   /** 当前功能页签：teaching（默认，教学助手）| interaction（智能交互语音操控）。 */
   assistantTab?: AssistantTab;
   onTabChange?: (tab: AssistantTab) => void;
@@ -419,6 +420,7 @@ export function CopilotWidget({
   imageGenerationLoading = false,
   imageGenerationConfigured = false,
   imageGenerationModel = "image-01",
+  imageGenerationAdmin = false,
   assistantTab = "teaching",
   onTabChange = () => undefined,
   ttsEnabled = true,
@@ -1313,14 +1315,14 @@ export function CopilotWidget({
             <button
               type="submit"
               className="copilot-image-gen-submit"
-              disabled={!imageGenPrompt.trim() || imageGenerationLoading || !onGenerateImage}
+              disabled={!imageGenPrompt.trim() || imageGenerationLoading || !onGenerateImage || !imageGenerationConfigured}
               data-testid="copilot-image-generate-submit"
             >
-              {imageGenerationLoading ? "生成中…" : "生成并存入数据库"}
+              {imageGenerationLoading ? "生成中…" : imageGenerationAdmin ? "直接生成并存入数据库" : "确认生成并存入数据库"}
             </button>
             <small>
               {imageGenerationConfigured
-                ? "付费能力：按 MiniMax 用量计费；生成结果自动存入数据库「图片」分类。"
+                ? `${imageGenerationAdmin ? "管理员可直接使用，无需额外确认。" : "点击生成即确认本次付费调用。"}按 MiniMax 用量计费，结果存入数据库「图片」。用于教学前请核对文字、箭头和地理关系。`
                 : "未配置 MiniMax 图片服务，生成前请先在服务端配置。"}
             </small>
 

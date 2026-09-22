@@ -34,9 +34,17 @@ class MiniMaxImageClient:
         prompt_optimizer: bool = True,
         timeout: float = 120.0,
     ) -> Dict[str, Any]:
+        validated = self.validate_request(prompt, model=model, aspect_ratio=aspect_ratio, prompt_optimizer=prompt_optimizer)
         if not self.config.image_generation_enabled():
             raise MiniMaxImageError("MiniMax 图片生成尚未配置，请先设置 WEBGIS_AI_MINIMAX_API_KEY。")
 
+        payload = {**validated, "response_format": "base64", "n": 1, "aigc_watermark": True}
+        return self._request_image(payload, timeout)
+
+    def validate_request(
+        self, prompt: str, *, model: str = "", aspect_ratio: str = "16:9", prompt_optimizer: bool = True
+    ) -> Dict[str, Any]:
+        """Validate before queuing a paid job; never contact the provider here."""
         normalized_prompt = str(prompt or "").strip()
         if not normalized_prompt:
             raise ValueError("请输入图片生成描述。")
@@ -52,15 +60,14 @@ class MiniMaxImageClient:
         if selected_model == "image-01-live" and selected_ratio == "21:9":
             raise ValueError("image-01-live 暂不支持 21:9，请改用其他比例。")
 
-        payload = {
+        return {
             "model": selected_model,
             "prompt": normalized_prompt,
             "aspect_ratio": selected_ratio,
-            "response_format": "base64",
-            "n": 1,
             "prompt_optimizer": bool(prompt_optimizer),
-            "aigc_watermark": True,
         }
+
+    def _request_image(self, payload: Dict[str, Any], timeout: float) -> Dict[str, Any]:
         endpoint = self._endpoint()
         request = urllib.request.Request(
             endpoint,
@@ -115,8 +122,8 @@ class MiniMaxImageClient:
             "raw_bytes": raw_bytes,
             "mime_type": mime_type,
             "suffix": suffix,
-            "model": selected_model,
-            "aspect_ratio": selected_ratio,
+            "model": payload["model"],
+            "aspect_ratio": payload["aspect_ratio"],
             "request_id": str(parsed.get("id") or parsed.get("request_id") or ""),
         }
 

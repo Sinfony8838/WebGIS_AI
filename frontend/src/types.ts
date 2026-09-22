@@ -311,6 +311,7 @@ export type JobRecord = {
   steps: Array<{ title: string; detail: string; status: string; timestamp: string }>;
   stages: Record<string, { status: string; summary: string; detail: string }>;
   result?: {
+    artifact?: ArtifactRecord;
     summary?: string;
     assistant_message?: string;
     intent?: string;

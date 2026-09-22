@@ -509,9 +509,9 @@ export async function uploadImageLibraryAsset(
 export async function generateImageLibraryAsset(
   projectId: string,
   prompt: string,
-  options?: { title?: string; model?: string; aspectRatio?: string; promptOptimizer?: boolean }
+  options?: { title?: string; model?: string; aspectRatio?: string; promptOptimizer?: boolean; confirmed?: boolean }
 ): Promise<{ job_id: string; artifact: ArtifactRecord }> {
-  return requestJson<{ job_id: string; artifact: ArtifactRecord }>("/image-generation", {
+  const accepted = await requestJson<{ job_id: string }>("/image-generation/jobs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -521,9 +521,26 @@ export async function generateImageLibraryAsset(
       model: options?.model || "",
       aspect_ratio: options?.aspectRatio || "16:9",
       prompt_optimizer: options?.promptOptimizer ?? true,
-      confirmed: true
+      confirmed: options?.confirmed ?? true
     })
   });
+  // Submit only once. Polling the same job cannot incur another generation charge.
+  const deadline = Date.now() + 180_000;
+  while (Date.now() < deadline) {
+    let job: JobRecord;
+    try {
+      job = await fetchJob(accepted.job_id);
+    } catch (error) {
+      throw new Error(`图片任务已提交（${accepted.job_id}），暂时无法查询结果。请稍后到数据库「图片」查看，避免重复生成。${error instanceof Error ? error.message : ""}`);
+    }
+    if (job.status === "failed") throw new Error(job.error || "图片生成失败，请查看任务记录。");
+    if (job.status === "completed") {
+      if (!job.result?.artifact) throw new Error(`图片任务 ${accepted.job_id} 已结束，但没有返回图片。`);
+      return { job_id: accepted.job_id, artifact: job.result.artifact };
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 1500));
+  }
+  throw new Error(`图片任务 ${accepted.job_id} 仍在处理，请稍后到数据库「图片」查看，避免重复生成。`);
 }
 
 export async function confirmAssistantAction(

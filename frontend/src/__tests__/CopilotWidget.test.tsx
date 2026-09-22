@@ -252,6 +252,14 @@ describe("CopilotWidget", () => {
     );
   });
 
+  it("shows direct image generation for administrators and disables an unconfigured service", () => {
+    renderWidget({ imageGenerationAdmin: true, imageGenerationConfigured: false, onGenerateImage: vi.fn() });
+    fireEvent.click(screen.getByTestId("copilot-chip-generate-image"));
+    fireEvent.change(screen.getByPlaceholderText(/描述想要的地理教学示意图内容/), { target: { value: "山地景观" } });
+    expect(screen.getByTestId("copilot-image-generate-submit")).toHaveTextContent("直接生成并存入数据库");
+    expect(screen.getByTestId("copilot-image-generate-submit")).toBeDisabled();
+  });
+
   it("shows the renamed image generation chip across teaching phases", () => {
     renderWidget({ teachingPhase: "post_class" });
     let chips = within(screen.getByTestId("copilot-capability-chips")).getAllByRole("button");

@@ -225,6 +225,22 @@ class AuthApiTest(unittest.TestCase):
             )
             self.assertEqual(unconfirmed_generation.status_code, 409)
             self.assertIn("付费调用", unconfirmed_generation.text)
+            with patch.object(app_main.runtime, "submit_image_generation", return_value={"job_id": "image_job"}) as submit:
+                headers = {"X-WebGIS-CSRF": teacher_csrf}
+                payload = {"project_id": own.json()["project_id"], "prompt": "地貌", "actor_role": "admin", "role": "admin"}
+                denied = teacher_client.post("/image-generation/jobs", json=payload, headers=headers)
+                self.assertEqual(denied.status_code, 409)
+                forbidden = teacher_client.post("/image-generation/jobs", json={**payload, "project_id": admin_project["project_id"], "confirmed": True}, headers=headers)
+                self.assertEqual(forbidden.status_code, 404)
+                submit.assert_not_called()
+                with patch.object(app_main.runtime.config, "image_generation_enabled", return_value=True):
+                    allowed = teacher_client.post("/image-generation/jobs", json={**payload, "confirmed": True}, headers=headers)
+                self.assertEqual(allowed.status_code, 202)
+                submit.assert_called_once()
+            self.assertTrue(teacher_client.get("/image-generation/capabilities").json()["requires_confirmation"])
+            with patch.object(app_main.runtime, "submit_assistant_message", return_value={"job_id": "teacher_job"}) as submit:
+                teacher_client.post("/assistant/messages", json={**payload, "message": "生成一张地貌图"}, headers=headers)
+                self.assertEqual(submit.call_args.kwargs["actor_role"], "teacher")
         finally:
             teacher_client.close()
 

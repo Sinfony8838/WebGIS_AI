@@ -35,6 +35,7 @@ backend/data/auth/
 backend/data/voice-models/
 backend/data/_backup/
 backend/data/public-runtime/
+image-generation-output/
 backend/app/data/builtin/one_map/_cache/
 backend/app/data/builtin/population/_datav_china_full.json
 
@@ -50,6 +51,7 @@ docs/*
 !docs/README.md
 !docs/上线配置与安全核查.md
 !docs/knowledge_base_ingest.md
+!docs/image-generation-api.md
 !docs/智能体使用范例_人口分布.md
 !docs/当前功能说明与课程融合方案.md
 !docs/人口分布_40分钟全流程产品演示脚本_0902.md

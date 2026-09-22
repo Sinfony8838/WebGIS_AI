@@ -1779,24 +1779,29 @@ export default function App({
     aspectRatio
   }: { prompt: string; model: string; aspectRatio: string }) => {
     if (!project || imageGenerationLoading) return;
+    const imageScopeEpoch = jobScopeEpochRef.current;
     setImageGenerationLoading(true);
     try {
-      const response = await generateImageLibraryAsset(project.project_id, prompt, { model, aspectRatio });
+      const response = await generateImageLibraryAsset(project.project_id, prompt, {
+        model, aspectRatio, confirmed: currentUser.role !== "admin"
+      });
+      if (imageScopeEpoch !== jobScopeEpochRef.current) return;
       await refreshProjectState(project.project_id);
+      if (imageScopeEpoch !== jobScopeEpochRef.current) return;
       handleAttachImage({
         artifact_id: response.artifact.artifact_id,
         title: response.artifact.title,
         public_url: buildPublicFileUrl(String(response.artifact.metadata?.public_url || "")),
         mime_type: String(response.artifact.metadata?.mime_type || "image/jpeg")
       });
-      pushToast("success", "图片已生成", "已保存到项目图片库，并加入智能助教待发送附件。AI 示意图不替代权威 GIS 数据。");
+      pushToast("success", "图片已生成", "已保存到项目图片库，并加入待发送附件。用于教学前请核对文字、箭头和地理关系。");
     } catch (error) {
       pushToast("error", "图片生成失败", error instanceof Error ? error.message : "MiniMax 图片服务暂不可用。");
       throw error;
     } finally {
       setImageGenerationLoading(false);
     }
-  }, [handleAttachImage, imageGenerationLoading, project, pushToast, refreshProjectState]);
+  }, [currentUser.role, handleAttachImage, imageGenerationLoading, project, pushToast, refreshProjectState]);
 
   const handleRenderedPptImport = useCallback(async (file: File) => {
     setPptLoading(true);
@@ -4102,6 +4107,7 @@ export default function App({
           imageGenerationLoading={imageGenerationLoading}
           imageGenerationConfigured={Boolean(health?.image_generation?.configured)}
           imageGenerationModel={health?.image_generation?.model || "image-01"}
+          imageGenerationAdmin={currentUser.role === "admin"}
         />
         </>
       ) : null}
