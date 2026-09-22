@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from .config import AppConfig
 from .logging_filters import install_request_log_filters
 from .runtime import WebGISRuntime
-from .services.minimax_image_client import MiniMaxImageError
+from .services.minimax_image_client import ALLOWED_ASPECT_RATIOS, ALLOWED_IMAGE_MODELS, MiniMaxImageError
 from .services import request_limits, resource_access
 from .services.ppt_renderer import PptRenderError, render_pptx_to_images
 from .services.auth import AuthContext, AuthError, AuthService
@@ -1483,6 +1483,7 @@ def submit_assistant_message(
             payload.screen_snapshot,
             payload.teaching_context,
             payload.image_attachments,
+            actor_role=str(_current_auth(request).user.get("role") or ""),
         )
         assistant_message = str(payload.message or "")
         wants_lesson_design = any(hint in assistant_message for hint in LESSON_DESIGN_REQUEST_HINTS) or (
@@ -1530,11 +1531,46 @@ async def upload_image_library_asset(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _authorize_image_generation(payload: ImageGenerationRequest, request: Request) -> None:
+    _require_project_access(request, payload.project_id)
+    if _current_auth(request).user.get("role") != "admin" and not payload.confirmed:
+        raise HTTPException(status_code=409, detail="图片生成会产生 MiniMax API 费用，请先确认本次付费调用。")
+
+
+@app.get("/image-generation/capabilities")
+def image_generation_capabilities(request: Request) -> Dict[str, Any]:
+    context = _current_auth(request)
+    return {
+        "configured": runtime.config.image_generation_enabled(),
+        "provider": "minimax",
+        "default_model": runtime.config.minimax_image_model,
+        "models": sorted(ALLOWED_IMAGE_MODELS),
+        "aspect_ratios": {model: sorted(ALLOWED_ASPECT_RATIOS - ({"21:9"} if model == "image-01-live" else set())) for model in sorted(ALLOWED_IMAGE_MODELS)},
+        "max_prompt_characters": 1500,
+        "requires_confirmation": context.user.get("role") != "admin",
+        "billing": "pay_as_you_go_api",
+    }
+
+
+@app.post("/image-generation/jobs", status_code=202)
+def submit_image_generation(payload: ImageGenerationRequest, request: Request) -> Dict[str, Any]:
+    _authorize_image_generation(payload, request)
+    if not runtime.config.image_generation_enabled():
+        raise HTTPException(status_code=503, detail="图片生成服务尚未配置，请联系管理员。")
+    try:
+        return runtime.submit_image_generation(
+            project_id=payload.project_id, prompt=payload.prompt, title=payload.title,
+            model=payload.model, aspect_ratio=payload.aspect_ratio, prompt_optimizer=payload.prompt_optimizer,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/image-generation")
 def generate_image(payload: ImageGenerationRequest, request: Request) -> Dict[str, Any]:
-    _require_project_access(request, payload.project_id)
-    if not payload.confirmed:
-        raise HTTPException(status_code=409, detail="图片生成会产生 MiniMax API 费用，请先确认本次付费调用。")
+    _authorize_image_generation(payload, request)
     try:
         return runtime.generate_image_asset(
             project_id=payload.project_id,

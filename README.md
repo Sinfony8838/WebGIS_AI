@@ -91,7 +91,7 @@
 - 对话记忆、阶段状态展示和引用来源展示；高风险操作需教师确认后才执行。
 - 统一 Agent Harness：所有 assistant 模式共用可终止运行循环、结构化工具契约、执行前策略闸门、确认后重校验、停止前结果验证和隐私化追踪；详见 [AGENT_HARNESS.md](AGENT_HARNESS.md)。
 - 项目图片库：地图框选截图、本地图片和 AI 生成示意图都按项目保存，可加入助教进行连续识图问答。
-- MiniMax 图片生成：图片库可直接调用 `image-01` 或 `image-01-live`；生成结果使用 Base64 立即持久化，不依赖 24 小时临时 URL。
+- MiniMax 图片生成：图片库可直接调用 `image-01` 或 `image-01-live`；管理员直接生成，普通教师确认付费后生成。异步任务完成后持久保存图片，不依赖 24 小时临时 URL。参见 [API 与 Python 客户端](docs/image-generation-api.md) 和 [地理图片实测](docs/qa/geography-image-generation-20260922.md)。
 
 支持的 LLM / Vision 配置包括：
 
@@ -327,6 +327,8 @@ GIS 工作流：
 - `GET /teaching-maps`
 - `POST /projects`
 - `POST /image-generation`
+- `GET /image-generation/capabilities`
+- `POST /image-generation/jobs`
 - `GET /projects/{project_id}`
 - `PATCH /projects/{project_id}/basemap`
 - `GET /layers?project_id=...`
