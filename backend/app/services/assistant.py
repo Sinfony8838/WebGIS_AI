@@ -26,7 +26,7 @@ ASSISTANT_TOOL_SCHEMA = [
     {"name": "run_visual_query", "description": "运行人口等结构化指标查询并生成可高亮地图图层。", "parameters": {"dataset": "string?", "year": "number?", "geo_level": "string?", "metric": "string?", "operation": "string?", "order": "string?", "limit": "number?"}, "modes": ["teaching", "tool", "interaction"]},
     {"name": "toggle_teaching_map", "description": "叠加或隐藏教学地图（课本插图）。", "parameters": {"map_id": "string", "visible": "boolean?"}, "modes": ["teaching"]},
     {"name": "open_material", "description": "打开课堂素材或外部教学资料。", "parameters": {"material_id": "string?", "material": "object?"}, "modes": ["teaching"]},
-    {"name": "generate_image", "description": "使用 MiniMax 生成一张 AI 教学示意图并保存到项目图片库。该操作会消耗 API 余额，执行前必须确认。", "parameters": {"prompt": "string", "model": "string?", "aspect_ratio": "string?"}, "modes": ["teaching"]},
+    {"name": "generate_image", "description": "使用 MiniMax 生成一张 AI 教学素材并保存到项目图片库。该操作会消耗 API 余额；管理员直接执行，其他账号需确认，权限由服务端判断。文字和地理机制需教师核对。", "parameters": {"prompt": "string", "model": "string?", "aspect_ratio": "string?"}, "modes": ["teaching"]},
     {"name": "record_observation", "description": "记录课堂学情观察到正在进行的班课（verdict 取值 correct/partial/misconception），供课后报告统计。仅在进行中的班课可用。", "parameters": {"verdict": "string", "tag": "string?", "note": "string?", "question_id": "string?"}, "modes": ["teaching"]},
     {"name": "launch_question", "description": "在教师课堂工作台呈现一道口头提问并记录为课堂证据（question_id 指教案题目，或用 text/options 现场出题）。不进入投屏。仅在进行中的班课可用。", "parameters": {"question_id": "string?", "text": "string?", "options": "string[]?", "answer_index": "number?"}, "modes": ["teaching"]},
     {"name": "switch_view_mode", "description": "在二维平面地图与三维地球之间切换投影模式。", "parameters": {"mode": "plane|globe"}, "modes": ["interaction"]},
@@ -462,7 +462,7 @@ class AssistantService:
         image_generation_action = None if visual_query_action else self._resolve_image_generation_action(message, lowered)
         if image_generation_action:
             return {
-                "assistant_message": "我可以按这段描述生成一张 AI 教学示意图。生成会消耗 MiniMax API 余额，需要你确认后执行。",
+                "assistant_message": "将按你的描述生成一张 AI 教学素材，并保存到当前项目图片库。",
                 "actions": [image_generation_action],
             }
 

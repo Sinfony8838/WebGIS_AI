@@ -2031,6 +2031,7 @@ class ToolExecutor:
         project_state: Optional[Dict[str, Any]] = None,
         map_context: Optional[Dict[str, Any]] = None,
         run_context: Optional[AgentRun] = None,
+        allow_image_generation: bool = False,
     ) -> Dict[str, Any]:
         permission_context = ToolPermissionContext.from_pinned_state(pinned_state)
         if run_context is not None:
@@ -2061,6 +2062,9 @@ class ToolExecutor:
         for action in actions:
             descriptor = self._describe_tool(target, action, assistant_mode, project_state or {}, map_context or {})
             descriptor["permission_decision"] = permission_context.decision_for(descriptor["risk_level"], descriptor["name"])
+            if allow_image_generation and descriptor["name"] == "generate_image" and descriptor["permission_decision"] != "deny":
+                descriptor["requires_confirmation"] = False
+                descriptor["permission_decision"] = "allow"
             descriptors.append(descriptor)
             if descriptor["permission_decision"] == "deny" or descriptor["risk_level"] == "blocked":
                 highest = "blocked"
@@ -2070,8 +2074,9 @@ class ToolExecutor:
                         {"tool_name": descriptor["name"]},
                     )
             elif descriptor["risk_level"] == "high":
-                highest = "high"
-                requires_confirmation = True
+                if highest != "blocked":
+                    highest = "high"
+                requires_confirmation = requires_confirmation or not (allow_image_generation and descriptor["name"] == "generate_image")
             elif descriptor["risk_level"] == "medium" and highest == "low":
                 highest = "medium"
         return {
@@ -2092,6 +2097,7 @@ class ToolExecutor:
         assistant_mode: str = "tool",
         project_state: Optional[Dict[str, Any]] = None,
         run_context: Optional[AgentRun] = None,
+        allow_image_generation: bool = False,
     ) -> List[Dict[str, Any]]:
         permission_context = ToolPermissionContext.from_pinned_state(pinned_state)
         executed = []
@@ -2102,7 +2108,7 @@ class ToolExecutor:
                 raise ValueError(str(descriptor["validation_error"]))
             if decision == "deny":
                 raise ValueError(f"Blocked action: {action['tool_name']}")
-            if decision == "ask" and not allow_high_risk:
+            if decision == "ask" and not allow_high_risk and not (allow_image_generation and descriptor["name"] == "generate_image"):
                 raise PermissionError(f"Confirmation required: {action['tool_name']}")
             event_id = run_context.before_tool(action) if run_context is not None else ""
             try:
@@ -2367,6 +2373,7 @@ class AssistantSessionEngine:
         target: str,
         input_mode: str,
         stage_callback: Callable[[str, str, str, str], None],
+        actor_role: str = "",
     ) -> Dict[str, Any]:
         run_context = AgentRun(
             policy=HarnessPolicy.from_config(self.config),
@@ -2403,6 +2410,7 @@ class AssistantSessionEngine:
                 input_mode=input_mode,
                 stage_callback=traced_stage,
                 run_context=run_context,
+                actor_role=actor_role,
             )
             verification = run_context.verify_result(result)
             result["harness"] = run_context.finish(
@@ -2434,6 +2442,7 @@ class AssistantSessionEngine:
         input_mode: str,
         stage_callback: Callable[[str, str, str, str], None],
         run_context: AgentRun,
+        actor_role: str = "",
     ) -> Dict[str, Any]:
         normalized_mode = assistant_mode if assistant_mode in {"teaching", "knowledge", "tool", "interaction"} else "teaching"
         # Heavy GIS work moved to /workflow/*; the in-classroom assistant is WebGIS-only.
@@ -2520,6 +2529,7 @@ class AssistantSessionEngine:
             project_state={"project_id": project.project_id},
             map_context=map_context,
             run_context=run_context,
+            allow_image_generation=actor_role == "admin",
         )
         prompt_parts = self.prompt_registry.build(intent, map_context, retrieval=None, conversation_context=context)
 
@@ -2720,18 +2730,20 @@ class AssistantSessionEngine:
             pinned_state=context.get("pinned_state"),
             assistant_mode=intent,
             run_context=run_context,
+            allow_image_generation=actor_role == "admin",
         )
         knowledge = None
         citations: List[Dict[str, Any]] = []
         assistant_message = str(plan.get("assistant_message") or "").strip()
-        if intent == "interaction":
+        image_only = bool(executed) and all(item["action"]["tool_name"] == "generate_image" for item in executed)
+        if intent == "interaction" or image_only:
             # The executor may reject a missing target or only submit an
             # asynchronous job. Report its actual outcome instead of the plan.
             outcomes = [str(item.get("result", {}).get("assistant_message") or "").strip() for item in executed]
             assistant_message = "\n".join(dict.fromkeys(text for text in outcomes if text)) or assistant_message
         teaching_contract: Optional[Dict[str, str]] = None
 
-        if intent == "hybrid" or normalized_mode == "teaching":
+        if not image_only and (intent == "hybrid" or normalized_mode == "teaching"):
             stage_callback("grounding", "running", "Explaining executed result", "")
             if normalized_mode == "teaching":
                 map_context = self._inject_session_digest(map_context, "teaching_action")
@@ -2916,10 +2928,11 @@ class AssistantSessionEngine:
         assistant_message = "Confirmed action executed successfully."
         teaching_contract: Optional[Dict[str, str]] = None
         confirmed_intent = str((frozen_plan or payload).get("intent") or payload.get("intent") or "tool")
-        if confirmed_intent == "interaction":
+        image_only = bool(executed) and all(item["action"]["tool_name"] == "generate_image" for item in executed)
+        if confirmed_intent == "interaction" or image_only:
             outcomes = [str(item.get("result", {}).get("assistant_message") or "").strip() for item in executed]
             assistant_message = "\n".join(dict.fromkeys(text for text in outcomes if text)) or "已执行确认的操作。"
-        if confirmed_intent == "hybrid" or confirmed_intent.startswith("teaching"):
+        if not image_only and (confirmed_intent == "hybrid" or confirmed_intent.startswith("teaching")):
             stage_callback("grounding", "running", "Explaining confirmed result", "")
             confirmed_message = str((frozen_plan or payload).get("message") or "")
             if confirmed_intent.startswith("teaching"):
@@ -3374,6 +3387,7 @@ class AssistantSessionEngine:
         pinned_state: Optional[Dict[str, Any]] = None,
         assistant_mode: str = "tool",
         run_context: Optional[AgentRun] = None,
+        allow_image_generation: bool = False,
     ) -> List[Dict[str, Any]]:
         stage_callback("execution", "running", "Executing planned actions", "")
         executed = self.tool_executor.execute(
@@ -3385,6 +3399,7 @@ class AssistantSessionEngine:
             assistant_mode=assistant_mode,
             project_state={"project_id": project_id},
             run_context=run_context,
+            allow_image_generation=allow_image_generation,
         )
         stage_callback("execution", "success", f"Executed {len(executed)} action(s)", "")
         return executed

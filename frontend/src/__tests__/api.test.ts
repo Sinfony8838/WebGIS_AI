@@ -222,12 +222,9 @@ describe("api.sendAssistantMessage", () => {
   });
 
   it("requests MiniMax image generation with project-scoped options", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ artifact: { artifact_id: "generated_1" } }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      })
-    );
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ job_id: "image_1" }), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: "completed", result: { artifact: { artifact_id: "generated_1" } } })));
 
     await generateImageLibraryAsset("project_1", "水循环示意图", {
       model: "image-01",
@@ -235,7 +232,8 @@ describe("api.sendAssistantMessage", () => {
     });
 
     const [url, init] = fetchMock.mock.calls[0];
-    expect(String(url)).toContain("/image-generation");
+    expect(String(url)).toContain("/image-generation/jobs");
+    expect(String(fetchMock.mock.calls[1][0])).toContain("/jobs/image_1");
     expect(init?.method).toBe("POST");
     expect(JSON.parse(String(init?.body))).toMatchObject({
       project_id: "project_1",
@@ -245,6 +243,38 @@ describe("api.sendAssistantMessage", () => {
       prompt_optimizer: true,
       confirmed: true
     });
+  });
+
+  it("polls an administrator image job without resubmitting or confirming it", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(new Response(JSON.stringify({ job_id: "image_admin" }), { status: 202 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify({ status: "running" })))
+        .mockResolvedValueOnce(new Response(JSON.stringify({ status: "completed", result: { artifact: { artifact_id: "done" } } })));
+      const pending = generateImageLibraryAsset("project_1", "山地", { confirmed: false });
+      await vi.advanceTimersByTimeAsync(1600);
+      expect((await pending).artifact.artifact_id).toBe("done");
+      expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).confirmed).toBe(false);
+      expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a failed image job and never retries a paid POST", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ job_id: "image_failed" }), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: "failed", error: "余额不足" })));
+    await expect(generateImageLibraryAsset("project_1", "山地")).rejects.toThrow("余额不足");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves the accepted job id when polling is interrupted", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ job_id: "image_pending" }), { status: 202 }))
+      .mockRejectedValueOnce(new Error("offline"));
+    await expect(generateImageLibraryAsset("project_1", "山地")).rejects.toThrow("image_pending");
   });
 
   it("posts assistant confirmation ids and decisions", async () => {

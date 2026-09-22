@@ -200,6 +200,55 @@ class ImageGenerationRuntimeTest(unittest.TestCase):
 
         self.assertFalse(any(action["tool_name"] == "generate_image" for action in plan["actions"]))
 
+    def test_admin_assistant_generates_without_confirmation(self) -> None:
+        runtime, project_id = self.build_runtime()
+        with patch.object(runtime.image_generation_service, "generate", return_value={
+            "raw_bytes": TRANSPARENT_PNG, "mime_type": "image/png", "suffix": ".png",
+            "model": "image-01", "aspect_ratio": "16:9", "request_id": "admin_image",
+        }) as generate:
+            queued = runtime.submit_assistant_message(project_id, "生成一张地貌教学示意图", actor_role="admin")
+            job = self.wait_for_job(runtime, queued["job_id"])
+        self.assertEqual(job["status"], "completed", job)
+        self.assertFalse(job["result"]["requires_confirmation"])
+        self.assertEqual(job["result"]["confirmation_id"], "")
+        self.assertIn("图片已生成", job["result"]["assistant_message"])
+        self.assertNotIn("确认后", job["result"]["assistant_message"])
+        self.assertIsNone(job["result"]["knowledge"])
+        self.assertEqual(job["result"]["actions_executed"][0]["action"]["tool_name"], "generate_image")
+        generate.assert_called_once()
+
+    def test_admin_image_permission_does_not_approve_other_high_risk_actions(self) -> None:
+        runtime, project_id = self.build_runtime()
+        executor = runtime.session_engine.tool_executor
+        actions = [
+            {"tool_name": "generate_image", "tool_params": {"prompt": "山地景观"}},
+            {"tool_name": "generate_image", "tool_params": {"prompt": ""}},
+        ]
+        good = executor.assess("webgis", actions[:1], allow_image_generation=True)
+        self.assertFalse(good["requires_confirmation"])
+        bad = executor.assess("webgis", actions, allow_image_generation=True)
+        self.assertEqual(bad["risk_level"], "blocked")
+        self.assertEqual(executor.assess("webgis", list(reversed(actions)), allow_image_generation=True)["risk_level"], "blocked")
+        with patch.object(executor, "_describe_tool", return_value={
+            "name": "end_class_session", "risk_level": "high", "requires_confirmation": False,
+        }), patch.object(executor, "execute_webgis") as execute:
+            mixed = executor.assess("webgis", [{"tool_name": "end_class_session"}], allow_image_generation=True)
+            self.assertTrue(mixed["requires_confirmation"])
+            with self.assertRaises(PermissionError):
+                executor.execute(project_id, "webgis", [{"tool_name": "end_class_session"}], {}, allow_image_generation=True)
+            execute.assert_not_called()
+
+    def test_client_supplied_role_cannot_approve_assistant_image_generation(self) -> None:
+        runtime, project_id = self.build_runtime()
+        with patch.object(runtime.image_generation_service, "generate") as generate:
+            queued = runtime.submit_assistant_message(
+                project_id, "生成一张地貌教学示意图", actor_role="teacher",
+                map_context={"actor_role": "admin", "allow_image_generation": True, "user": {"role": "admin"}},
+            )
+            job = self.wait_for_job(runtime, queued["job_id"])
+        self.assertTrue(job["result"]["requires_confirmation"])
+        generate.assert_not_called()
+
     def test_gis_layer_generation_does_not_trigger_paid_image(self) -> None:
         runtime, project_id = self.build_runtime()
         project = runtime.store.get_project(project_id)
@@ -255,6 +304,7 @@ class ImageGenerationRuntimeTest(unittest.TestCase):
         approve_job = self.wait_for_job(runtime, approve["job_id"])
 
         self.assertEqual(approve_job["status"], "completed")
+        self.assertIn("图片已生成", approve_job["result"]["assistant_message"])
         generated = [item for item in runtime.list_outputs(project_id)["items"] if item["artifact_type"] == "generated_image"]
         self.assertEqual(len(generated), 1)
 

@@ -989,6 +989,7 @@ class WebGISRuntime:
         screen_snapshot: Optional[Dict[str, Any]] = None,
         teaching_context: Optional[Dict[str, Any]] = None,
         image_attachments: Optional[List[Dict[str, Any]]] = None,
+        *, actor_role: str = "",
     ) -> Dict[str, Any]:
         # Heavy GIS work moved to /workflow/*; assistant actions are WebGIS-only.
         normalized_target = "webgis"
@@ -1032,6 +1033,7 @@ class WebGISRuntime:
                 screen_snapshot or {},
                 teaching_context or {},
                 resolved_attachments,
+                actor_role,
             ),
             daemon=True,
         ).start()
@@ -1150,20 +1152,47 @@ class WebGISRuntime:
         aspect_ratio: str = "16:9",
         prompt_optimizer: bool = True,
     ) -> Dict[str, Any]:
+        job = self._create_image_generation_job(project_id, prompt, title, model, aspect_ratio, prompt_optimizer)
+        return self._run_image_generation_job(job.job_id)
+
+    def submit_image_generation(
+        self, project_id: str, prompt: str, title: str = "", model: str = "",
+        aspect_ratio: str = "16:9", prompt_optimizer: bool = True,
+    ) -> Dict[str, Any]:
+        job = self._create_image_generation_job(project_id, prompt, title, model, aspect_ratio, prompt_optimizer)
+        threading.Thread(target=self._run_image_generation_background, args=(job.job_id,), daemon=True).start()
+        return {"status": "accepted", "job_id": job.job_id, "project_id": project_id, "status_url": f"/jobs/{job.job_id}"}
+
+    def _create_image_generation_job(
+        self, project_id: str, prompt: str, title: str, model: str,
+        aspect_ratio: str, prompt_optimizer: bool,
+    ):
         self._require_project(project_id)
-        normalized_prompt = str(prompt or "").strip()
-        job = self.store.create_job(
+        params = self.image_generation_service.validate_request(
+            prompt, model=model, aspect_ratio=aspect_ratio, prompt_optimizer=prompt_optimizer,
+        )
+        return self.store.create_job(
             project_id=project_id,
             job_type="image_generation",
             title=title.strip() or "AI生成示意图",
             workflow_type="image_generation",
-            request={
-                "prompt": normalized_prompt,
-                "model": model or self.config.minimax_image_model,
-                "aspect_ratio": aspect_ratio,
-                "prompt_optimizer": bool(prompt_optimizer),
-            },
+            request=params,
         )
+
+    def _run_image_generation_background(self, job_id: str) -> None:
+        try:
+            self._run_image_generation_job(job_id)
+        except Exception:
+            # The shared worker records the failure for authenticated /jobs polling.
+            pass
+
+    def _run_image_generation_job(self, job_id: str) -> Dict[str, Any]:
+        job = self.store.get_job(job_id)
+        if job is None:
+            raise KeyError(f"Unknown image generation job: {job_id}")
+        project_id = job.project_id
+        params = job.request
+        normalized_prompt = params["prompt"]
         output_path: Optional[Path] = None
         artifact_registered = False
         try:
@@ -1171,9 +1200,9 @@ class WebGISRuntime:
             self.store.update_job_stage(job.job_id, "artifacts", "running", "正在调用 MiniMax 生成图片。")
             generated = self.image_generation_service.generate(
                 normalized_prompt,
-                model=model,
-                aspect_ratio=aspect_ratio,
-                prompt_optimizer=prompt_optimizer,
+                model=params["model"],
+                aspect_ratio=params["aspect_ratio"],
+                prompt_optimizer=params["prompt_optimizer"],
             )
             raw_bytes = generated["raw_bytes"]
             if not raw_bytes or len(raw_bytes) > MAX_IMAGE_LIBRARY_BYTES:
@@ -1187,7 +1216,7 @@ class WebGISRuntime:
                 project_id=project_id,
                 job_id=job.job_id,
                 artifact_type="generated_image",
-                title=title.strip() or "AI生成示意图",
+                title=job.title,
                 path=str(output_path),
                 metadata={
                     "public_url": self.config.public_url_for_path(output_path),
@@ -1200,6 +1229,8 @@ class WebGISRuntime:
                     "request_id": generated["request_id"],
                     "ai_generated": True,
                     "aigc_watermark": True,
+                    "prompt_optimizer": params["prompt_optimizer"],
+                    "teaching_review": "required",
                 },
             )
             artifact_registered = True
@@ -2015,6 +2046,7 @@ class WebGISRuntime:
         screen_snapshot: Optional[Dict[str, Any]] = None,
         teaching_context: Optional[Dict[str, Any]] = None,
         image_attachments: Optional[List[Dict[str, Any]]] = None,
+        actor_role: str = "",
     ) -> None:
         try:
             project = self._require_project(project_id)
@@ -2041,6 +2073,7 @@ class WebGISRuntime:
                 target=target,
                 input_mode=input_mode,
                 stage_callback=update_stage,
+                actor_role=actor_role,
             )
             if not result.get("requires_confirmation"):
                 self._log_assistant_exchange(job_id, map_context, message, result)
