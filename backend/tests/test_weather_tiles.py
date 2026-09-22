@@ -122,7 +122,7 @@ class WeatherTileApiTest(unittest.TestCase):
         # 而不是渲染只剩高德参考层的「伪天气」状态。
         self._patch_key(None)
         normalized = app_main.config.normalize_basemap({"id": "weather_precipitation"})
-        self.assertEqual(normalized["id"], "amap_vector")
+        self.assertEqual(normalized["id"], "amap_imagery")
 
 
 if __name__ == "__main__":

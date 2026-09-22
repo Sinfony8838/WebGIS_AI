@@ -161,7 +161,7 @@ class AppConfig:
             "© OpenStreetMap contributors",
         )
     )
-    default_basemap_id: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_DEFAULT_BASEMAP", "amap_vector"))
+    default_basemap_id: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_DEFAULT_BASEMAP", "amap_imagery"))
     amap_vector_url: str = field(
         default_factory=lambda: os.getenv(
             "WEBGIS_AI_AMAP_VECTOR_URL",
@@ -820,8 +820,8 @@ class AppConfig:
         known_ids = {item["id"] for item in items}
         if requested in known_ids:
             return requested
-        if "amap_vector" in known_ids:
-            return "amap_vector"
+        if "amap_imagery" in known_ids:
+            return "amap_imagery"
         return items[0]["id"]
 
     def _xyz_layer(
