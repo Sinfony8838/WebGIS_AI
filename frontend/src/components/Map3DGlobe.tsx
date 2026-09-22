@@ -25,6 +25,9 @@ import {
   GLOBE_TO_PLANE_ALTITUDE_THRESHOLD
 } from "../lib/altitudeZoom";
 import { GlobeThemeManager, getEntityTooltip } from "../lib/globeThemes";
+import { GlobeBasemap } from "../lib/globeBasemap";
+import { basemapSourceKey } from "../lib/basemap";
+import type { BasemapLayerDescriptor } from "../types";
 
 export type CameraState = {
   lon: number;
@@ -57,10 +60,8 @@ type Props = {
   onUrbanStatus?: (status:UrbanStatus) => void;
   /** Visible state — hides the canvas without destroying the scene. */
   visible: boolean;
-  /** XYZ template URL used as the globe imagery. Use {x}/{y}/{z} placeholders. */
-  imageryUrl: string;
-  /** Optional subdomains array for the imagery URL. */
-  imagerySubdomains?: string[];
+  /** Catalog source shared with 2D, including all tile servers. */
+  imageryLayer: BasemapLayerDescriptor;
   /** Whether to show the lat/lon graticule overlay. */
   showGraticule?: boolean;
   /** Initial camera position (defaults to China at 12000km). */
@@ -90,24 +91,12 @@ const DEFAULT_INITIAL_VIEW = {
   altitudeMeters: DEFAULT_GLOBE_ALTITUDE
 };
 
-function extractTokenPattern(template: string): { url: string; subdomains?: string[] } {
-  // Cesium's UrlTemplateImageryProvider uses {x}/{y}/{z}/{s} placeholders,
-  // matching OpenLayers' XYZ convention. We pass through unchanged.
-  const subdomainMatch = template.match(/\{([a-z0-9_,;-]+)\}/i);
-  if (subdomainMatch && subdomainMatch[1].includes(",")) {
-    const subdomains = subdomainMatch[1].split(",").map((s) => s.trim()).filter(Boolean);
-    return { url: template.replace(subdomainMatch[0], "{s}"), subdomains };
-  }
-  return { url: template };
-}
-
 export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlobe(
   {
     visible,
     urbanSource,
     onUrbanStatus,
-    imageryUrl,
-    imagerySubdomains,
+    imageryLayer,
     showGraticule,
     initialView = DEFAULT_INITIAL_VIEW,
     onCameraChange,
@@ -128,7 +117,8 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
   const screenHandlerRef = useRef<Cesium.ScreenSpaceEventHandler | null>(null);
   const gridLayerRef = useRef<Cesium.ImageryLayer | null>(null);
   const gridLabelsRef = useRef<Cesium.LabelCollection | null>(null);
-  const baseImageryLayerRef = useRef<Cesium.ImageryLayer | null>(null);
+  const basemapRef = useRef<GlobeBasemap | null>(null);
+  const imageryKey = basemapSourceKey(imageryLayer);
   const themeManagerRef = useRef<GlobeThemeManager | null>(null);
   const themesActiveRef = useRef(false);
   const urbanActiveRef = useRef(false);
@@ -160,9 +150,6 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
       return undefined;
     }
 
-    const { url, subdomains: extractedSubdomains } = extractTokenPattern(imageryUrl);
-    const subdomains = imagerySubdomains && imagerySubdomains.length ? imagerySubdomains : extractedSubdomains;
-
     let viewer: Cesium.Viewer;
     try {
       viewer = new Cesium.Viewer(containerRef.current, {
@@ -179,17 +166,9 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
         navigationHelpButton: false,
         navigationInstructionsInitiallyVisible: false,
         vrButton: false,
-        baseLayer: Cesium.ImageryLayer.fromProviderAsync(
-          Promise.resolve(
-            new Cesium.UrlTemplateImageryProvider({
-              url,
-              subdomains,
-              maximumLevel: 18,
-              credit: new Cesium.Credit("© 高德地图", false)
-            })
-          ),
-          {}
-        ),
+        // The dedicated effect installs one layer. Avoid starting and then
+        // immediately discarding a duplicate provider during initial mount.
+        baseLayer: false,
         terrain: new Cesium.Terrain(Promise.resolve(new Cesium.EllipsoidTerrainProvider())),
         skyBox: undefined,
         skyAtmosphere: undefined,
@@ -211,7 +190,7 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
     }
 
     viewerRef.current = viewer;
-    baseImageryLayerRef.current = viewer.imageryLayers.get(0);
+    basemapRef.current = new GlobeBasemap(viewer);
     if (import.meta.env.DEV) {
       // Debug handle for DevTools / automated verification only.
       (window as unknown as Record<string, unknown>).__globeViewer = viewer;
@@ -394,12 +373,13 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
       screenHandler.destroy();
       screenHandlerRef.current = null;
       try {
+        basemapRef.current?.destroy();
+        basemapRef.current = null;
         viewer.destroy();
       } catch {
         /* ignore */
       }
       viewerRef.current = null;
-      baseImageryLayerRef.current = null;
       gridLayerRef.current = null;
       gridLabelsRef.current = null;
     };
@@ -463,27 +443,12 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
 
   // Live-swap the base imagery layer when the URL prop changes.
   useEffect(() => {
-    const viewer = viewerRef.current;
-    if (!viewer) {
-      return;
-    }
     const osmBuildings=urbanSource?.format === "geojson";
-    const { url, subdomains: extractedSubdomains } = extractTokenPattern(osmBuildings ? "https://tile.openstreetmap.org/{z}/{x}/{y}.png" : imageryUrl);
-    const subdomains = imagerySubdomains && imagerySubdomains.length ? imagerySubdomains : extractedSubdomains;
-    const provider = new Cesium.UrlTemplateImageryProvider({
-      url,
-      subdomains,
-      maximumLevel: 18,
-      credit: new Cesium.Credit(osmBuildings ? '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>' : "© 高德地图", true)
-    });
-    const nextLayer = new Cesium.ImageryLayer(provider, {});
-    // Insert below the grid layer (if any) but above other layers.
-    viewer.imageryLayers.add(nextLayer, 0);
-    if (baseImageryLayerRef.current) {
-      viewer.imageryLayers.remove(baseImageryLayerRef.current, true);
-    }
-    baseImageryLayerRef.current = nextLayer;
-  }, [imageryUrl, imagerySubdomains, urbanSource?.format]);
+    basemapRef.current?.set(osmBuildings ? {
+      ...imageryLayer, urls: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>'
+    } : imageryLayer);
+  }, [imageryKey, imageryLayer.opacity, urbanSource?.format]);
 
   // Add or remove the lat/lon graticule overlay (lines + numeric labels).
   // The grid is two coordinated pieces: a tile-based GridImageryProvider

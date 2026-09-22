@@ -34,6 +34,7 @@ import { getCenter } from "ol/extent";
 import { captureMapSnapshot } from "./mapScreenshot";
 import { captureWorkspaceSnapshot } from "./workspaceScreenshot";
 import { observePlaneView } from "./lib/planeViewState";
+import { BasemapLayerCache, DEFAULT_IMAGERY_LAYER } from "./lib/basemap";
 import { collectLegendRows, composeSnapshotDocument, mergeSnapshotInk, plainAttribution, type SnapshotDocument } from "./lib/snapshotDocument";
 import {
   addCatalogDatasetLayer,
@@ -466,6 +467,8 @@ export default function App({
   const mapElementRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<Map | null>(null);
     const basemapLayersRef = useRef<RenderableLayer[]>([]);
+    const basemapCacheRef = useRef(new BasemapLayerCache());
+  const [basemapSwitchPending, setBasemapSwitchPending] = useState(false);
     // 按 layer_id 缓存已构建的 OpenLayers 图层：GeoJSON 解析开销大，只有
     // 数据版本（data_rev）变化时才重建，可见性/透明度/层级直接原地更新。
     const businessLayerCacheRef = useRef<
@@ -2397,16 +2400,16 @@ export default function App({
   // zoom-threshold, and the globe's double-click "dive" gesture.
 
   /** Pick the first 3D-compatible XYZ layer from the active basemap. */
-  const globeImageryUrl = useMemo(() => {
+  const globeImageryLayer = useMemo(() => {
     const layers = layerState?.base_map.layers || [];
     const candidate = layers.find(
       (layer) => layer.kind === "xyz" && layer.usable_in_3d !== false && layer.urls.length
     );
     if (candidate) {
-      return candidate.urls[0];
+      return candidate;
     }
     // Sane fallback when no project / basemap yet
-    return "https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={x}&y={y}&z={z}";
+    return DEFAULT_IMAGERY_LAYER;
   }, [layerState?.base_map]);
 
   const transitionToPlane = useCallback(
@@ -2417,19 +2420,13 @@ export default function App({
       const map = mapRef.current;
       const targetZoom = opts.zoom ?? altitudeToZoom(DOUBLE_CLICK_LANDING_ALTITUDE);
       planeAutoArmedRef.current = false;
+      // Align the hidden view first: do not load the previous location or
+      // every intermediate zoom while revealing the new map.
+      const view = map?.getView();
+      view?.cancelAnimations();
+      view?.setCenter(fromLonLat([opts.lon, opts.lat]));
+      view?.setZoom(Math.max(targetZoom, 4));
       setViewMode("plane");
-      // Defer the OL view sync to the next tick so the canvas is visible.
-      window.setTimeout(() => {
-        const view = mapRef.current?.getView() || map?.getView();
-        if (view) {
-          view.animate({
-            center: fromLonLat([opts.lon, opts.lat]),
-            zoom: Math.max(targetZoom, 4),
-            duration: opts.reason === "manual" ? 250 : 700,
-            easing: easeOut
-          });
-        }
-      }, 30);
       if (opts.reason !== "manual") {
         pushToast(
           "info",
@@ -2931,6 +2928,7 @@ export default function App({
       stopTrackingView();
       map.setTarget(undefined);
       basemapLayersRef.current = [];
+      basemapCacheRef.current.clear();
         businessLayerCacheRef.current.clear();
         vectorLayerByIdRef.current.clear();
       searchAreaSourceRef.current = null;
@@ -2944,6 +2942,17 @@ export default function App({
 
   // Auto plane → globe: watch the OL view's resolution and pop back to 3D
   // when the user zooms far enough out. Status tracking belongs to map creation.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    // Opacity alone leaves OL downloading tiles behind the globe.
+    map.getLayerGroup().setVisible(viewMode === "plane");
+    if (viewMode === "plane") {
+      map.updateSize();
+      map.renderSync();
+    }
+  }, [viewMode]);
+
   useEffect(() => {
     if (viewMode !== "plane") {
       return undefined;
@@ -3066,12 +3075,14 @@ export default function App({
     };
   }, [currentUser.user_id, initAttempt, loadKnowledgeBase, pushToast, refreshProjectState]);
 
+  const basemapDescriptorKey = JSON.stringify(layerState?.base_map);
   useEffect(() => {
     if (!mapRef.current || !layerState?.base_map) {
       return;
     }
     const map = mapRef.current;
     const basemapId = layerState.base_map.id;
+    let fallbackTimer: number | undefined;
     const listenerKeys: Array<unknown> = [];
     const loadStats = { started: 0, finished: 0, errored: 0 };
     // 天气叠加层单独计数：基础底图（高德）成功不代表天气瓦片成功，
@@ -3102,17 +3113,14 @@ export default function App({
       .slice()
       .sort((left, right) => left.z_index - right.z_index)
       .forEach((descriptor) => {
-        const source = new XYZ({
-          ...(descriptor.urls.length > 1 ? { urls: descriptor.urls } : { url: descriptor.urls[0] }),
-          attributions: descriptor.attribution || undefined,
-          maxZoom: descriptor.max_zoom ?? 18,
-          crossOrigin: descriptor.cross_origin || "anonymous"
-        });
+        const layer = basemapCacheRef.current.get(descriptor);
+        const source = layer.getSource()!;
         const isOverlayDescriptor = (descriptor.class_name || "").includes("basemap-weather-overlay");
         const countInto = isOverlayDescriptor ? overlayStats : loadStats;
         listenerKeys.push(
           source.on("tileloadstart", () => {
             countInto.started += 1;
+            scheduleFallback();
           })
         );
         listenerKeys.push(
@@ -3125,16 +3133,11 @@ export default function App({
           source.on("tileloaderror", () => {
             countInto.errored += 1;
             syncWeatherStatus();
+            scheduleFallback();
           })
         );
-        const layer = new TileLayer({
-          source,
-          opacity: descriptor.opacity,
-          zIndex: descriptor.z_index
-        });
         basemapLayersRef.current.push(layer);
         map.addLayer(layer);
-        source.refresh();
       });
 
     // 只有基础底图全部失败才自动回退到兼容底图；天气叠加失败时基础底图仍
@@ -3144,28 +3147,26 @@ export default function App({
       map.renderSync();
     });
 
-    const fallbackTimer = window.setTimeout(() => {
-      if (!project?.project_id || basemapId === "legacy_xyz") {
-        return;
-      }
-      if (loadStats.finished > 0) {
-        return;
-      }
-      if (loadStats.errored <= 0) {
-        return;
-      }
-      if (loadStats.started > loadStats.errored) {
-        return;
-      }
-      void switchBasemap(project.project_id, "legacy_xyz")
-        .then(() => refreshProjectState(project.project_id))
-        .then(() => {
-          pushToast("info", "底图已自动回退", "当前在线底图未成功加载，已切换到兼容底图。");
-        })
-        .catch(() => {
-          pushToast("error", "底图加载失败", "在线底图与兼容底图均未成功切换。");
-        });
-    }, 3500);
+    function scheduleFallback() {
+      if (fallbackTimer !== undefined) return;
+      fallbackTimer = window.setTimeout(() => {
+        fallbackTimer = undefined;
+        if (!project?.project_id || basemapId === "legacy_xyz") {
+          return;
+        }
+        if (loadStats.finished > 0 || loadStats.errored <= 0 || loadStats.started > loadStats.errored) {
+          return;
+        }
+        void switchBasemap(project.project_id, "legacy_xyz")
+          .then(() => refreshProjectState(project.project_id))
+          .then(() => {
+            pushToast("info", "底图已自动回退", "当前在线底图未成功加载，已切换到兼容底图。");
+          })
+          .catch(() => {
+            pushToast("error", "底图加载失败", "在线底图与兼容底图均未成功切换。");
+          });
+      }, 3500);
+    }
 
     return () => {
       window.clearTimeout(fallbackTimer);
@@ -3173,7 +3174,7 @@ export default function App({
         unByKey(listenerKeys as never);
       }
     };
-  }, [layerState?.base_map, project?.project_id, pushToast, refreshProjectState]);
+  }, [basemapDescriptorKey, project?.project_id, pushToast, refreshProjectState]);
 
   useEffect(() => {
     if (!mapRef.current || !layerState) {
@@ -3587,7 +3588,7 @@ export default function App({
       <Map3DGlobe
         ref={globeRef}
         visible={viewMode === "globe"}
-        imageryUrl={globeImageryUrl}
+        imageryLayer={globeImageryLayer}
         showGraticule={showGraticule}
         themeIds={globeThemeIds}
         onThemeError={(themeId, message) => {
@@ -3712,19 +3713,28 @@ export default function App({
           <BasemapMenu
             items={basemapItems}
             activeId={activeBasemapId}
-            disabled={!project}
+            disabled={!project || basemapSwitchPending}
             weatherEnabled={weatherBasemapEnabled}
             onWeatherBlocked={(title, message) => {
               pushToast("info", `${title} · 未配置`, message);
             }}
             onSelect={async (basemapId) => {
-              if (!project) {
+              if (!project || basemapSwitchPending || basemapId === activeBasemapId) {
                 return;
               }
-              await switchBasemap(project.project_id, basemapId);
-              await refreshProjectState(project.project_id);
-              const title = basemapItems.find((item) => item.id === basemapId)?.title || "底图";
-              pushToast("success", "底图已切换", `当前底图：${title}`);
+              const scope = jobScopeEpochRef.current;
+              setBasemapSwitchPending(true);
+              try {
+                const response = await switchBasemap(project.project_id, basemapId);
+                if (scope !== jobScopeEpochRef.current) return;
+                setProject(previous => previous ? { ...previous, base_map: response.base_map } : previous);
+                setLayerState(previous => previous ? { ...previous, base_map: response.base_map } : previous);
+                pushToast("success", "底图已选择", `当前底图：${response.base_map.title}，瓦片将按视野加载。`);
+              } catch (error) {
+                pushToast("error", "底图切换失败", error instanceof Error ? error.message : "请稍后重试。");
+              } finally {
+                setBasemapSwitchPending(false);
+              }
             }}
           />
           <button
