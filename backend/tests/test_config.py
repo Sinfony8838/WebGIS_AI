@@ -38,6 +38,14 @@ class AppConfigTest(unittest.TestCase):
         self.assertIn("amap_imagery", ids)
         self.assertIn("amap_light", ids)
 
+    def test_imagery_default_preserves_saved_and_configured_choices(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            config = AppConfig()
+            self.assertEqual(config.default_basemap()["id"], "amap_imagery")
+            self.assertEqual(config.normalize_basemap({"id": "amap_vector"})["id"], "amap_vector")
+            self.assertEqual(AppConfig(default_basemap_id="amap_light").default_basemap()["id"], "amap_light")
+            self.assertEqual(AppConfig(default_basemap_id="unknown").default_basemap()["id"], "amap_imagery")
+
     def test_normalize_basemap_from_legacy_xyz_shape(self) -> None:
         config = AppConfig()
         normalized = config.normalize_basemap(
@@ -64,7 +72,7 @@ class AppConfigTest(unittest.TestCase):
             self.assertIn("weather_temperature", ids)
             weather_item = next(item for item in catalog["items"] if item["id"] == "weather_precipitation")
             self.assertIn("WEBGIS_AI_OPENWEATHERMAP_API_KEY", weather_item["description"])
-            self.assertEqual(catalog["default_id"], "amap_vector")
+            self.assertEqual(catalog["default_id"], "amap_imagery")
 
     def test_weather_upstream_url_requires_key_with_actionable_error(self) -> None:
         # 未配置密钥时必须显式失败（端点映射为 503），绝不静默降级。
@@ -79,7 +87,7 @@ class AppConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(os.environ, {}, clear=True):
             config = AppConfig(root_dir=Path(temp_dir))
             normalized = config.normalize_basemap({"id": "weather_precipitation"})
-            self.assertEqual(normalized["id"], "amap_vector")
+            self.assertEqual(normalized["id"], "amap_imagery")
 
         with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
             os.environ,

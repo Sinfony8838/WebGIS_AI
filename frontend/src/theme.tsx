@@ -10,7 +10,7 @@ export function readTheme(): Theme {
   } catch {
     // Blocked storage should not prevent theme switching.
   }
-  return "dark";
+  return "light";
 }
 
 export function applyTheme(theme: Theme) {
@@ -19,7 +19,7 @@ export function applyTheme(theme: Theme) {
 }
 
 const ThemeContext = createContext<{ theme: Theme; toggleTheme: () => void }>({
-  theme: "dark", toggleTheme: () => undefined
+  theme: "light", toggleTheme: () => undefined
 });
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
