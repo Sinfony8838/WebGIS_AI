@@ -132,6 +132,21 @@ class DatabasePanelBackendTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             runtime.load_output_as_layer(project_id, artifact_id)
 
+    def test_repeated_sync_and_load_preserve_artifact_and_layer_ids(self) -> None:
+        runtime, store, project_id = self.build_runtime()
+        executor = WorkflowExecutor(runtime.config, store)
+        record = self._make_workflow_with_artifact(runtime, project_id, "wf_stable")
+        executor._sync_artifacts_to_database(record)
+        before = runtime.list_outputs(project_id=project_id)["items"]
+        artifact_id = next(item["artifact_id"] for item in before if item["artifact_type"] == "workflow_output")
+        first = runtime.load_output_as_layer(project_id, artifact_id)["item"]
+        executor._sync_artifacts_to_database(record)
+        assert store.get_artifact(artifact_id) is not None
+        second = runtime.load_output_as_layer(project_id, artifact_id)
+        assert second["reused"] is True
+        assert first["layer_id"] == second["item"]["layer_id"]
+        assert sum(layer.source == "output_artifact" for layer in store.get_project(project_id).layers) == 1
+
     def test_delete_output_removes_record_only(self) -> None:
         runtime, store, project_id = self.build_runtime()
         runtime.store.register_artifact(project_id, "job_d", "assistant_note", "待删", "/tmp/note.md")

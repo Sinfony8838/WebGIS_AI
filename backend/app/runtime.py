@@ -288,6 +288,18 @@ def _fallback_summary(record: "WorkflowRecord", stats_payload: Dict[str, Any]) -
     lines: List[str] = []
     if record.intent:
         lines.append(f"### {record.intent}")
+    total = stats_payload.get("all_rows_count", (stats_payload.get("summary") or {}).get("count"))
+    if total is not None:
+        lines.append(f"本次统计共 {total} 个要素；下表仅展示前 {len(stats_payload.get('rows') or [])} 条，示例行数不代表总数。")
+    for step in record.workflow_json.get("steps", []):
+        params = step.get("params") or {}
+        if step.get("op") == "buffer":
+            lines.append(f"按地表距离 {params.get('distance')} 米生成缓冲区。该空间邻域不代表灾害范围或实际服务覆盖。")
+        elif step.get("op") == "classify":
+            lines.append(f"分级字段：{params.get('field')}；方法：{params.get('method')}；目标级数：{params.get('classes')}。空值和非数值不参与分级。")
+    classification = stats_payload.get("classification") or {}
+    if classification.get("breaks"):
+        lines.append("分级边界：" + "、".join(str(value) for value in classification["breaks"]) + "；各档左闭右开，最后一档包含最大值。")
     summary = (stats_payload or {}).get("summary") or {}
     if summary:
         snippet_keys = list(summary.keys())[:6]
@@ -1413,6 +1425,24 @@ class WebGISRuntime:
             raise ValueError(f"产物文件不是有效的 GeoJSON：{exc}") from exc
         if not isinstance(data, dict) or data.get("type") != "FeatureCollection":
             raise ValueError("产物文件不是有效的 GeoJSON FeatureCollection")
+        from .services.workflow_output_style import artifact_style, decorate_features
+        workflow_id = str((artifact.metadata or {}).get("workflow_id") or "")
+        workflow = self.store.get_workflow(workflow_id) if workflow_id else None
+        style = artifact_style(self.config, workflow) if workflow and workflow.project_id == project_id else {}
+        decorate_features(data, style)
+        # Older duplicate layers are retained; reuse the earliest matching layer.
+        reusable = next((item for item in self._require_project(project_id).layers
+                         if item.source == "output_artifact" and (item.metadata.get("artifact_id") == artifact_id
+                         or (workflow_id and item.metadata.get("workflow_id") == workflow_id
+                             and item.metadata.get("artifact_relative_path") == artifact.metadata.get("relative_path")))), None)
+        if reusable is not None:
+            reusable.data = data
+            reusable.style = {}
+            reusable.visible = True
+            reusable.metadata.update(workflow_style=style, artifact_id=artifact_id)
+            self.store.upsert_layer(project_id, reusable)
+            self.store.set_active_layer(project_id, reusable.layer_id)
+            return {"status": "success", "item": reusable.to_dict(), "reused": True}
         layer_name = str(artifact.title or "分析结果")
         existing = [layer for layer in self._require_project(project_id).layers if layer.name == layer_name]
         layer = LayerRecord.create(
@@ -1421,11 +1451,13 @@ class WebGISRuntime:
             source="output_artifact",
             geometry_type=self.dataset_service._infer_geometry_type(data.get("features", [])),
             data=data,
-            style={"fillColor": "#60a5fa", "strokeColor": "#1d4ed8"},
+            style={},
             metadata={
                 "artifact_id": artifact_id,
                 "workflow_id": str((artifact.metadata or {}).get("workflow_id") or ""),
                 "origin": "database_panel",
+                "artifact_relative_path": str(artifact.metadata.get("relative_path") or ""),
+                "workflow_style": style,
             },
         )
         self.store.upsert_layer(project_id, layer)
@@ -1813,6 +1845,11 @@ class WebGISRuntime:
     def list_workflow_templates(self) -> Dict[str, Any]:
         return {"status": "success", "items": list_templates()}
 
+    def preview_workflow(self, project_id: str, message: str = "", template_id: str = "", parameters=None, **_kwargs):
+        from .services.workflow_parameters import prepare_workflow
+        preview, _match = prepare_workflow(self.config, project_id, message, template_id, parameters)
+        return preview
+
     def submit_workflow(
         self,
         project_id: str,
@@ -1823,7 +1860,19 @@ class WebGISRuntime:
     ) -> Dict[str, Any]:
         """Build a workflow JSON from a template (or accept caller-built JSON)
         and hand it off to :class:`WorkflowExecutor`."""
-        params = dict(parameters or {})
+        from .services.workflow_parameters import prepare_workflow
+        preview, resolved_match = prepare_workflow(self.config, project_id, message, template_id, parameters)
+        # Keep legacy failed-workflow records for compiled/preflight errors.
+        # Missing/ambiguous parameters have no runnable workflow to persist.
+        if not preview["valid"] and resolved_match is None:
+            errors = preview["issues"]
+            return {"status": "error", "workflow_id": "", "workflow_status": "error",
+                    "intent": preview.get("intent", ""), "template_id": preview["template_id"],
+                    "parameters": preview["parameters"],
+                    "error": {"code": "VALIDATION_FAILED", "message": "参数校验未通过",
+                              "user_friendly": "；".join(e.get("user_friendly") or e.get("message", "") for e in errors),
+                              "details": {"errors": errors}}}
+        params = dict(preview["parameters"])
         # Server-side project context: the trusted owner project is injected
         # here and never taken from client parameters. A client-supplied
         # nested project_id that disagrees with the validated one is rejected.
@@ -1833,7 +1882,7 @@ class WebGISRuntime:
         params["project_id"] = project_id
         chosen_template = template_id or detect_template(message) or "population_choropleth"
         try:
-            match = expand_template(chosen_template, message, params)
+            match = resolved_match or expand_template(chosen_template, message, params)
         except KeyError as exc:
             raise KeyError(f"Unknown workflow template: {chosen_template}") from exc
 
@@ -1906,8 +1955,8 @@ class WebGISRuntime:
         """Optional summary generator. Reads stats.json if present and asks
         MiniMax for a brief Chinese explanation suitable for classroom use.
 
-        On any failure returns an empty string so the workflow result still
-        ships even without the LLM."""
+        Quantitative facts always come from execution outputs; failure falls
+        back to the same deterministic summary without an AI supplement."""
         stats_path: Optional[Path] = None
         for state_id, outputs in outputs_by_step.items():
             stats_value = outputs.get("stats") if isinstance(outputs, dict) else None
@@ -1920,6 +1969,9 @@ class WebGISRuntime:
                 stats_payload = json.loads(stats_path.read_text(encoding="utf-8"))
             except Exception:
                 stats_payload = {}
+        for outputs in outputs_by_step.values():
+            if isinstance(outputs, dict) and outputs.get("breaks"):
+                stats_payload["classification"] = {"breaks": outputs["breaks"]}
         if not stats_payload and not record.intent:
             return ""
 
@@ -1927,13 +1979,19 @@ class WebGISRuntime:
             return _fallback_summary(record, stats_payload)
 
         try:
-            user_payload = json.dumps(stats_payload, ensure_ascii=False)[:4000]
+            # Bound samples before serialisation: never slice JSON or lose the full-count summary.
+            facts = {"summary": stats_payload.get("summary", {}),
+                     "total_features": stats_payload.get("all_rows_count"),
+                     "sample_rows_count": len(stats_payload.get("rows") or []),
+                     "examples": (stats_payload.get("rows") or [])[:3]}
+            user_payload = json.dumps(facts, ensure_ascii=False)
             messages = [
                 {
                     "role": "system",
                     "content": (
-                        "你是一名高中地理教师，擅长用 100-180 字概括 GIS 分析结果。"
-                        "请输出 Markdown 格式的解释，不要使用代码块，不要输出 JSON。"
+                        "你是一名高中地理教师。事实摘要由系统生成，你只补充简短教学提示。"
+                        "不要复述数量、距离、等级、年份或数值；不要推断受灾范围、真实服务覆盖或因果。"
+                        "示例行只是部分数据，不能用于推断总数。不要输出标题、代码或 JSON。"
                     ),
                 },
                 {
@@ -1946,7 +2004,11 @@ class WebGISRuntime:
                 },
             ]
             content = self.minimax_client.chat_completion(messages, temperature=0.4)
-            return content.strip()
+            base = _fallback_summary(record, stats_payload)
+            text = content.strip()
+            if not text or re.search(r"[0-9一二三四五六七八九十百千万亿]|共.*个|总计|半径|公里|米缓冲", text):
+                return base
+            return base + "\n\n教学提示：" + text
         except Exception:
             return _fallback_summary(record, stats_payload)
 

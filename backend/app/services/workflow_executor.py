@@ -135,7 +135,7 @@ def _resolve_dataset_for_preflight(
 
 
 def _read_geojson_fields(path: Path) -> Optional[List[str]]:
-    """Return the property names of the first GeoJSON feature.
+    """Return the union of property names across GeoJSON features.
 
     Returns None when the file is not inspectable (too large, unreadable, or
     not parseable) — preflight then skips field checks for that dataset
@@ -151,11 +151,12 @@ def _read_geojson_fields(path: Path) -> Optional[List[str]]:
         return None
     if not isinstance(data, dict) or not isinstance(data.get("features"), list):
         return None
+    names = dict()
     for feature in data["features"]:
         properties = feature.get("properties") if isinstance(feature, dict) else None
         if isinstance(properties, dict) and properties:
-            return [str(key) for key in properties.keys()]
-    return None
+            names.update((str(key), None) for key in properties)
+    return list(names) if names else None
 
 
 def _read_geojson_crs(path: Path) -> Optional[str]:
@@ -747,6 +748,8 @@ class WorkflowExecutor:
                     # bubble up first failed step error
                     if first_err and first_err.get("error"):
                         record.error = first_err["error"]
+        if success:
+            self._sync_artifacts_to_database(record)
         record.touch()
         self.store.save_workflow(record)
         self._write_workflow_files(record)
@@ -799,21 +802,12 @@ class WorkflowExecutor:
 
         The 数据库 panel lists RuntimeStore artifacts only; without this
         bridge, analysis results (结果矢量/地图图片/统计) are invisible there.
-        Idempotent: re-running a workflow replaces its previous mirror
-        entries (matched by metadata.workflow_id) so the panel never shows
-        stale duplicates.
+        Idempotent upserts preserve artifact IDs and existing download/layer references.
         """
         try:
-            existing = [
-                item
-                for item in self.store.list_outputs(project_id=record.project_id)
-                if str((item.get("metadata") or {}).get("workflow_id") or "") == record.workflow_id
-            ]
-            for item in existing:
-                self.store.delete_artifact(item["artifact_id"])
             for artifact in record.artifacts:
                 kind = str(artifact.get("kind") or "")
-                if kind not in {"geojson", "png", "stats", "summary"}:
+                if kind not in {"geojson", "png", "stats", "summary", "style"}:
                     continue
                 relative = str(artifact.get("relative_path") or "")
                 absolute = self.config.workflow_dir(record.workflow_id) / relative

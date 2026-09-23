@@ -12,6 +12,10 @@ export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onSho
   const night = !globe && basemapId === "nasa_nightlights_2016";
   const populationGrid = !globe && basemapId === "nasa_population_2020";
   const visible = layers.filter(layer => layer.visible);
+  const workflowLegends = visible.filter(layer => layer.metadata?.workflow_style).map(layer => ({
+    id: layer.layer_id, name: layer.name,
+    style: layer.metadata.workflow_style as { title?: string; legend?: { title?: string; items?: Array<{ label: string; color: string }> } }
+  }));
   const hasDensity = globe ? themeIds.some(id => ["density_fill","density_3d","population_columns"].includes(id)) : visible.some(layer => ["builtin_population_regions","builtin_population_density"].includes(layer.layer_id));
   const shanghai = !globe && visible.find(layer => layer.metadata?.catalog_id === "shanghai_population_density");
   const shanghaiAge = !globe && visible.some(layer => layer.metadata?.catalog_id === "shanghai_age_60_plus_2020");
@@ -20,13 +24,16 @@ export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onSho
   const hasLine = globe ? themeIds.includes("hu_line") : Boolean(line);
   const otherThemes = globe ? GLOBE_THEMES.filter(theme => themeIds.includes(theme.id) && !["density_fill","density_3d","population_columns","hu_line"].includes(theme.id)) : [];
   const ranked = !globe && visible.some(layer => Boolean(layer.metadata?.visualization));
-  if (!shanghaiAge && !precipitation && !night && !populationGrid && !shanghai && !hasDensity && !hasLine && !otherThemes.length && !ranked) return null;
+  if (!shanghaiAge && !precipitation && !night && !populationGrid && !shanghai && !hasDensity && !hasLine && !otherThemes.length && !ranked && !workflowLegends.length) return null;
   const share = line?.metadata?.classic_share;
   return <section className={`map-evidence-legend${expanded ? "" : " is-collapsed"}`} aria-label="地图图例与依据">
     <button className="map-legend-toggle" aria-expanded={expanded} aria-controls={contentId} onClick={() => setExpanded(value => !value)}>
       图例与数据 <span aria-hidden="true">{expanded ? "−" : "+"}</span>
     </button>
     <div id={contentId} className="map-legend-content" hidden={!expanded}>
+    {workflowLegends.map(layer => <div key={layer.id}><strong>{layer.style.legend?.title || layer.style.title || layer.name}</strong>
+      {layer.style.legend?.items?.map((item, index) => <span className="map-other-key" key={index}><i style={{ background: item.color }} />{item.label}</span>)}
+    </div>)}
     {!globe && (hasLine || precipitation) && onTogglePrecipitation && <label>
       <input type="checkbox" checked={precipitation} disabled={busy || changingPrecipitation} onChange={async event => {
         const value = event.target.checked;

@@ -8021,3 +8021,12 @@ button {
   .copilot-widget-header { cursor: default; }
   .copilot-resize-handle { display: none; }
 }
+.workflow-parameters { border: 1px solid var(--border-color, #b9cbd7); border-radius: 10px; padding: 12px; display: grid; gap: 10px; margin: 10px 0; }
+.workflow-parameters__heading { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.workflow-parameters p, .workflow-parameters small { font-size: 12px; opacity: .8; margin: 0; }
+.workflow-parameter { display: grid; gap: 5px; min-width: 0; }
+.workflow-parameter > span:first-child { display: flex; justify-content: space-between; gap: 8px; }
+.workflow-parameter input, .workflow-parameter select { min-width: 0; max-width: 100%; padding: 7px; border: 1px solid #aabcca; border-radius: 6px; background: var(--panel-bg, #fff); color: inherit; }
+.workflow-distance { display: flex; gap: 6px; }
+.workflow-distance input { flex: 1; width: 80px; }
+.workflow-parameters [role="alert"] { color: #a33d18; font-size: 13px; padding-left: 20px; }

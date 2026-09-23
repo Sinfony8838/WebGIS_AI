@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import statistics
+import math
 from typing import Any, Dict, List
 
 from ..errors import WorkflowExecutionError
@@ -48,11 +49,15 @@ def execute(params: Dict[str, Any], workspace: Workspace) -> Dict[str, Any]:
             row: Dict[str, Any] = {}
             if label_field:
                 row[label_field] = _coerce_scalar(feature.attribute(label_field))
+            else:
+                row["__feature_id"] = feature.id()
             for fname in fields_param:
                 value = feature.attribute(fname)
                 if value is not None:
                     try:
-                        numeric_columns[fname].append(float(value))
+                        number = float(value)
+                        if math.isfinite(number):
+                            numeric_columns[fname].append(number)
                     except (TypeError, ValueError):
                         pass
                 row[fname] = _coerce_scalar(value)
@@ -78,9 +83,10 @@ def execute(params: Dict[str, Any], workspace: Workspace) -> Dict[str, Any]:
 
     out_payload = {
         "title": title,
-        "fields": ([label_field] if label_field else []) + list(fields_param),
+        "fields": list(dict.fromkeys(([label_field] if label_field else ["__feature_id"]) + list(fields_param))),
         "rows": top_rows,
         "all_rows_count": len(rows),
+        "sample_rows_count": len(top_rows),
         "summary": summary,
     }
 

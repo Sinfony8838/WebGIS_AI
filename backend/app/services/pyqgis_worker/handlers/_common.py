@@ -288,22 +288,27 @@ def write_geojson(layer, target_path: Path, target_crs: str = "EPSG:4326") -> Tu
     Newer SIP bindings (QGIS 3.34+) reject ``options.ct = None`` — that
     setter is typed ``const QgsCoordinateTransform &`` and refuses ``None``,
     surfacing as ``NoneType cannot be converted to QgsCoordinateTransform``.
-    Instead of constructing a transform here, we leave ``options.ct``
-    unset (an empty invalid transform) and provide ``destCRS`` +
-    ``transformContext`` so QGIS builds the right transform internally.
+    Set an explicit coordinate transform when the source differs from the
+    target. Assigning ``destCRS`` alone does not transform QGIS 3.40 output.
     """
-    from qgis.core import QgsCoordinateReferenceSystem, QgsVectorFileWriter, QgsProject  # type: ignore
+    from qgis.core import QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsVectorFileWriter, QgsProject  # type: ignore
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
     options = QgsVectorFileWriter.SaveVectorOptions()
     options.driverName = "GeoJSON"
     options.fileEncoding = "UTF-8"
     crs_obj = QgsCoordinateReferenceSystem(target_crs)
-    options.destCRS = crs_obj
     transform_context = QgsProject.instance().transformContext() if QgsProject.instance() else None
     if transform_context is None:
         from qgis.core import QgsCoordinateTransformContext  # type: ignore
         transform_context = QgsCoordinateTransformContext()
+    # SaveVectorOptions has no effective destCRS attribute in QGIS 3.40.
+    # An explicit transform is required or projected metres leak into GeoJSON.
+    output_extent = layer.extent()
+    if layer.crs() != crs_obj:
+        coordinate_transform = QgsCoordinateTransform(layer.crs(), crs_obj, transform_context)
+        options.ct = coordinate_transform
+        output_extent = coordinate_transform.transformBoundingBox(output_extent)
     # Prefer the V3 API on modern QGIS (returns a tuple where the second
     # element is the user-friendly error message); fall back to V2 on older
     # builds. Both accept the same (layer, dest, context, options) signature.
@@ -329,5 +334,5 @@ def write_geojson(layer, target_path: Path, target_crs: str = "EPSG:4326") -> Tu
         )
     return target_path, {
         "feature_count": layer.featureCount(),
-        "extent": layer_extent_to_list(layer),
+        "extent": [output_extent.xMinimum(), output_extent.yMinimum(), output_extent.xMaximum(), output_extent.yMaximum()],
     }

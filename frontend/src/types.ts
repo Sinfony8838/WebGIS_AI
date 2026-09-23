@@ -1430,6 +1430,16 @@ export type WorkflowSubmitResponse = {
   error?: WorkflowError | null;
 };
 
+export type WorkflowPreview = {
+  valid: boolean;
+  template_id: string;
+  intent?: string;
+  parameters: Record<string, unknown>;
+  parameter_sources: Record<string, "manual" | "message" | "default">;
+  fields: Array<{ name: string; numeric: boolean; numeric_count: number; non_null_count: number }>;
+  issues: Array<{ field?: string; message?: string; user_friendly?: string }>;
+};
+
 export type WorkflowTemplateInfo = {
   id: string;
   title: string;

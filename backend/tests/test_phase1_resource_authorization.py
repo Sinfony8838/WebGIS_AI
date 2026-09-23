@@ -334,6 +334,21 @@ class ResourceAuthorizationMatrixTest(unittest.TestCase):
 
     # --------------------------------------- workflow project context (T2.3)
 
+    def test_workflow_preview_is_read_only_and_project_scoped(self) -> None:
+        uploads = Path(app_main.config.uploads_dir) / self.project_a
+        uploads.mkdir(parents=True, exist_ok=True)
+        (uploads / "preview.geojson").write_text(GEOJSON, encoding="utf-8")
+        payload = {"project_id": self.project_a, "template_id": "facility_buffer", "message": "20 公里缓冲",
+                   "parameters": {"dataset": f"upload:{self.project_a}/preview.geojson"}}
+        before = app_main.runtime.store.list_workflows(project_id=self.project_a)
+        response = self.teacher_a_client.post("/workflow/preview", json=payload, headers={"X-WebGIS-CSRF": self.a_csrf})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["valid"], response.text)
+        self.assertEqual(response.json()["parameters"]["distance_m"], 20000)
+        self.assertEqual(before, app_main.runtime.store.list_workflows(project_id=self.project_a))
+        denied = self.teacher_b_client.post("/workflow/preview", json=payload, headers={"X-WebGIS-CSRF": self.b_csrf})
+        self.assertIn(denied.status_code, (403, 404))
+
     def test_workflow_submit_rejects_mismatched_nested_project_id(self) -> None:
         response = self.teacher_a_client.post(
             "/workflow/submit",

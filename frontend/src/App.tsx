@@ -1044,13 +1044,22 @@ export default function App({
     }
   }, [buildKbRegisterMetadata, kbEditingItem, kbQuery, layerState?.active_layer_id, project, pushToast, refreshProjectState]);
 
-    const focusLayerExtent = useCallback((layerId: string) => {
+    const focusLayerExtent = useCallback((layerId: string, suppliedRecord?: LayerRecord) => {
       const map = mapRef.current;
-      const record = layerState?.items.find((item) => item.layer_id === layerId);
-      if (!map || !record || record.kind !== "vector") {
+      const record = suppliedRecord || layerState?.items.find((item) => item.layer_id === layerId);
+      if (!record || record.kind !== "vector") {
         return false;
       }
       const format = new GeoJSON();
+      if (viewMode === "globe") {
+        const geo = format.readFeatures(record.data, { dataProjection: "EPSG:4326", featureProjection: "EPSG:4326" });
+        if (!geo.length) return false;
+        const bounds = new VectorSource({ features: geo }).getExtent();
+        const center = getCenter(bounds);
+        globeRef.current?.flyTo(center[0], center[1], Math.max(50000, Math.max(bounds[2] - bounds[0], bounds[3] - bounds[1]) * 222000), 1);
+        return true;
+      }
+      if (!map) return false;
       const features = format.readFeatures(record.data, {
         dataProjection: "EPSG:4326",
         featureProjection: "EPSG:3857"
@@ -1067,7 +1076,10 @@ export default function App({
         highlighted.set("__selectedLabel", regionLabel(firstFeature.getProperties()), true);
         highlightSourceRef.current?.addFeature(highlighted);
       }
-      map.getView().fit(extent, { duration: 620, padding: [90, 360, 90, 360], maxZoom: 8 });
+      const size = map.getSize() || [1000, 700];
+      const paddingX = Math.min(180, size[0] * 0.15);
+      const paddingY = Math.min(90, size[1] * 0.15);
+      map.getView().fit(extent, { duration: 620, padding: [paddingY, paddingX, paddingY, paddingX], maxZoom: 10 });
       const properties = { ...firstFeature.getProperties() } as Record<string, unknown>;
       delete properties.geometry;
       setFocusedRegion({
@@ -1077,7 +1089,7 @@ export default function App({
         pixel: map.getPixelFromCoordinate(getCenter(extent)) as [number, number]
       });
       return true;
-    }, [layerState?.items]);
+    }, [layerState?.items, viewMode]);
 
     const handleFocusKnowledgeLayer = useCallback(
       async (layerId: string) => {
@@ -2282,14 +2294,33 @@ export default function App({
         const response = await loadOutputAsLayer(artifact.artifact_id, project.project_id);
         await refreshProjectState(project.project_id);
         setDatabaseViewerOpen(false);
-        const layer = response.item as { name?: string } | undefined;
+        const layer = response.item as LayerRecord | undefined;
+        if (layer) focusLayerExtent(layer.layer_id, layer);
         pushToast("success", "产物已上图", layer?.name || artifact.title || artifact.artifact_id);
       } catch (error) {
         pushToast("error", "产物上图失败", error instanceof Error ? error.message : "请求失败");
       }
     },
-    [project, pushToast, refreshProjectState]
+    [project, pushToast, refreshProjectState, focusLayerExtent]
   );
+
+  const handleWorkflowArtifactsChanged = useCallback(async (artifacts: import("./types").WorkflowArtifactRecord[]) => {
+    if (!project) return;
+    try {
+      const result = artifacts.find(item => item.kind === "geojson");
+      const outputsPayload = await fetchOutputs(project.project_id);
+      setOutputs(outputsPayload.items);
+      const stored = result && outputsPayload.items.find(item => item.metadata.workflow_id === result.workflow_id && item.metadata.kind === "geojson");
+      if (stored) {
+        const loaded = await loadOutputAsLayer(stored.artifact_id, project.project_id);
+        await refreshProjectState(project.project_id);
+        const layer = loaded.item as LayerRecord;
+        focusLayerExtent(layer.layer_id, layer);
+      }
+    } catch (error) {
+      pushToast("error", "分析已完成，结果加载失败", error instanceof Error ? error.message : "请从数据库重新上图");
+    }
+  }, [project, refreshProjectState, focusLayerExtent, pushToast]);
 
   const handleDatabaseAttachImage = useCallback(
     (artifact: ArtifactRecord) => {
@@ -3589,13 +3620,14 @@ export default function App({
         ref={globeRef}
         visible={viewMode === "globe"}
         imageryLayer={globeImageryLayer}
+        projectLayers={layerState?.items}
         showGraticule={showGraticule}
         themeIds={globeThemeIds}
         onThemeError={(themeId, message) => {
           pushToast("error", "三维专题图层加载失败", `${themeId}: ${message}`);
         }}
         onCameraChange={setGlobeCamera}
-        onAltitudeThreshold={urbanActive ? undefined : handleGlobeAltitudeThreshold}
+        onAltitudeThreshold={urbanActive || layerState?.items.some(item => item.visible && item.source === "output_artifact") ? undefined : handleGlobeAltitudeThreshold}
         urbanSource={urbanActive ? urbanSource : null}
         onUrbanStatus={setUrbanStatus}
         onDoubleClickGlobe={handleGlobeDoubleClick}
@@ -4200,6 +4232,7 @@ export default function App({
           open={workflowDockOpen}
           layerState={layerState}
           initialDatasetSource={workflowInitialDataset}
+          onArtifactsChanged={handleWorkflowArtifactsChanged}
           onRequestClose={() => setWorkflowDockOpen(false)}
           onToast={(tone, message) => pushToast(tone, message)}
         />

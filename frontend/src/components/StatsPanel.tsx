@@ -34,6 +34,7 @@ export function StatsPanel({ stats }: StatsPanelProps): JSX.Element | null {
   return (
     <section className="stats-panel" data-testid="stats-panel">
       <h4 className="stats-panel__title">{stats.title || "统计结果"}</h4>
+      <p>共 {stats.all_rows_count ?? summary.count ?? rows.length} 条，展示前 {rows.length} 条</p>
       {Object.keys(summary).length > 0 ? (
         <ul className="stats-panel__summary">
           {Object.entries(summary).map(([key, value]) => (

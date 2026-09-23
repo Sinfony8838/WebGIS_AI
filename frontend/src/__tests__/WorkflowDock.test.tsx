@@ -13,6 +13,8 @@ vi.mock("../api", () => ({
     ]
   }),
   submitWorkflow: vi.fn()
+  , previewWorkflow: vi.fn(async (payload) => ({ valid: true, template_id: payload.template_id || "population_choropleth",
+    parameters: payload.parameters || {}, parameter_sources: {}, fields: [], issues: [] }))
 }));
 
 vi.mock("../hooks/useWorkflowStream", () => ({
@@ -100,6 +102,22 @@ describe("WorkflowDock", () => {
     expect(screen.getByTestId("workflow-panel")).not.toHaveTextContent("失败");
   });
 
+  it("refreshes saved artifacts once after completion, including a late summary", async () => {
+    const onArtifactsChanged = vi.fn();
+    const completed = {workflowId: "wf_done", status: "success", intent: "", steps: [],
+      artifacts: [{artifact_id: "a1", kind: "geojson", title: "结果", relative_path: "output.geojson"}], error: null, lastEvent: null};
+    vi.mocked(useWorkflowStream).mockReturnValue(completed as never);
+    const props = {projectId: "project_demo", mapRef: createRef<Map>(), onArtifactsChanged};
+    const view = render(<WorkflowDock {...props} />);
+    await waitFor(() => expect(onArtifactsChanged).toHaveBeenCalledTimes(1));
+    view.rerender(<WorkflowDock {...props} />);
+    expect(onArtifactsChanged).toHaveBeenCalledTimes(1);
+    vi.mocked(useWorkflowStream).mockReturnValue({...completed, artifacts: [...completed.artifacts,
+      {artifact_id:"a2", kind:"markdown", title:"说明", relative_path:"summary.md"}]} as never);
+    view.rerender(<WorkflowDock {...props} />);
+    await waitFor(() => expect(onArtifactsChanged).toHaveBeenCalledTimes(2));
+  });
+
   it("surfaces a preflight rejection as a toast while keeping the form filled", async () => {
     const { submitWorkflow } = await import("../api");
     vi.mocked(submitWorkflow).mockResolvedValue({
@@ -127,6 +145,7 @@ describe("WorkflowDock", () => {
     );
 
     fireEvent.change(screen.getByDisplayValue(""), { target: { value: "制作人口密度图" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "提交工作流" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "提交工作流" }));
 
     await waitFor(() => {
