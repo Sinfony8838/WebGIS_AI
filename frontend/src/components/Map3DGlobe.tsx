@@ -27,6 +27,7 @@ import {
 import { GlobeThemeManager, getEntityTooltip } from "../lib/globeThemes";
 import { GlobeBasemap } from "../lib/globeBasemap";
 import { basemapSourceKey } from "../lib/basemap";
+import { normalizeGlobeGeoJson } from "../lib/globeGeojson";
 import type { BasemapLayerDescriptor, LayerRecord } from "../types";
 
 export type CameraState = {
@@ -451,7 +452,7 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
     const sources: Cesium.GeoJsonDataSource[] = [];
     for (const layer of projectLayers || []) {
       if (!layer.visible || layer.kind !== "vector" || !["output_artifact", "upload"].includes(layer.source)) continue;
-      void Cesium.GeoJsonDataSource.load(layer.data, { clampToGround: true }).then(async source => {
+      void Cesium.GeoJsonDataSource.load(normalizeGlobeGeoJson(layer.data), { clampToGround: true }).then(async source => {
         if (cancelled || viewer.isDestroyed()) return;
         const time = Cesium.JulianDate.now();
         for (const entity of source.entities.values) {
