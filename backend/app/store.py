@@ -797,6 +797,17 @@ class RuntimeStore:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> ArtifactRecord:
         with self._lock:
+            if artifact_type == "workflow_output" and metadata and all(metadata.get(k) for k in ("workflow_id", "kind", "relative_path")):
+                key = (metadata.get("workflow_id"), metadata.get("kind"), metadata.get("relative_path"))
+                for existing in self.artifacts.values():
+                    old = existing.metadata or {}
+                    if (existing.project_id == project_id and existing.artifact_type == artifact_type
+                            and key == (old.get("workflow_id"), old.get("kind"), old.get("relative_path"))):
+                        existing.title = title
+                        existing.path = path
+                        existing.metadata = dict(metadata)
+                        self._save()
+                        return existing
             artifact = ArtifactRecord.create(
                 project_id=project_id,
                 job_id=job_id,

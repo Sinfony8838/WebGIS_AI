@@ -213,7 +213,7 @@ def _template_facility_buffer(message: str, params: Dict[str, Any]) -> TemplateM
                     "distance": distance_m,
                     "segments": 16,
                     "auto_project": True,
-                    "dissolve": True,
+                    "dissolve": params.get("dissolve", True),
                 },
                 "depends_on": ["s2"],
                 "output_bindings": {"layer": "service_area"},
@@ -228,7 +228,7 @@ def _template_facility_buffer(message: str, params: Dict[str, Any]) -> TemplateM
             {
                 "id": "s5",
                 "op": "aggregate_stats",
-                "params": {"input": "${s2.layer}", "label_field": "name", "top": 20, "title": "设施清单"},
+                "params": {"input": "${s2.layer}", "label_field": params.get("label_field", ""), "top": 20, "title": "输入要素清单"},
                 "depends_on": ["s2"],
                 "output_bindings": {"stats": "stats"},
             },

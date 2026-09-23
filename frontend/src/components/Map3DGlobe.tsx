@@ -27,7 +27,7 @@ import {
 import { GlobeThemeManager, getEntityTooltip } from "../lib/globeThemes";
 import { GlobeBasemap } from "../lib/globeBasemap";
 import { basemapSourceKey } from "../lib/basemap";
-import type { BasemapLayerDescriptor } from "../types";
+import type { BasemapLayerDescriptor, LayerRecord } from "../types";
 
 export type CameraState = {
   lon: number;
@@ -56,6 +56,7 @@ export type Map3DGlobeHandle = {
 };
 
 type Props = {
+  projectLayers?: LayerRecord[];
   urbanSource?: UrbanSource|null;
   onUrbanStatus?: (status:UrbanStatus) => void;
   /** Visible state — hides the canvas without destroying the scene. */
@@ -94,6 +95,7 @@ const DEFAULT_INITIAL_VIEW = {
 export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlobe(
   {
     visible,
+    projectLayers,
     urbanSource,
     onUrbanStatus,
     imageryLayer,
@@ -440,6 +442,40 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
       if(buildings && !viewer.isDestroyed()) viewer.dataSources.remove(buildings,true);
     };
   },[urbanSource]);
+
+  // Imported data and persisted analysis outputs use the same feature colors as 2D.
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer) return;
+    let cancelled = false;
+    const sources: Cesium.GeoJsonDataSource[] = [];
+    for (const layer of projectLayers || []) {
+      if (!layer.visible || layer.kind !== "vector" || !["output_artifact", "upload"].includes(layer.source)) continue;
+      void Cesium.GeoJsonDataSource.load(layer.data, { clampToGround: true }).then(async source => {
+        if (cancelled || viewer.isDestroyed()) return;
+        const time = Cesium.JulianDate.now();
+        for (const entity of source.entities.values) {
+          const props = entity.properties?.getValue(time) || {};
+          const fill = Cesium.Color.fromCssColorString(String(props.__fillColor || layer.style.fillColor || "#60a5fa"));
+          const stroke = Cesium.Color.fromCssColorString(String(props.__strokeColor || "#1d4ed8"));
+          if (entity.billboard || entity.point) {
+            entity.billboard = undefined;
+            entity.point = new Cesium.PointGraphics({ color: fill, pixelSize: Number(props.__radius || 6) * 2,
+              outlineColor: stroke, outlineWidth: 1, heightReference: Cesium.HeightReference.CLAMP_TO_GROUND });
+          }
+          if (entity.polygon) entity.polygon.material = new Cesium.ColorMaterialProperty(fill.withAlpha(Number(props.__fillOpacity || .3)));
+          if (entity.polyline) entity.polyline.material = new Cesium.ColorMaterialProperty(stroke);
+        }
+        await viewer.dataSources.add(source);
+        if (cancelled || viewer.isDestroyed()) { if (!viewer.isDestroyed()) viewer.dataSources.remove(source, true); return; }
+        sources.push(source);
+        viewer.scene.requestRender();
+      }).catch(error => {
+        if (!cancelled) callbacksRef.current.onThemeError?.(layer.name, String(error));
+      });
+    }
+    return () => { cancelled = true; if (!viewer.isDestroyed()) sources.forEach(source => viewer.dataSources.remove(source, true)); };
+  }, [projectLayers]);
 
   // Live-swap the base imagery layer when the URL prop changes.
   useEffect(() => {

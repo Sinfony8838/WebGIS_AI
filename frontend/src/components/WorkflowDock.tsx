@@ -24,6 +24,7 @@ import {
   buildWorkflowFileUrl,
   fetchDatasetCatalog,
   listWorkflowTemplates,
+  previewWorkflow,
   submitWorkflow
 } from "../api";
 import { useWorkflowStream } from "../hooks/useWorkflowStream";
@@ -40,12 +41,14 @@ import type {
   LayersResponse,
   StatsPayload,
   WorkflowArtifactRecord,
-  WorkflowTemplateInfo
+  WorkflowTemplateInfo,
+  WorkflowPreview
 } from "../types";
 import { LegendPanel } from "./LegendPanel";
 import { ResultExplanation } from "./ResultExplanation";
 import { StatsPanel } from "./StatsPanel";
 import { WorkflowPanel } from "./WorkflowPanel";
+import { WorkflowParameters } from "./WorkflowParameters";
 
 const DEFAULT_FILL = "#cccccc";
 const DEFAULT_STROKE = "#444444";
@@ -94,6 +97,7 @@ export type WorkflowDockProps = {
   onRequestClose?: () => void;
   /** Optional toast shim so the dock can surface errors via the host UI. */
   onToast?: (level: "info" | "error" | "success", message: string) => void;
+  onArtifactsChanged?: (artifacts: WorkflowArtifactRecord[]) => void;
 };
 
 function pickArtifact(
@@ -255,7 +259,8 @@ export function WorkflowDock({
   layerState,
   initialDatasetSource = "",
   onRequestClose,
-  onToast
+  onToast,
+  onArtifactsChanged
 }: WorkflowDockProps): JSX.Element | null {
   const [message, setMessage] = useState("");
   const [templates, setTemplates] = useState<WorkflowTemplateInfo[]>([]);
@@ -265,6 +270,10 @@ export function WorkflowDock({
   const [secondaryDataset, setSecondaryDataset] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [activeWorkflowId, setActiveWorkflowId] = useState<string>("");
+  const [overrides, setOverrides] = useState<Record<string, unknown>>({});
+  const [preview, setPreview] = useState<WorkflowPreview | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewError, setPreviewError] = useState("");
 
   useEffect(() => {
     if (assistantJob?.status !== "completed" || assistantJob.project_id !== projectId) return;
@@ -308,7 +317,36 @@ export function WorkflowDock({
 
   const secondaryConfig = templateId ? SECONDARY_PARAM_BY_TEMPLATE[templateId] : undefined;
 
+  const requestParameters = useMemo(() => ({
+    ...(primaryDataset ? { dataset: primaryDataset, input_dataset: primaryDataset, facility_dataset: primaryDataset, province_dataset: primaryDataset } : {}),
+    ...(secondaryConfig && secondaryDataset ? { [secondaryConfig.paramName]: secondaryDataset } : {}),
+    ...overrides
+  }), [primaryDataset, secondaryConfig, secondaryDataset, overrides]);
+
+  useEffect(() => {
+    if (!open || !projectId) return;
+    let cancelled = false;
+    setPreviewBusy(true);
+    setPreviewError("");
+    const timer = window.setTimeout(() => {
+      previewWorkflow({ project_id: projectId, message, template_id: templateId, parameters: requestParameters })
+        .then(value => { if (!cancelled) setPreview(value); })
+        .catch(error => { if (!cancelled) { setPreview(null); setPreviewError(error instanceof Error ? error.message : "参数预览失败"); } })
+        .finally(() => { if (!cancelled) setPreviewBusy(false); });
+    }, 300);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [open, projectId, message, templateId, requestParameters]);
+
   const stream = useWorkflowStream(activeWorkflowId);
+  const notifiedArtifacts = useRef("");
+  useEffect(() => {
+    if (stream.status !== "success") return;
+    const key = stream.workflowId + ":" + stream.artifacts.map(a => a.artifact_id).join(",");
+    if (notifiedArtifacts.current !== key) {
+      notifiedArtifacts.current = key;
+      onArtifactsChanged?.(stream.artifacts);
+    }
+  }, [stream.status, stream.workflowId, stream.artifacts, onArtifactsChanged]);
 
   const [styleObj, setStyleObj] = useState<WorkflowLayerStyle | null>(null);
   const [statsObj, setStatsObj] = useState<StatsPayload | null>(null);
@@ -450,6 +488,8 @@ export function WorkflowDock({
 
   // Load the GeoJSON onto the map whenever a geojson artifact arrives.
   useEffect(() => {
+    // The application persists results as project layers for both 2D and 3D.
+    if (onArtifactsChanged) return;
     const map = mapRef.current;
     if (!map) {
       return;
@@ -522,7 +562,7 @@ export function WorkflowDock({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stream.artifacts, mapRef]);
+  }, [stream.artifacts, mapRef, onArtifactsChanged]);
 
   // Re-apply style when style.json updates. While a replay owns the layer
   // style we leave it alone; the replay restores this style when it ends.
@@ -566,7 +606,7 @@ export function WorkflowDock({
     // template builder only reads the alias it knows about, so the extras
     // are harmless and we don't need to know which template the backend
     // ends up routing "自动识别" to.
-    const parameters: Record<string, unknown> = {};
+    const parameters: Record<string, unknown> = { ...overrides };
     if (primaryDataset) {
       parameters.dataset = primaryDataset;
       parameters.input_dataset = primaryDataset;
@@ -578,12 +618,18 @@ export function WorkflowDock({
     }
     setSubmitting(true);
     try {
+      const checked = await previewWorkflow({ project_id: projectId, message: text, template_id: templateId, parameters });
+      setPreview(checked);
+      if (!checked.valid) {
+        onToast?.("error", "请修正执行参数后重新提交");
+        return;
+      }
       const response = await submitWorkflow({
         project_id: projectId,
         message: text,
         mode: "template",
         template_id: templateId || "",
-        parameters
+        parameters: checked.parameters
       });
       if (response.workflow_id) {
         setActiveWorkflowId(response.workflow_id);
@@ -598,7 +644,7 @@ export function WorkflowDock({
     } finally {
       setSubmitting(false);
     }
-  }, [message, onToast, primaryDataset, projectId, secondaryConfig, secondaryDataset, templateId]);
+  }, [message, onToast, primaryDataset, projectId, secondaryConfig, secondaryDataset, templateId, overrides]);
 
   const handleSkipReplay = useCallback(() => {
     replayRef.current?.skip();
@@ -656,6 +702,7 @@ export function WorkflowDock({
             onChange={(value) => {
               setTemplateId(value);
               setSecondaryDataset("");
+              setOverrides({});
             }}
             disabled={submitting}
             placeholder="自动识别"
@@ -668,7 +715,7 @@ export function WorkflowDock({
           <DockSelect
             testId="workflow-primary-dataset-select"
             value={primaryDataset}
-            onChange={setPrimaryDataset}
+            onChange={(value) => { setPrimaryDataset(value); setOverrides({}); }}
             disabled={submitting}
             placeholder="默认（按模板）"
             options={datasetOptions.map((option) => ({ value: option.source, label: option.label }))}
@@ -697,12 +744,18 @@ export function WorkflowDock({
           rows={3}
           disabled={submitting}
         />
+        <WorkflowParameters preview={preview} busy={previewBusy}
+          onChange={(key, value) => {
+            setOverrides(current => ({ ...current, [key]: value }));
+            setPreview(current => current ? { ...current, parameters: { ...current.parameters, [key]: value }, parameter_sources: { ...current.parameter_sources, [key]: "manual" } } : null);
+          }} onReset={() => setOverrides({})} />
+        {previewError && <p role="alert">{previewError}</p>}
         <div className="workflow-dock__actions">
           <button
             type="button"
             className="workflow-dock__submit"
             onClick={handleSubmit}
-            disabled={submitting || !message.trim()}
+            disabled={submitting || !message.trim() || previewBusy || !preview?.valid}
           >
             {submitting ? "提交中…" : "提交工作流"}
           </button>

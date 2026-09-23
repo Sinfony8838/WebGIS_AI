@@ -15,6 +15,7 @@ Uses the same break-point algorithms as ``choropleth`` via
 from __future__ import annotations
 
 import re
+import math
 from typing import Any, Dict, List
 
 from ..errors import WorkflowExecutionError
@@ -47,9 +48,9 @@ def _build_class_expression(source_field: str, breaks: List[float]) -> str:
     """
     if len(breaks) < 2:
         return "0"
-    field_ref = f'"{source_field}"'
+    field_ref = '"' + source_field.replace('"', '""') + '"'
     last_class = len(breaks) - 2
-    lines = ["CASE"]
+    lines = ["CASE", f"  WHEN {field_ref} IS NULL OR to_real({field_ref}) IS NULL THEN NULL"]
     for i in range(last_class):
         upper = _format_for_expression(breaks[i + 1])
         lines.append(f"  WHEN {field_ref} < {upper} THEN {i}")
@@ -91,7 +92,9 @@ def execute(params: Dict[str, Any], workspace: Workspace) -> Dict[str, Any]:
         if raw is None:
             continue
         try:
-            values.append(float(raw))
+            value = float(raw)
+            if math.isfinite(value):
+                values.append(value)
         except (TypeError, ValueError):
             continue
     if not values:
@@ -102,32 +105,7 @@ def execute(params: Dict[str, Any], workspace: Workspace) -> Dict[str, Any]:
         )
 
     breaks = _classification.compute_breaks(values, classes, method)
-    expression = _build_class_expression(field, breaks)
-
-    import processing  # type: ignore
-
-    try:
-        result = processing.run(
-            "native:fieldcalculator",
-            {
-                "INPUT": layer,
-                "FIELD_NAME": output_field,
-                "FIELD_TYPE": 1,  # Integer
-                "FIELD_LENGTH": 4,
-                "FIELD_PRECISION": 0,
-                "FORMULA": expression,
-                "OUTPUT": "memory:classified",
-            },
-        )
-    except Exception as exc:
-        raise WorkflowExecutionError(
-            code="PROCESSING_FAILED",
-            message=f"classify field calculation failed: {exc}",
-            user_friendly=f"分级计算失败：{field}",
-            details={"field": field, "method": method, "classes": classes, "reason": repr(exc)},
-        ) from exc
-
-    out = result["OUTPUT"]
+    out, missing_count = _make_classified_layer(layer, field, output_field, breaks)
     alias = _common.make_layer_alias(workspace, "classify", out)
 
     classes_applied = [
@@ -135,7 +113,7 @@ def execute(params: Dict[str, Any], workspace: Workspace) -> Dict[str, Any]:
             "class_id": i,
             "min": float(breaks[i]),
             "max": float(breaks[i + 1]),
-            "label": _classification.format_label(breaks[i], breaks[i + 1]),
+            "label": f"[{breaks[i]:g}, {breaks[i + 1]:g}{']' if i == len(breaks) - 2 else ')'}",
         }
         for i in range(len(breaks) - 1)
     ]
@@ -167,8 +145,9 @@ def execute(params: Dict[str, Any], workspace: Workspace) -> Dict[str, Any]:
         "title": f"字段分级 · {field}",
         "legend": {
             "title": f"字段分级 · {field}",
-            "items": [{"label": entry["label"], "color": palette[index]}
-                      for index, entry in enumerate(classes_applied)],
+            "items": ([{"label": entry["label"], "color": palette[index]}
+                      for index, entry in enumerate(classes_applied)]
+                      + ([{"label": "未分级（空值或非数值）", "color": "#cccccc"}] if missing_count else [])),
         },
     }
     style_path = workspace.alloc_output_path("classify_style", ".json")
@@ -187,3 +166,34 @@ def execute(params: Dict[str, Any], workspace: Workspace) -> Dict[str, Any]:
         "style": str(style_path),
         "style_relative": workspace.relative(style_path),
     }
+
+
+def _make_classified_layer(layer, field, output_field, breaks):
+    from qgis.core import QgsFeature, QgsField, QgsVectorLayer, QgsWkbTypes
+    from qgis.PyQt.QtCore import QVariant
+
+    if output_field in _common.layer_field_names(layer):
+        raise WorkflowExecutionError(code="VALIDATION_FAILED", message="output field already exists",
+                                     user_friendly=f"输出字段 {output_field} 已存在，请使用新的字段名。")
+    out = QgsVectorLayer(QgsWkbTypes.displayString(layer.wkbType()), "classified", "memory")
+    out.setCrs(layer.crs())
+    provider = out.dataProvider()
+    provider.addAttributes(list(layer.fields()) + [QgsField(output_field, QVariant.Int)])
+    out.updateFields()
+    missing_count = 0
+    for feature in layer.getFeatures():
+        class_id = None
+        try:
+            value = float(feature.attribute(field))
+            if math.isfinite(value):
+                class_id = _classification.classify_value(value, breaks)
+        except (TypeError, ValueError):
+            pass
+        if class_id is None:
+            missing_count += 1
+        copied = QgsFeature(out.fields())
+        copied.setGeometry(feature.geometry())
+        copied.setAttributes(feature.attributes() + [class_id])
+        provider.addFeatures([copied])
+    out.updateExtents()
+    return out, missing_count

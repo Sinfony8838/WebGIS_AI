@@ -127,12 +127,13 @@ class ClassifyStyleTests(unittest.TestCase):
             with mock.patch.dict("sys.modules", {"processing": processing}), \
                  mock.patch.object(classify._common, "require_layer", return_value=layer), \
                  mock.patch.object(classify._common, "ensure_field_exists"), \
+                 mock.patch.object(classify, "_make_classified_layer", return_value=(layer, 0)), \
                  mock.patch.object(classify._common, "make_layer_alias", return_value="classified"):
                 classify.execute({}, workspace)
             style = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(style["field"], "population_class")
             self.assertEqual([(c["min"], c["max"]) for c in style["classes"]], [(0, 0), (1, 1)])
-            self.assertEqual(style["legend"]["items"][0]["label"], "1e+03 - 3e+03")
+            self.assertEqual(style["legend"]["items"][0]["label"], "[1000, 3000)")
 
 
 if __name__ == "__main__":

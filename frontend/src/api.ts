@@ -1373,6 +1373,14 @@ export async function submitWorkflow(payload: {
   });
 }
 
+export async function previewWorkflow(payload: {
+  project_id: string; message: string; template_id?: string; parameters?: Record<string, unknown>;
+}): Promise<import("./types").WorkflowPreview> {
+  return requestJson<import("./types").WorkflowPreview>("/workflow/preview", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+  });
+}
+
 export async function fetchWorkflow(workflowId: string): Promise<WorkflowRecord & { status: string }> {
   return requestJson<WorkflowRecord & { status: string }>(`/workflow/${encodeURIComponent(workflowId)}`);
 }

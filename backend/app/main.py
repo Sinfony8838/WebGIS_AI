@@ -2798,6 +2798,18 @@ def list_workflow_templates() -> Dict[str, Any]:
     return runtime.list_workflow_templates()
 
 
+@app.post("/workflow/preview")
+def preview_workflow(payload: WorkflowSubmitRequest, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, payload.project_id)
+    try:
+        return runtime.preview_workflow(project_id=payload.project_id, message=payload.message,
+                                        template_id=payload.template_id, parameters=payload.parameters)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/workflow/submit")
 def submit_workflow(payload: WorkflowSubmitRequest, request: Request) -> Dict[str, Any]:
     if not payload.project_id:
