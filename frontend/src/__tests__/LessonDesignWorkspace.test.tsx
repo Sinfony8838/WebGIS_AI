@@ -664,6 +664,40 @@ describe("LessonDesignWorkspace", () => {
     expect(screen.queryByTestId("ldw-focus")).toBeNull();
   });
 
+  it("lets process advance to question matching before requiring stage questions", async () => {
+    const missing = ["环节“导入”至少需要一个明确问题。"];
+    const draft = {
+      title: "人口分布", stages: [{ stage_id: "s1", title: "导入", minutes: 10, questions: [] }]
+    } as LessonPlanProfile;
+    createMock.mockResolvedValue({ ...session({ current_step: "process", revision: 2, draft }), focus_summary: { missing } });
+    resolveMock.mockResolvedValue({
+      status: "success",
+      design: session({ current_step: "question_matching", revision: 3, draft }),
+      focus_summary: { missing }
+    });
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByTestId("ldw-adopt-continue"));
+    await waitFor(() => expect(resolveMock).toHaveBeenCalledWith("design_1", "process", "accept", "", 2));
+    fireEvent.click(screen.getByTestId("ldw-adopt-continue"));
+    expect(screen.getByTestId("ldw-paper-section-question_citations")).toHaveClass("ldw-paper-incomplete");
+    expect(screen.getByTestId("ldw-paper-section-question_citations")).toHaveTextContent(missing[0]);
+    expect(resolveMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not require later stage activities when confirming objectives", async () => {
+    createMock.mockResolvedValue({
+      ...session({ current_step: "objectives", draft: {
+        title: "人口分布", objectives: ["比较人口分布"], key_difficulties: "人口分布原因"
+      } as LessonPlanProfile }),
+      focus_summary: { missing: ["以下教学目标还没有对应环节活动：比较人口分布"] }
+    });
+    resolveMock.mockResolvedValue({ status: "success", design: session({ current_step: "core_questions", revision: 1 }) });
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByTestId("ldw-adopt-continue"));
+    await waitFor(() => expect(resolveMock).toHaveBeenCalledWith("design_1", "objectives", "accept", "", 0));
+    expect(screen.queryByTestId("ldw-paper-missing")).toBeNull();
+  });
+
   it("sends the single input to the viewed step and disables send while empty", async () => {
     createMock.mockResolvedValue(
       session({
