@@ -118,7 +118,10 @@ type CompletionIssue = { target: string; message: string };
 
 function issueTarget(message: string): string | null {
   if (/课题名称/.test(message)) return "title";
-  if (/教学目标|目标.*活动/.test(message)) return "objectives";
+  // 活动与题目会在后续步骤补全，不能阻塞前面步骤的确认。
+  if (/目标.*活动/.test(message)) return "stages";
+  if (/明确问题|题库题目|手动题目|题图|题目.*答案|题目.*解析/.test(message)) return "question_citations";
+  if (/教学目标/.test(message)) return "objectives";
   if (/核心问题|递进子问题/.test(message)) return "core_questions";
   if (/设计思路/.test(message)) return "design_thinking";
   if (/基础作业/.test(message)) return "homework";
