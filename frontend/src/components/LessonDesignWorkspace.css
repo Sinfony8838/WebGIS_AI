@@ -1,75 +1,7 @@
-/* LessonDesignWorkspace 专属样式：本轮焦点、整份教案工具与右侧推进区。
+/* LessonDesignWorkspace 专属样式：整份教案工具、待补全标记与简洁共创区。
    其余 ldw-* 样式集中在 lesson-workflow.css（由 App.tsx 引入）。 */
 
-/* 本轮焦点：刚修改 / 还缺 / 下一步确认 */
-.ldw-focus {
-  display: flex;
-  flex: 0 1 auto;
-  min-height: 0;
-  max-height: 36vh;
-  overflow-y: auto;
-  flex-direction: column;
-  gap: 6px;
-  margin: 6px 0 2px;
-  padding: 10px 12px;
-  border: 1px solid var(--panel-border-strong);
-  border-radius: 10px;
-  background: var(--surface);
-  color: var(--text-main);
-  font-size: 12px;
-  line-height: 1.55;
-}
-.ldw-focus-row {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-}
-.ldw-focus-label {
-  flex: 0 0 auto;
-  font-weight: 600;
-  color: var(--accent);
-  white-space: nowrap;
-}
-.ldw-focus-row > span:last-child {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.ldw-focus-question {
-  display: block;
-  margin-top: 2px;
-  color: var(--text-soft);
-}
-.ldw-focus-missing {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.ldw-focus-missing ul {
-  margin: 0;
-  padding-left: 1.2em;
-}
-.ldw-focus-missing li + li {
-  margin-top: 4px;
-}
-.ldw-focus-toggle {
-  margin-top: 4px;
-  padding: 2px 0;
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  font: inherit;
-  text-decoration: underline;
-  cursor: pointer;
-}
-.ldw-shell .ldw-right {
-  overflow-y: auto;
-}
-.ldw-focus-note {
-  margin: 2px 0 0;
-  padding-top: 6px;
-  border-top: 1px dashed var(--panel-border);
-  color: var(--warning);
-  font-size: 11px;
-}
+.ldw-shell .ldw-right { overflow: hidden; }
 
 /* 整份教案工具属于主工作区，不与当前步骤的对话输入混放。 */
 .ldw-whole-draft-tools {
@@ -148,57 +80,31 @@
   border-top: 1px dashed var(--panel-border);
 }
 
-/* 右栏只承担当前步骤共创与确认推进，避免全局/局部操作混杂。 */
-.ldw-right-head {
-  flex: 0 0 auto;
-}
-.ldw-chat {
-  min-height: 0;
-}
+/* 确认留在文档区；右栏仅保留对话与一个输入框。 */
+.ldw-confirm-bar { display: flex; flex: 0 0 auto; justify-content: flex-end; padding-top: 10px; border-top: 1px solid var(--panel-border); }
+.ldw-confirm-bar button { min-height: 38px; }
+.ldw-right-head { flex: 0 0 auto; }
+.ldw-chat { min-height: 0; }
 .ldw-composer {
   flex: 0 0 auto;
-  gap: 7px;
   padding-top: 10px;
   border-top: 1px solid var(--panel-border);
   background: var(--surface);
 }
-.ldw-composer-label {
-  color: var(--text-soft);
-  font-size: 11px;
-  font-weight: 700;
-}
-.ldw-composer textarea {
-  min-height: 64px;
-  resize: none;
-}
-.ldw-composer-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.ldw-step-footer {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding-top: 10px;
-  border-top: 1px solid var(--panel-border);
-  background: var(--surface);
-}
-.ldw-step-footer > span {
-  min-width: 0;
-  color: var(--text-dim);
-  font-size: 11px;
-}
-.ldw-step-footer .ldw-actions {
-  justify-content: flex-end;
-}
-.ldw-step-footer .ldw-next-step {
-  width: 100%;
-  min-height: 38px;
-}
+.ldw-composer-input { position: relative; }
+.ldw-composer-input textarea { box-sizing: border-box; min-height: 86px; max-height: 28vh; resize: vertical; padding-right: 52px; }
+.ldw-send-button { position: absolute; right: 9px; bottom: 9px; display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 9px; background: var(--accent); color: #fff; font: inherit; font-size: 19px; cursor: pointer; }
+.ldw-send-button:disabled { opacity: .45; cursor: not-allowed; }
+
+/* 文档式补全反馈只在教师点击确认时出现。 */
+.ldw-paper-completion { margin: 0 0 10px; padding: 10px 13px; border: 1px solid #ef4444; border-radius: 8px; background: #fef2f2; color: #b91c1c; font-size: 12px; }
+.ldw-paper-completion p { margin: 3px 0 0; color: #991b1b; }
+.ldw-paper-completion ul { margin: 6px 0 0; padding-left: 18px; }
+.ldw-paper-title-incomplete { padding: 2px 8px; border: 2px solid #ef4444; border-radius: 5px; background: #fff1f2; color: #b91c1c; }
+.ldw-paper-title-issue { margin: -8px 0 14px; color: #b91c1c; font-size: 12px; text-align: center; }
+.ldw-paper-section.ldw-paper-incomplete { margin: 4px -10px; padding: 12px 10px; border: 2px solid #ef4444; border-radius: 7px; background: #fff1f2; }
+.ldw-paper-section .ldw-status-incomplete { background: #dc2626; color: #fff; }
+.ldw-paper-issue-list { margin: 2px 0 8px; padding-left: 20px; color: #b91c1c; font-size: 12px; line-height: 1.6; }
 
 @media (max-width: 1280px) {
   .ldw-whole-draft-tools {
