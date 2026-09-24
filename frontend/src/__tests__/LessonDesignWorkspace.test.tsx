@@ -81,6 +81,84 @@ describe("LessonDesignWorkspace", () => {
 
   afterEach(cleanup);
 
+  it("shows the whole A4 document and saves a section from its paper editor", async () => {
+    createMock.mockResolvedValue(session({ draft: {
+      title: "人口分布", topic: "人口分布", grade: "高一", duration_minutes: 40,
+      curriculum_interpretation: "原课标解读", objectives: ["观察人口分布"], stages: []
+    } as LessonPlanProfile }));
+    resolveMock.mockResolvedValue({ status: "success", design: session({ revision: 1, draft: {
+      title: "人口分布", curriculum_interpretation: "修改后的课标解读", objectives: ["观察人口分布"], stages: []
+    } as LessonPlanProfile }) });
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+    expect(await screen.findByTestId("ldw-paper-stack")).toBeVisible();
+    expect(screen.getAllByLabelText(/教案第 \d 页/)).toHaveLength(3);
+    expect(screen.getByTestId("ldw-paper-section-stages")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "编辑课标解读" }));
+    fireEvent.change(screen.getByLabelText("教案纸张编辑内容"), { target: { value: "修改后的课标解读" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    await waitFor(() => expect(resolveMock).toHaveBeenCalledWith("design_1", "curriculum_interpretation", "edit", "", 0, "修改后的课标解读"));
+    await waitFor(() => expect(screen.queryByTestId("ldw-paper-editor")).toBeNull());
+    expect(screen.getByTestId("ldw-paper-section-curriculum_interpretation")).toHaveTextContent("修改后的课标解读");
+  });
+
+  it("keeps paper edits open after a failed save and preserves the step detail route", async () => {
+    resolveMock.mockRejectedValueOnce(new Error("保存失败"));
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑教学需求" }));
+    fireEvent.change(screen.getByLabelText("教案纸张编辑内容"), { target: { value: "高一人口分布课堂" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    await screen.findByText("保存失败");
+    expect(screen.getByLabelText("教案纸张编辑内容")).toHaveValue("高一人口分布课堂");
+    fireEvent.click(screen.getByTestId("ldw-step-question_matching"));
+    expect(screen.queryByTestId("ldw-paper-editor")).toBeNull();
+    expect(screen.getByTestId("ldw-plan")).not.toContainElement(screen.queryByTestId("ldw-paper-stack"));
+  });
+
+  it("keeps bound questions when saving a stage edit in paper mode", async () => {
+    createMock.mockResolvedValue(session({ draft: {
+      title: "人口分布", stages: [{ stage_id: "s1", title: "地图观察", minutes: 10, questions: [{ question_id: "q1", text: "人口集中在哪里？" }] }]
+    } as LessonPlanProfile }));
+    resolveMock.mockResolvedValue({ status: "success", design: session({ revision: 1 }) });
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑教学过程" }));
+    fireEvent.change(screen.getByLabelText("教案纸张编辑内容"), { target: { value: "环节1｜地图观察｜12分钟\n知识点：人口分布\n材料：中国人口密度图" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    await waitFor(() => expect(resolveMock).toHaveBeenCalled());
+    const savedStages = resolveMock.mock.calls[0][5];
+    expect(savedStages[0]).toMatchObject({ stage_id: "s1", title: "地图观察", minutes: 12, material: "中国人口密度图" });
+    expect(savedStages[0].questions).toEqual([{ question_id: "q1", text: "人口集中在哪里？" }]);
+  });
+
+  it("does not overwrite a newer AI revision from an open paper editor", async () => {
+    turnMock.mockResolvedValue(turnResult({ revision: 2, next_step: "analysis" }));
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑课标解读" }));
+    fireEvent.change(screen.getByLabelText("教案纸张编辑内容"), { target: { value: "教师未保存的修改" } });
+    fireEvent.change(screen.getByLabelText("教案设计对话输入"), { target: { value: "补充课标解读" } });
+    fireEvent.click(screen.getByTestId("ldw-send"));
+    await waitFor(() => expect(turnMock).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    expect(await screen.findByText("教案已更新，请关闭编辑窗口并重新打开后保存。")).toBeVisible();
+    expect(resolveMock).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("教案纸张编辑内容")).toHaveValue("教师未保存的修改");
+  });
+
+  it("keeps question bindings with their stage when paper stages are reordered", async () => {
+    createMock.mockResolvedValue(session({ draft: { title: "人口分布", stages: [
+      { stage_id: "s1", title: "地图观察", minutes: 10, questions: [{ question_id: "q1", text: "观察什么？" }] },
+      { stage_id: "s2", title: "原因探究", minutes: 20, questions: [{ question_id: "q2", text: "为什么？" }] }
+    ] } as LessonPlanProfile }));
+    resolveMock.mockResolvedValue({ status: "success", design: session({ revision: 1 }) });
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑教学过程" }));
+    fireEvent.change(screen.getByLabelText("教案纸张编辑内容"), { target: { value: "环节1｜原因探究｜20分钟\n\n环节2｜地图观察｜10分钟" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    await waitFor(() => expect(resolveMock).toHaveBeenCalled());
+    const savedStages = resolveMock.mock.calls[0][5];
+    expect(savedStages.map((stage: { stage_id: string }) => stage.stage_id)).toEqual(["s2", "s1"]);
+    expect(savedStages.map((stage: { questions: Array<{ question_id: string }> }) => stage.questions[0].question_id)).toEqual(["q2", "q1"]);
+  });
+
   it("clears the previous lesson and result when switching design sessions", async () => {
     fetchDesignMock.mockResolvedValueOnce(session({ status: "finalized", current_step: "confirmation", final_lesson_id: "lesson_1" }));
     const view = render(<LessonDesignWorkspace projectId="p1" initialDesignId="old_design" onClose={vi.fn()} />);
@@ -88,7 +166,7 @@ describe("LessonDesignWorkspace", () => {
     fetchDesignMock.mockResolvedValueOnce(session({ design_id: "new_design", current_step: "requirements", draft: {} as never }));
     view.rerender(<LessonDesignWorkspace projectId="p2" initialDesignId="new_design" onClose={vi.fn()} />);
     await waitFor(() => expect(fetchDesignMock).toHaveBeenLastCalledWith("new_design"));
-    await screen.findByRole("heading", { name: "第 1 步 · 需求确认" });
+    await screen.findByRole("heading", { name: "教案总览 · A4 编辑" });
     fireEvent.click(screen.getByTestId("ldw-step-confirmation"));
     expect(screen.queryByRole("button", { name: "下载教案 Word" })).toBeNull();
     expect(screen.getByTestId("ldw-finalize-button")).toBeVisible();
