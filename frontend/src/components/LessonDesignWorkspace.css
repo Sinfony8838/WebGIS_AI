@@ -211,3 +211,104 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* A4 document view keeps the existing step workflow and service-backed saves. */
+.ldw-overview-link {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 9px;
+  background: var(--surface-raised);
+  color: var(--text-main);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+.ldw-overview-link small { margin-left: auto; color: var(--text-dim); font-size: 10px; font-weight: 400; }
+.ldw-overview-link.active { border-color: #93c5fd; background: #eff6ff; color: #1d4ed8; }
+.ldw-paper-outline { display: flex; flex: 0 0 auto; flex-direction: column; gap: 8px; height: 24vh; min-height: 110px; overflow: auto; padding: 2px 5px 2px 10px; border-left: 2px solid #dbeafe; }
+.ldw-paper-outline strong { display: block; margin: 5px 0 3px; color: var(--text-main); font-size: 11px; }
+.ldw-paper-outline button { display: flex; align-items: center; justify-content: space-between; gap: 5px; width: 100%; padding: 4px 6px; border: 0; border-radius: 5px; background: transparent; color: var(--text-soft); font: inherit; font-size: 11px; text-align: left; cursor: pointer; }
+.ldw-paper-outline button:hover { background: var(--accent-soft); color: var(--accent); }
+.ldw-view-switch { display: flex; padding: 2px; border: 1px solid var(--panel-border); border-radius: 8px; background: var(--surface); }
+.ldw-view-switch button { padding: 5px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text-soft); font: inherit; font-size: 11px; cursor: pointer; white-space: nowrap; }
+.ldw-view-switch button.active { background: #dbeafe; color: #1d4ed8; font-weight: 700; }
+.ldw-mid { position: relative; }
+.ldw-paper-stack { display: flex; flex-direction: column; align-items: center; gap: 24px; padding: 12px 10px 26px; }
+.ldw-paper-page {
+  box-sizing: border-box;
+  width: min(210mm, 100%);
+  min-height: 297mm;
+  padding: 18mm 19mm 14mm;
+  background: #fff;
+  color: #1e293b;
+  box-shadow: 0 8px 26px rgba(15, 23, 42, .16);
+  border: 1px solid #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+}
+.ldw-paper-kicker { color: #64748b; font-size: 10px; letter-spacing: .16em; text-transform: uppercase; text-align: right; }
+.ldw-paper-title { margin: 18px 0 16px; text-align: center; font-family: "Noto Serif SC", "SimSun", serif; font-size: 22px; line-height: 1.45; color: #111827; }
+.ldw-paper-title button { margin-left: 9px; border: 0; background: transparent; color: #2563eb; font: inherit; font-size: 11px; cursor: pointer; vertical-align: middle; }
+.ldw-paper-title button:hover, .ldw-paper-edit-button:hover { text-decoration: underline; }
+.ldw-paper-meta { display: flex; flex-wrap: wrap; justify-content: center; gap: 9px 18px; margin: 0 0 20px; padding: 10px; border-top: 1px solid #cbd5e1; border-bottom: 1px solid #cbd5e1; color: #475569; font-size: 12px; }
+.ldw-paper-meta button { padding: 0; border: 0; background: transparent; color: #334155; font: inherit; cursor: pointer; }
+.ldw-paper-meta button:hover { color: #2563eb; }
+.ldw-paper-page-heading { margin: 15px 0 10px; padding-bottom: 7px; border-bottom: 2px solid #334155; color: #111827; font-size: 16px; }
+.ldw-paper-section { padding: 12px 0; border-bottom: 1px solid #e2e8f0; break-inside: avoid; }
+.ldw-paper-section-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.ldw-paper-section-head h5 { flex: 1; min-width: 0; margin: 0; color: #1e293b; font-size: 13px; }
+.ldw-paper-section .ldw-section-text { color: #334155; font-size: 12px; line-height: 1.75; }
+.ldw-paper-section .ldw-status-pending { background: #f1f5f9; color: #475569; }
+.ldw-paper-section .ldw-status-proposed { background: #fef3c7; color: #92400e; }
+.ldw-paper-section .ldw-status-confirmed { background: #dcfce7; color: #166534; }
+.ldw-paper-section .ldw-hint { color: #64748b; }
+.ldw-paper-section .ldw-stage { background: #fff; border-color: #cbd5e1; }
+.ldw-paper-section .ldw-stage-fields dd { color: #334155; }
+.ldw-paper-section .ldw-stage-fields dt { color: #64748b; }
+.ldw-paper-section .ldw-stages:empty::after { content: "待补充教学过程。"; color: #94a3b8; font-size: 12px; }
+.ldw-paper-edit-button { flex: 0 0 auto; border: 0; background: transparent; color: #2563eb; font: inherit; font-size: 11px; cursor: pointer; }
+.ldw-paper-edit-button:disabled, .ldw-paper-title button:disabled, .ldw-paper-meta button:disabled { opacity: .45; cursor: not-allowed; }
+.ldw-paper-footer { margin-top: auto; padding-top: 20px; color: #94a3b8; text-align: right; font-size: 10px; }
+.ldw-paper-edit-panel {
+  position: absolute;
+  z-index: 5;
+  top: 52px;
+  right: 18px;
+  box-sizing: border-box;
+  width: min(420px, calc(100% - 36px));
+  max-height: calc(100% - 70px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  background: #fff;
+  color: #1e293b;
+  box-shadow: 0 16px 44px rgba(15, 23, 42, .24);
+}
+.ldw-paper-edit-head { display: flex; align-items: center; justify-content: space-between; }
+.ldw-paper-edit-head strong { font-size: 15px; }
+.ldw-paper-edit-head button { border: 0; background: transparent; color: #64748b; font-size: 22px; cursor: pointer; }
+.ldw-paper-edit-panel p, .ldw-paper-edit-panel small { margin: 0; color: #64748b; font-size: 11px; line-height: 1.5; }
+.ldw-paper-edit-panel textarea { box-sizing: border-box; width: 100%; min-height: 180px; max-height: 48vh; resize: vertical; padding: 10px; border: 1px solid #cbd5e1; border-radius: 7px; color: #1e293b; background: #fff; font: inherit; font-size: 12px; line-height: 1.6; }
+.ldw-paper-edit-panel textarea:focus { outline: 2px solid #93c5fd; outline-offset: 1px; }
+.ldw-paper-edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
+@media (max-width: 1280px) {
+  .ldw-mid-head { flex-wrap: wrap; }
+  .ldw-view-switch { order: 3; }
+  .ldw-paper-page { padding: 12mm; }
+}
+@media (max-width: 860px) {
+  .ldw-paper-stack { padding: 8px 0 20px; }
+  .ldw-paper-page { min-height: 0; padding: 20px; }
+  .ldw-paper-edit-panel { position: fixed; top: 12vh; right: 5vw; width: 90vw; max-height: 76vh; }
+}
