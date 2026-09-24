@@ -203,19 +203,23 @@ describe("LessonDesignWorkspace", () => {
     await waitFor(() => expect(screen.getByTestId("ldw-full-draft")).toBeEnabled());
     expect(createMock).toHaveBeenCalledWith("p1");
     expect(screen.getByTestId("ldw-smart-optimize")).toBeDisabled();
-    expect(screen.getByTestId("ldw-adopt-continue")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("ldw-adopt-continue"));
+    expect(screen.getByTestId("ldw-paper-section-requirements")).toHaveClass("ldw-paper-incomplete");
+    expect(resolveMock).not.toHaveBeenCalled();
   });
 
-  it("shows complete missing items as a list and allows expanding the remaining items", async () => {
+  it("shows the full missing list in the document only after confirming publication", async () => {
     const missing = ["还缺少课题名称。", "至少需要一个可观察的教学目标。", "还没有教学过程环节。", "各环节合计 0 分钟，与课堂时长 40 分钟不一致；请先调整环节时长，再定稿。"];
-    createMock.mockResolvedValue({ ...session(), focus_summary: { missing } });
+    createMock.mockResolvedValue({ ...session({ current_step: "confirmation", draft: { title: "", topic: "", stages: [] } as LessonPlanProfile }), focus_summary: { missing } });
     render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
-    const focus = await screen.findByTestId("ldw-focus");
-    expect(within(focus).getAllByRole("listitem")).toHaveLength(3);
-    expect(focus.textContent).not.toMatch(/[。；][。；]/);
-    fireEvent.click(within(focus).getByText("展开其余 1 项"));
-    expect(within(focus).getAllByRole("listitem")).toHaveLength(4);
-    expect(within(focus).getByText(missing[3])).toBeVisible();
+    await screen.findByTestId("ldw-finalize-button");
+    expect(screen.queryByTestId("ldw-paper-missing")).toBeNull();
+    fireEvent.click(screen.getByTestId("ldw-finalize-button"));
+    expect(screen.getByTestId("ldw-paper-missing")).toBeVisible();
+    expect(document.getElementById("ldw-paper-title")).toHaveClass("ldw-paper-title-incomplete");
+    expect(screen.getByTestId("ldw-paper-section-stages")).toHaveClass("ldw-paper-incomplete");
+    expect(screen.getByTestId("ldw-paper-section-stages")).toHaveTextContent(missing[3]);
+    expect(finalizeMock).not.toHaveBeenCalled();
   });
 
   it("numbers and scopes edits to the step currently being viewed", async () => {
@@ -226,16 +230,42 @@ describe("LessonDesignWorkspace", () => {
     fireEvent.click(screen.getByTestId("ldw-step-analysis"));
     expect(screen.getByRole("heading", { name: "第 2 步 · 课标与学情（回看）" })).toBeVisible();
     fireEvent.change(screen.getByLabelText("教案设计对话输入"), { target: { value: "补充学生已有基础" } });
-    fireEvent.click(screen.getByTestId("ldw-scoped-edit"));
-    await waitFor(() => expect(turnMock).toHaveBeenCalledWith("design_1", "只修改当前环节：补充学生已有基础", 4, "analysis"));
+    fireEvent.click(screen.getByTestId("ldw-send"));
+    await waitFor(() => expect(turnMock).toHaveBeenCalledWith("design_1", "补充学生已有基础", 4, "analysis"));
   });
 
-  it("disables confirmation when the viewed step has no content", async () => {
+  it("marks missing fields in the A4 document when confirming an empty step", async () => {
     createMock.mockResolvedValue(session({ current_step: "process" }));
     render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
     await waitFor(() => expect(screen.getByTestId("ldw-full-draft")).toBeEnabled());
     fireEvent.click(screen.getByTestId("ldw-step-analysis"));
-    expect(screen.getByTestId("ldw-accept-step")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("ldw-accept-step"));
+    expect(screen.getByTestId("ldw-paper-missing")).toBeVisible();
+    expect(screen.getByTestId("ldw-paper-section-curriculum_interpretation")).toHaveClass("ldw-paper-incomplete");
+    expect(screen.getByTestId("ldw-paper-section-student_analysis")).toHaveClass("ldw-paper-incomplete");
+    expect(screen.getByTestId("ldw-paper-section-textbook_analysis")).toHaveClass("ldw-paper-incomplete");
+    expect(resolveMock).not.toHaveBeenCalled();
+  });
+
+  it("clears red markers after a document edit and then permits confirmation", async () => {
+    createMock.mockResolvedValue({
+      ...session({ current_step: "process", revision: 2, draft: { title: "人口分布", stages: [] } as LessonPlanProfile }),
+      focus_summary: { missing: ["还没有教学过程环节。"] }
+    });
+    const completed = session({ current_step: "process", revision: 3, draft: {
+      title: "人口分布", stages: [{ stage_id: "s1", title: "地图观察", minutes: 40 }]
+    } as LessonPlanProfile });
+    resolveMock.mockResolvedValueOnce({ status: "success", design: completed, focus_summary: { missing: [] } });
+    resolveMock.mockResolvedValueOnce({ status: "success", design: session({ current_step: "question_matching", revision: 4 }) });
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByTestId("ldw-adopt-continue"));
+    expect(screen.getByTestId("ldw-paper-section-stages")).toHaveClass("ldw-paper-incomplete");
+    fireEvent.click(screen.getByRole("button", { name: "编辑教学过程" }));
+    fireEvent.change(screen.getByLabelText("教案纸张编辑内容"), { target: { value: "环节1｜地图观察｜40分钟" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    await waitFor(() => expect(screen.queryByTestId("ldw-paper-missing")).toBeNull());
+    fireEvent.click(screen.getByTestId("ldw-adopt-continue"));
+    await waitFor(() => expect(resolveMock).toHaveBeenLastCalledWith("design_1", "process", "accept", "", 3));
   });
 
   it("asks for a topic locally when a blank draft has no requirement", async () => {
@@ -287,7 +317,7 @@ describe("LessonDesignWorkspace", () => {
     expect(turnMock).not.toHaveBeenCalled();
   });
 
-  it("renders the nine steps, asks the active question and sends a turn", async () => {
+  it("renders the nine steps with a minimal right column and sends a turn", async () => {
     turnMock.mockResolvedValue(turnResult());
     render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
 
@@ -296,22 +326,25 @@ describe("LessonDesignWorkspace", () => {
     expect(screen.getByText("题目匹配")).toBeTruthy();
     expect(screen.getByText("预演检查")).toBeTruthy();
     expect(screen.getByText("确认发布")).toBeTruthy();
-    expect(screen.getByTestId("ldw-active-question").textContent).toContain("年级、课题与课时");
+    expect(screen.queryByTestId("ldw-active-question")).toBeNull();
+    expect(screen.queryByTestId("ldw-focus")).toBeNull();
+    expect(screen.queryByTestId("ldw-scoped-edit")).toBeNull();
+    expect(screen.getByTestId("ldw-step-navigation").closest("main")).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText("教案设计对话输入"), { target: { value: "高一《人口分布》40分钟" } });
     fireEvent.click(screen.getByTestId("ldw-send"));
 
     await waitFor(() => expect(turnMock).toHaveBeenCalledWith("design_1", "高一《人口分布》40分钟", 0, "requirements"));
     expect(await screen.findByText("我理解你的课题。")).toBeTruthy();
-    expect(screen.getByTestId("ldw-active-question").textContent).toContain("课标重点");
+    expect(screen.getByTestId("ldw-composer").querySelectorAll("textarea")).toHaveLength(1);
   });
 
-  it("exits the design workspace via the sidebar exit button", async () => {
+  it("exits the design workspace via the left close button", async () => {
     const onClose = vi.fn();
     render(<LessonDesignWorkspace projectId="p1" onClose={onClose} />);
-    await screen.findByTestId("ldw-exit");
+    await screen.findByTestId("ldw-close");
 
-    fireEvent.click(screen.getByTestId("ldw-exit"));
+    fireEvent.click(screen.getByTestId("ldw-close"));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -509,7 +542,7 @@ describe("LessonDesignWorkspace", () => {
     expect((await screen.findAllByText(/教学过程/)).length).toBeGreaterThan(0);
   });
 
-  it("generates a full draft from one requirement paragraph and shows the focus card", async () => {
+  it("generates a full draft without cluttering the right column", async () => {
     const multiSectionDraft = {
       title: "胡焕庸线与中国人口分布", topic: "胡焕庸线与中国人口分布", grade: "高一", duration_minutes: 45,
       objectives: ["运用地图说出分布特征", "解释成因", "迁移方法"],
@@ -540,7 +573,7 @@ describe("LessonDesignWorkspace", () => {
     });
     render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
 
-    await screen.findByTestId("ldw-active-question");
+    await screen.findByTestId("ldw-composer");
     const draftTools = screen.getByTestId("ldw-draft-tools");
     const composer = screen.getByTestId("ldw-composer");
     expect(draftTools.textContent).toContain("不会自动确认步骤，也不会直接发布");
@@ -563,16 +596,12 @@ describe("LessonDesignWorkspace", () => {
         "requirements"
       )
     );
-    const focus = await screen.findByTestId("ldw-focus");
-    expect(focus.textContent).toContain("刚修改");
-    expect(focus.textContent).toContain("教学过程");
-    expect(focus.textContent).toContain("暂无阻断缺口");
-    expect(focus.textContent).toContain("下一步确认");
-    expect(focus.textContent).toContain("这节课面向哪个年级？");
-    expect(focus.textContent).toContain("教学建议");
+    expect(await screen.findByText(/已按你的完整需求生成初稿/)).toBeVisible();
+    expect(screen.queryByTestId("ldw-focus")).toBeNull();
+    expect(screen.getByTestId("ldw-paper-section-stages")).toHaveTextContent("胡焕庸线两侧对比");
   });
 
-  it("shows the focus card immediately when resuming an old design", async () => {
+  it("defers old-design missing feedback until the relevant section is confirmed", async () => {
     fetchDesignMock.mockResolvedValue({
       ...session({ current_step: "process", revision: 7 }),
       focus_summary: {
@@ -586,12 +615,15 @@ describe("LessonDesignWorkspace", () => {
     });
     render(<LessonDesignWorkspace projectId="p1" initialDesignId="design_9" onClose={vi.fn()} />);
 
-    const focus = await screen.findByTestId("ldw-focus");
-    expect(focus.textContent).toContain("还缺少一个贯穿课堂的核心问题。");
-    expect(focus.textContent).toContain("教学过程");
+    await screen.findByTestId("ldw-composer");
+    expect(screen.queryByTestId("ldw-paper-missing")).toBeNull();
+    fireEvent.click(screen.getByTestId("ldw-step-core_questions"));
+    fireEvent.click(screen.getByTestId("ldw-accept-step"));
+    expect(screen.getByTestId("ldw-paper-section-core_questions")).toHaveClass("ldw-paper-incomplete");
+    expect(screen.getByTestId("ldw-paper-section-core_questions")).toHaveTextContent("还缺少一个贯穿课堂的核心问题。");
   });
 
-  it("adopts the current suggestion and continues, then shows confirmed focus", async () => {
+  it("adopts the current suggestion and continues without a focus card", async () => {
     createMock.mockResolvedValue(
       session({
         current_step: "process",
@@ -628,11 +660,11 @@ describe("LessonDesignWorkspace", () => {
 
     fireEvent.click(adopt);
     await waitFor(() => expect(resolveMock).toHaveBeenCalledWith("design_1", "process", "accept", "", 5));
-    const focus = await screen.findByTestId("ldw-focus");
-    expect(focus.textContent).toContain("已确认：教学过程、板书设计");
+    await waitFor(() => expect(screen.getByTestId("ldw-adopt-continue")).toHaveTextContent("题目匹配"));
+    expect(screen.queryByTestId("ldw-focus")).toBeNull();
   });
 
-  it("sends a scoped edit that only touches the current step, and disables it without input", async () => {
+  it("sends the single input to the viewed step and disables send while empty", async () => {
     createMock.mockResolvedValue(
       session({
         current_step: "process",
@@ -657,21 +689,21 @@ describe("LessonDesignWorkspace", () => {
     });
     render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
 
-    expect(await screen.findByTestId("ldw-scoped-edit")).toBeDisabled();
+    expect(await screen.findByTestId("ldw-send")).toBeDisabled();
     fireEvent.change(screen.getByLabelText("教案设计对话输入"), { target: { value: "把导入的提问改为胡焕庸线两侧差异" } });
-    expect(screen.getByTestId("ldw-scoped-edit")).not.toBeDisabled();
-    fireEvent.click(screen.getByTestId("ldw-scoped-edit"));
+    expect(screen.getByTestId("ldw-send")).not.toBeDisabled();
+    fireEvent.click(screen.getByTestId("ldw-send"));
 
     await waitFor(() =>
       expect(turnMock).toHaveBeenCalledWith(
         "design_1",
-        "只修改当前环节：把导入的提问改为胡焕庸线两侧差异",
+        "把导入的提问改为胡焕庸线两侧差异",
         4,
         "process"
       )
     );
-    const focus = await screen.findByTestId("ldw-focus");
-    expect(focus.textContent).toContain("教学过程");
+    expect(await screen.findByText("我理解你的课题。")).toBeVisible();
+    expect(screen.queryByTestId("ldw-focus")).toBeNull();
   });
 
   it("runs one-click smart optimization only when a draft exists", async () => {
@@ -705,15 +737,14 @@ describe("LessonDesignWorkspace", () => {
     fireEvent.click(optimize);
 
     await waitFor(() => expect(turnMock).toHaveBeenCalledWith("design_1", "一键智能优化", 6, "process"));
-    const focus = await screen.findByTestId("ldw-focus");
-    expect(focus.textContent).toContain("教学目标");
+    expect(await screen.findByText("我理解你的课题。")).toBeVisible();
     expect(screen.getByTestId("ldw-draft-tools-hint").textContent).toContain("已有课题、年级、课时与已确认内容");
   });
 
   it("keeps one-click smart optimization disabled for an empty draft", async () => {
     createMock.mockResolvedValue(session({ current_step: "requirements", revision: 0 }));
     render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
-    await screen.findByTestId("ldw-active-question");
+    await screen.findByTestId("ldw-composer");
     await waitFor(() => expect(screen.getByTestId("ldw-full-draft")).not.toBeDisabled());
     expect(screen.getByTestId("ldw-smart-optimize")).toBeDisabled();
     expect(turnMock).not.toHaveBeenCalled();

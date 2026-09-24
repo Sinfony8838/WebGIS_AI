@@ -60,6 +60,15 @@ const STEP_SECTION_KEYS: Record<string, string[]> = {
   rehearsal: [],
   confirmation: ["design_thinking", "reflection"]
 };
+const REQUIRED_STEP_SECTIONS: Record<string, string[]> = {
+  // 与后端 lesson_design.REQUIRED_SECTIONS 在各步骤的归属保持一致。
+  requirements: ["requirements"],
+  analysis: ["curriculum_interpretation", "student_analysis", "textbook_analysis"],
+  objectives: ["objectives", "key_difficulties"],
+  core_questions: ["core_questions"],
+  process: ["stages"],
+  capabilities: ["capabilities"]
+};
 const SECTION_LABELS: Record<string, string> = {
   requirements: "教学需求", curriculum_interpretation: "课标解读", student_analysis: "学情分析",
   textbook_analysis: "教材分析", objectives: "教学目标", key_difficulties: "教学重难点",
@@ -97,7 +106,6 @@ type DesignRehearsalReport = {
   duration_minutes?: number;
 };
 
-// 后端每轮计算的「本轮焦点」：刚修改 / 还缺 / 下一步确认。
 type FocusSummary = {
   changed_labels?: string[];
   confirmed_labels?: string[];
@@ -106,6 +114,18 @@ type FocusSummary = {
   next_confirm_question?: string;
   unverified_note?: string;
 };
+type CompletionIssue = { target: string; message: string };
+
+function issueTarget(message: string): string | null {
+  if (/课题名称/.test(message)) return "title";
+  if (/教学目标|目标.*活动/.test(message)) return "objectives";
+  if (/核心问题|递进子问题/.test(message)) return "core_questions";
+  if (/设计思路/.test(message)) return "design_thinking";
+  if (/基础作业/.test(message)) return "homework";
+  if (/教学过程|环节|时长|分钟|学生活动|知识结论|题目|题图/.test(message)) return "stages";
+  if (/能力|数据/.test(message)) return "capabilities";
+  return null;
+}
 
 function sectionHasContent(value: unknown): boolean {
   if (Array.isArray(value)) return value.some((item) => sectionHasContent(item));
@@ -114,27 +134,9 @@ function sectionHasContent(value: unknown): boolean {
   return value !== null && value !== undefined && value !== false && value !== 0;
 }
 
-function MissingFeedback({ items }: { items: string[] }) {
-  const [expanded, setExpanded] = useState(false);
-  if (!items.length) return <span>暂无阻断缺口</span>;
-  return (
-    <div className="ldw-focus-missing">
-      <ul aria-label="待补充内容">
-        {(expanded ? items : items.slice(0, 3)).map((item, index) => <li key={index}>{item}</li>)}
-      </ul>
-      {items.length > 3 ? (
-        <button type="button" className="ldw-focus-toggle" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
-          {expanded ? "收起其余内容" : `展开其余 ${items.length - 3} 项`}
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
 export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose, onFinalized, onEnterRehearsal }: Props) {
   const [design, setDesign] = useState<LessonDesignSession | null>(null);
   const [planItems, setPlanItems] = useState<DesignPlanItem[]>([]);
-  const [activeQuestion, setActiveQuestion] = useState("");
   const [candidates, setCandidates] = useState<QuestionRetrievalCandidate[]>([]);
   const [messages, setMessages] = useState<Array<{ role: "assistant" | "teacher"; text: string }>>([]);
   const [input, setInput] = useState("");
@@ -157,15 +159,15 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
   const [searchResults, setSearchResults] = useState<QuestionBankQuestion[]>([]);
   const [finalResult, setFinalResult] = useState<{ lesson: LessonRecord; export?: { status: string; artifact?: { metadata?: { public_url?: string } } } } | null>(null);
   const [focus, setFocus] = useState<FocusSummary | null>(null);
+  const [completionIssues, setCompletionIssues] = useState<CompletionIssue[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
   const applySession = useCallback((payload: LessonDesignSession & Partial<{ plan_items: DesignPlanItem[]; active_design_question: string; focus_summary: FocusSummary }>) => {
     setDesign(payload);
     if (payload.plan_items) setPlanItems(payload.plan_items);
-    if (payload.active_design_question !== undefined) setActiveQuestion(payload.active_design_question);
-    // 打开/回读旧设计时也立即给出「还缺什么、下一步确认什么」。
     if (payload.focus_summary !== undefined) setFocus(payload.focus_summary);
+    setCompletionIssues([]);
   }, []);
 
   useEffect(() => {
@@ -181,7 +183,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
     setFocus(null);
     setCheckedPlan(null);
     setPlanItems([]);
-    setActiveQuestion("");
+    setCompletionIssues([]);
     setCandidates([]);
     setMessages([]);
     setInput("");
@@ -252,18 +254,6 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
     () => Object.values(design?.section_status || {}).filter((status) => status === "confirmed").length,
     [design?.section_status]
   );
-  // 「下一步」仅在当前步骤存在可确认内容时可用（空步骤不可冒充已审核）。
-  const canAdoptCurrent = useMemo(() => {
-    if (!design || design.status === "finalized") return false;
-    const sections = STEP_SECTION_KEYS[currentStep] || [];
-    const values = draft as Record<string, unknown>;
-    return sections.some((key) => sectionHasContent(values[key]));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [design, currentStep, draft]);
-  const canAdoptViewed = !!design && design.status !== "finalized" && (STEP_SECTION_KEYS[viewStep] || []).some(
-    (key) => sectionHasContent((draft as Record<string, unknown>)[key])
-  );
-  const scopedEditAvailable = (STEP_SECTION_KEYS[viewStep] || []).length > 0 && design?.status !== "finalized";
   // 一键智能优化仅在已有初稿内容时可用（空稿无内容可优化）。
   const hasDraftContent = useMemo(() => {
     if (!design || design.status === "finalized") return false;
@@ -286,10 +276,48 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
     void runTurn(requirement ? `一键智能优化：${requirement}` : "一键智能优化", currentStep);
   }
 
-  function modifyCurrentStepOnly() {
-    const requirement = input.trim();
-    if (!requirement) return;
-    void runTurn(`只修改当前环节：${requirement}`, viewStep);
+  function showCompletionIssues(issues: CompletionIssue[]) {
+    setCompletionIssues(issues);
+    setPaperMode(true);
+    setPaperEdit("");
+    const first = issues[0]?.target;
+    if (first) setTimeout(() => document.getElementById(`ldw-paper-${first}`)?.scrollIntoView?.({ block: "center", behavior: "smooth" }), 0);
+  }
+
+  function confirmStep(step: string) {
+    if (!design || busy || isFinalized) return;
+    const values = draft as Record<string, unknown>;
+    const issues: CompletionIssue[] = (REQUIRED_STEP_SECTIONS[step] || [])
+      .filter((key) => !sectionHasContent(values[key]))
+      .map((key) => ({ target: key, message: `${SECTION_LABELS[key]}尚未填写。` }));
+    if (step === "requirements" && !asText(draft.title || draft.topic).trim()) {
+      issues.unshift({ target: "title", message: "请填写课题名称。" });
+    }
+    for (const message of focus?.missing || []) {
+      const target = issueTarget(message);
+      if (target && ((target === "title" && step === "requirements") || (STEP_SECTION_KEYS[step] || []).includes(target))) {
+        if (!issues.some((issue) => issue.target === target && issue.message === message)) issues.push({ target, message });
+      }
+    }
+    if (!issues.length && !(STEP_SECTION_KEYS[step] || []).some((key) => sectionHasContent(values[key]))) {
+      const target = STEP_SECTION_KEYS[step]?.[0];
+      if (target) issues.push({ target, message: `${SECTION_LABELS[target]}尚未填写。` });
+    }
+    if (issues.length) {
+      showCompletionIssues(issues);
+      return;
+    }
+    setCompletionIssues([]);
+    void acceptStep(step);
+  }
+
+  function confirmPublish() {
+    const issues = (focus?.missing || []).map((message) => ({ target: issueTarget(message) || "", message }));
+    if (issues.length) {
+      showCompletionIssues(issues);
+      return;
+    }
+    void finalize();
   }
 
   function stepState(key: string): "done" | "active" | "todo" {
@@ -340,7 +368,6 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
         revision: result.revision
       });
       setPlanItems(result.plan_items || []);
-      setActiveQuestion(result.active_design_question || "");
       setCandidates(result.retrieval_candidates || []);
       setFocus((result as LessonDesignTurnResult & { focus_summary?: FocusSummary }).focus_summary || null);
       setMessages((previous) => [...previous, { role: "assistant", text: result.assistant_message }]);
@@ -370,7 +397,6 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
       const result = await resolveLessonDesignSection(design.design_id, step, "accept", "", design.revision);
       applySession(result.design);
       setPlanItems(result.design.plan_items || []);
-      setActiveQuestion(result.design.active_design_question || "");
       setFocus(
         (result as { focus_summary?: FocusSummary }).focus_summary || null
       );
@@ -390,7 +416,6 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
       const result = await resolveLessonDesignSection(design.design_id, sectionId, "edit", "", design.revision, value);
       applySession(result.design);
       setPlanItems(result.design.plan_items || []);
-      setActiveQuestion(result.design.active_design_question || "");
       setFocus((result as { focus_summary?: FocusSummary }).focus_summary || null);
       return true;
     } catch (exc) {
@@ -582,11 +607,12 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
 
   function renderPaperSection(sectionId: string) {
     const status = design?.section_status?.[sectionId] || "pending";
+    const issues = completionIssues.filter((issue) => issue.target === sectionId);
     return (
-      <section className="ldw-paper-section" id={`ldw-paper-${sectionId}`} key={sectionId} data-testid={`ldw-paper-section-${sectionId}`}>
+      <section className={`ldw-paper-section ${issues.length ? "ldw-paper-incomplete" : ""}`} id={`ldw-paper-${sectionId}`} key={sectionId} data-testid={`ldw-paper-section-${sectionId}`}>
         <div className="ldw-paper-section-head">
           <h5>{SECTION_LABELS[sectionId]}</h5>
-          <span className={`ldw-status ldw-status-${status}`}>{status === "confirmed" ? "已确认" : status === "proposed" ? "待确认" : "待补充"}</span>
+          <span className={`ldw-status ${issues.length ? "ldw-status-incomplete" : `ldw-status-${status}`}`}>{issues.length ? "待补全" : status === "confirmed" ? "已确认" : status === "proposed" ? "待确认" : "待补充"}</span>
           {sectionId === "question_citations" ? (
             <button type="button" className="ldw-paper-edit-button" onClick={() => { setFocusStep("question_matching"); setPaperMode(false); }}>匹配题目</button>
           ) : (
@@ -595,6 +621,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
             </button>
           )}
         </div>
+        {issues.length ? <ul className="ldw-paper-issue-list">{issues.map((issue, index) => <li key={`${issue.target}-${index}`}>{issue.message}</li>)}</ul> : null}
         <SectionBody
           sectionId={sectionId}
           design={design}
@@ -762,15 +789,23 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
                     {index === 0 ? (
                       <>
                         <h4 className="ldw-paper-title">
-                          {draft.title || draft.topic || "未命名课时"}
+                          <span id="ldw-paper-title" className={completionIssues.some((issue) => issue.target === "title") ? "ldw-paper-title-incomplete" : ""}>{draft.title || draft.topic || "待填写课题名称"}</span>
                           <button type="button" disabled={busy || isFinalized} onClick={() => openPaperEdit("title")} aria-label="编辑课题">编辑</button>
                         </h4>
+                        {completionIssues.filter((issue) => issue.target === "title").map((issue, issueIndex) => <p className="ldw-paper-title-issue" key={issueIndex}>{issue.message}</p>)}
                         <div className="ldw-paper-meta">
                           <button type="button" disabled={busy || isFinalized} onClick={() => openPaperEdit("grade")}>年级：{draft.grade || "待填写"} ✎</button>
                           <button type="button" disabled={busy || isFinalized} onClick={() => openPaperEdit("duration_minutes")}>课时：{draft.duration_minutes || 40} 分钟 ✎</button>
                           <span>状态：{isFinalized ? "已发布" : "设计中"}</span>
                         </div>
                       </>
+                    ) : null}
+                    {index === 0 && completionIssues.length ? (
+                      <div className="ldw-paper-completion" role="alert" data-testid="ldw-paper-missing">
+                        <strong>教案还有 {completionIssues.length} 处待补全</strong>
+                        <p>红色标记处可直接点击“编辑”填写；保存后再确认本节。</p>
+                        {completionIssues.some((issue) => !issue.target) ? <ul>{completionIssues.filter((issue) => !issue.target).map((issue, issueIndex) => <li key={issueIndex}>{issue.message}</li>)}</ul> : null}
+                      </div>
                     ) : null}
                     <h4 className="ldw-paper-page-heading">{index + 1}. {page.title}</h4>
                     {page.sections.map(renderPaperSection)}
@@ -842,7 +877,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
                       type="button"
                       className="toolbar-button compact primary"
                       disabled={busy || !design}
-                      onClick={() => void finalize()}
+                      onClick={confirmPublish}
                       data-testid="ldw-finalize-button"
                     >
                       确认发布为课时草稿
@@ -868,50 +903,19 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
               </div>
             </div>
           ) : null}
+          <footer className="ldw-confirm-bar" data-testid="ldw-step-navigation">
+            {viewStep === "rehearsal" ? (
+              <button type="button" className="toolbar-button compact primary" disabled={busy || !currentReport?.ready} onClick={() => setFocusStep("confirmation")} data-testid="ldw-continue-to-confirmation">进入确认发布</button>
+            ) : focusStep && focusStep !== currentStep ? (
+              <button type="button" className="toolbar-button compact primary" disabled={busy || !design || isFinalized} onClick={() => confirmStep(viewStep)} data-testid="ldw-accept-step">确认“{currentLabel}”</button>
+            ) : (
+              <button type="button" className="toolbar-button compact primary" disabled={busy || !design || isFinalized} onClick={() => confirmStep(currentStep)} data-testid="ldw-adopt-continue">确认“{currentLabel}”并进入下一步</button>
+            )}
+          </footer>
         </main>
 
         <aside className="ldw-right">
-          <header className="ldw-right-head">
-            <div className="ldw-right-title">
-              <strong>AI 共创</strong>
-              <button
-                type="button"
-                className="toolbar-button compact"
-                onClick={onClose}
-                data-testid="ldw-exit"
-                title="退出教案设计，草稿已自动保存，可随时回来继续"
-              >
-                退出设计
-              </button>
-            </div>
-            {activeQuestion ? <p className="ldw-active-question" data-testid="ldw-active-question">{activeQuestion}</p> : null}
-          </header>
-          {focus ? (
-            <div className="ldw-focus" data-testid="ldw-focus">
-              <div className="ldw-focus-row">
-                <span className="ldw-focus-label">刚修改</span>
-                <span>
-                  {focus.changed_labels?.length
-                    ? focus.changed_labels.join("、")
-                    : focus.confirmed_labels?.length
-                      ? `已确认：${focus.confirmed_labels.join("、")}`
-                      : "本轮草稿内容未变化"}
-                </span>
-              </div>
-              <div className="ldw-focus-row">
-                <span className="ldw-focus-label">还缺</span>
-                <MissingFeedback key={`${design?.design_id}-${design?.revision}`} items={focus.missing || []} />
-              </div>
-              <div className="ldw-focus-row">
-                <span className="ldw-focus-label">下一步确认</span>
-                <span>
-                  {focus.next_confirm_sections?.length ? focus.next_confirm_sections.join(" → ") : "无待确认章节"}
-                  {focus.next_confirm_question ? <small className="ldw-focus-question">{focus.next_confirm_question}</small> : null}
-                </span>
-              </div>
-              {focus.unverified_note ? <p className="ldw-focus-note">{focus.unverified_note}</p> : null}
-            </div>
-          ) : null}
+          <header className="ldw-right-head"><strong>AI 共创</strong></header>
           <div className="ldw-chat" aria-live="polite" data-testid="ldw-chat">
             {messages.map((message, index) => (
               <div key={`${message.role}-${index}`} className={`lesson-design-message ${message.role}`}>
@@ -924,85 +928,24 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
           {busy ? <ThinkingIndicator label={`正在处理${STEPS.find(([key]) => key === viewStep)?.[1] || "教案"}…`} testId="lesson-design-thinking" /> : null}
           {error ? <p className="lesson-design-error" data-testid="ldw-error">{error}</p> : null}
           <div className="ldw-composer" data-testid="ldw-composer">
-            <label className="ldw-composer-label" htmlFor="lesson-design-input">给 AI 的修改要求</label>
-            <textarea
-              id="lesson-design-input"
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-                  event.preventDefault();
-                  void runTurn(input);
-                }
-              }}
-              placeholder={activeQuestion || "说明希望补充或修改的内容；Ctrl/⌘ + Enter 发送"}
-              disabled={busy || isFinalized}
-              aria-label="教案设计对话输入"
-            />
-            <div className="ldw-composer-actions">
-              <button
-                type="button"
-                className="toolbar-button compact"
-                disabled={busy || !design || !input.trim() || !scopedEditAvailable}
-                onClick={modifyCurrentStepOnly}
-                title="只把输入内容应用到当前步骤，不覆盖其他章节"
-                data-testid="ldw-scoped-edit"
-              >
-                仅修改当前步骤
-              </button>
-              <button
-                type="button"
-                className="toolbar-button compact primary"
-                disabled={busy || !input.trim() || isFinalized}
-                onClick={() => void runTurn(input)}
-                data-testid="ldw-send"
-              >
-                发送给 AI
-              </button>
+            <div className="ldw-composer-input">
+              <textarea
+                id="lesson-design-input"
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                    event.preventDefault();
+                    void runTurn(input);
+                  }
+                }}
+                placeholder="描述要补充或修改的内容…"
+                disabled={busy || isFinalized}
+                aria-label="教案设计对话输入"
+              />
+              <button type="button" className="ldw-send-button" disabled={busy || !input.trim() || isFinalized} onClick={() => void runTurn(input)} aria-label="发送给 AI" title="发送给 AI" data-testid="ldw-send">↑</button>
             </div>
           </div>
-          <footer className="ldw-step-footer" data-testid="ldw-step-navigation">
-            {viewStep === "rehearsal" ? (
-              <button
-                type="button"
-                className="toolbar-button compact primary ldw-next-step"
-                disabled={busy || !currentReport?.ready}
-                onClick={() => setFocusStep("confirmation")}
-                data-testid="ldw-continue-to-confirmation"
-              >
-                进入确认发布
-              </button>
-            ) : focusStep && focusStep !== currentStep ? (
-              <>
-                <span>{isReviewingEarlierStep ? "正在回看" : "正在查看"}：{STEPS.find(([key]) => key === viewStep)?.[1] || "其他步骤"}</span>
-                <div className="ldw-actions">
-                  <button type="button" className="toolbar-button compact" onClick={() => setFocusStep("")}>
-                    回到当前步骤
-                  </button>
-                  <button
-                    type="button"
-                    className="toolbar-button compact primary"
-                    disabled={busy || !canAdoptViewed}
-                    onClick={() => void acceptStep(viewStep)}
-                    data-testid="ldw-accept-step"
-                  >
-                    确认本节
-                  </button>
-                </div>
-              </>
-            ) : (
-              <button
-                type="button"
-                className="toolbar-button compact primary ldw-next-step"
-                disabled={busy || !design || !canAdoptCurrent}
-                onClick={() => void acceptStep(currentStep)}
-                title={`确认“${STEPS.find(([key]) => key === currentStep)?.[1] || "当前步骤"}”并进入下一步`}
-                data-testid="ldw-adopt-continue"
-              >
-                确认“{STEPS.find(([key]) => key === currentStep)?.[1] || "当前步骤"}”并进入下一步
-              </button>
-            )}
-          </footer>
         </aside>
       </div>
     </section>
