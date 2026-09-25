@@ -44,7 +44,6 @@ import type {
   SceneSnapshot,
   TeachingContext
 } from "../types";
-import { ClassMiniWindow } from "./ClassMiniWindow";
 import { ClassRunPanel } from "./ClassRunPanel";
 import { LessonPanel } from "./LessonPanel";
 import { QuestionPracticeModal } from "./QuestionPracticeModal";
@@ -53,11 +52,6 @@ import { ReportPanel } from "./ReportPanel";
 import { VisualQueryPopup, type VisualizationItem } from "./VisualQueryPopup";
 
 type LessonMode = "off" | "prep" | "rehearsal" | "teach" | "review";
-
-/** 课堂小窗里的口头提问队列项：question_id 来自服务端 adhoc 题快照。 */
-type OralQueueItem = { question_id: string; text: string; options: string[] };
-
-const ORAL_OPTION_LABELS = ["A", "B", "C", "D", "E", "F", "G", "H"];
 
 type Props = {
   project: (ProjectRecord & { status?: string }) | null;
@@ -223,23 +217,12 @@ export function LessonWorkflowShell({
   const [populationSourceVersion, setPopulationSourceVersion] = useState("");
   const visualQuerySignatureRef = useRef("");
   const prepAbortRef = useRef<AbortController | null>(null);
-  // 课堂小窗：closed=未打开；minimized=收成标签（投屏题仍进行时保留入口）。
-  const [miniWindowState, setMiniWindowState] = useState<"closed" | "open" | "minimized">("closed");
-  // 投屏题显示面：full=全屏弹窗（默认，刷新恢复不变）；mini=课堂小窗。同一时刻只在一个面显示。
+  // 投屏题显示面：full=全屏弹窗（默认，刷新恢复不变）；mini=可拖拽悬浮小卡。同一时刻只在一个面显示。
   const [projectionSurface, setProjectionSurface] = useState<"full" | "mini">("full");
-  const [oralQueue, setOralQueue] = useState<OralQueueItem[]>([]);
-  const [activeOralId, setActiveOralId] = useState("");
-  const [miniAdhocText, setMiniAdhocText] = useState("");
-  const [miniAdhocOptions, setMiniAdhocOptions] = useState("");
 
-  // 换课堂（或重新加载到另一节课）时重置小窗与口头队列：队列是本机课堂辅助状态。
+  // 换课堂（或重新加载到另一节课）时投屏题回到全屏显示面。
   useEffect(() => {
-    setMiniWindowState("closed");
     setProjectionSurface("full");
-    setOralQueue([]);
-    setActiveOralId("");
-    setMiniAdhocText("");
-    setMiniAdhocOptions("");
   }, [activeSession?.session_id]);
 
   // 侧栏“上课模式”入口：有进行中课堂直接展开课中面板，否则进入课前备课。
@@ -660,37 +643,15 @@ export function LessonWorkflowShell({
     async (text: string, options: string[]) => {
       if (!activeSession) return;
       await runWithBusy(async () => {
-        const response = await launchSessionQuestion(activeSession.session_id, {
+        await launchSessionQuestion(activeSession.session_id, {
           stage_id: activeSession.current_stage_id,
           adhoc: { text, options },
           delivery: "teacher_oral"
         });
-        // 口头题不占用投屏单槽；队列是本机课堂辅助状态，事件历史仍进课堂报告。
-        const presented = response.presented_question as
-          | { question_id?: unknown; text?: unknown; options?: unknown }
-          | undefined;
-        const questionId = typeof presented?.question_id === "string" ? presented.question_id : "";
-        if (!questionId) return;
-        const item: OralQueueItem = {
-          question_id: questionId,
-          text: typeof presented?.text === "string" ? presented.text : text,
-          options: Array.isArray(presented?.options)
-            ? presented.options.filter((option): option is string => typeof option === "string")
-            : options
-        };
-        setOralQueue((previous) => [...previous.slice(-11), item]);
-        setActiveOralId(questionId);
-        setMiniWindowState("open");
       });
     },
     [activeSession, runWithBusy]
   );
-
-  const openMiniWindow = useCallback(() => {
-    setMiniWindowState("open");
-    // 有投屏题时把题目一并收进小窗，保证同一时刻只有一个题目显示面。
-    setProjectionSurface("mini");
-  }, []);
 
   // ------------------------------------------------------------------
   // 正式课堂题目投屏与计时（服务端计时状态，刷新/断线自动恢复）
@@ -803,22 +764,6 @@ export function LessonWorkflowShell({
 
   const workflowBusy = busy || localBusy;
   const teachPanelVisible = lessonMode === "teach" && activeSession?.status === "running" && Boolean(activeLesson);
-  const activeOral = oralQueue.find((item) => item.question_id === activeOralId) || oralQueue[oralQueue.length - 1] || null;
-  const quizActiveForMini = Boolean(activeSession?.active_question?.question_id);
-
-  function launchMiniAdhoc() {
-    const text = miniAdhocText.trim();
-    if (!text) {
-      return;
-    }
-    const options = miniAdhocOptions
-      .split(/[/／;；]/)
-      .map((item) => item.trim())
-      .filter(Boolean);
-    setMiniAdhocText("");
-    setMiniAdhocOptions("");
-    void launchAdhocQuestion(text, options);
-  }
 
   return (
     <>
@@ -847,7 +792,6 @@ export function LessonWorkflowShell({
           onLaunchQuestion={(questionId, stageId) => void launchQuestion(questionId, stageId)}
           onProjectQuestion={(questionId, stageId) => void projectQuestion(questionId, stageId)}
           onLaunchAdhocQuestion={(text, options) => void launchAdhocQuestion(text, options)}
-          onOpenMiniWindow={openMiniWindow}
           onObservation={recordObservation}
           onSnapshot={() => onCaptureEvidence?.(activeSession.session_id, activeSession.current_stage_id)}
           onEndSession={() => void endSession()}
@@ -867,109 +811,23 @@ export function LessonWorkflowShell({
           onTimerAction={(action) => void projectionTimerAction(action)}
           onReveal={() => void projectionReveal()}
           onClose={() => void closeProjection()}
-          onMinimize={() => {
-            setMiniWindowState("open");
-            setProjectionSurface("mini");
-          }}
+          onMinimize={() => setProjectionSurface("mini")}
           onObservation={(verdict, tag, note) =>
             recordObservation(verdict, tag, note, String(projectionQuestion.question_id || ""))}
         />
       ) : null}
-      {teachPanelVisible && miniWindowState === "open" ? (
-        <ClassMiniWindow
-          title={projectionQuestion && projectionSurface === "mini" ? "课堂小窗 · 题目投屏" : "课堂小窗"}
-          closeTitle={projectionQuestion ? "收起小窗：投屏题保持进行，可随时展开" : "收起课堂小窗"}
-          onClose={() => setMiniWindowState(projectionQuestion ? "minimized" : "closed")}
-        >
-          {projectionQuestion && projectionSurface === "mini" ? (
-            <QuestionPracticeModal
-              variant="mini"
-              question={projectionQuestion}
-              busy={workflowBusy}
-              onTimerAction={(action) => void projectionTimerAction(action)}
-              onReveal={() => void projectionReveal()}
-              onClose={() => void closeProjection()}
-              onExpand={() => setProjectionSurface("full")}
-              onObservation={(verdict, tag, note) =>
-                recordObservation(verdict, tag, note, String(projectionQuestion.question_id || ""))}
-            />
-          ) : null}
-          <div className="class-mini-oral" data-testid="mini-oral">
-            {oralQueue.length ? (
-              <div className="class-mini-oral-queue" role="tablist" aria-label="口头提问队列">
-                {oralQueue.map((item, index) => (
-                  <button
-                    key={item.question_id}
-                    type="button"
-                    role="tab"
-                    aria-selected={item.question_id === activeOral?.question_id}
-                    className={`class-mini-oral-chip ${item.question_id === activeOral?.question_id ? "active" : ""}`}
-                    onClick={() => setActiveOralId(item.question_id)}
-                    data-testid={`oral-queue-${index + 1}`}
-                    title={item.text}
-                  >
-                    {index + 1}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            {activeOral ? (
-              <div className="class-mini-oral-question" data-testid="mini-oral-question">
-                <p>{activeOral.text}</p>
-                {activeOral.options.length ? (
-                  <ol className="class-oral-options">
-                    {activeOral.options.map((option, index) => (
-                      <li key={index}>
-                        <span>{ORAL_OPTION_LABELS[index] || index + 1}</span>
-                        {option}
-                      </li>
-                    ))}
-                  </ol>
-                ) : null}
-              </div>
-            ) : null}
-            <input
-              value={miniAdhocText}
-              placeholder="写下想追问学生的话…"
-              aria-label="课堂小窗临时口头提问"
-              onChange={(event) => setMiniAdhocText(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  launchMiniAdhoc();
-                }
-              }}
-            />
-            <div className="class-panel-adhoc-row">
-              <input
-                value={miniAdhocOptions}
-                placeholder="选项用 / 分隔（留空为开放题）"
-                aria-label="课堂小窗提问选项"
-                onChange={(event) => setMiniAdhocOptions(event.target.value)}
-              />
-              <button
-                type="button"
-                className="toolbar-button compact primary"
-                disabled={workflowBusy || quizActiveForMini || !miniAdhocText.trim()}
-                onClick={launchMiniAdhoc}
-                data-testid="launch-adhoc-mini"
-              >
-                记录并提问
-              </button>
-            </div>
-          </div>
-        </ClassMiniWindow>
-      ) : null}
-      {teachPanelVisible && miniWindowState === "minimized" ? (
-        <button
-          type="button"
-          className="class-mini-window-tab glass-panel"
-          onClick={() => setMiniWindowState("open")}
-          data-testid="class-mini-window-tab"
-          title="展开课堂小窗"
-        >
-          <span className="tab-caret">‹</span>
-          <span className="tab-label">{projectionQuestion ? "投屏题进行中" : "课堂小窗"}</span>
-        </button>
+      {teachPanelVisible && projectionQuestion && projectionSurface === "mini" ? (
+        <QuestionPracticeModal
+          variant="mini"
+          question={projectionQuestion}
+          busy={workflowBusy}
+          onTimerAction={(action) => void projectionTimerAction(action)}
+          onReveal={() => void projectionReveal()}
+          onClose={() => void closeProjection()}
+          onExpand={() => setProjectionSurface("full")}
+          onObservation={(verdict, tag, note) =>
+            recordObservation(verdict, tag, note, String(projectionQuestion.question_id || ""))}
+        />
       ) : null}
       <div className="bottom-stack">
         <div className="bottom-dock">

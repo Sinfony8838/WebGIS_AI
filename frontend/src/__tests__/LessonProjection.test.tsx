@@ -3,6 +3,19 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { LessonWorkflowShell } from "../components/LessonWorkflowShell";
 import type { ClassSessionRecord, LessonRecord, ProjectRecord } from "../types";
 
+// jsdom 没有 PointerEvent：testing-library 会退化为普通 Event，丢掉 clientX/button。
+// 用 MouseEvent 派生一个最小实现，保证拖拽测试拿到真实的指针坐标。
+class JsdomPointerEvent extends MouseEvent {
+  pointerId: number;
+  constructor(type: string, init: MouseEventInit & { pointerId?: number } = {}) {
+    super(type, init);
+    this.pointerId = init.pointerId ?? 1;
+  }
+}
+if (typeof window.PointerEvent === "undefined") {
+  (window as unknown as { PointerEvent: typeof JsdomPointerEvent }).PointerEvent = JsdomPointerEvent;
+}
+
 const fetchLessonsMock = vi.fn();
 const createDesignMock = vi.fn();
 const fetchClassSessionsMock = vi.fn();
@@ -225,14 +238,15 @@ describe("LessonWorkflowShell question projection", () => {
   });
 });
 
-describe("LessonWorkflowShell classroom mini window", () => {
-  it("moves the projected question between the fullscreen modal and the mini window", async () => {
+describe("LessonWorkflowShell projection mini card", () => {
+  it("moves the projected question between the fullscreen modal and the draggable mini card", async () => {
     renderShell(makeSession(projectedQuestion()));
     await waitFor(() => expect(screen.getByTestId("qpm-minimize")).toBeTruthy());
 
-    // 全屏 → 小窗：同一道题出现在小窗里，计时控件齐全，服务端计时照常工作。
+    // 全屏 → 小窗：同一道题出现在悬浮小卡里，计时控件齐全，服务端计时照常工作。
     fireEvent.click(screen.getByTestId("qpm-minimize"));
-    expect(screen.getByTestId("class-mini-window")).toBeTruthy();
+    const miniCard = screen.getByTestId("question-practice-modal") as HTMLElement;
+    expect(miniCard.className).toContain("qpm-mini");
     expect(screen.getByTestId("qpm-expand")).toBeTruthy();
     expect(screen.getByTestId("qpm-clock").textContent).toContain("2:00");
     updateTimerMock.mockResolvedValue({
@@ -244,73 +258,41 @@ describe("LessonWorkflowShell classroom mini window", () => {
     await waitFor(() => expect(updateTimerMock).toHaveBeenCalledWith("session_1", "start"));
     await waitFor(() => expect(screen.getByTestId("qpm-pause")).toBeTruthy());
 
-    // 小窗 → 大屏：回到全屏投屏；小窗保持打开（口头提问区仍在）。
+    // 小窗 → 大屏：回到全屏投屏。
     fireEvent.click(screen.getByTestId("qpm-expand"));
     await waitFor(() => expect(screen.getByTestId("qpm-minimize")).toBeTruthy());
-    expect(screen.getByTestId("class-mini-window")).toBeTruthy();
-    expect(screen.getByTestId("mini-oral")).toBeTruthy();
+    expect(screen.getByTestId("question-practice-modal").className).not.toContain("qpm-mini");
   });
 
-  it("collapses to a tab while a projection question is in flight and reopens", async () => {
+  it("drags the mini card by its header (press and hold) and remembers the position", async () => {
     renderShell(makeSession(projectedQuestion()));
     await waitFor(() => expect(screen.getByTestId("qpm-minimize")).toBeTruthy());
     fireEvent.click(screen.getByTestId("qpm-minimize"));
-    expect(screen.getByTestId("class-mini-window")).toBeTruthy();
+    const miniCard = screen.getByTestId("question-practice-modal") as HTMLElement;
+    const header = miniCard.querySelector(".qpm-header") as HTMLElement;
+    expect(header).toBeTruthy();
 
-    fireEvent.click(screen.getByTestId("class-mini-window-close"));
-    const tab = screen.getByTestId("class-mini-window-tab");
-    expect(tab.textContent).toContain("投屏题进行中");
-    fireEvent.click(tab);
-    await waitFor(() => expect(screen.getByTestId("class-mini-window")).toBeTruthy());
+    // 长按页头拖动：只有按住拖动才改变位置，普通点击不打架。
+    fireEvent.pointerDown(header, { clientX: 300, clientY: 200, button: 0, pointerId: 1 });
+    fireEvent.pointerMove(header, { clientX: 120, clientY: 90, pointerId: 1 });
+    expect(miniCard.style.left).toBe("8px");
+    fireEvent.pointerUp(header, { clientX: 120, clientY: 90, pointerId: 1 });
+
+    // 页头上的按钮不受拖拽影响：大屏按钮仍可点击，回到全屏。
+    fireEvent.click(screen.getByTestId("qpm-expand"));
+    await waitFor(() => expect(screen.getByTestId("qpm-minimize")).toBeTruthy());
   });
 
-  it("queues ad-hoc oral questions with 1-2-3 switching in the mini window", async () => {
-    renderShell(makeSession({}));
-    await waitFor(() => expect(screen.getByTestId("class-run-panel")).toBeTruthy());
+  it("closes the question from the mini card via the header close button", async () => {
+    renderShell(makeSession(projectedQuestion()));
+    await waitFor(() => expect(screen.getByTestId("qpm-minimize")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("qpm-minimize"));
+    expect(screen.getByTestId("question-practice-modal").className).toContain("qpm-mini");
 
-    launchSessionQuestionMock.mockResolvedValueOnce({
-      status: "success",
-      active_question: {},
-      presented_question: { question_id: "adhoc_a", text: "第一问：胡焕庸线两侧差异？", options: ["东部密", "西部疏"] }
-    });
-    fireEvent.change(screen.getAllByPlaceholderText("写下想追问学生的话…")[0], {
-      target: { value: "第一问：胡焕庸线两侧差异？" }
-    });
-    fireEvent.click(screen.getByTestId("launch-adhoc"));
-    await waitFor(() =>
-      expect(launchSessionQuestionMock).toHaveBeenCalledWith("session_1", expect.objectContaining({
-        delivery: "teacher_oral",
-        adhoc: { text: "第一问：胡焕庸线两侧差异？", options: [] }
-      }))
-    );
-    // 记录并提问后小窗自动打开，当前题即第 1 问。
-    await waitFor(() => expect(screen.getByTestId("class-mini-window")).toBeTruthy());
-    expect(screen.getByTestId("mini-oral-question").textContent).toContain("第一问");
-
-    launchSessionQuestionMock.mockResolvedValueOnce({
-      status: "success",
-      active_question: {},
-      presented_question: { question_id: "adhoc_b", text: "第二问：影响因素有哪些？", options: [] }
-    });
-    const inputs = screen.getAllByPlaceholderText("写下想追问学生的话…");
-    fireEvent.change(inputs[inputs.length - 1], { target: { value: "第二问：影响因素有哪些？" } });
-    fireEvent.click(screen.getByTestId("launch-adhoc-mini"));
-    await waitFor(() => expect(screen.getByTestId("oral-queue-2")).toBeTruthy());
-    expect(screen.getByTestId("mini-oral-question").textContent).toContain("第二问");
-
-    fireEvent.click(screen.getByTestId("oral-queue-1"));
-    expect(screen.getByTestId("mini-oral-question").textContent).toContain("第一问");
-    expect(screen.getByTestId("mini-oral-question").textContent).toContain("东部密");
-  });
-
-  it("opens the mini window from the class run panel for oral-only use", async () => {
-    renderShell(makeSession({}));
-    await waitFor(() => expect(screen.getByTestId("class-run-panel")).toBeTruthy());
-
-    fireEvent.click(screen.getByTestId("open-class-mini-window"));
-    expect(screen.getByTestId("class-mini-window")).toBeTruthy();
-    expect(screen.getByTestId("mini-oral")).toBeTruthy();
-    expect(screen.queryByTestId("qpm-clock")).toBeNull();
+    closeQuestionMock.mockResolvedValue({ status: "success" });
+    fireEvent.click(screen.getByTestId("qpm-close"));
+    await waitFor(() => expect(closeQuestionMock).toHaveBeenCalledWith("session_1"));
+    await waitFor(() => expect(screen.queryByTestId("question-practice-modal")).toBeNull());
   });
 
   it("renders ✍ practice icons from the stage kind in the stage navigation", async () => {

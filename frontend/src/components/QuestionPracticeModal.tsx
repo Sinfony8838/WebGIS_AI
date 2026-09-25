@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { buildAuthenticatedUrl } from "../api";
 import type { LessonQuestion, ObservationVerdict } from "../types";
@@ -6,14 +6,14 @@ import type { LessonQuestion, ObservationVerdict } from "../types";
 type Props = {
   /** 来自班课 active_question 的完整题目快照（含服务端计时状态 timer）。 */
   question: LessonQuestion;
-  /** full = 全屏投屏（默认，带遮罩）；mini = 嵌入课堂小窗的紧凑卡（无遮罩、无 portal）。 */
+  /** full = 全屏投屏（默认，带遮罩）；mini = 可拖拽悬浮小卡（无遮罩、无 portal，页头长按拖动）。 */
   variant?: "full" | "mini";
   busy: boolean;
   onTimerAction: (action: "start" | "pause" | "resume" | "reset") => void;
   onReveal: () => void;
   /** 收题并关闭；未揭示时由服务端记录「未揭示答案」事实。 */
   onClose: () => void;
-  /** full 形态点「小窗」：收进课堂小窗（不收题，计时继续）。 */
+  /** full 形态点「小窗」：收进可拖拽小卡（不收题，计时继续）。 */
   onMinimize?: () => void;
   /** mini 形态点「大屏」：回到全屏投屏。 */
   onExpand?: () => void;
@@ -29,10 +29,30 @@ const SOURCE_LABELS: Record<string, string> = {
   lesson: "课时题目"
 };
 
+const MINI_POSITION_KEY = "qpm-mini-position";
+const VIEWPORT_MARGIN = 8;
+
 function formatClock(seconds: number): string {
   const safe = Math.max(0, Math.floor(seconds));
   const minutes = Math.floor(safe / 60);
   return `${minutes}:${String(safe % 60).padStart(2, "0")}`;
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.max(minimum, Math.min(maximum, value));
+}
+
+function readStoredMiniPosition(): { left: number; top: number } | null {
+  try {
+    const raw = window.localStorage.getItem(MINI_POSITION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { left?: unknown; top?: unknown };
+    if (typeof parsed.left !== "number" || typeof parsed.top !== "number") return null;
+    if (!Number.isFinite(parsed.left) || !Number.isFinite(parsed.top)) return null;
+    return { left: parsed.left, top: parsed.top };
+  } catch {
+    return null;
+  }
 }
 
 export function QuestionPracticeModal({
@@ -122,14 +142,74 @@ export function QuestionPracticeModal({
 
   const images = question.images || [];
 
+  // mini 形态的拖拽：页头长按拖动（按钮不触发），位置记忆在 localStorage。
+  const frameRef = useRef<HTMLElement | null>(null);
+  const dragRef = useRef<{ dx: number; dy: number } | null>(null);
+  const [miniPosition, setMiniPosition] = useState<{ left: number; top: number } | null>(readStoredMiniPosition);
+
+  useEffect(() => {
+    if (!mini || !miniPosition) return;
+    try {
+      window.localStorage.setItem(MINI_POSITION_KEY, JSON.stringify(miniPosition));
+    } catch {
+      /* localStorage 不可用（隐私模式等）时位置仅在本次会话内生效。 */
+    }
+  }, [mini, miniPosition]);
+
+  function startDrag(event: React.PointerEvent<HTMLDivElement>) {
+    // jsdom 等环境回退的合成事件可能没有 button 字段：仅在明确报告非左键时忽略。
+    if (!mini || (event.button !== undefined && event.button !== 0)) return;
+    if ((event.target as HTMLElement | null)?.closest("button")) return;
+    const frame = frameRef.current;
+    if (!frame) return;
+    const rect = frame.getBoundingClientRect();
+    setMiniPosition((previous) => previous || { left: rect.left, top: rect.top });
+    dragRef.current = { dx: event.clientX - rect.left, dy: event.clientY - rect.top };
+    try {
+      frame.setPointerCapture(event.pointerId);
+    } catch {
+      /* 环境不支持指针捕获时，依靠事件流继续拖拽。 */
+    }
+  }
+
+  function moveDrag(event: React.PointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    const frame = frameRef.current;
+    if (!drag || !frame) return;
+    setPositionClamped(event.clientX - drag.dx, event.clientY - drag.dy, frame);
+  }
+
+  function setPositionClamped(left: number, top: number, frame: HTMLElement) {
+    setMiniPosition({
+      left: clamp(left, VIEWPORT_MARGIN, Math.max(VIEWPORT_MARGIN, window.innerWidth - frame.offsetWidth - VIEWPORT_MARGIN)),
+      top: clamp(top, VIEWPORT_MARGIN, Math.max(VIEWPORT_MARGIN, window.innerHeight - frame.offsetHeight - VIEWPORT_MARGIN))
+    });
+  }
+
+  function endDrag(event: React.PointerEvent<HTMLDivElement>) {
+    dragRef.current = null;
+    const frame = frameRef.current;
+    if (frame?.hasPointerCapture?.(event.pointerId)) {
+      frame.releasePointerCapture(event.pointerId);
+    }
+  }
+
   const shell = (
     <section
+      ref={frameRef}
       className={`qpm-shell${mini ? " qpm-mini" : ""}`}
       role="dialog"
       aria-label="题目投屏"
       data-testid="question-practice-modal"
+      style={mini && miniPosition ? { left: miniPosition.left, top: miniPosition.top, right: "auto", bottom: "auto" } : undefined}
     >
-      <header className="qpm-header">
+      <header
+        className="qpm-header"
+        onPointerDown={mini ? startDrag : undefined}
+        onPointerMove={mini ? moveDrag : undefined}
+        onPointerUp={mini ? endDrag : undefined}
+        onPointerCancel={mini ? endDrag : undefined}
+      >
         <div className="qpm-heading">
           <span className="qpm-kicker">
             题目投屏 · {SOURCE_LABELS[timer?.question_source || ""] || "题目"}
