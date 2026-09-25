@@ -22,8 +22,6 @@ type Props = {
   /** 全屏投屏本题：服务端计时 + 课堂大屏同步（题目投影模式）。 */
   onProjectQuestion?: (questionId: string, stageId: string) => void;
   onLaunchAdhocQuestion: (text: string, options: string[]) => void;
-  /** 打开课堂小窗（口头提问 / 投屏题的迷你窗口）。 */
-  onOpenMiniWindow?: () => void;
   onObservation: (verdict: ObservationVerdict, tag: string, note: string, questionId: string) => void;
   onSnapshot: () => void;
   onEndSession: () => void;
@@ -65,7 +63,6 @@ export function ClassRunPanel({
   onLaunchQuestion,
   onProjectQuestion,
   onLaunchAdhocQuestion,
-  onOpenMiniWindow,
   onObservation,
   onSnapshot,
   onEndSession,
@@ -519,20 +516,7 @@ export function ClassRunPanel({
         ) : null}
 
         {!chinaInquiry && <div className="class-panel-adhoc" data-testid="adhoc-question">
-          <div className="class-panel-adhoc-head">
-            <span className="question-detail-label">临时口头提问</span>
-            {onOpenMiniWindow ? (
-              <button
-                type="button"
-                className="mini-control"
-                onClick={onOpenMiniWindow}
-                data-testid="open-class-mini-window"
-                title="打开课堂小窗：可拖拽，不遮挡地图"
-              >
-                小窗
-              </button>
-            ) : null}
-          </div>
+          <span className="question-detail-label">临时口头提问</span>
           <input
             value={adhocText}
             placeholder="写下想追问学生的话…"
