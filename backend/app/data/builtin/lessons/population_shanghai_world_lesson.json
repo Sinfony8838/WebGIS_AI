@@ -11,7 +11,7 @@
     "能用地图和材料检验自己的想法，认识总体规律中仍会出现绿洲、河谷等局地差异。"
   ],
   "metadata": {
-    "builtin_version": "6",
+    "builtin_version": "7",
     "duration_minutes": 40,
     "recommended": true,
     "reference": "人口分布教案参照.docx；地方情境由广东适配上海",
@@ -79,6 +79,7 @@
       "stage_id": "shanghai_intro",
       "title": "从上海出发：哪里人多，哪里人少",
       "minutes": 3,
+      "kind": "question",
       "scene": {
         "basemap_id": "amap_light",
         "templates": [],
@@ -140,6 +141,7 @@
       "stage_id": "concept",
       "title": "先学会读图：灯光亮就一定住的人多吗",
       "minutes": 5,
+      "kind": "presentation",
       "scene": {
         "basemap_id": "nasa_nightlights_2016",
         "templates": [],
@@ -229,6 +231,7 @@
       "stage_id": "shanghai_inquiry",
       "title": "看上海：黄浦与崇明为什么差这么多",
       "minutes": 7,
+      "kind": "practice",
       "scene": {
         "basemap_id": "amap_light",
         "templates": [],
@@ -333,6 +336,7 @@
       "stage_id": "shanghai_verify",
       "title": "再找证据：影像里的城市空间",
       "minutes": 4,
+      "kind": "practice",
       "scene": {
         "basemap_id": "amap_imagery",
         "templates": [],
@@ -396,6 +400,7 @@
       "stage_id": "china_inquiry",
       "title": "看中国：画出你发现的人口分界",
       "minutes": 5,
+      "kind": "practice",
       "scene": {
         "basemap_id": "amap_light",
         "templates": [
@@ -482,6 +487,7 @@
       "stage_id": "china_explain",
       "title": "看中国：规律之外为什么还有“例外”",
       "minutes": 6,
+      "kind": "presentation",
       "scene": {
         "basemap_id": "amap_light",
         "templates": [
@@ -564,6 +570,7 @@
       "stage_id": "world_inquiry",
       "title": "看世界：同一套方法还能解释哪里",
       "minutes": 7,
+      "kind": "practice",
       "scene": {
         "basemap_id": "nasa_population_2020",
         "templates": [],
@@ -649,6 +656,7 @@
       "stage_id": "summary",
       "title": "课堂小结：我学会怎样读人口分布图",
       "minutes": 3,
+      "kind": "summary",
       "scene": {
         "basemap_id": "amap_light",
         "templates": [],

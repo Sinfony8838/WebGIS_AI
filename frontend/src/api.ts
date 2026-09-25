@@ -1055,8 +1055,17 @@ export async function launchSessionQuestion(
     adhoc?: Record<string, unknown>;
     delivery?: "student" | "teacher_oral";
   }
-): Promise<{ status: string; active_question: Record<string, unknown> }> {
-  return requestJson<{ status: string; active_question: Record<string, unknown> }>(
+): Promise<{
+  status: string;
+  active_question: Record<string, unknown>;
+  /** delivery=teacher_oral 时返回口头呈现的题目快照（含 adhoc 题的 question_id）。 */
+  presented_question?: Record<string, unknown>;
+}> {
+  return requestJson<{
+    status: string;
+    active_question: Record<string, unknown>;
+    presented_question?: Record<string, unknown>;
+  }>(
     `/class-sessions/${encodeURIComponent(sessionId)}/questions/launch`,
     {
       method: "POST",

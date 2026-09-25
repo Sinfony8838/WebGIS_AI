@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ClassroomPresentationTarget } from "../api";
+import { stageKindInfo } from "../lib/stageKinds";
 import { ShanghaiPopulationInquiry } from "./ShanghaiPopulationInquiry";
 import { ChinaInquiryGuide, type ChinaInquiryContent } from "./ChinaInquiryGuide";
 import type { ClassSessionRecord, LessonQuestion, LessonRecord, LessonStage, ObservationVerdict } from "../types";
@@ -21,6 +22,8 @@ type Props = {
   /** 全屏投屏本题：服务端计时 + 课堂大屏同步（题目投影模式）。 */
   onProjectQuestion?: (questionId: string, stageId: string) => void;
   onLaunchAdhocQuestion: (text: string, options: string[]) => void;
+  /** 打开课堂小窗（口头提问 / 投屏题的迷你窗口）。 */
+  onOpenMiniWindow?: () => void;
   onObservation: (verdict: ObservationVerdict, tag: string, note: string, questionId: string) => void;
   onSnapshot: () => void;
   onEndSession: () => void;
@@ -62,6 +65,7 @@ export function ClassRunPanel({
   onLaunchQuestion,
   onProjectQuestion,
   onLaunchAdhocQuestion,
+  onOpenMiniWindow,
   onObservation,
   onSnapshot,
   onEndSession,
@@ -320,6 +324,7 @@ export function ClassRunPanel({
         {lesson.stages.map((stage, index) => {
           const active = stage.stage_id === currentStageId;
           const done = !active && session.events.some(event => event.type === "stage_enter" && event.stage_id === stage.stage_id);
+          const kindInfo = stageKindInfo(stage);
           return (
             <button
               key={stage.stage_id}
@@ -335,7 +340,10 @@ export function ClassRunPanel({
                 {index < lesson.stages.length - 1 ? <span className="stage-item-line" /> : null}
               </span>
               <span className="stage-item-body">
-                <span className="stage-item-title">{stage.title}</span>
+                <span className="stage-item-title">
+                  {kindInfo.icon ? <span className="stage-item-kind" title={kindInfo.label}>{kindInfo.icon}</span> : null}
+                  {stage.title}
+                </span>
                 <span className="stage-item-meta">
                   {stage.minutes}′
                   {stage.questions.length ? ` · ${stage.questions.length} 问` : ""}
@@ -356,11 +364,7 @@ export function ClassRunPanel({
         </details> : null}
         {currentStage?.scene && !chinaInquiry ? (
           <div className="basic-knowledge-launcher" data-testid="class-map-launcher">
-            <div>
-              <span className="question-detail-label">课堂地图</span>
-              <strong>先看图，再说发现</strong>
-              <small>进入环节会自动准备对应地图。先让学生描述看到的现象，再一起解释。</small>
-            </div>
+            <span className="question-detail-label">课堂地图</span>
             <div className="class-presentation-actions">
               <button type="button" className="toolbar-button compact primary" disabled={busy || presentationBusy || !onPresentScene} onClick={() => void openMapPresentation()}>
                 {presentationBusy ? "正在定位…" : "地图展示"}
@@ -385,7 +389,7 @@ export function ClassRunPanel({
           stageId={currentStageId as "china_inquiry" | "china_explain"} busy={busy}
           onEnterStage={onEnterStage} onSave={onSaveInquiryNote} />}
         {shanghaiSupplement && onPresentScene && <div className="shanghai-supplement-launcher">
-          <div><strong>基础讲完后 · 真题拓展</strong><small>2025 河南卷：人口分布与“年轻环”</small></div>
+          <div><strong>补充探究 · 真题拓展</strong><small>2025 河南卷：人口分布与“年轻环”</small></div>
           <button className="toolbar-button compact" disabled={busy || presentationBusy} onClick={() => setInquiryOpen(true)}>进入补充探究</button>
         </div>}
 
@@ -515,7 +519,20 @@ export function ClassRunPanel({
         ) : null}
 
         {!chinaInquiry && <div className="class-panel-adhoc" data-testid="adhoc-question">
-          <span className="question-detail-label">临时口头提问</span>
+          <div className="class-panel-adhoc-head">
+            <span className="question-detail-label">临时口头提问</span>
+            {onOpenMiniWindow ? (
+              <button
+                type="button"
+                className="mini-control"
+                onClick={onOpenMiniWindow}
+                data-testid="open-class-mini-window"
+                title="打开课堂小窗：可拖拽，不遮挡地图"
+              >
+                小窗
+              </button>
+            ) : null}
+          </div>
           <input
             value={adhocText}
             placeholder="写下想追问学生的话…"

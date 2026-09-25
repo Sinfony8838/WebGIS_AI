@@ -225,6 +225,111 @@ describe("LessonWorkflowShell question projection", () => {
   });
 });
 
+describe("LessonWorkflowShell classroom mini window", () => {
+  it("moves the projected question between the fullscreen modal and the mini window", async () => {
+    renderShell(makeSession(projectedQuestion()));
+    await waitFor(() => expect(screen.getByTestId("qpm-minimize")).toBeTruthy());
+
+    // 全屏 → 小窗：同一道题出现在小窗里，计时控件齐全，服务端计时照常工作。
+    fireEvent.click(screen.getByTestId("qpm-minimize"));
+    expect(screen.getByTestId("class-mini-window")).toBeTruthy();
+    expect(screen.getByTestId("qpm-expand")).toBeTruthy();
+    expect(screen.getByTestId("qpm-clock").textContent).toContain("2:00");
+    updateTimerMock.mockResolvedValue({
+      status: "success",
+      server_now: "2026-09-05T01:06:00+00:00",
+      timer: { ...(projectedQuestion().timer as Record<string, unknown>), status: "running", elapsed_seconds: 5, running_since: "2026-09-05T01:05:55+00:00" }
+    });
+    fireEvent.click(screen.getByTestId("qpm-start"));
+    await waitFor(() => expect(updateTimerMock).toHaveBeenCalledWith("session_1", "start"));
+    await waitFor(() => expect(screen.getByTestId("qpm-pause")).toBeTruthy());
+
+    // 小窗 → 大屏：回到全屏投屏；小窗保持打开（口头提问区仍在）。
+    fireEvent.click(screen.getByTestId("qpm-expand"));
+    await waitFor(() => expect(screen.getByTestId("qpm-minimize")).toBeTruthy());
+    expect(screen.getByTestId("class-mini-window")).toBeTruthy();
+    expect(screen.getByTestId("mini-oral")).toBeTruthy();
+  });
+
+  it("collapses to a tab while a projection question is in flight and reopens", async () => {
+    renderShell(makeSession(projectedQuestion()));
+    await waitFor(() => expect(screen.getByTestId("qpm-minimize")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("qpm-minimize"));
+    expect(screen.getByTestId("class-mini-window")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("class-mini-window-close"));
+    const tab = screen.getByTestId("class-mini-window-tab");
+    expect(tab.textContent).toContain("投屏题进行中");
+    fireEvent.click(tab);
+    await waitFor(() => expect(screen.getByTestId("class-mini-window")).toBeTruthy());
+  });
+
+  it("queues ad-hoc oral questions with 1-2-3 switching in the mini window", async () => {
+    renderShell(makeSession({}));
+    await waitFor(() => expect(screen.getByTestId("class-run-panel")).toBeTruthy());
+
+    launchSessionQuestionMock.mockResolvedValueOnce({
+      status: "success",
+      active_question: {},
+      presented_question: { question_id: "adhoc_a", text: "第一问：胡焕庸线两侧差异？", options: ["东部密", "西部疏"] }
+    });
+    fireEvent.change(screen.getAllByPlaceholderText("写下想追问学生的话…")[0], {
+      target: { value: "第一问：胡焕庸线两侧差异？" }
+    });
+    fireEvent.click(screen.getByTestId("launch-adhoc"));
+    await waitFor(() =>
+      expect(launchSessionQuestionMock).toHaveBeenCalledWith("session_1", expect.objectContaining({
+        delivery: "teacher_oral",
+        adhoc: { text: "第一问：胡焕庸线两侧差异？", options: [] }
+      }))
+    );
+    // 记录并提问后小窗自动打开，当前题即第 1 问。
+    await waitFor(() => expect(screen.getByTestId("class-mini-window")).toBeTruthy());
+    expect(screen.getByTestId("mini-oral-question").textContent).toContain("第一问");
+
+    launchSessionQuestionMock.mockResolvedValueOnce({
+      status: "success",
+      active_question: {},
+      presented_question: { question_id: "adhoc_b", text: "第二问：影响因素有哪些？", options: [] }
+    });
+    const inputs = screen.getAllByPlaceholderText("写下想追问学生的话…");
+    fireEvent.change(inputs[inputs.length - 1], { target: { value: "第二问：影响因素有哪些？" } });
+    fireEvent.click(screen.getByTestId("launch-adhoc-mini"));
+    await waitFor(() => expect(screen.getByTestId("oral-queue-2")).toBeTruthy());
+    expect(screen.getByTestId("mini-oral-question").textContent).toContain("第二问");
+
+    fireEvent.click(screen.getByTestId("oral-queue-1"));
+    expect(screen.getByTestId("mini-oral-question").textContent).toContain("第一问");
+    expect(screen.getByTestId("mini-oral-question").textContent).toContain("东部密");
+  });
+
+  it("opens the mini window from the class run panel for oral-only use", async () => {
+    renderShell(makeSession({}));
+    await waitFor(() => expect(screen.getByTestId("class-run-panel")).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId("open-class-mini-window"));
+    expect(screen.getByTestId("class-mini-window")).toBeTruthy();
+    expect(screen.getByTestId("mini-oral")).toBeTruthy();
+    expect(screen.queryByTestId("qpm-clock")).toBeNull();
+  });
+
+  it("renders ✍ practice icons from the stage kind in the stage navigation", async () => {
+    const lesson = makeLesson();
+    lesson.stages = [
+      { ...lesson.stages[0], kind: "practice" as const },
+      { ...lesson.stages[0], stage_id: "s2", kind: "question" as const, questions: [] }
+    ];
+    fetchLessonsMock.mockResolvedValue({ items: [lesson] });
+    fetchLessonMock.mockResolvedValue(lesson);
+    fetchClassSessionsMock.mockResolvedValue({ items: [makeSession({})] });
+    render(<LessonWorkflowShell project={project} layerState={null} onRefresh={vi.fn()} />);
+
+    await waitFor(() => expect(screen.getByTestId("stage-chip-s1")).toBeTruthy());
+    expect(screen.getByTestId("stage-chip-s1").textContent).toContain("✍");
+    expect(screen.getByTestId("stage-chip-s2").textContent).toContain("？");
+  });
+});
+
 it("adopts completed commentary after reveal without blocking classroom controls", async () => {
   const q=projectedQuestion();
   const pending={...(q.timer as object),status:"revealed",revealed:true,ai_explanation_status:"pending",ai_request_id:"request-a"};
