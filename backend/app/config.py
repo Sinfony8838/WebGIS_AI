@@ -540,7 +540,7 @@ class AppConfig:
             descriptor = self._xyz_layer(layer_name, title,
                 ["https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/" + tile_path + "/{z}/{y}/{x}.png"],
                 "NASA GIBS / SEDAC GPW" if max_zoom == 7 else "NASA GIBS / VIIRS Black Marble",
-                "basemap-layer basemap-scientific", usable_in_3d=False)
+                "basemap-layer basemap-scientific", usable_in_3d=True)
             descriptor["max_zoom"] = max_zoom
             items.insert(-1, {"id": dataset_id, "title": title,
                 "description": "有年份的科学可视化；不等同于实时或逐户测量。", "type": "stack", "provider": "nasa_gibs", "layers": [descriptor]})

@@ -95,6 +95,29 @@ export type BasemapCatalog = {
   items: BasemapPreset[];
 };
 
+export type MapProfileSample = {
+  distance_km: number;
+  lon: number;
+  lat: number;
+  value: number | null;
+  label?: string;
+};
+
+export type MapProfileResult = {
+  kind: "population" | "terrain";
+  source_id: string;
+  source_name: string;
+  source_year: string;
+  source_url: string | null;
+  unit: string;
+  sampling: string;
+  resolution_m: number | null;
+  total_distance_km: number;
+  sample_spacing_m: number | null;
+  no_data_count: number;
+  samples: MapProfileSample[];
+};
+
 export type LayerRecord = {
   layer_id: string;
   name: string;
