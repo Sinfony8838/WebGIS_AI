@@ -19,6 +19,7 @@ from .runtime import WebGISRuntime
 from .services.minimax_image_client import ALLOWED_ASPECT_RATIOS, ALLOWED_IMAGE_MODELS, MiniMaxImageError
 from .services import request_limits, resource_access
 from .services.ppt_renderer import PptRenderError, render_pptx_to_images
+from .services.map_profiles import ProfileError, preview as preview_map_profile
 from .services.auth import AuthContext, AuthError, AuthService
 
 
@@ -390,6 +391,12 @@ def _lesson_design_grant_roots(design) -> tuple:
 class CreateProjectRequest(BaseModel):
     name: str = ""
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class MapProfileRequest(BaseModel):
+    coordinates: List[List[float]]
+    kind: str
+    source_id: str
 
 
 class AuthBootstrapRequest(BaseModel):
@@ -1382,6 +1389,18 @@ def get_project(project_id: str, request: Request) -> Dict[str, Any]:
         return runtime.get_project(project_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/projects/{project_id}/profiles/preview")
+async def preview_project_profile(project_id: str, request: Request, payload: MapProfileRequest) -> Dict[str, Any]:
+    project = _require_project_access(request, project_id)
+    try:
+        return await asyncio.to_thread(
+            preview_map_profile, project, payload.coordinates, payload.kind,
+            payload.source_id, config.data_dir / "cache" / "map_profiles",
+        )
+    except ProfileError as exc:
+        raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
 
 
 @app.get("/projects/{project_id}/lesson-resources")

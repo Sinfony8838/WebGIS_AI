@@ -42,6 +42,7 @@ import type {
   LlmStatusResponse,
   LayersResponse,
   MapContext,
+  MapProfileResult,
   PoiSearchResponse,
   PopulationLessonPrepInput,
   PopulationLessonPrepResult,
@@ -373,6 +374,18 @@ export async function createProject(name = "WebGIS 实时课堂"): Promise<Proje
 
 export async function fetchProject(projectId: string): Promise<ProjectRecord & { status: string }> {
   return requestJson<ProjectRecord & { status: string }>(`/projects/${projectId}`);
+}
+
+export async function previewMapProfile(projectId: string, payload: {
+  coordinates: [number, number][];
+  kind: "population" | "terrain";
+  source_id: string;
+}): Promise<MapProfileResult> {
+  return requestJson<MapProfileResult>(`/projects/${encodeURIComponent(projectId)}/profiles/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
 }
 
 export async function switchBasemap(projectId: string, basemapId: string): Promise<{ status: string; base_map: BasemapPreset }> {

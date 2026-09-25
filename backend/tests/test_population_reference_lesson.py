@@ -53,7 +53,7 @@ class PopulationReferenceLessonTest(unittest.TestCase):
         for name, maximum in [("nasa_nightlights_2016", 8), ("nasa_population_2020", 7)]:
             descriptor = runtime.config.basemap_by_id(name)["layers"][0]
             self.assertEqual(descriptor["max_zoom"], maximum)
-            self.assertFalse(descriptor["usable_in_3d"])
+            self.assertTrue(descriptor["usable_in_3d"])
             self.assertIn("gibs.earthdata.nasa.gov", descriptor["urls"][0])
 
     def test_classroom_returns_recorded_stage_and_reference_answers(self):

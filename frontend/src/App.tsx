@@ -3,6 +3,7 @@ import MultiPolygon from "ol/geom/MultiPolygon";
 import type { UrbanSource, UrbanStatus } from "./components/UrbanStudyPanel";
 import { shanghaiAgeColor, shanghaiDensityColor, densityColor, densityRadius, rankColor } from "./lib/populationVisual";
 import { MapEvidenceLegend } from "./components/MapEvidenceLegend";
+import { MapProfilePanel } from "./components/MapProfilePanel";
 import { JobActivity } from "./lib/jobActivity";
 import { forgetPendingJob, rememberPendingJob, type PendingJob } from "./lib/pendingJobs";
 import { usePendingJobs } from "./hooks/usePendingJobs";
@@ -35,6 +36,7 @@ import { captureMapSnapshot } from "./mapScreenshot";
 import { captureWorkspaceSnapshot } from "./workspaceScreenshot";
 import { observePlaneView } from "./lib/planeViewState";
 import { BasemapLayerCache, DEFAULT_IMAGERY_LAYER } from "./lib/basemap";
+import { globeCompatibility } from "./lib/viewCompatibility";
 import { collectLegendRows, composeSnapshotDocument, mergeSnapshotInk, plainAttribution, type SnapshotDocument } from "./lib/snapshotDocument";
 import {
   addCatalogDatasetLayer,
@@ -479,6 +481,7 @@ export default function App({
   const highlightSourceRef = useRef<VectorSource | null>(null);
   const annotationSourceRef = useRef<VectorSource | null>(null);
   const measureSourceRef = useRef<VectorSource | null>(null);
+  const measureHoverFeatureRef = useRef<Feature<Point> | null>(null);
   const graticuleLayerRef = useRef<Graticule | null>(null);
   const drawInteractionRef = useRef<Draw | null>(null);
   const measureDrawRef = useRef<Draw | null>(null);
@@ -558,6 +561,7 @@ export default function App({
   const [measureTotalKm, setMeasureTotalKm] = useState<number | null>(null);
   const [annotationCount, setAnnotationCount] = useState(0);
   const [measurementCount, setMeasurementCount] = useState(0);
+  const [measureCoordinates, setMeasureCoordinates] = useState<[number, number][] | null>(null);
   const [annotationDraft, setAnnotationDraft] = useState<{ lonLat: [number, number] } | null>(null);
   const [selectedFeatureText, setSelectedFeatureText] = useState("");
   const [brushSettings, setBrushSettings] = useState<BrushSettings>({
@@ -719,6 +723,19 @@ export default function App({
   const onlinePoiEnabled = health?.online_services.amap_poi_enabled ?? false;
   const basemapItems = health?.basemaps.items || [];
   const activeBasemapId = layerState?.base_map.id || health?.basemaps.default_id || "";
+  const densityProfileSources = useMemo(() => {
+    const choices: { id: string; name: string }[] = [];
+    if (activeBasemapId === "nasa_population_2020") choices.push({ id: "gpw_2020", name: "全球 GPW 2020 栅格" });
+    for (const layer of layerState?.items || []) {
+      if (!layer.visible || layer.kind !== "vector" || !layer.geometry_type.includes("Polygon")) continue;
+      const features = layer.data.features;
+      if (Array.isArray(features) && features.some(feature =>
+        typeof feature?.properties?.density === "number" && Number.isFinite(feature.properties.density))) {
+        choices.push({ id: layer.layer_id, name: layer.name });
+      }
+    }
+    return choices;
+  }, [activeBasemapId, layerState?.items]);
   const weatherBasemapEnabled = Boolean(health?.online_services.weather_basemap_enabled);
   const weatherBasemapActive = isWeatherBasemapId(activeBasemapId);
   const kbActiveLayerId = layerState?.active_layer_id || "";
@@ -1963,6 +1980,7 @@ export default function App({
     searchAreaSourceRef.current?.clear();
     highlightSourceRef.current?.clear();
     measureSourceRef.current?.clear();
+    measureHoverFeatureRef.current = null;
     annotationSourceRef.current?.clear();
     brushRef.current?.clear();
     pptBrushRef.current?.clear();
@@ -1979,6 +1997,7 @@ export default function App({
     setMeasureTotalKm(null);
     setAnnotationCount(0);
     setMeasurementCount(0);
+    setMeasureCoordinates(null);
     setAnnotationDraft(null);
     setInteractionMode("browse");
 
@@ -2442,6 +2461,11 @@ export default function App({
     // Sane fallback when no project / basemap yet
     return DEFAULT_IMAGERY_LAYER;
   }, [layerState?.base_map]);
+  const autoGlobe = useMemo(
+    () => globeCompatibility(layerState?.base_map, layerState?.items || []),
+    [layerState?.base_map, layerState?.items]
+  );
+  const autoGlobeNoticeRef = useRef("");
 
   const transitionToPlane = useCallback(
     (opts: { lon: number; lat: number; zoom?: number; reason: "manual" | "altitude" | "dblclick" }) => {
@@ -2462,7 +2486,7 @@ export default function App({
         pushToast(
           "info",
           opts.reason === "dblclick" ? "已落入平面地图" : "已切换到平面地图",
-          "继续缩小可返回 3D 数字地球。"
+          "可通过切换按钮返回 3D；兼容图层也支持缩小自动切换。"
         );
       }
       // Re-arm the plane→globe trigger after a short cooldown so we don't
@@ -2524,10 +2548,11 @@ export default function App({
           reason: "manual"
         });
       } else {
+        if (!autoGlobe.ready) pushToast("info", "部分内容仅在 2D 显示", `${autoGlobe.reason}，切回 2D 可继续查看。`);
         transitionToGlobe({ reason: "manual" });
       }
     },
-    [globeCamera, transitionToGlobe, transitionToPlane]
+    [autoGlobe, globeCamera, pushToast, transitionToGlobe, transitionToPlane]
   );
 
   const handleGlobeDoubleClick = useCallback(
@@ -2723,6 +2748,10 @@ export default function App({
       style: (feature) => {
         const geometry = feature.getGeometry();
         const styles: Style[] = [];
+        if (geometry instanceof Point && feature.get("profile_hover")) {
+          return [new Style({ image: new CircleStyle({ radius: 8,
+            fill: new Fill({ color: "#e34e4e" }), stroke: new Stroke({ color: "#fff", width: 2 }) }) })];
+        }
         if (!geometry || !(geometry instanceof LineString)) {
           return styles;
         }
@@ -3001,7 +3030,16 @@ export default function App({
         return;
       }
       const zoom = view.getZoom();
+      if (typeof zoom === "number" && zoom >= PLANE_TO_GLOBE_ZOOM_THRESHOLD) autoGlobeNoticeRef.current = "";
       if (typeof zoom === "number" && zoom < PLANE_TO_GLOBE_ZOOM_THRESHOLD) {
+        if (!autoGlobe.ready) {
+          if (autoGlobeNoticeRef.current !== autoGlobe.reason) {
+            autoGlobeNoticeRef.current = autoGlobe.reason;
+            pushToast("info", "已保持二维地图", `${autoGlobe.reason}；需要时可手动切到 3D。`);
+          }
+          return;
+        }
+        autoGlobeNoticeRef.current = "";
         planeAutoArmedRef.current = false;
         const center = view.getCenter();
         const ll = center ? (toLonLat(center) as [number, number]) : [104, 35];
@@ -3011,11 +3049,19 @@ export default function App({
         }, 1500);
       }
     };
-    view.on("change:resolution", checkThreshold);
-    return () => {
-      view.un("change:resolution", checkThreshold);
+    // OpenLayers emits many intermediate resolutions during an animated zoom.
+    // Debounce those changes so only the settled zoom can switch views or notify.
+    let checkTimer: number | undefined;
+    const scheduleCheck = () => {
+      window.clearTimeout(checkTimer);
+      checkTimer = window.setTimeout(checkThreshold, 280);
     };
-  }, [transitionToGlobe, viewMode]);
+    view.on("change:resolution", scheduleCheck);
+    return () => {
+      window.clearTimeout(checkTimer);
+      view.un("change:resolution", scheduleCheck);
+    };
+  }, [autoGlobe, pushToast, transitionToGlobe, viewMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3414,6 +3460,8 @@ export default function App({
 
     draw.on("drawstart", (event) => {
       measureSourceRef.current?.clear();
+      measureHoverFeatureRef.current = null;
+      setMeasureCoordinates(null);
       setMeasureText("绘制中…双击结束当前测线，按 Esc 取消。");
       setMeasureTotalKm(0);
       const geometry = event.feature.getGeometry();
@@ -3441,6 +3489,9 @@ export default function App({
         lengthKm >= 1 ? `${lengthKm.toFixed(2)} 千米` : `${lengthMeters.toFixed(0)} 米`;
       setMeasureText(`测量完成：${pretty}`);
       setMeasureTotalKm(lengthKm);
+      if (geometry instanceof LineString) setMeasureCoordinates(
+        geometry.getCoordinates().map(point => toLonLat(point) as [number, number])
+      );
       setMeasurementCount((value) => value + 1);
       pushToast("success", "测距完成", `本段共 ${pretty}`);
       setInteractionMode("browse");
@@ -3675,6 +3726,23 @@ export default function App({
         />
       ) : null}
       <MapEvidenceLegend basemapId={activeBasemapId} layers={layerState?.items || []} globe={viewMode === "globe"} themeIds={globeThemeIds} showFit={showTeachingFit} onShowFit={setShowTeachingFit} busy={mapBusy} onTogglePrecipitation={value => handleToggleTextbookMap("china_precipitation_400mm", value)} />
+      {viewMode === "plane" && project && measureCoordinates && <MapProfilePanel
+        projectId={project.project_id}
+        coordinates={measureCoordinates}
+        densitySources={densityProfileSources}
+        onHover={sample => {
+          const source = measureSourceRef.current;
+          if (!source) return;
+          if (measureHoverFeatureRef.current) source.removeFeature(measureHoverFeatureRef.current);
+          measureHoverFeatureRef.current = null;
+          if (sample) {
+            const feature = new Feature({ geometry: new Point(fromLonLat([sample.lon, sample.lat])) });
+            feature.set("profile_hover", true);
+            source.addFeature(feature);
+            measureHoverFeatureRef.current = feature;
+          }
+        }}
+      />}
       <MapBrushOverlay
         projection={mapInkProjection}
         scope={project?.project_id || ""}

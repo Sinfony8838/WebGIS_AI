@@ -9,9 +9,10 @@ export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onSho
   const contentId = useId();
   const [changingPrecipitation, setChangingPrecipitation] = useState(false);
   const [expanded, setExpanded] = useState(() => !window.matchMedia?.("(max-width: 960px)").matches);
-  const night = !globe && basemapId === "nasa_nightlights_2016";
-  const populationGrid = !globe && basemapId === "nasa_population_2020";
-  const visible = layers.filter(layer => layer.visible);
+  const night = basemapId === "nasa_nightlights_2016";
+  const populationGrid = basemapId === "nasa_population_2020";
+  const visible = layers.filter(layer => layer.visible && (!globe ||
+    (layer.kind === "vector" && ["upload", "output_artifact"].includes(layer.source))));
   const workflowLegends = visible.filter(layer => layer.metadata?.workflow_style).map(layer => ({
     id: layer.layer_id, name: layer.name,
     style: layer.metadata.workflow_style as { title?: string; legend?: { title?: string; items?: Array<{ label: string; color: string }> } }
