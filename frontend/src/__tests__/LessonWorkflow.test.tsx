@@ -380,7 +380,12 @@ describe("ClassRunPanel", () => {
   it("applies the map without opening a lecture overlay and reports failures", async () => {
     const onPresentScene = vi.fn().mockRejectedValueOnce(new Error("场景已变化")).mockResolvedValueOnce(undefined);
     renderPanel({ onPresentScene });
-    expect(screen.getByTestId("class-map-launcher").textContent).toContain("进入环节会自动准备对应地图");
+    // 课堂面板只保留动作入口：设计期说明文字（“先看图，再说发现”与教学提示）不再展示。
+    const launcher = screen.getByTestId("class-map-launcher").textContent;
+    expect(launcher).toContain("课堂地图");
+    expect(launcher).toContain("地图展示");
+    expect(launcher).not.toContain("先看图，再说发现");
+    expect(launcher).not.toContain("先让学生描述看到的现象");
     fireEvent.click(screen.getByRole("button", { name: "地图展示" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("场景已变化");
     expect(screen.queryByTestId("basic-knowledge-overlay")).toBeNull();

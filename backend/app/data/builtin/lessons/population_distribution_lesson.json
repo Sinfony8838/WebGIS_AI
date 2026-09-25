@@ -15,13 +15,14 @@
     "duration_minutes": 40,
     "reference": "人教版高中地理必修二《人口分布》",
     "design_note": "v7：课前共创形成40分钟正式课时；课堂最后5分钟完成当堂复盘与即时巩固；课后报告另行推荐练习，不计入课堂时间。基础知识结合真实地图，教师答案与内部提示不投屏；三维只作宏观导入，定量判读回到二维规范专题图。",
-    "builtin_version": "8"
+    "builtin_version": "9"
   },
   "stages": [
     {
       "stage_id": "s1",
       "title": "问题导入：人口分布均匀吗",
       "minutes": 3,
+      "kind": "question",
       "scene": {
         "basemap_id": "amap_light",
         "templates": ["population_distribution"],
@@ -79,6 +80,7 @@
       "stage_id": "s2",
       "title": "概念建构：人口分布与人口密度",
       "minutes": 4,
+      "kind": "presentation",
       "scene": {
         "basemap_id": "amap_light",
         "templates": ["population_distribution", "population_density"],
@@ -149,6 +151,7 @@
       "stage_id": "s3",
       "title": "数据探究：2020 年地级市人口 Top20",
       "minutes": 5,
+      "kind": "practice",
       "scene": {
         "basemap_id": "amap_light",
         "templates": ["population_distribution"],
@@ -224,6 +227,7 @@
       "stage_id": "s4",
       "title": "中国主案例：胡焕庸线两侧差异",
       "minutes": 7,
+      "kind": "presentation",
       "scene": {
         "basemap_id": "amap_light",
         "templates": ["population_distribution", "hu_line_comparison"],
@@ -300,6 +304,7 @@
       "stage_id": "s5",
       "title": "影响因素归纳：水土气生与人文要素的融合",
       "minutes": 8,
+      "kind": "presentation",
       "scene": {
         "basemap_id": "amap_light",
         "templates": ["population_distribution", "hu_line_comparison"],
@@ -388,6 +393,7 @@
       "stage_id": "s6",
       "title": "尺度迁移：上海区县人口密度差异",
       "minutes": 8,
+      "kind": "practice",
       "scene": {
         "basemap_id": "amap_light",
         "templates": [],
@@ -489,6 +495,7 @@
       "stage_id": "s7",
       "title": "当堂复盘：证据链定格",
       "minutes": 3,
+      "kind": "summary",
       "scene": {
         "basemap_id": "amap_light",
         "templates": ["population_distribution", "hu_line_comparison"],
@@ -529,6 +536,7 @@
       "stage_id": "s8",
       "title": "当堂巩固：四步法检测",
       "minutes": 2,
+      "kind": "practice",
       "scene": {
         "basemap_id": "amap_light",
         "templates": ["population_distribution", "hu_line_comparison"],

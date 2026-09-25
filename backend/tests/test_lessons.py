@@ -63,7 +63,11 @@ class LessonServiceTest(unittest.TestCase):
         self.assertEqual(sum(int(stage.get("minutes") or 0) for stage in lesson.stages), 40)
         self.assertEqual(lesson.find_stage("s7")["title"], "当堂复盘：证据链定格")
         self.assertEqual(lesson.find_stage("s8")["title"], "当堂巩固：四步法检测")
-        self.assertEqual(lesson.metadata.get("builtin_version"), "8")
+        self.assertEqual(lesson.metadata.get("builtin_version"), "9")
+        # 环节类型标注：课中面板据此渲染 ✍（练习）/？（提问）徽标。
+        self.assertEqual(lesson.find_stage("s1")["kind"], "question")
+        self.assertEqual(lesson.find_stage("s3")["kind"], "practice")
+        self.assertEqual(lesson.find_stage("s7")["kind"], "summary")
         listing = runtime.classroom.list_lessons()
         self.assertTrue(any(item["lesson_id"] == BUILTIN_LESSON_ID for item in listing["items"]))
 
@@ -106,6 +110,23 @@ class LessonServiceTest(unittest.TestCase):
         )
 
         self.assertEqual(created["stages"][0]["brainstorm"], {})
+
+    def test_stage_kind_is_normalized_against_whitelist(self) -> None:
+        runtime, _store, _project_id = self.build_runtime()
+
+        created = runtime.classroom.create_lesson(
+            {
+                "title": "环节类型归一化",
+                "stages": [
+                    {"stage_id": "s1", "title": "练习环节", "scene": {}, "kind": "practice"},
+                    {"stage_id": "s2", "title": "非法类型", "scene": {}, "kind": "bogus"},
+                    {"stage_id": "s3", "title": "未标注", "scene": {}},
+                ],
+            }
+        )
+
+        kinds = {stage["stage_id"]: stage["kind"] for stage in created["stages"]}
+        self.assertEqual(kinds, {"s1": "practice", "s2": "", "s3": ""})
 
     def test_apply_stage_scene_sets_layers_view_and_basemap(self) -> None:
         runtime, store, project_id = self.build_runtime()

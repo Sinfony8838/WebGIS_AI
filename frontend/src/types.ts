@@ -865,10 +865,14 @@ export type LessonScene = {
   globe?: LessonGlobeScene;
 };
 
+export type LessonStageKind = "presentation" | "practice" | "question" | "summary";
+
 export type LessonStage = {
   stage_id: string;
   title: string;
   minutes: number;
+  /** 课堂环节类型：课中面板据此渲染 ✍（练习）/？（提问）徽标；空/缺省由前端推断。 */
+  kind?: LessonStageKind | "";
   scene: LessonScene;
   script: string[];
   questions: LessonQuestion[];

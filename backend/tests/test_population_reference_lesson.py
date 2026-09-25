@@ -98,9 +98,14 @@ class PopulationReferenceLessonTest(unittest.TestCase):
     def test_inquiry_regions_follow_the_current_geographical_scale(self):
         runtime, store, _ = self.build_runtime()
         lesson = store.get_lesson("lesson_builtin_population_shanghai_world")
-        self.assertEqual(lesson.metadata["builtin_version"], "6")
+        self.assertEqual(lesson.metadata["builtin_version"], "7")
         self.assertEqual(lesson.find_stage("shanghai_inquiry")["brainstorm"]["regions"], ["黄浦区", "崇明区"])
         self.assertIn("塔里木盆地", lesson.find_stage("china_explain")["brainstorm"]["regions"])
+        # 环节类型标注：课中面板据此渲染 ✍（练习）/？（提问）徽标。
+        self.assertEqual(lesson.find_stage("shanghai_intro")["kind"], "question")
+        self.assertEqual(lesson.find_stage("concept")["kind"], "presentation")
+        self.assertEqual(lesson.find_stage("shanghai_inquiry")["kind"], "practice")
+        self.assertEqual(lesson.find_stage("summary")["kind"], "summary")
         # Do not interrupt the student-first line-drawing activity with AI answers.
         self.assertEqual(lesson.find_stage("china_inquiry")["brainstorm"], {})
         self.assertEqual(lesson.find_stage("shanghai_verify")["brainstorm"], {})

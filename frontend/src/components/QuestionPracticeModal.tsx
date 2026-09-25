@@ -6,11 +6,17 @@ import type { LessonQuestion, ObservationVerdict } from "../types";
 type Props = {
   /** 来自班课 active_question 的完整题目快照（含服务端计时状态 timer）。 */
   question: LessonQuestion;
+  /** full = 全屏投屏（默认，带遮罩）；mini = 嵌入课堂小窗的紧凑卡（无遮罩、无 portal）。 */
+  variant?: "full" | "mini";
   busy: boolean;
   onTimerAction: (action: "start" | "pause" | "resume" | "reset") => void;
   onReveal: () => void;
   /** 收题并关闭；未揭示时由服务端记录「未揭示答案」事实。 */
   onClose: () => void;
+  /** full 形态点「小窗」：收进课堂小窗（不收题，计时继续）。 */
+  onMinimize?: () => void;
+  /** mini 形态点「大屏」：回到全屏投屏。 */
+  onExpand?: () => void;
   onObservation: (verdict: ObservationVerdict, tag: string, note: string) => void;
 };
 
@@ -31,12 +37,16 @@ function formatClock(seconds: number): string {
 
 export function QuestionPracticeModal({
   question,
+  variant = "full",
   busy,
   onTimerAction,
   onReveal,
   onClose,
+  onMinimize,
+  onExpand,
   onObservation
 }: Props) {
+  const mini = variant === "mini";
   const timer = question.timer;
   const [nowTick, setNowTick] = useState(() => Date.now());
   // 服务端每次响应带回实时计算好的 elapsed_seconds；以收到时刻为锚点本地递增，
@@ -59,6 +69,10 @@ export function QuestionPracticeModal({
   }, [timer]);
 
   useEffect(() => {
+    if (mini) {
+      // 小窗形态由显式按钮关闭，不占用 Escape（避免误触收题）。
+      return;
+    }
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         onClose();
@@ -66,7 +80,7 @@ export function QuestionPracticeModal({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [mini, onClose]);
 
   const running = timer?.status === "running";
   const elapsedSeconds = timer
@@ -108,19 +122,47 @@ export function QuestionPracticeModal({
 
   const images = question.images || [];
 
-  return createPortal(
-    <div className="qpm-backdrop" data-testid="question-practice-modal">
-      <section className="qpm-shell" role="dialog" aria-label="题目投屏">
-        <header className="qpm-header">
-          <div className="qpm-heading">
-            <span className="qpm-kicker">
-              题目投屏 · {SOURCE_LABELS[timer?.question_source || ""] || "题目"}
-            </span>
-            <strong>{question.type === "choice" ? "选择" : question.type === "composite" ? "复合题" : "问答题"}</strong>
-            {question.knowledge_points?.length ? (
-              <span className="qpm-meta">{question.knowledge_points.join(" · ")}</span>
-            ) : null}
-          </div>
+  const shell = (
+    <section
+      className={`qpm-shell${mini ? " qpm-mini" : ""}`}
+      role="dialog"
+      aria-label="题目投屏"
+      data-testid="question-practice-modal"
+    >
+      <header className="qpm-header">
+        <div className="qpm-heading">
+          <span className="qpm-kicker">
+            题目投屏 · {SOURCE_LABELS[timer?.question_source || ""] || "题目"}
+          </span>
+          <strong>{question.type === "choice" ? "选择" : question.type === "composite" ? "复合题" : "问答题"}</strong>
+          {question.knowledge_points?.length ? (
+            <span className="qpm-meta">{question.knowledge_points.join(" · ")}</span>
+          ) : null}
+        </div>
+        <div className="qpm-header-actions">
+          {mini ? (
+            onExpand ? (
+              <button
+                type="button"
+                className="toolbar-button compact"
+                onClick={onExpand}
+                data-testid="qpm-expand"
+                title="回到全屏投屏（课堂大屏展示）"
+              >
+                大屏
+              </button>
+            ) : null
+          ) : onMinimize ? (
+            <button
+              type="button"
+              className="toolbar-button compact"
+              onClick={onMinimize}
+              data-testid="qpm-minimize"
+              title="收进课堂小窗：不遮挡地图，计时继续"
+            >
+              小窗
+            </button>
+          ) : null}
           <button
             type="button"
             className="mini-control"
@@ -130,259 +172,267 @@ export function QuestionPracticeModal({
           >
             ×
           </button>
-        </header>
+        </div>
+      </header>
 
-        {revealed ? (
-          <div className="qpm-timer revealed" data-testid="qpm-revealed-timer">
-            <span>实际用时 {formatClock(timer?.actual_seconds ?? elapsedSeconds)}</span>
-            {(timer?.overtime_seconds || 0) > 0 ? (
-              <em className="qpm-overtime">超时 {formatClock(timer?.overtime_seconds || 0)}</em>
-            ) : (
-              <em className="qpm-ontime">未超时</em>
-            )}
+      {revealed ? (
+        <div className="qpm-timer revealed" data-testid="qpm-revealed-timer">
+          <span>实际用时 {formatClock(timer?.actual_seconds ?? elapsedSeconds)}</span>
+          {(timer?.overtime_seconds || 0) > 0 ? (
+            <em className="qpm-overtime">超时 {formatClock(timer?.overtime_seconds || 0)}</em>
+          ) : (
+            <em className="qpm-ontime">未超时</em>
+          )}
+        </div>
+      ) : (
+        <div className={`qpm-timer ${overtime ? "overtime" : ""} ${timer?.status || "idle"}`}>
+          <div className="qpm-timer-clock" data-testid="qpm-clock">
+            {overtime ? `已超时 ${formatClock(-remaining)}` : formatClock(remaining)}
           </div>
-        ) : (
-          <div className={`qpm-timer ${overtime ? "overtime" : ""} ${timer?.status || "idle"}`}>
-            <div className="qpm-timer-clock" data-testid="qpm-clock">
-              {overtime ? `已超时 ${formatClock(-remaining)}` : formatClock(remaining)}
-            </div>
-            <div className="qpm-timer-sub">
-              建议用时 {formatClock(suggested)} · 已用 {formatClock(elapsedSeconds)}
-            </div>
-            <div className="qpm-timer-actions">
-              {timer?.status === "idle" ? (
-                <button
-                  type="button"
-                  className="toolbar-button compact primary"
-                  disabled={busy}
-                  onClick={() => onTimerAction("start")}
-                  data-testid="qpm-start"
-                >
-                  开始计时
-                </button>
-              ) : null}
-              {running ? (
-                <button
-                  type="button"
-                  className="toolbar-button compact"
-                  disabled={busy}
-                  onClick={() => onTimerAction("pause")}
-                  data-testid="qpm-pause"
-                >
-                  暂停
-                </button>
-              ) : null}
-              {timer?.status === "paused" ? (
-                <button
-                  type="button"
-                  className="toolbar-button compact primary"
-                  disabled={busy}
-                  onClick={() => onTimerAction("resume")}
-                  data-testid="qpm-resume"
-                >
-                  继续
-                </button>
-              ) : null}
-              {timer && (running || timer.status === "paused") ? (
-                <button
-                  type="button"
-                  className="toolbar-button compact"
-                  disabled={busy}
-                  onClick={() => onTimerAction("reset")}
-                  data-testid="qpm-reset"
-                >
-                  重置
-                </button>
-              ) : null}
+          <div className="qpm-timer-sub">
+            建议用时 {formatClock(suggested)} · 已用 {formatClock(elapsedSeconds)}
+          </div>
+          <div className="qpm-timer-actions">
+            {timer?.status === "idle" ? (
               <button
                 type="button"
-                className="toolbar-button compact danger"
+                className="toolbar-button compact primary"
                 disabled={busy}
-                onClick={onReveal}
-                data-testid="qpm-reveal"
+                onClick={() => onTimerAction("start")}
+                data-testid="qpm-start"
               >
-                提前查看答案
+                开始计时
               </button>
-            </div>
+            ) : null}
+            {running ? (
+              <button
+                type="button"
+                className="toolbar-button compact"
+                disabled={busy}
+                onClick={() => onTimerAction("pause")}
+                data-testid="qpm-pause"
+              >
+                暂停
+              </button>
+            ) : null}
+            {timer?.status === "paused" ? (
+              <button
+                type="button"
+                className="toolbar-button compact primary"
+                disabled={busy}
+                onClick={() => onTimerAction("resume")}
+                data-testid="qpm-resume"
+              >
+                继续
+              </button>
+            ) : null}
+            {timer && (running || timer.status === "paused") ? (
+              <button
+                type="button"
+                className="toolbar-button compact"
+                disabled={busy}
+                onClick={() => onTimerAction("reset")}
+                data-testid="qpm-reset"
+              >
+                重置
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="toolbar-button compact danger"
+              disabled={busy}
+              onClick={onReveal}
+              data-testid="qpm-reveal"
+            >
+              提前查看答案
+            </button>
           </div>
-        )}
+        </div>
+      )}
 
-        <div className="qpm-body">
-          {question.task_text ? (
-            <p className="qpm-task" data-testid="qpm-task">
-              {question.task_text}
-            </p>
-          ) : null}
-          {question.material ? (
-            <div className="qpm-material" data-testid="qpm-material">
-              <span className="qpm-section-label">材料</span>
-              <p>{question.material}</p>
-            </div>
-          ) : null}
-          {images.length ? (
-            <div className="qpm-images" data-testid="qpm-images">
-              {images.map((image, index) => (
-                <img key={`${image.url}_${index}`} src={buildAuthenticatedUrl(image.url)} alt={`题图 ${index + 1}`} />
-              ))}
-            </div>
-          ) : null}
-          <div className="qpm-stem" data-testid="qpm-stem">
-            {question.text}
+      <div className="qpm-body">
+        {question.task_text ? (
+          <p className="qpm-task" data-testid="qpm-task">
+            {question.task_text}
+          </p>
+        ) : null}
+        {question.material ? (
+          <div className="qpm-material" data-testid="qpm-material">
+            <span className="qpm-section-label">材料</span>
+            <p>{question.material}</p>
           </div>
-          {question.options.length ? (
-            <ol className="qpm-options" data-testid="qpm-options">
-              {question.options.map((option, index) => (
-                <li key={index} className={revealed && question.answer_index === index ? "correct" : ""}>
-                  <span className="option-label">{OPTION_LABELS[index] || index + 1}</span>
-                  <span>{option}</span>
-                </li>
-              ))}
-            </ol>
-          ) : null}
-          {question.sub_questions?.length ? (
-            <div className="qpm-subs" data-testid="qpm-subs">
-              {question.sub_questions.map((sub) => (
-                <div key={sub.index} className="qpm-sub">
-                  <p className="qpm-sub-stem">
-                    {sub.index}. {sub.text}
-                  </p>
-                  {sub.options.length ? (
-                    <ol className="qpm-options">
-                      {sub.options.map((option, index) => (
-                        <li key={index} className={revealed && sub.answer_index === index ? "correct" : ""}>
-                          <span className="option-label">{OPTION_LABELS[index] || index + 1}</span>
-                          <span>{option}</span>
-                        </li>
-                      ))}
-                    </ol>
-                  ) : null}
-                  {revealed ? (
-                    <div className="qpm-sub-answer">
-                      <strong>答案：{sub.answer || "（未提供）"}</strong>
-                      {sub.explanation ? <p>{sub.explanation}</p> : null}
-                    </div>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          ) : null}
-
-          {revealed ? (
-            <div className="qpm-answer" data-testid="qpm-answer">
-              <span className="qpm-section-label">{question.source === "question_bank" ? "题库答案" : "参考答案"}</span>
-              <p className="qpm-answer-main">
-                {question.answer
-                  ? `${question.answer_letter ? `${question.answer_letter}. ` : ""}${question.answer}`
-                  : question.answer_index !== null && question.answer_index !== undefined && question.options.length
-                    ? `正确选项：${OPTION_LABELS[question.answer_index] || question.answer_index + 1}. ${question.options[question.answer_index]}`
-                    : "（本题未提供参考答案）"}
-              </p>
-              {question.explanation ? (
-                <div className="qpm-explanation">
-                  <span className="qpm-section-label">{question.source === "question_bank" ? "题库解析" : "参考解析"}</span>
-                  <p>{question.explanation}</p>
-                </div>
-              ) : null}
-              {question.knowledge_points?.length ? (
-                <div className="qpm-knowledge">
-                  {question.knowledge_points.map((point) => (
-                    <span key={point} className="qpm-knowledge-chip">
-                      {point}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-              {timer?.ai_explanation_status === "pending" ? (
-                <div className="qpm-ai" role="status" aria-live="polite"><span className="qpm-thinking-dot" />正在整理讲解…参考答案已可使用，可继续收题或记录观察。</div>
-              ) : null}
-              {timer?.ai_explanation_status === "interrupted" ? (
-                <div className="qpm-ai" role="status">讲解任务已中断，参考答案不受影响。<button type="button" disabled={busy} onClick={onReveal}>重试讲解</button></div>
-              ) : null}
-              {timer?.ai_explanation_note && timer.ai_explanation_status === "ready" ? <p className="qpm-section-label">{timer.ai_explanation_note}</p> : null}
-              {timer?.ai_explanation ? (
-                <div className="qpm-ai" data-testid="qpm-ai">
-                  <span className="qpm-section-label">
-                    {timer.ai_explanation.generator === "minimax" ? "AI 补充讲解" : "材料要点（规则整理）"}
-                  </span>
-                  <p>{timer.ai_explanation.text}</p>
-                </div>
-              ) : null}
-              <div className="qpm-notes" data-testid="qpm-notes">
-                <span className="qpm-section-label">
-                  学情速记{savedFlash ? <em className="record-saved"> ✓ 已记录</em> : null}
-                </span>
-                <div className="qpm-note-row">
-                  <input
-                    value={note}
-                    placeholder="一句话描述学生表现（可留空）"
-                    onChange={(event) => setNote(event.target.value)}
-                  />
-                </div>
-                <div className="qpm-note-actions">
-                  <button
-                    type="button"
-                    className="record-button correct"
-                    onClick={() => submitNote("correct")}
-                    data-testid="qpm-note-correct"
-                  >
-                    答对
-                  </button>
-                  <button
-                    type="button"
-                    className="record-button partial"
-                    onClick={() => submitNote("partial")}
-                    data-testid="qpm-note-partial"
-                  >
-                    部分
-                  </button>
-                  <button
-                    type="button"
-                    className={`record-button misconception ${noteVerdict === "misconception" ? "active" : ""}`}
-                    onClick={() => submitNote("misconception")}
-                    data-testid="qpm-note-misconception"
-                  >
-                    误区
-                  </button>
-                </div>
-                {noteVerdict === "misconception" ? (
-                  <div className="qpm-misconception" data-testid="qpm-misconception">
-                    <input
-                      value={noteTag}
-                      placeholder="输入误区标签"
-                      onChange={(event) => setNoteTag(event.target.value)}
-                    />
-                    <button
-                      type="button"
-                      className="toolbar-button compact primary"
-                      onClick={confirmMisconception}
-                      data-testid="qpm-note-confirm"
-                    >
-                      记录误区
-                    </button>
-                    <button type="button" className="toolbar-button compact" onClick={resetNote}>
-                      取消
-                    </button>
+        ) : null}
+        {images.length ? (
+          <div className="qpm-images" data-testid="qpm-images">
+            {images.map((image, index) => (
+              <img key={`${image.url}_${index}`} src={buildAuthenticatedUrl(image.url)} alt={`题图 ${index + 1}`} />
+            ))}
+          </div>
+        ) : null}
+        <div className="qpm-stem" data-testid="qpm-stem">
+          {question.text}
+        </div>
+        {question.options.length ? (
+          <ol className="qpm-options" data-testid="qpm-options">
+            {question.options.map((option, index) => (
+              <li key={index} className={revealed && question.answer_index === index ? "correct" : ""}>
+                <span className="option-label">{OPTION_LABELS[index] || index + 1}</span>
+                <span>{option}</span>
+              </li>
+            ))}
+          </ol>
+        ) : null}
+        {question.sub_questions?.length ? (
+          <div className="qpm-subs" data-testid="qpm-subs">
+            {question.sub_questions.map((sub) => (
+              <div key={sub.index} className="qpm-sub">
+                <p className="qpm-sub-stem">
+                  {sub.index}. {sub.text}
+                </p>
+                {sub.options.length ? (
+                  <ol className="qpm-options">
+                    {sub.options.map((option, index) => (
+                      <li key={index} className={revealed && sub.answer_index === index ? "correct" : ""}>
+                        <span className="option-label">{OPTION_LABELS[index] || index + 1}</span>
+                        <span>{option}</span>
+                      </li>
+                    ))}
+                  </ol>
+                ) : null}
+                {revealed ? (
+                  <div className="qpm-sub-answer">
+                    <strong>答案：{sub.answer || "（未提供）"}</strong>
+                    {sub.explanation ? <p>{sub.explanation}</p> : null}
                   </div>
                 ) : null}
               </div>
-            </div>
-          ) : null}
-        </div>
+            ))}
+          </div>
+        ) : null}
 
-        <footer className="qpm-footer">
-          <span className="qpm-footer-hint">本题已投屏至课堂大屏；揭示答案前仅展示题目。</span>
-          <button
-            type="button"
-            className="toolbar-button compact"
-            onClick={onClose}
-            disabled={busy}
-            data-testid="qpm-close-footer"
-          >
-            {revealed ? "收题并关闭" : "收题（未揭示答案）"}
-          </button>
-        </footer>
-      </section>
-    </div>,
-    document.body
+        {revealed ? (
+          <div className="qpm-answer" data-testid="qpm-answer">
+            <span className="qpm-section-label">{question.source === "question_bank" ? "题库答案" : "参考答案"}</span>
+            <p className="qpm-answer-main">
+              {question.answer
+                ? `${question.answer_letter ? `${question.answer_letter}. ` : ""}${question.answer}`
+                : question.answer_index !== null && question.answer_index !== undefined && question.options.length
+                  ? `正确选项：${OPTION_LABELS[question.answer_index] || question.answer_index + 1}. ${question.options[question.answer_index]}`
+                  : "（本题未提供参考答案）"}
+            </p>
+            {question.explanation ? (
+              <div className="qpm-explanation">
+                <span className="qpm-section-label">{question.source === "question_bank" ? "题库解析" : "参考解析"}</span>
+                <p>{question.explanation}</p>
+              </div>
+            ) : null}
+            {question.knowledge_points?.length ? (
+              <div className="qpm-knowledge">
+                {question.knowledge_points.map((point) => (
+                  <span key={point} className="qpm-knowledge-chip">
+                    {point}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            {timer?.ai_explanation_status === "pending" ? (
+              <div className="qpm-ai" role="status" aria-live="polite"><span className="qpm-thinking-dot" />正在整理讲解…参考答案已可使用，可继续收题或记录观察。</div>
+            ) : null}
+            {timer?.ai_explanation_status === "interrupted" ? (
+              <div className="qpm-ai" role="status">讲解任务已中断，参考答案不受影响。<button type="button" disabled={busy} onClick={onReveal}>重试讲解</button></div>
+            ) : null}
+            {timer?.ai_explanation_note && timer.ai_explanation_status === "ready" ? <p className="qpm-section-label">{timer.ai_explanation_note}</p> : null}
+            {timer?.ai_explanation ? (
+              <div className="qpm-ai" data-testid="qpm-ai">
+                <span className="qpm-section-label">
+                  {timer.ai_explanation.generator === "minimax" ? "AI 补充讲解" : "材料要点（规则整理）"}
+                </span>
+                <p>{timer.ai_explanation.text}</p>
+              </div>
+            ) : null}
+            <div className="qpm-notes" data-testid="qpm-notes">
+              <span className="qpm-section-label">
+                学情速记{savedFlash ? <em className="record-saved"> ✓ 已记录</em> : null}
+              </span>
+              <div className="qpm-note-row">
+                <input
+                  value={note}
+                  placeholder="一句话描述学生表现（可留空）"
+                  onChange={(event) => setNote(event.target.value)}
+                />
+              </div>
+              <div className="qpm-note-actions">
+                <button
+                  type="button"
+                  className="record-button correct"
+                  onClick={() => submitNote("correct")}
+                  data-testid="qpm-note-correct"
+                >
+                  答对
+                </button>
+                <button
+                  type="button"
+                  className="record-button partial"
+                  onClick={() => submitNote("partial")}
+                  data-testid="qpm-note-partial"
+                >
+                  部分
+                </button>
+                <button
+                  type="button"
+                  className={`record-button misconception ${noteVerdict === "misconception" ? "active" : ""}`}
+                  onClick={() => submitNote("misconception")}
+                  data-testid="qpm-note-misconception"
+                >
+                  误区
+                </button>
+              </div>
+              {noteVerdict === "misconception" ? (
+                <div className="qpm-misconception" data-testid="qpm-misconception">
+                  <input
+                    value={noteTag}
+                    placeholder="输入误区标签"
+                    onChange={(event) => setNoteTag(event.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="toolbar-button compact primary"
+                    onClick={confirmMisconception}
+                    data-testid="qpm-note-confirm"
+                  >
+                    记录误区
+                  </button>
+                  <button type="button" className="toolbar-button compact" onClick={resetNote}>
+                    取消
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      <footer className="qpm-footer">
+        <span className="qpm-footer-hint">
+          {mini
+            ? "小窗模式：地图保持可见；计时由服务端同步，可随时回到大屏。"
+            : "本题已投屏至课堂大屏；揭示答案前仅展示题目。"}
+        </span>
+        <button
+          type="button"
+          className="toolbar-button compact"
+          onClick={onClose}
+          disabled={busy}
+          data-testid="qpm-close-footer"
+        >
+          {revealed ? "收题并关闭" : "收题（未揭示答案）"}
+        </button>
+      </footer>
+    </section>
   );
+
+  if (mini) {
+    return shell;
+  }
+  return createPortal(<div className="qpm-backdrop">{shell}</div>, document.body);
 }

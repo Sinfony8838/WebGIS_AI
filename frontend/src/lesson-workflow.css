@@ -2794,3 +2794,163 @@
 .class-local-comparison > div { display: flex; flex-wrap: wrap; gap: 6px; }
 .class-local-comparison button { white-space: nowrap; }
 .class-local-comparison small { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+
+/* ------------------------------------------------------------------
+ * 环节类型徽标（✍ 练习 / ？提问）与课堂小窗（可拖拽、不遮挡地图）
+ * ------------------------------------------------------------------ */
+.stage-item-kind {
+  display: inline-block;
+  margin-right: 5px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.basic-knowledge-launcher {
+  align-items: center;
+}
+
+.class-panel-adhoc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.class-panel-adhoc-head .mini-control {
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.class-mini-window {
+  position: fixed;
+  right: 18px;
+  bottom: 84px;
+  z-index: 600;
+  width: min(420px, calc(100vw - 24px));
+  max-height: min(72vh, 660px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  box-shadow: 0 18px 42px rgba(6, 22, 41, 0.42);
+  overflow: hidden;
+}
+
+.class-mini-window-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px 8px 14px;
+  border-bottom: 1px solid var(--panel-border);
+  background: var(--surface);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.class-mini-window-head:active { cursor: grabbing; }
+
+.class-mini-window-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main);
+  letter-spacing: 0.03em;
+}
+
+.class-mini-window-body {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px 12px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(132, 178, 220, 0.4) transparent;
+}
+
+/* QuestionPracticeModal 小窗形态：压缩计时区与正文留白。 */
+.qpm-shell.qpm-mini {
+  width: 100%;
+  height: auto;
+  max-height: 58vh;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+}
+
+.qpm-mini .qpm-header { padding: 8px 10px; }
+.qpm-mini .qpm-heading strong { font-size: 14px; }
+.qpm-mini .qpm-header-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.qpm-mini .qpm-timer { gap: 10px; padding: 8px 10px; }
+.qpm-mini .qpm-timer-clock { font-size: 24px; min-width: 96px; }
+.qpm-mini .qpm-timer-sub { font-size: 11px; }
+.qpm-mini .qpm-body { padding: 10px 12px; gap: 10px; }
+.qpm-mini .qpm-footer { padding: 8px 10px; }
+.qpm-mini .qpm-footer-hint { font-size: 11px; }
+
+.class-mini-oral {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--panel-border);
+  padding-top: 10px;
+}
+
+.class-mini-oral-queue {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.class-mini-oral-chip {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--panel-border);
+  background: var(--surface);
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.class-mini-oral-chip.active {
+  background: rgba(120, 196, 255, 0.28);
+  border-color: var(--accent);
+  color: var(--text-main);
+}
+
+.class-mini-oral-question {
+  border: 1px solid rgba(88, 199, 255, 0.3);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: rgba(27, 93, 130, 0.14);
+}
+
+.class-mini-oral-question p {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-main);
+}
+
+.class-mini-window-tab {
+  position: fixed;
+  right: 12px;
+  bottom: 84px;
+  z-index: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  color: var(--text-main);
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 10px 26px rgba(6, 22, 41, 0.35);
+}
+
+.class-mini-window-tab .tab-caret { transform: rotate(180deg); }

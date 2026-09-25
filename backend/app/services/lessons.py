@@ -22,6 +22,10 @@ from .visual_query import VisualQueryService
 
 LESSON_ANNOTATION_LAYER_ID = "lesson_stage_annotations"
 
+# 课堂环节类型：驱动课中面板的 ✍（练习）/？（提问）类型徽标。
+# 空字符串表示未标注，由前端按环节内容回落推断。
+STAGE_KINDS = frozenset({"presentation", "practice", "question", "summary"})
+
 LESSON_IMPORT_SCHEMA_HINT = {
     "title": "string",
     "subject": "string",
@@ -653,6 +657,8 @@ class LessonService:
             if not isinstance(raw, dict):
                 continue
             stage_id = str(raw.get("stage_id") or f"s{index}")
+            raw_kind = str(raw.get("kind") or "")
+            kind = raw_kind if raw_kind in STAGE_KINDS else ""
             scene = {**default_scene(), **(raw.get("scene") or {})}
             raw_catalog = scene.get("catalog_layers")
             scene["catalog_layers"] = [str(item) for item in raw_catalog] if isinstance(raw_catalog, list) else []
@@ -674,6 +680,7 @@ class LessonService:
                     "stage_id": stage_id,
                     "title": str(raw.get("title") or f"环节 {index}"),
                     "minutes": max(1, int(raw.get("minutes") or 5)),
+                    "kind": kind,
                     "scene": scene,
                     "script": [str(item) for item in raw.get("script") or []],
                     "questions": questions,
