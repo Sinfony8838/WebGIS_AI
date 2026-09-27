@@ -6359,9 +6359,174 @@ button {
   backdrop-filter: blur(16px);
 }
 
+/* ── PPT split pane (portal-rendered, above the workspace stacking context) ── */
+
+.screen-shell.ppt-pane-open .map-canvas,
+.screen-shell.ppt-pane-open .map-3d-globe {
+  right: var(--ppt-pane-width, 0px);
+}
+
+.screen-shell.ppt-pane-open .map-vignette,
+.screen-shell.ppt-pane-open .map-grid-overlay,
+.screen-shell.ppt-pane-open .map-scanline {
+  right: var(--ppt-pane-width, 0px);
+}
+
+/* Keep right-anchored / centered chrome usable next to the pane instead of
+   hidden underneath it (header actions, tool dock, docks, overlays). */
+.screen-shell.ppt-pane-open .app-header {
+  right: var(--ppt-pane-width, 0px);
+}
+
+.screen-shell.ppt-pane-open .right-rail.map-tools-dock {
+  right: calc(var(--ppt-pane-width, 0px) + 16px);
+}
+
+.screen-shell.ppt-pane-open .workflow-dock,
+.screen-shell.ppt-pane-open .layer-manager {
+  right: calc(var(--ppt-pane-width, 0px) + 16px);
+}
+
+.screen-shell.ppt-pane-open .bottom-stack {
+  left: calc((100vw - var(--ppt-pane-width, 0px)) / 2);
+}
+
+.screen-shell.ppt-pane-open .map-basemap-notice {
+  left: calc((100vw - var(--ppt-pane-width, 0px)) / 2);
+}
+
+.ppt-pane {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  background: rgba(4, 8, 16, 0.97);
+  border-left: 1px solid rgba(88, 199, 255, 0.18);
+  box-shadow: -12px 0 36px rgba(0, 0, 0, 0.42);
+  outline: none;
+}
+
+.ppt-pane--fullscreen {
+  width: 100vw !important;
+  border-left: none;
+}
+
+.ppt-pane-divider {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  z-index: 91;
+  cursor: col-resize;
+  background: transparent;
+  touch-action: none;
+}
+
+.ppt-pane-divider:hover,
+.ppt-pane-divider:active {
+  background: rgba(88, 199, 255, 0.28);
+}
+
+.ppt-pane-badge {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.ppt-pane-badge--simple {
+  background: rgba(255, 176, 32, 0.14);
+  border: 1px solid rgba(255, 176, 32, 0.35);
+  color: #ffc766;
+}
+
+.ppt-pane-badge--progress {
+  background: rgba(88, 199, 255, 0.12);
+  border: 1px solid rgba(88, 199, 255, 0.32);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.ppt-pane-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  color: var(--text-soft);
+  font-size: 14px;
+  flex: 1;
+}
+
+.ppt-pane-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid rgba(88, 199, 255, 0.2);
+  border-top-color: var(--accent);
+  animation: ppt-pane-spin 0.9s linear infinite;
+}
+
+@keyframes ppt-pane-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ppt-slide-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(16, 30, 50, 0.9);
+  color: var(--text-soft);
+  font-size: 14px;
+}
+
+.ppt-slide-error button {
+  padding: 6px 18px;
+  border-radius: 10px;
+  background: rgba(88, 199, 255, 0.14);
+  border: 1px solid rgba(88, 199, 255, 0.35);
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.ppt-slide-error button:hover {
+  background: rgba(88, 199, 255, 0.24);
+}
+
+.ppt-viewer-thumb-pending {
+  opacity: 0.4;
+  cursor: default;
+}
+
+@media (max-width: 1024px) {
+  .ppt-pane-divider {
+    display: none;
+  }
+
+  .screen-shell.ppt-pane-open .map-canvas,
+  .screen-shell.ppt-pane-open .map-3d-globe,
+  .screen-shell.ppt-pane-open .map-vignette,
+  .screen-shell.ppt-pane-open .map-grid-overlay,
+  .screen-shell.ppt-pane-open .map-scanline {
+    right: 0;
+  }
+}
+
 .ppt-viewer-header {
   display: flex;
   align-items: center;
+  gap: 10px;
   justify-content: space-between;
   padding: 12px 20px;
   background: rgba(16, 30, 50, 0.7);

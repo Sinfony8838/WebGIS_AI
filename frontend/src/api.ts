@@ -49,6 +49,7 @@ import type {
   PopulationSourceCard,
   PopulationSourceVersion,
   PptRenderResponse,
+  PptRenderJobState,
   ProjectRecord,
   QgisStatusResponse,
   QuestionBankGroup,
@@ -1447,6 +1448,36 @@ export async function renderPptx(file: File): Promise<PptRenderResponse> {
       image_url: buildPublicFileUrl(slide.image_url)
     }))
   };
+}
+
+function mapPptRenderJob(job: PptRenderJobState): PptRenderJobState {
+  return {
+    ...job,
+    slides: (job.slides || []).map((slide) => ({
+      ...slide,
+      image_url: buildPublicFileUrl(slide.image_url)
+    }))
+  };
+}
+
+/** Start an async render job; returns immediately with the render id and any
+ *  already-ready (cached) slides. */
+export async function startPptRender(file: File): Promise<PptRenderJobState> {
+  const formData = new FormData();
+  formData.set("file", file);
+  const job = await requestJson<PptRenderJobState>("/ppt/renders", {
+    method: "POST",
+    body: formData
+  });
+  return mapPptRenderJob(job);
+}
+
+/** Poll an async render job; slides finished since the last poll are included. */
+export async function fetchPptRender(renderId: string): Promise<PptRenderJobState> {
+  const job = await requestJson<PptRenderJobState>(
+    `/ppt/renders/${encodeURIComponent(renderId)}`
+  );
+  return mapPptRenderJob(job);
 }
 
 // ── Timeline API ────────────────────────────────────────────

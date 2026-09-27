@@ -28,8 +28,7 @@ export async function parsePptxFile(file: File): Promise<PptxParsedPresentation>
 
     const images: Record<string, string> = {};
     for (const [rId, target] of Object.entries(imageRels)) {
-      const imgPath = "ppt/slides/" + target;
-      const imgFile = zip.file(imgPath) || zip.file("ppt/" + target);
+      const imgFile = findImageEntry(zip, target);
       if (imgFile) {
         const blob = await imgFile.async("blob");
         images[rId] = URL.createObjectURL(blob);
@@ -41,7 +40,7 @@ export async function parsePptxFile(file: File): Promise<PptxParsedPresentation>
     slides.push({ index: slides.length, html, bgColor, images, width, height });
   }
 
-  return { fileName: file.name, slideWidth: width, slideHeight: height, slides };
+  return { fileName: file.name, slideWidth: width, slideHeight: height, slides, mode: "simple" };
 }
 
 export function releaseSlideObjectUrls(slides: SlideContent[]): void {
@@ -53,6 +52,44 @@ export function releaseSlideObjectUrls(slides: SlideContent[]): void {
 }
 
 // ── XML parsing helpers ─────────────────────────────────────
+
+/** Resolve a slide relationship target ("../media/image1.png") against the
+ *  slide directory ("ppt/slides") into a real ZIP entry path. */
+export function resolvePptRelPath(target: string, baseDir = "ppt/slides"): string {
+  let decoded = target;
+  try {
+    decoded = decodeURIComponent(target);
+  } catch {
+    // keep raw target when it contains malformed percent escapes
+  }
+  if (decoded.startsWith("/")) {
+    return normalizeZipPath(decoded.slice(1));
+  }
+  return normalizeZipPath(`${baseDir}/${decoded}`);
+}
+
+function normalizeZipPath(value: string): string {
+  const stack: string[] = [];
+  for (const part of value.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") stack.pop();
+    else stack.push(part);
+  }
+  return stack.join("/");
+}
+
+function findImageEntry(zip: JSZip, target: string): JSZip.JSZipObject | null {
+  const candidates = [
+    resolvePptRelPath(target),
+    normalizeZipPath(`ppt/${target}`),
+    normalizeZipPath(`ppt/slides/${target}`),
+  ];
+  for (const path of candidates) {
+    const entry = zip.file(path);
+    if (entry) return entry;
+  }
+  return null;
+}
 
 async function readZipEntry(zip: JSZip, path: string): Promise<string> {
   const entry = zip.file(path);
@@ -74,10 +111,15 @@ function parseSlideSize(xml: string): { width: number; height: number } {
 function parseImageRelationships(relsXml: string): Record<string, string> {
   const result: Record<string, string> = {};
   if (!relsXml) return result;
-  const re = /Id="([^"]+)"[^>]*Type="[^"]*image[^"]*"[^>]*Target="([^"]+)"/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(relsXml))) {
-    result[m[1]] = m[2];
+  // Parse per-<Relationship> element so attribute order doesn't matter.
+  const relRe = /<Relationship\b[^>]*\/?>/g;
+  let rel: RegExpExecArray | null;
+  while ((rel = relRe.exec(relsXml))) {
+    const element = rel[0];
+    if (!/Type="[^"]*image[^"]*"/.test(element)) continue;
+    const id = element.match(/\bId="([^"]+)"/)?.[1];
+    const target = element.match(/\bTarget="([^"]+)"/)?.[1];
+    if (id && target) result[id] = target;
   }
   return result;
 }
@@ -284,7 +326,7 @@ function extractParagraphHtml(paraXml: string): string {
 
     const text = xmlUnescape(textMatch[1]);
     const style = rPr ? parseRunStyle(rPr[1] + (rPr[0].endsWith("/>") ? "" : "")) : "";
-    parts.push(`<span style="${style}">${text}</span>`);
+    parts.push(`<span style="${style}">${escapeHtml(text)}</span>`);
   }
 
   // Process line break
@@ -331,12 +373,22 @@ function parseRunStyle(rPrAttr: string): string {
 // ── Utility ─────────────────────────────────────────────────
 
 function xmlUnescape(s: string): string {
+  // Non-amp entities first so "&amp;lt;" becomes "&lt;" and not "<".
   return s
-    .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'");
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function findMatchingClose(xml: string, openStart: number, tag: string): number {

@@ -54,6 +54,8 @@ export type Map3DGlobeHandle = {
   getCameraState: () => CameraState | null;
   captureImage: () => string;
   getCanvasRect: () => { left: number; top: number; width: number; height: number } | null;
+  /** Re-reads the container size (e.g. after the PPT split pane resizes). */
+  notifyResize: () => void;
 };
 
 type Props = {
@@ -668,6 +670,13 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
         if (!canvas) return null;
         const rect = canvas.getBoundingClientRect();
         return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+      },
+      notifyResize: () => {
+        try {
+          viewerRef.current?.resize();
+        } catch {
+          // the viewer may be mid-teardown during unmount
+        }
       }
     })
   );

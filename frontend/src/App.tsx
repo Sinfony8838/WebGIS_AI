@@ -67,7 +67,9 @@ import {
   deleteLayer,
   patchLayer,
   registerKbLayer,
+  fetchPptRender,
   renderPptx,
+  startPptRender,
   runTemplate,
   searchKb,
   searchPoi,
@@ -147,6 +149,8 @@ import type {
   LayersResponse,
   MapContext,
   PoiSearchItem,
+  PptRenderJobState,
+  PptRenderJobStatus,
   ProjectRecord,
   RegionBinding,
   ResourceSearchResult,
@@ -673,6 +677,14 @@ export default function App({
   const [pptSlides, setPptSlides] = useState<SlideContent[]>([]);
   const [pptFileName, setPptFileName] = useState("");
   const [pptLoading, setPptLoading] = useState(false);
+  const [pptDeckKey, setPptDeckKey] = useState("");
+  const [pptRenderStatus, setPptRenderStatus] = useState<PptRenderJobStatus | "idle">("idle");
+  const [pptExpectedSlides, setPptExpectedSlides] = useState(0);
+  const [pptPreviewMode, setPptPreviewMode] = useState<"rendered" | "simple">("rendered");
+  const [pptPaneWidth, setPptPaneWidth] = useState(() => Math.round(window.innerWidth * 0.42));
+  const [pptFullscreen, setPptFullscreen] = useState(false);
+  const pptRenderPollRef = useRef<number | null>(null);
+  const pptPaneResizeRafRef = useRef(0);
   const pptPresentationReady = pptSlides.length > 0;
   const brushTargetRef = pptViewerOpen && pptPresentationReady ? pptBrushRef : brushRef;
   const brushTargetHasContent = pptViewerOpen && pptPresentationReady ? pptBrushHasContent : mapBrushHasContent;
@@ -1835,30 +1847,25 @@ export default function App({
     }
   }, [currentUser.role, handleAttachImage, imageGenerationLoading, project, pushToast, refreshProjectState]);
 
-  const handleRenderedPptImport = useCallback(async (file: File) => {
-    setPptLoading(true);
-    let renderError = "";
-    try {
-      const rendered = await renderPptx(file);
-      const slides = rendered.slides.map((slide) => ({
-        index: slide.index,
-        html: "",
-        imageUrl: slide.image_url,
-        images: {},
-        width: slide.width,
-        height: slide.height,
-        renderer: rendered.renderer
-      }));
-      setPptSlides((previousSlides) => {
-        releaseSlideObjectUrls(previousSlides);
-        return slides;
-      });
-      setPptFileName(rendered.file_name || file.name);
-      setPptBrushHasContent(false);
-      setPptViewerOpen(true);
-      pushToast("success", "PPT 已导入", `已使用 ${rendered.renderer} 渲染 ${rendered.slides.length} 张幻灯片`);
-    } catch (err) {
-      renderError = err instanceof Error ? err.message : String(err);
+  const stopPptRenderPolling = useCallback(() => {
+    if (pptRenderPollRef.current !== null) {
+      window.clearInterval(pptRenderPollRef.current);
+      pptRenderPollRef.current = null;
+    }
+  }, []);
+
+  const notifyMapsResized = useCallback(() => {
+    // The 2D OpenLayers map re-layouts via its own ResizeObserver; the Cesium
+    // globe needs an explicit nudge when its container box changes.
+    window.cancelAnimationFrame(pptPaneResizeRafRef.current);
+    pptPaneResizeRafRef.current = window.requestAnimationFrame(() => {
+      globeRef.current?.notifyResize();
+    });
+  }, []);
+
+  const fallbackToSimpleParser = useCallback(
+    async (file: File, renderMessage: string) => {
+      stopPptRenderPolling();
       try {
         const result = await parsePptxFile(file);
         setPptSlides((previousSlides) => {
@@ -1866,30 +1873,203 @@ export default function App({
           return result.slides;
         });
         setPptFileName(result.fileName);
-        setPptBrushHasContent(false);
-        setPptViewerOpen(true);
-        pushToast("info", "PPT 已导入（简易模式）", "未找到可用的服务端渲染器，已使用前端解析兜底。复杂背景可能不完全一致。");
+        setPptPreviewMode("simple");
+        setPptRenderStatus("complete");
+        setPptExpectedSlides(result.slides.length);
+        setPptLoading(false);
+        pushToast("info", "PPT 已导入（简易预览）", `服务端渲染未成功（${renderMessage}），已使用前端解析，排版为近似还原。`);
       } catch (fallbackErr) {
         const fallbackMessage = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
-        pushToast("error", "PPT 导入失败", `${fallbackMessage}${renderError ? `；渲染器错误：${renderError}` : ""}`);
+        setPptRenderStatus("failed");
+        setPptLoading(false);
+        pushToast("error", "PPT 导入失败", `${fallbackMessage}；渲染器错误：${renderMessage}`);
       }
-    } finally {
-      setPptLoading(false);
-    }
-  }, [pushToast]);
+    },
+    [pushToast, stopPptRenderPolling]
+  );
+
+  const handleRenderedPptImport = useCallback(
+    async (file: File) => {
+      stopPptRenderPolling();
+      setPptLoading(true);
+      setPptViewerOpen(true);
+      setPptFullscreen(false);
+      const deckKey = `${file.name}:${file.size}:${file.lastModified}`;
+      setPptDeckKey(deckKey);
+      setPptFileName(file.name);
+      setPptPreviewMode("rendered");
+      setPptRenderStatus("queued");
+      setPptExpectedSlides(0);
+      setPptSlides((previousSlides) => {
+        releaseSlideObjectUrls(previousSlides);
+        return [];
+      });
+
+      const applySlides = (slides: SlideContent[]) => {
+        setPptSlides((previousSlides) => {
+          if (slides.length <= previousSlides.length) return previousSlides;
+          return slides;
+        });
+      };
+
+      const toSlideContent = (job: PptRenderJobState): SlideContent[] =>
+        job.slides.map((slide) => ({
+          index: slide.index,
+          html: "",
+          imageUrl: slide.image_url,
+          images: {},
+          width: slide.width,
+          height: slide.height,
+          renderer: job.renderer
+        }));
+
+      let job: PptRenderJobState;
+      try {
+        job = await startPptRender(file);
+      } catch (err) {
+        // Async endpoint unavailable or rejected the file: fall back to sync
+        // render, then to the client-side simple parser.
+        try {
+          const rendered = await renderPptx(file);
+          applySlides(
+            rendered.slides.map((slide) => ({
+              index: slide.index,
+              html: "",
+              imageUrl: slide.image_url,
+              images: {},
+              width: slide.width,
+              height: slide.height,
+              renderer: rendered.renderer
+            }))
+          );
+          setPptFileName(rendered.file_name || file.name);
+          setPptRenderStatus("complete");
+          setPptExpectedSlides(rendered.slides.length);
+          pushToast("success", "PPT 已导入", `已使用 ${rendered.renderer} 渲染 ${rendered.slides.length} 张幻灯片`);
+        } catch (renderErr) {
+          try {
+            const result = await parsePptxFile(file);
+            applySlides(result.slides);
+            setPptFileName(result.fileName);
+            setPptPreviewMode("simple");
+            setPptRenderStatus("complete");
+            setPptExpectedSlides(result.slides.length);
+            pushToast("info", "PPT 已导入（简易预览）", "服务端渲染不可用，已使用前端解析。排版为近似还原，复杂背景可能不完全一致。");
+          } catch (fallbackErr) {
+            const fallbackMessage = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+            const renderMessage = renderErr instanceof Error ? renderErr.message : String(renderErr);
+            setPptRenderStatus("failed");
+            pushToast("error", "PPT 导入失败", `${fallbackMessage}；渲染器错误：${renderMessage}`);
+          }
+        }
+        setPptLoading(false);
+        return;
+      }
+
+      setPptFileName(job.file_name || file.name);
+      if (job.expected_slides) setPptExpectedSlides(job.expected_slides);
+      if (job.slides.length > 0) {
+        applySlides(toSlideContent(job));
+        notifyMapsResized();
+      }
+      if (job.status === "complete") {
+        setPptRenderStatus("complete");
+        setPptExpectedSlides(job.slides.length);
+        setPptLoading(false);
+        pushToast(
+          "success",
+          job.cached ? "PPT 已导入（缓存）" : "PPT 已导入",
+          `共 ${job.slides.length} 张幻灯片${job.cached ? "，来自上次渲染缓存" : ""}`
+        );
+        return;
+      }
+      if (job.status === "failed") {
+        await fallbackToSimpleParser(file, job.error?.message || "服务端渲染失败");
+        return;
+      }
+
+      setPptRenderStatus(job.status);
+      const renderId = job.render_id;
+      pptRenderPollRef.current = window.setInterval(() => {
+        void (async () => {
+          try {
+            const poll = await fetchPptRender(renderId);
+            if (poll.expected_slides) setPptExpectedSlides(poll.expected_slides);
+            if (poll.slides.length > 0) {
+              applySlides(toSlideContent(poll));
+            }
+            if (poll.status === "complete") {
+              stopPptRenderPolling();
+              setPptRenderStatus("complete");
+              setPptExpectedSlides((previous) => previous || poll.slides.length);
+              setPptLoading(false);
+              pushToast("success", "PPT 渲染完成", `共 ${poll.slides.length} 张幻灯片`);
+            } else if (poll.status === "failed") {
+              stopPptRenderPolling();
+              await fallbackToSimpleParser(file, poll.error?.message || "服务端渲染失败");
+            } else {
+              setPptRenderStatus(poll.status);
+            }
+          } catch {
+            // transient network errors: keep polling until a terminal state
+          }
+        })();
+      }, 600);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [fallbackToSimpleParser, notifyMapsResized, pushToast, stopPptRenderPolling]
+  );
 
   const handlePptCollapse = useCallback(() => {
     setPptViewerOpen(false);
-  }, []);
+    notifyMapsResized();
+  }, [notifyMapsResized]);
+
+  const handlePptExpand = useCallback(() => {
+    setPptViewerOpen(true);
+    notifyMapsResized();
+  }, [notifyMapsResized]);
+
+  const handlePptFullscreenToggle = useCallback(() => {
+    setPptFullscreen((previous) => !previous);
+    notifyMapsResized();
+  }, [notifyMapsResized]);
+
+  const handlePptPaneWidthChange = useCallback(
+    (px: number) => {
+      setPptPaneWidth(px);
+      notifyMapsResized();
+    },
+    [notifyMapsResized]
+  );
 
   const handlePptRemove = useCallback(() => {
+    stopPptRenderPolling();
     setPptViewerOpen(false);
+    setPptFullscreen(false);
     setPptBrushHasContent(false);
     setPptFileName("");
+    setPptDeckKey("");
+    setPptRenderStatus("idle");
+    setPptExpectedSlides(0);
+    setPptPreviewMode("rendered");
     setPptSlides((previousSlides) => {
       releaseSlideObjectUrls(previousSlides);
       return [];
     });
+    notifyMapsResized();
+  }, [notifyMapsResized, stopPptRenderPolling]);
+
+  // Stop polling when the App unmounts.
+  useEffect(() => stopPptRenderPolling, [stopPptRenderPolling]);
+
+  // Keep the map ≥520px when the window shrinks while the pane is open.
+  useEffect(() => {
+    const onResize = () => {
+      setPptPaneWidth((width) => Math.max(360, Math.min(window.innerWidth - 520, width)));
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, []);
 
   const handleUploadDataset = useCallback(
@@ -3658,7 +3838,14 @@ export default function App({
   return (
     <div
       ref={workspaceRef}
-      className={`screen-shell screen-shell-classroom view-mode-${viewMode}`}
+      className={`screen-shell screen-shell-classroom view-mode-${viewMode} ${
+        pptViewerOpen && !pptFullscreen ? "ppt-pane-open" : ""
+      }`}
+      style={
+        pptViewerOpen && !pptFullscreen
+          ? ({ "--ppt-pane-width": `${pptPaneWidth}px` } as React.CSSProperties)
+          : undefined
+      }
       data-interaction-mode={interactionMode}
       data-testid="workspace-capture-root"
     >
@@ -4366,7 +4553,15 @@ export default function App({
           open={pptViewerOpen}
           slides={pptSlides}
           fileName={pptFileName}
-          onExpand={() => setPptViewerOpen(true)}
+          deckKey={pptDeckKey}
+          renderStatus={pptRenderStatus}
+          expectedSlides={pptExpectedSlides}
+          previewMode={pptPreviewMode}
+          paneWidth={pptPaneWidth}
+          fullscreen={pptFullscreen}
+          onPaneWidthChange={handlePptPaneWidthChange}
+          onToggleFullscreen={handlePptFullscreenToggle}
+          onExpand={handlePptExpand}
           onCollapse={handlePptCollapse}
           onRemove={handlePptRemove}
           brushActive={interactionMode === "brush"}

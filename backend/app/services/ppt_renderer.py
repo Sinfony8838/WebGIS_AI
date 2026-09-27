@@ -341,6 +341,117 @@ def _attempt_powerpoint_comtypes(source_path: Path, output_dir: Path, attempts: 
             pass
 
 
+def _export_slides_incrementally(
+    source_path: Path,
+    export_dir: Path,
+    progress_path: Path,
+    attempts: List[Dict[str, str]],
+) -> Dict[str, Any] | None:
+    """Export slides one by one via PowerPoint COM, writing progress JSON after each.
+
+    Runs inside the ppt_renderer_worker subprocess so the first slide image is
+    available long before the whole deck has been exported. Returns the final
+    result dict, or None when no COM library was usable or the export failed.
+    """
+    export_dir.mkdir(parents=True, exist_ok=True)
+    result = _incremental_export_with_com("pywin32", source_path, export_dir, progress_path, attempts)
+    if result is None:
+        result = _incremental_export_with_com("comtypes", source_path, export_dir, progress_path, attempts)
+    return result
+
+
+def _incremental_export_with_com(
+    backend: str,
+    source_path: Path,
+    export_dir: Path,
+    progress_path: Path,
+    attempts: List[Dict[str, str]],
+) -> Dict[str, Any] | None:
+    renderer_name = f"powerpoint-incremental-{backend}"
+    try:
+        if backend == "pywin32":
+            import pythoncom
+            import win32com.client
+
+            co_initialize = pythoncom.CoInitialize
+            co_uninitialize = pythoncom.CoUninitialize
+            create_app = lambda: win32com.client.DispatchEx("PowerPoint.Application")
+        else:
+            import comtypes
+            import comtypes.client
+
+            co_initialize = comtypes.CoInitialize
+            co_uninitialize = comtypes.CoUninitialize
+            create_app = lambda: comtypes.client.CreateObject("PowerPoint.Application")
+    except Exception as exc:  # pragma: no cover - requires local Office
+        attempts.append({"renderer": renderer_name, "status": "unavailable", "detail": str(exc)})
+        return None
+
+    app = None
+    presentation = None
+    co_initialize()
+    image_paths: List[Path] = []
+    try:
+        app = create_app()
+        app.Visible = 1
+        presentation = app.Presentations.Open(str(source_path), True, False, False)
+        slide_width_pt = float(presentation.PageSetup.SlideWidth)
+        slide_height_pt = float(presentation.PageSetup.SlideHeight)
+        aspect = slide_width_pt / slide_height_pt if slide_height_pt else 16 / 9
+        export_width = DEFAULT_EXPORT_WIDTH
+        export_height = max(1, round(export_width / aspect))
+        total = int(presentation.Slides.Count)
+
+        for index in range(1, total + 1):
+            image_path = export_dir / f"slide_{index:03d}.png"
+            presentation.Slides(index).Export(str(image_path), "PNG", export_width, export_height)
+            if not image_path.is_file():
+                raise RuntimeError(f"PowerPoint did not write the export for slide {index}")
+            image_paths.append(image_path)
+            _write_json_atomic(
+                progress_path,
+                {
+                    "done": index,
+                    "total": total,
+                    "slide_width_px": export_width,
+                    "slide_height_px": export_height,
+                    "image_paths": [str(path) for path in image_paths],
+                },
+            )
+
+        attempts.append({"renderer": renderer_name, "status": "success", "detail": f"{len(image_paths)} slide images"})
+        return {
+            "renderer": "powerpoint-incremental",
+            "image_paths": image_paths,
+            "width_px": export_width,
+            "height_px": export_height,
+        }
+    except Exception as exc:  # pragma: no cover - requires local Office
+        attempts.append({"renderer": renderer_name, "status": "failed", "detail": str(exc)})
+        return None
+    finally:
+        try:
+            if presentation is not None:
+                presentation.Close()
+        except Exception:
+            pass
+        try:
+            if app is not None:
+                app.Quit()
+        except Exception:
+            pass
+        try:
+            co_uninitialize()
+        except Exception:
+            pass
+
+
+def _write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
 def _attempt_libreoffice(
     source_path: Path,
     output_dir: Path,

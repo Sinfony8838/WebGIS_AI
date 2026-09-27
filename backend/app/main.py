@@ -18,6 +18,7 @@ from .logging_filters import install_request_log_filters
 from .runtime import WebGISRuntime
 from .services.minimax_image_client import ALLOWED_ASPECT_RATIOS, ALLOWED_IMAGE_MODELS, MiniMaxImageError
 from .services import request_limits, resource_access
+from .services import ppt_render_jobs
 from .services.ppt_renderer import PptRenderError, render_pptx_to_images
 from .services.map_profiles import ProfileError, preview as preview_map_profile
 from .services.auth import AuthContext, AuthError, AuthService
@@ -1926,6 +1927,37 @@ async def render_ppt(request: Request, file: UploadFile = File(...)) -> Dict[str
         raise HTTPException(status_code=413, detail="演示文稿超过大小限制") from None
     except PptRenderError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.to_dict()) from exc
+
+
+@app.post("/ppt/renders")
+async def start_ppt_render(request: Request, file: UploadFile = File(...)) -> Dict[str, Any]:
+    """Start an async render job; returns immediately with queued/ready slides."""
+    try:
+        raw = await request_limits.read_upload_limited(file, config.max_ppt_upload_bytes)
+    except request_limits.PayloadTooLarge:
+        raise HTTPException(status_code=413, detail="演示文稿超过大小限制") from None
+    context = _current_auth(request)
+    user_id = str(context.user.get("user_id") or "")
+    try:
+        payload = ppt_render_jobs.start_render_job(config, user_id, file.filename or "presentation.pptx", raw)
+    except PptRenderError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_dict()) from exc
+    _grant_response_files(request, payload, allowed_roots=(config.outputs_dir / "ppt_previews",))
+    return payload
+
+
+@app.get("/ppt/renders/{render_id}")
+def get_ppt_render_status(render_id: str, request: Request) -> Dict[str, Any]:
+    """Poll an async render job; slides that finished since the last poll are included."""
+    context = _current_auth(request)
+    user_id = str(context.user.get("user_id") or "")
+    is_admin = context.user.get("role") == "admin"
+    try:
+        payload = ppt_render_jobs.get_render_job(config, user_id, render_id, is_admin=is_admin)
+    except PptRenderError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.to_dict()) from exc
+    _grant_response_files(request, payload, allowed_roots=(config.outputs_dir / "ppt_previews",))
+    return payload
 
 
 @app.post("/search/poi")
