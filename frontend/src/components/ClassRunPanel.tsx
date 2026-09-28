@@ -25,6 +25,8 @@ type Props = {
   onObservation: (verdict: ObservationVerdict, tag: string, note: string, questionId: string) => void;
   onSnapshot: () => void;
   onEndSession: () => void;
+  presentationVisible?: boolean;
+  onTogglePresentation?: () => void;
   visibleCatalogLayerIds?: string[];
   onFocusEvidenceLayer?: (datasetId: string, stageDatasetIds: string[]) => void;
   onRequestPlaneView?: () => void;
@@ -66,6 +68,8 @@ export function ClassRunPanel({
   onObservation,
   onSnapshot,
   onEndSession,
+  presentationVisible,
+  onTogglePresentation,
   visibleCatalogLayerIds = [],
   onFocusEvidenceLayer,
   onRequestPlaneView,
@@ -316,7 +320,40 @@ export function ClassRunPanel({
       </div>
 
       <details className="class-stage-navigation" key={currentStageId}>
-        <summary>{currentStageIndex + 1}/{lesson.stages.length} · {currentStage?.title || "选择环节"} · 切换</summary>
+        <summary>
+          {currentStageIndex + 1}/{lesson.stages.length} · {currentStage?.title || "选择环节"} · 切换
+        </summary>
+        <div className="class-stage-steps">
+          <button
+            type="button"
+            className="toolbar-button compact"
+            disabled={busy || currentStageIndex <= 0}
+            data-testid="class-prev-stage"
+            onClick={() => onEnterStage(lesson.stages[currentStageIndex - 1].stage_id)}
+          >
+            上一环节
+          </button>
+          <button
+            type="button"
+            className="toolbar-button compact"
+            disabled={busy || currentStageIndex >= lesson.stages.length - 1}
+            data-testid="class-next-stage"
+            onClick={() => onEnterStage(lesson.stages[currentStageIndex + 1].stage_id)}
+          >
+            下一环节
+          </button>
+          {onTogglePresentation ? (
+            <button
+              type="button"
+              className="toolbar-button compact"
+              disabled={busy || !currentStage}
+              data-testid="class-toggle-presentation"
+              onClick={() => onTogglePresentation()}
+            >
+              {presentationVisible ? "回到地图" : "展示板"}
+            </button>
+          ) : null}
+        </div>
       <nav className="class-panel-stages" aria-label="课堂环节">
         {lesson.stages.map((stage, index) => {
           const active = stage.stage_id === currentStageId;
@@ -352,6 +389,24 @@ export function ClassRunPanel({
       </nav>
       </details>
 
+      {currentStage?.teacher_guidance && Object.keys(currentStage.teacher_guidance).length ? (
+        <details className="class-teacher-hints" data-testid="class-teacher-hints">
+          <summary>教师提示（学生不可见）</summary>
+          <dl>
+            {Object.entries(currentStage.teacher_guidance).map(([key, value]) =>
+              Array.isArray(value) ? (
+                value.length ? (
+                  <div key={key}><dt>{key}</dt><dd>{value.join("；")}</dd></div>
+                ) : null
+              ) : (
+                value ? (
+                  <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>
+                ) : null
+              )
+            )}
+          </dl>
+        </details>
+      ) : null}
       <div className="class-panel-current">
         {inquiryContent && currentStageId === "summary" && onAssistantPrompt ? <details>
           <summary>选用拓展 · 人口总量比较</summary>
