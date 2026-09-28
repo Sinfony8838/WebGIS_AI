@@ -1003,6 +1003,45 @@ export type DesignPlanItem = {
   value: string | Array<Record<string, unknown>>;
 };
 
+export type LessonMigrationItem = {
+  kind: "question" | "template" | "dataset" | "unmappable";
+  detail: string;
+  position?: number;
+  target_stage_id?: string;
+  target_stage_title?: string;
+  note?: string;
+};
+
+export type LessonMigrationPreview = {
+  available: boolean;
+  applied?: boolean;
+  items: LessonMigrationItem[];
+};
+
+export type LessonDocxImportMapping = {
+  field: string;
+  label: string;
+  content: string;
+  origin: string;
+};
+
+export type LessonDocxUnclassified = {
+  kind: "text" | "table" | "image";
+  heading?: string;
+  text?: string;
+  name?: string;
+  content_type?: string;
+  url?: string;
+};
+
+export type LessonDocxImportResult = {
+  status: string;
+  summary: string;
+  design: LessonDesignSession;
+  mapping: LessonDocxImportMapping[];
+  unclassified: LessonDocxUnclassified[];
+};
+
 export type QuestionBankImportJobResult = {
   banks?: QuestionBankSummary[];
   assistant_message?: string;

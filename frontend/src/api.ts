@@ -17,6 +17,8 @@ import type {
   ConversationResponse,
   DatasetCatalogResponse,
   DatasetUploadResponse,
+  LessonDocxImportResult,
+  LessonMigrationPreview,
   DatasetStatsResponse,
   HealthResponse,
   UiCapabilities,
@@ -691,6 +693,65 @@ export async function exportLessonDocx(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ project_id: projectId, design_id: designId })
+  });
+}
+
+export async function importLessonDocx(projectId: string, file: File): Promise<LessonDocxImportResult> {
+  const formData = new FormData();
+  formData.set("project_id", projectId);
+  formData.append("file", file);
+  return requestJson<LessonDocxImportResult>("/lesson-design/import-docx", {
+    method: "POST",
+    body: formData
+  });
+}
+
+export async function exportDesignDocx(
+  designId: string,
+  projectId: string
+): Promise<{ status: string; artifact: ArtifactRecord }> {
+  return requestJson(`/lesson-design/sessions/${encodeURIComponent(designId)}/export/docx`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: projectId })
+  });
+}
+
+export async function exportDesignPdf(
+  designId: string,
+  projectId: string
+): Promise<{ status: string; artifact: ArtifactRecord }> {
+  return requestJson(`/lesson-design/sessions/${encodeURIComponent(designId)}/export/pdf`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: projectId })
+  });
+}
+
+export async function exportLessonPdf(
+  lessonId: string,
+  projectId: string,
+  designId = ""
+): Promise<{ status: string; artifact: ArtifactRecord }> {
+  return requestJson(`/lessons/${encodeURIComponent(lessonId)}/exports/pdf`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id: projectId, design_id: designId })
+  });
+}
+
+export async function fetchLessonMigrationPreview(designId: string): Promise<LessonMigrationPreview> {
+  return requestJson(`/lesson-design/sessions/${encodeURIComponent(designId)}/migration-preview`);
+}
+
+export async function applyLessonMigration(
+  designId: string,
+  expectedRevision?: number
+): Promise<{ status: string; message?: string; design: LessonDesignSession }> {
+  return requestJson(`/lesson-design/sessions/${encodeURIComponent(designId)}/migration/apply`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ expected_revision: expectedRevision })
   });
 }
 
