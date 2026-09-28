@@ -599,6 +599,14 @@ class LessonDesignFinalizeRequest(BaseModel):
     apply_base: bool = False
 
 
+class LessonDesignMigrationApplyRequest(BaseModel):
+    expected_revision: Optional[int] = None
+
+
+class LessonDesignExportRequest(BaseModel):
+    project_id: str = ""
+
+
 class LessonRehearsalCreateRequest(BaseModel):
     project_id: str
     lesson_id: str
@@ -2064,6 +2072,27 @@ def finalize_lesson_design(design_id: str, payload: LessonDesignFinalizeRequest,
     try:
         result = runtime.classroom.finalize_lesson_design(design_id, payload.expected_revision, payload.apply_base)
         _grant_response_files(request, result, allowed_roots=_lesson_design_grant_roots(design))
+        return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409 if "更新" in str(exc) else 400, detail=str(exc)) from exc
+
+
+@app.get("/lesson-design/sessions/{design_id}/migration-preview")
+def lesson_design_migration_preview(design_id: str, request: Request) -> Dict[str, Any]:
+    _require_lesson_design_access(request, design_id)
+    try:
+        return runtime.classroom.lesson_design_migration_preview(design_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/lesson-design/sessions/{design_id}/migration/apply")
+def apply_lesson_design_migration(design_id: str, payload: LessonDesignMigrationApplyRequest, request: Request) -> Dict[str, Any]:
+    _require_lesson_design_access(request, design_id)
+    try:
+        result = runtime.classroom.apply_lesson_design_migration(design_id, payload.expected_revision)
         return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

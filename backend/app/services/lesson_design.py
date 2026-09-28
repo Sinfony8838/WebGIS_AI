@@ -537,6 +537,112 @@ class LessonDesignService:
                 **self.session_view(design), "focus_summary": self._focus_summary(design, confirmed_keys=accepted)}
 
     # ------------------------------------------------------------------
+    # 旧草稿一次性迁移：核心问题与问题链 / GIS·AI 能力 → 各教学环节
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _capability_id(item: Any) -> str:
+        if isinstance(item, dict):
+            return str(item.get("id") or item.get("capability_id") or "").strip()
+        return str(item or "").strip()
+
+    def _migration_plan(self, draft: Dict[str, Any]) -> Dict[str, Any]:
+        """确定性映射（无副作用）：旧字段内容 → 目标环节与写入位置。"""
+        stages = [stage for stage in draft.get("stages") or [] if isinstance(stage, dict)]
+        items: List[Dict[str, Any]] = []
+        applied = bool(draft.get("legacy_migration_applied"))
+        if not stages or applied:
+            return {"available": False, "applied": applied, "items": []}
+
+        def stage_ref(index: int) -> Dict[str, Any]:
+            return {"target_stage_id": str(stages[index].get("stage_id") or f"stage{index + 1}"),
+                    "target_stage_title": str(stages[index].get("title") or f"环节{index + 1}")}
+
+        core = draft.get("core_questions") if isinstance(draft.get("core_questions"), dict) else {}
+        core_text = str((core or {}).get("core") or "").strip()
+        if core_text:
+            items.append({"kind": "question", "detail": core_text, "position": 0, **stage_ref(0)})
+        for offset, question in enumerate((core or {}).get("sub_questions") or []):
+            text = str(question).strip()
+            if text:
+                items.append({"kind": "question", "detail": text, "position": -1,
+                              **stage_ref(offset % len(stages))})
+        catalog = {str(item["id"]): str(item.get("kind") or "") for item in self.capability_catalog()}
+        for entry in draft.get("capabilities") or []:
+            capability_id = self._capability_id(entry)
+            if not capability_id:
+                continue
+            kind = catalog.get(capability_id, "")
+            if kind in {"template", "dataset"}:
+                items.append({"kind": kind, "detail": capability_id, "position": -1, **stage_ref(0)})
+            else:
+                items.append({"kind": "unmappable", "detail": capability_id, "position": -1,
+                              "target_stage_id": "", "target_stage_title": "",
+                              "note": "非场景类能力，保留在原字段，不写入环节。"})
+        return {"available": any(item["kind"] != "unmappable" for item in items),
+                "applied": bool(draft.get("legacy_migration_applied")), "items": items}
+
+    def migration_preview(self, design_id: str) -> Dict[str, Any]:
+        design = self.get(design_id)
+        return self._migration_plan(design.draft)
+
+    def apply_migration(self, design_id: str, expected_revision: Optional[int] = None) -> Dict[str, Any]:
+        design = self.get(design_id)
+        if expected_revision is not None and expected_revision != design.revision:
+            raise ValueError("教案草稿已更新，请刷新后再操作。")
+        if design.draft.get("legacy_migration_applied"):
+            raise ValueError("旧版内容已迁移过，不能重复应用。")
+        plan = self._migration_plan(design.draft)
+        if not plan["available"]:
+            raise ValueError("没有可迁移到教学环节的旧版内容。")
+        stages = [stage for stage in design.draft.get("stages") or [] if isinstance(stage, dict)]
+        stage_by_id = {str(stage.get("stage_id") or f"stage{index + 1}"): stage for index, stage in enumerate(stages)}
+        core = design.draft.get("core_questions") if isinstance(design.draft.get("core_questions"), dict) else {}
+        for item in plan["items"]:
+            if item["kind"] not in {"question", "template", "dataset"}:
+                continue
+            stage = stage_by_id.get(item["target_stage_id"])
+            if stage is None:
+                continue
+            if item["kind"] == "question":
+                chain = stage.setdefault("question_chain", [])
+                if not isinstance(chain, list):
+                    chain = []
+                    stage["question_chain"] = chain
+                if item["position"] == 0:
+                    chain.insert(0, item["detail"])
+                elif item["detail"] not in chain:
+                    chain.append(item["detail"])
+            else:
+                scene = stage.get("scene")
+                if not isinstance(scene, dict) or not scene:
+                    scene = LessonService.default_scene()
+                    stage["scene"] = scene
+                key = "templates" if item["kind"] == "template" else "catalog_layers"
+                values = scene.setdefault(key, [])
+                if not isinstance(values, list):
+                    values = []
+                    scene[key] = values
+                if item["detail"] not in values:
+                    values.append(item["detail"])
+        # 能力写入环节后同步 capability_bindings，保持既有视图一致。
+        bindings = {self._capability_id(binding) for binding in design.capability_bindings or []}
+        for entry in design.draft.get("capabilities") or []:
+            capability_id = self._capability_id(entry)
+            if capability_id and capability_id not in bindings and capability_id in {i["detail"] for i in plan["items"]}:
+                design.capability_bindings = list(design.capability_bindings or []) + [
+                    {"id": capability_id, "reason": "旧版能力迁移"}]
+                bindings.add(capability_id)
+        design.draft["legacy_migration_applied"] = True
+        design.section_status["stages"] = "proposed"
+        design.revision += 1
+        design.diff_summary = self._build_diff_summary(design)
+        self.store.upsert_lesson_design(design)
+        count = sum(1 for item in plan["items"] if item["kind"] != "unmappable")
+        return {"status": "success", "message": f"已把 {count} 条旧版内容写入教学环节，请核对。",
+                "design": design.to_dict(), **self.session_view(design)}
+
+    # ------------------------------------------------------------------
     # 题目匹配：题库快照绑定 / 手动录入 / 替换 / 移除
     # ------------------------------------------------------------------
 

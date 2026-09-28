@@ -188,6 +188,12 @@ class ClassroomWorkflowRuntime:
     def export_lesson_docx(self, lesson_id: str, project_id: str, design_id: str = "") -> Dict[str, Any]:
         return self.lesson_design.export_docx(lesson_id, project_id, design_id)
 
+    def lesson_design_migration_preview(self, design_id: str) -> Dict[str, Any]:
+        return self.lesson_design.migration_preview(design_id)
+
+    def apply_lesson_design_migration(self, design_id: str, expected_revision: Optional[int] = None) -> Dict[str, Any]:
+        return self.lesson_design.apply_migration(design_id, expected_revision)
+
     # ------------------------------------------------------------------
     # Question banks（题库导入/检索）
     # ------------------------------------------------------------------
