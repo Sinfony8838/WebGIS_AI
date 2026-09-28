@@ -51,8 +51,10 @@ STEP_SECTIONS = {
     "confirmation": ("design_thinking", "reflection"),
 }
 REQUIRED_SECTIONS = (
+    # 一页表格式教案：问题与系统操作已并入教学环节，
+    # core_questions / capabilities 不再作为独立确认门槛。
     "requirements", "curriculum_interpretation", "student_analysis", "textbook_analysis",
-    "objectives", "key_difficulties", "core_questions", "stages", "capabilities",
+    "objectives", "key_difficulties", "stages",
 )
 SECTION_LABELS = {
     "requirements": "教学需求", "curriculum_interpretation": "课标解读", "student_analysis": "学情分析",
@@ -417,8 +419,10 @@ class LessonDesignService:
         design = self.get(design_id)
         if expected_revision is not None and expected_revision != design.revision:
             raise ValueError("教案草稿已更新，请刷新后再操作。")
-        if section_id not in SECTION_KEYS and section_id not in STEP_SECTIONS and section_id not in {"title", "grade", "duration_minutes"}:
+        if section_id not in SECTION_KEYS and section_id not in STEP_SECTIONS and section_id not in {"title", "grade", "duration_minutes", "all"}:
             raise ValueError("未知教案章节")
+        if section_id == "all":
+            return self._resolve_accept_all(design, decision)
         section_ids = STEP_SECTIONS.get(section_id, (section_id,))
         normalized_decision = str(decision).lower()
         if normalized_decision in {"edit", "direct_edit", "直接编辑"}:
@@ -510,6 +514,27 @@ class LessonDesignService:
         confirmed_keys = accepted if normalized_decision in {"accept", "accepted", "确认", "接受"} else []
         return {"status": "success", "message": message, "design": design.to_dict(),
                 **self.session_view(design), "focus_summary": self._focus_summary(design, confirmed_keys=confirmed_keys)}
+
+    def _resolve_accept_all(self, design: LessonDesignRecord, decision: str) -> Dict[str, Any]:
+        """一次核对：教师查看整份教案后一键确认全部非空章节。
+
+        这是教师主动的整份确认动作：空章节不会被确认为“已确认”。
+        """
+        normalized_decision = str(decision).lower()
+        if normalized_decision in {"reject", "edit", "直接编辑"} or normalized_decision not in {"accept", "accepted", "确认", "接受"}:
+            raise ValueError("整份核对仅支持确认操作；单章节修改请直接编辑对应单元格。")
+        accepted: List[str] = []
+        for key in SECTION_KEYS:
+            if self._section_has_content(design.draft.get(key)):
+                design.section_status[key] = "confirmed"
+                accepted.append(key)
+        if not accepted:
+            raise ValueError("教案还没有可确认的内容")
+        design.revision += 1
+        message = f"已确认整份教案（{len(accepted)} 个章节）。"
+        self.store.upsert_lesson_design(design)
+        return {"status": "success", "message": message, "design": design.to_dict(),
+                **self.session_view(design), "focus_summary": self._focus_summary(design, confirmed_keys=accepted)}
 
     # ------------------------------------------------------------------
     # 题目匹配：题库快照绑定 / 手动录入 / 替换 / 移除
@@ -1348,17 +1373,18 @@ class LessonDesignService:
             errors.append("至少需要一个可观察的教学目标。")
         elif len(objectives) > 4:
             warnings.append(f"教学目标有 {len(objectives)} 个，建议精简到 3-4 个可观察目标。")
-        # 核心问题与递进问题链
+        # 核心问题与递进问题链：已并入各教学环节，仅作提示；
+        # 环节缺少问题时仍按下方环节检查报错。
         core = draft.get("core_questions") or {}
         if not isinstance(core, dict):
             core = {}
+        core_chain = [str(item).strip() for item in (core.get("sub_questions") or []) if str(item).strip()]
         if not str(core.get("core") or "").strip():
-            errors.append("还缺少一个贯穿课堂的核心问题。")
-        chain = [str(item).strip() for item in (core.get("sub_questions") or []) if str(item).strip()]
-        if len(chain) < 2:
-            errors.append("核心问题需要拆成至少 2 个递进子问题。")
-        elif len(chain) > 4:
-            errors.append(f"递进子问题有 {len(chain)} 个，请精简到 2-4 个。")
+            warnings.append("独立的核心问题字段已并入教学环节；请确认各环节问题链覆盖核心问题。")
+        if len(core_chain) < 2:
+            warnings.append("独立问题链少于 2 条：递进子问题建议拆入各环节问题链。")
+        elif len(core_chain) > 4:
+            warnings.append(f"独立问题链有 {len(core_chain)} 条，请精简后拆入各环节。")
         # 设计思路 100-150 字
         thinking = str(draft.get("design_thinking") or "").strip()
         if not thinking:
@@ -1397,6 +1423,8 @@ class LessonDesignService:
             stage_label = stage.get('title') or f'环节{index}'
             if not str(stage.get("title") or "").strip():
                 errors.append(f"第{index}个环节缺少名称。")
+            if minutes <= 0:
+                errors.append(f"环节“{stage_label}”未设置时长。")
             if not str(stage.get("design_intent") or stage.get("content") or "").strip():
                 warnings.append(f"“{stage_label}”还可以补充设计意图。")
             if not str(stage.get("knowledge_conclusion") or "").strip():
@@ -1479,6 +1507,10 @@ class LessonDesignService:
             raise ValueError("教案还不能保存：" + " ".join(report["errors"]))
         unconfirmed = [key for key in REQUIRED_SECTIONS if design.section_status.get(key) != "confirmed"]
         if unconfirmed:
+            empty = [key for key in unconfirmed if not self._section_has_content(design.draft.get(key))]
+            if empty:
+                labels = "、".join(SECTION_LABELS.get(key, key) for key in empty)
+                raise ValueError("以下必填章节还没有内容，请先在教学案中填写：" + labels)
             labels = "、".join(SECTION_LABELS.get(key, key) for key in unconfirmed)
             raise ValueError("请先逐项确认这些章节：" + labels)
         if design.base_lesson_id and apply_base:

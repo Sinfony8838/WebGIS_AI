@@ -846,5 +846,126 @@ class LessonDesignServiceTest(unittest.TestCase):
         self.assertEqual(client.chat_completion.call_args.kwargs["timeout"], 90.0)
 
 
+def _table_ready_draft() -> dict:
+    """一页表格式教案流程使用的完整可过预演草稿。"""
+    return {
+        "title": "人口分布",
+        "grade": "高一",
+        "duration_minutes": 40,
+        "requirements": {"raw": "高一人口分布，40分钟"},
+        "curriculum_interpretation": "课标要求描述人口分布特点并解释成因。",
+        "student_analysis": "学生已具备读图基础，缺乏成因分析支架。",
+        "textbook_analysis": "教材以世界与中国人口密度图为主要素材。",
+        "key_difficulties": {"key": ["人口分布格局"], "difficult": ["成因分析"]},
+        "objectives": ["描述世界人口分布格局", "解释人口分布的自然成因"],
+        "design_thinking": "以世界人口密度图切入，先描述分布格局，再用地形与气候图层叠加探究成因，最后用胡焕庸线迁移回中国情境，形成区域认知与综合思维的双重训练。",
+        "homework": {"basic": ["完成地图册人口分布练习"], "inquiry": ["查一个国家的人口分布并解释"]},
+        "stages": [
+            {
+                "stage_id": "s1",
+                "title": "情境导入与分布描述",
+                "minutes": 12,
+                "knowledge_conclusion": "世界人口呈斑块状集中在中低纬度沿海平原。",
+                "student_activities": ["读世界人口密度图，圈画稠密区"],
+                "question_chain": ["人口集中在哪里？"],
+                "objective_refs": [1],
+                "questions": [{"text": "世界人口集中分布在哪里？", "answer": "中低纬度沿海平原。", "explanation": "自然条件优越。"}],
+                "scene": {"basemap_id": "", "templates": [], "layer_visibility": {}, "view": {}, "annotations": []},
+            },
+            {
+                "stage_id": "s2",
+                "title": "成因探究与迁移",
+                "minutes": 28,
+                "knowledge_conclusion": "气候、地形与水源共同决定人口分布格局。",
+                "student_activities": ["叠加地形与气候图层，小组归纳成因"],
+                "question_chain": ["为什么集中在这里？"],
+                "objective_refs": [2],
+                "questions": [{"text": "影响人口分布的自然因素有哪些？", "answer": "气候、地形、水源。", "explanation": "逐项举例说明。"}],
+                "scene": {"basemap_id": "", "templates": [], "layer_visibility": {}, "view": {}, "annotations": []},
+            },
+        ],
+    }
+
+
+class TableLessonPlanFlowTest(unittest.TestCase):
+    """一页表格式教案：预演规则调整 + 一次核对确认（accept_all）。"""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        root_dir = Path(__file__).resolve().parents[2]
+        config = AppConfig(root_dir=root_dir)
+        config.data_dir = Path(self.temp_dir.name) / "backend" / "data"
+        config.state_dir = config.data_dir / "state"
+        config.uploads_dir = config.data_dir / "uploads"
+        config.outputs_dir = config.data_dir / "outputs"
+        config.state_file = config.state_dir / "runtime.json"
+        config.minimax_api_key = ""
+        config.minimax_token_plan_key = ""
+        config.ensure_dirs()
+        self.store = RuntimeStore(config.state_file)
+        self.runtime = WebGISRuntime(config=config, store=self.store)
+        self.project = self.runtime.create_project()["project_id"]
+        self.service = self.runtime.classroom.lesson_design
+        self.addCleanup(self.temp_dir.cleanup)
+
+    def _design_with(self, draft: dict):
+        design = self.service.create_or_resume(self.project, "local_admin")
+        design.draft.update(draft)
+        self.store.upsert_lesson_design(design)
+        return design
+
+    def test_validate_plan_flags_stage_without_duration(self) -> None:
+        draft = _table_ready_draft()
+        draft["stages"][0]["minutes"] = 0
+        report = self.service.validate_plan(draft, [])
+        self.assertFalse(report["ready"])
+        self.assertTrue(any("未设置时长" in item for item in report["errors"]))
+
+    def test_validate_plan_core_questions_are_advisory_when_stages_carry_questions(self) -> None:
+        draft = _table_ready_draft()
+        draft["core_questions"] = {"core": "", "sub_questions": []}
+        report = self.service.validate_plan(draft, [])
+        self.assertTrue(report["ready"])
+        self.assertTrue(any("核心问题" in item for item in report["warnings"]))
+        self.assertFalse(any("核心问题" in item for item in report["errors"]))
+        # 环节本身缺题目仍是硬错误
+        draft["stages"][0]["questions"] = []
+        report = self.service.validate_plan(draft, [])
+        self.assertFalse(report["ready"])
+        self.assertTrue(any("至少需要一个明确问题" in item for item in report["errors"]))
+
+    def test_resolve_accept_all_confirms_only_non_empty_sections(self) -> None:
+        design = self._design_with({"objectives": ["描述人口分布"], "stages": _table_ready_draft()["stages"]})
+        result = self.service.resolve(design.design_id, "all", "accept", expected_revision=self.service.get(design.design_id).revision)
+        status = result["design"]["section_status"]
+        self.assertEqual(status["objectives"], "confirmed")
+        self.assertEqual(status["stages"], "confirmed")
+        self.assertNotEqual(status.get("student_analysis"), "confirmed")
+        self.assertEqual(result["design"]["current_step"], design.current_step)
+
+    def test_finalize_after_accept_all_succeeds_without_step_confirmations(self) -> None:
+        draft = _table_ready_draft()
+        design = self._design_with(draft)
+        latest = self.service.get(design.design_id)
+        self.service.resolve(design.design_id, "all", "accept", expected_revision=latest.revision)
+        latest = self.service.get(design.design_id)
+        result = self.service.finalize(design.design_id, latest.revision)
+        self.assertEqual(result["lesson"]["metadata"]["ready_for_class"], False)
+        self.assertEqual(self.store.get_lesson_design(design.design_id).status, "finalized")
+
+    def test_finalize_reports_missing_content_for_required_sections(self) -> None:
+        design = self.service.create_or_resume(self.project, "local_admin")
+        draft = _table_ready_draft()
+        for key in ("curriculum_interpretation", "student_analysis", "textbook_analysis"):
+            draft.pop(key)
+        design.draft.update(draft)
+        self.store.upsert_lesson_design(design)
+        latest = self.service.get(design.design_id)
+        self.service.resolve(design.design_id, "all", "accept", expected_revision=latest.revision)
+        latest = self.service.get(design.design_id)
+        with self.assertRaisesRegex(ValueError, "还没有内容"):
+            self.service.finalize(design.design_id, latest.revision)
+
+
 if __name__ == "__main__":
     unittest.main()
