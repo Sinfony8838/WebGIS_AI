@@ -2509,6 +2509,84 @@ def export_lesson_docx(lesson_id: str, payload: LessonDocxExportRequest, request
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/lesson-design/import-docx")
+async def import_lesson_design_docx(
+    request: Request,
+    project_id: str = Form(...),
+    file: UploadFile = File(...),
+) -> Dict[str, Any]:
+    """Word 教案导入：解析后生成**新的未确认教案草稿**，不覆盖现有草稿。"""
+    _require_project_access(request, project_id)
+    filename = str(file.filename or "")
+    if not filename.lower().endswith(".docx"):
+        raise HTTPException(status_code=400, detail="仅支持 .docx 格式的 Word 教案，旧 .doc 请先另存为 .docx。")
+    try:
+        raw = await request_limits.read_upload_limited(file, config.max_lesson_docx_upload_bytes)
+    except request_limits.PayloadTooLarge as exc:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Word 文档超过大小限制（上限 {config.max_lesson_docx_upload_bytes // (1024 * 1024)} MB）",
+        ) from exc
+    context = _current_auth(request)
+    try:
+        result = runtime.classroom.import_lesson_design_docx(
+            project_id, str(context.user.get("user_id") or ""), raw, filename
+        )
+        design = _require_lesson_design_access(request, result["design"]["design_id"])
+        _grant_response_files(request, result, allowed_roots=_lesson_design_grant_roots(design))
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/lesson-design/sessions/{design_id}/export/docx")
+def export_lesson_design_docx(design_id: str, payload: LessonDesignExportRequest, request: Request) -> Dict[str, Any]:
+    design = _require_lesson_design_access(request, design_id)
+    _require_project_access(request, payload.project_id or design.project_id)
+    try:
+        result = runtime.classroom.export_design_docx(design_id, payload.project_id or design.project_id)
+        _grant_response_files(request, result, allowed_roots=_lesson_design_grant_roots(design))
+        return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/lesson-design/sessions/{design_id}/export/pdf")
+def export_lesson_design_pdf(design_id: str, payload: LessonDesignExportRequest, request: Request) -> Dict[str, Any]:
+    design = _require_lesson_design_access(request, design_id)
+    _require_project_access(request, payload.project_id or design.project_id)
+    try:
+        result = runtime.classroom.export_design_pdf(design_id, payload.project_id or design.project_id)
+        _grant_response_files(request, result, allowed_roots=_lesson_design_grant_roots(design))
+        return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/lessons/{lesson_id}/exports/pdf")
+def export_lesson_pdf(lesson_id: str, payload: LessonDocxExportRequest, request: Request) -> Dict[str, Any]:
+    lesson = _require_lesson_access(request, lesson_id)
+    project_id = str(payload.project_id or (lesson.metadata or {}).get("project_id") or "")
+    if not project_id:
+        context = _current_auth(request)
+        projects = [p for p in runtime.store.projects.values() if p.owner_user_id == context.user.get("user_id") or context.user.get("role") == "admin"]
+        if len(projects) == 1:
+            project_id = projects[0].project_id
+    if not project_id:
+        raise HTTPException(status_code=400, detail="请指定项目")
+    _require_project_access(request, project_id)
+    try:
+        return runtime.classroom.export_lesson_pdf(lesson_id, project_id, payload.design_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/lessons/{lesson_id}/stages/{stage_id}/scene/apply")
 def apply_lesson_scene(lesson_id: str, stage_id: str, payload: SceneApplyRequest, request: Request) -> Dict[str, Any]:
     _require_lesson_access(request, lesson_id)
