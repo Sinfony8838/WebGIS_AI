@@ -1534,6 +1534,30 @@ def submit_assistant_message(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/media/video-upload")
+async def upload_video_library_asset(
+    request: Request,
+    project_id: str = Form(...),
+    file: UploadFile = File(...),
+    title: str = Form(""),
+) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
+    try:
+        raw = await request_limits.read_upload_limited(file, config.max_video_upload_bytes)
+        return runtime.upload_video_asset(
+            project_id=project_id,
+            filename=file.filename or "uploaded_video",
+            raw_bytes=raw,
+            title=title,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except request_limits.PayloadTooLarge as exc:
+        raise HTTPException(status_code=413, detail="视频文件超过大小限制") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/image-library/upload")
 async def upload_image_library_asset(
     request: Request,
