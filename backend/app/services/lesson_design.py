@@ -1720,6 +1720,32 @@ class LessonDesignService:
             "next_hint": "教案草稿已生成。进入「模拟测试」试讲一遍，通过后即可发布为正式课堂。",
         }
 
+    def _register_lesson_export(self, project_id: str, title: str, path: Path, artifact_type: str, artifact_title: str, request: Dict[str, Any]) -> Dict[str, Any]:
+        job = self.store.create_job(project_id=project_id, job_type="lesson_plan_export", title=f"导出教案：{title}", workflow_type="lesson_plan_export", request=request)
+        artifact = self.store.register_artifact(project_id=project_id, job_id=job.job_id, artifact_type=artifact_type, title=artifact_title, path=str(path), metadata={**request, "public_url": self.config.public_url_for_path(path)})
+        self.store.set_job_status(job.job_id, "success", {"artifact": artifact.to_dict()})
+        return {"status": "success", "artifact": artifact.to_dict(), "job_id": job.job_id}
+
+    @staticmethod
+    def _lesson_status_label(lesson: Any) -> str:
+        metadata = getattr(lesson, "metadata", None) or {}
+        if metadata.get("ready_for_class"):
+            return f"已确认 · 版本 {metadata.get('lesson_version', 1)}"
+        return "草稿（未发布）"
+
+    def _draft_lesson_proxy(self, design: LessonDesignRecord) -> Any:
+        from types import SimpleNamespace
+        draft = design.draft
+        return SimpleNamespace(
+            title=str(draft.get("title") or draft.get("topic") or "未命名教案"),
+            subject=str(draft.get("subject") or "地理"),
+            grade=str(draft.get("grade") or ""),
+            objectives=list(draft.get("objectives") or []),
+            stages=[stage for stage in draft.get("stages") or [] if isinstance(stage, dict)],
+            plan=copy.deepcopy(draft),
+            metadata={"duration_minutes": draft.get("duration_minutes", 40), "lesson_version": None},
+        )
+
     def export_docx(self, lesson_id: str, project_id: str, design_id: str = "") -> Dict[str, Any]:
         lesson = self.store.get_lesson(lesson_id)
         if lesson is None:
@@ -1733,12 +1759,62 @@ class LessonDesignService:
                 raise ValueError("教案会话与当前项目或课时不匹配")
         output_dir = self.config.project_output_dir(project_id) / "lesson_plans"
         output_dir.mkdir(parents=True, exist_ok=True)
+        status_label = self._lesson_status_label(lesson)
         path = output_dir / f"lesson_plan_{lesson.lesson_id}_{uuid4().hex[:8]}.docx"
-        self._write_docx(path, lesson)
-        job = self.store.create_job(project_id=project_id, job_type="lesson_plan_export", title=f"导出教案：{lesson.title}", workflow_type="lesson_plan_export", request={"lesson_id": lesson_id, "design_id": design_id})
-        artifact = self.store.register_artifact(project_id=project_id, job_id=job.job_id, artifact_type="lesson_plan_docx", title=f"{lesson.title} 教案", path=str(path), metadata={"lesson_id": lesson_id, "design_id": design_id, "public_url": self.config.public_url_for_path(path)})
-        self.store.set_job_status(job.job_id, "success", {"artifact": artifact.to_dict()})
-        return {"status": "success", "artifact": artifact.to_dict(), "job_id": job.job_id}
+        self._write_docx(path, lesson, status_label=status_label)
+        return self._register_lesson_export(
+            project_id, lesson.title, path, "lesson_plan_docx", f"{lesson.title} 教案",
+            {"lesson_id": lesson_id, "design_id": design_id, "format": "docx", "status_label": status_label},
+        )
+
+    def export_lesson_pdf(self, lesson_id: str, project_id: str, design_id: str = "") -> Dict[str, Any]:
+        from .lesson_pdf_export import write_lesson_pdf
+        lesson = self.store.get_lesson(lesson_id)
+        if lesson is None:
+            raise KeyError("Unknown lesson")
+        lesson_project_id = str((lesson.metadata or {}).get("project_id") or "")
+        if lesson.source != "builtin" and lesson_project_id and lesson_project_id != project_id:
+            raise ValueError("课时不属于当前项目")
+        status_label = self._lesson_status_label(lesson)
+        output_dir = self.config.project_output_dir(project_id) / "lesson_plans"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / f"lesson_plan_{lesson.lesson_id}_{uuid4().hex[:8]}.pdf"
+        write_lesson_pdf(path, title=lesson.title, subject=lesson.subject, grade=lesson.grade,
+                         plan=lesson.plan or {}, stages=lesson.stages, status_label=status_label)
+        return self._register_lesson_export(
+            project_id, lesson.title, path, "lesson_plan_pdf", f"{lesson.title} 教案（PDF）",
+            {"lesson_id": lesson_id, "design_id": design_id, "format": "pdf", "status_label": status_label},
+        )
+
+    def export_design_docx(self, design_id: str, project_id: str) -> Dict[str, Any]:
+        design = self.get(design_id)
+        if design.project_id != project_id:
+            raise ValueError("教案会话不属于当前项目")
+        proxy = self._draft_lesson_proxy(design)
+        output_dir = self.config.project_output_dir(project_id) / "lesson_plans"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / f"lesson_plan_draft_{design.design_id}_{uuid4().hex[:8]}.docx"
+        self._write_docx(path, proxy, status_label="草稿（未发布）")
+        return self._register_lesson_export(
+            project_id, proxy.title, path, "lesson_plan_docx", f"{proxy.title} 教案（草稿）",
+            {"design_id": design_id, "format": "docx", "status_label": "草稿（未发布）"},
+        )
+
+    def export_design_pdf(self, design_id: str, project_id: str) -> Dict[str, Any]:
+        from .lesson_pdf_export import write_lesson_pdf
+        design = self.get(design_id)
+        if design.project_id != project_id:
+            raise ValueError("教案会话不属于当前项目")
+        proxy = self._draft_lesson_proxy(design)
+        output_dir = self.config.project_output_dir(project_id) / "lesson_plans"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / f"lesson_plan_draft_{design.design_id}_{uuid4().hex[:8]}.pdf"
+        write_lesson_pdf(path, title=proxy.title, subject=proxy.subject, grade=proxy.grade,
+                         plan=proxy.plan, stages=proxy.stages, status_label="草稿（未发布）")
+        return self._register_lesson_export(
+            project_id, proxy.title, path, "lesson_plan_pdf", f"{proxy.title} 教案（草稿·PDF）",
+            {"design_id": design_id, "format": "pdf", "status_label": "草稿（未发布）"},
+        )
 
     def _retrieve(self, message: str, owner_user_id: str) -> tuple[str, List[Dict[str, Any]]]:
         lowered = str(message or "").lower()
@@ -2315,7 +2391,9 @@ class LessonDesignService:
                     run._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
                 run.font.size = Pt(size)
 
-    def _write_docx(self, path: Path, lesson: LessonRecord) -> None:
+    def _write_docx(self, path: Path, lesson: Any, status_label: str = "当前草稿") -> None:
+        # lesson 可为 LessonRecord，也可为草稿代理（title/subject/grade/objectives/stages/plan/metadata），
+        # 设计草稿与已发布课时从同一份教案数据导出。
         from docx import Document
         from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
         from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -2417,7 +2495,7 @@ class LessonDesignService:
             ("学科", lesson.subject, "年级", lesson.grade),
             ("课题", lesson.title, "课时", f"{plan.get('duration_minutes', lesson.metadata.get('duration_minutes', 40))}分钟"),
             ("课型", plan.get("lesson_type", "专题探究课"), "平台", "WebGIS-AI"),
-            ("设计来源", "教师与智能体共创", "版本", "当前草稿"),
+            ("设计来源", "教师与智能体共创", "版本", status_label),
         ]
         for row, values in zip(info.rows, rows):
             for cell, value in zip(row.cells, values):
@@ -2462,7 +2540,21 @@ class LessonDesignService:
         for stage in lesson.stages:
             row = table.add_row()
             activities = stage.get("activities") or []
-            content = stage.get("content") or "；".join(str(x) for x in activities) or "待补充"
+            if stage.get("content"):
+                content = str(stage.get("content"))
+            else:
+                parts: List[str] = []
+                if stage.get("material"):
+                    parts.append("材料：" + str(stage.get("material")))
+                for label, key in (("教师活动", "teacher_activities"), ("学生活动", "student_activities")):
+                    values = stage.get(key) or []
+                    if values:
+                        parts.append(label + "：" + "；".join(str(item) for item in values))
+                if stage.get("question_chain"):
+                    parts.append("问题链：" + "；".join(str(item) for item in stage["question_chain"]))
+                if stage.get("knowledge_conclusion"):
+                    parts.append("结论：" + str(stage["knowledge_conclusion"]))
+                content = "\n".join(parts) or "；".join(str(x) for x in activities) or "待补充"
             if stage.get("system_steps"):
                 content += "\n系统操作：" + "；".join(str(x) for x in stage["system_steps"])
             values = [

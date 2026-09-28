@@ -194,6 +194,18 @@ class ClassroomWorkflowRuntime:
     def apply_lesson_design_migration(self, design_id: str, expected_revision: Optional[int] = None) -> Dict[str, Any]:
         return self.lesson_design.apply_migration(design_id, expected_revision)
 
+    def import_lesson_design_docx(self, project_id: str, owner_user_id: str, data: bytes, filename: str) -> Dict[str, Any]:
+        return self.lesson_design.import_docx_draft(project_id, owner_user_id, data, filename)
+
+    def export_design_docx(self, design_id: str, project_id: str) -> Dict[str, Any]:
+        return self.lesson_design.export_design_docx(design_id, project_id)
+
+    def export_design_pdf(self, design_id: str, project_id: str) -> Dict[str, Any]:
+        return self.lesson_design.export_design_pdf(design_id, project_id)
+
+    def export_lesson_pdf(self, lesson_id: str, project_id: str, design_id: str = "") -> Dict[str, Any]:
+        return self.lesson_design.export_lesson_pdf(lesson_id, project_id, design_id)
+
     # ------------------------------------------------------------------
     # Question banks（题库导入/检索）
     # ------------------------------------------------------------------
