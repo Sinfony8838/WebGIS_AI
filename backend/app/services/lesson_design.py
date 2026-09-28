@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from ..models import LessonDesignRecord, LessonRecord
 from ..store import RuntimeStore
-from .lessons import LessonService
+from .lessons import LessonService, default_scene
 from .minimax_client import MiniMaxClient
 from .population_lesson_prep import ALLOWED_GLOBE_THEME_IDS
 from .question_bank import QuestionBankService
@@ -616,7 +616,7 @@ class LessonDesignService:
             else:
                 scene = stage.get("scene")
                 if not isinstance(scene, dict) or not scene:
-                    scene = LessonService.default_scene()
+                    scene = default_scene()
                     stage["scene"] = scene
                 key = "templates" if item["kind"] == "template" else "catalog_layers"
                 values = scene.setdefault(key, [])
@@ -641,6 +641,73 @@ class LessonDesignService:
         count = sum(1 for item in plan["items"] if item["kind"] != "unmappable")
         return {"status": "success", "message": f"已把 {count} 条旧版内容写入教学环节，请核对。",
                 "design": design.to_dict(), **self.session_view(design)}
+
+    # ------------------------------------------------------------------
+    # Word 教案导入：解析 → 新建未确认草稿（绝不覆盖现有草稿）
+    # ------------------------------------------------------------------
+
+    def import_docx_draft(self, project_id: str, owner_user_id: str, data: bytes, filename: str) -> Dict[str, Any]:
+        from .lesson_docx_import import parse_lesson_docx
+        name = str(filename or "").strip()
+        if not name.lower().endswith(".docx"):
+            raise ValueError("仅支持 .docx 格式的 Word 教案，旧 .doc 请先另存为 .docx。")
+        parsed = parse_lesson_docx(data)
+        draft = default_draft()
+        for key, value in parsed["draft"].items():
+            draft[key] = copy.deepcopy(value)
+        for index, stage in enumerate(draft.get("stages") or [], 1):
+            if not isinstance(stage, dict):
+                continue
+            stage.setdefault("stage_id", f"import_{uuid4().hex[:6]}_{index}")
+            stage.setdefault("kind", "presentation")
+            scene = stage.get("scene")
+            if not isinstance(scene, dict) or not scene:
+                stage["scene"] = default_scene()
+        self._backfill_draft(draft)
+        design = LessonDesignRecord.create(
+            project_id=project_id, owner_user_id=owner_user_id, base_lesson_id="",
+            requirements={}, draft=draft, base_draft={},
+        )
+        design.section_status = {
+            key: ("proposed" if self._section_has_content(draft.get(key)) else "pending")
+            for key in SECTION_KEYS
+        }
+        job = self.store.create_job(
+            project_id=project_id, job_type="lesson_design_import",
+            title=f"导入 Word 教案：{name}", workflow_type="lesson_design_import",
+            request={"filename": name},
+        )
+        image_index = 0
+        saved_images: List[Dict[str, Any]] = []
+        for item in parsed["unclassified"]:
+            if item.get("kind") != "image":
+                continue
+            image_index += 1
+            target_dir = self.config.project_upload_dir(project_id) / "lesson_imports" / design.design_id
+            path = self.config.unique_path(target_dir, str(item.get("name") or f"image_{image_index}.png"))
+            path.write_bytes(item["data"])
+            url = self.config.public_url_for_path(path)
+            artifact = self.store.register_artifact(
+                project_id=project_id, job_id=job.job_id, artifact_type="lesson_import_image",
+                title=path.name, path=str(path),
+                metadata={"public_url": url, "mime_type": item.get("content_type"), "design_id": design.design_id},
+            )
+            saved_images.append({
+                "kind": "image", "name": path.name, "content_type": item.get("content_type"),
+                "url": url, "artifact_id": artifact.artifact_id,
+            })
+        text_count = sum(1 for item in parsed["unclassified"] if item.get("kind") != "image")
+        summary = f"Word 导入：映射 {len(parsed['mapping'])} 处，待归类文本 {text_count} 条"
+        if saved_images:
+            summary += f"，待归类图片 {len(saved_images)} 张"
+        summary += "。请逐项校对后再确认。"
+        design.diff_summary = summary
+        self.store.upsert_lesson_design(design)
+        self.store.set_job_status(job.job_id, "success", {"design_id": design.design_id})
+        unclassified = [item for item in parsed["unclassified"] if item.get("kind") != "image"] + saved_images
+        return {"status": "success", "summary": summary,
+                "design": {**design.to_dict(), **self.session_view(design)},
+                "mapping": parsed["mapping"], "unclassified": unclassified}
 
     # ------------------------------------------------------------------
     # 题目匹配：题库快照绑定 / 手动录入 / 替换 / 移除
