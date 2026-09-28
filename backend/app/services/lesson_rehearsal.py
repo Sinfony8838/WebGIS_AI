@@ -137,6 +137,7 @@ class LessonRehearsalService:
         image_bind: Optional[Dict[str, Any]] = None,
         scene_capture: Optional[Dict[str, Any]] = None,
         test_result: Optional[Dict[str, Any]] = None,
+        presentation_update: Optional[Dict[str, Any]] = None,
         expected_revision: Optional[int] = None,
     ) -> Dict[str, Any]:
         # Store 返回的是持久对象本身；使用深拷贝保证组合操作中任一步失败时，
@@ -166,6 +167,8 @@ class LessonRehearsalService:
             events.append(self._capture_scene(record, scene_capture))
         if test_result:
             events.append(self._record_test_result(record, test_result))
+        if presentation_update:
+            events.append(self._update_presentation(record, presentation_update))
 
         if not events:
             raise ValueError("没有可保存的模拟测试修改。")
@@ -388,6 +391,35 @@ class LessonRehearsalService:
             images.append(entry)
         question["images"] = images
         return {"action": "bind_image", "stage_id": stage_id, "question_id": question_id, "at": utc_now()}
+
+    def _update_presentation(self, record: LessonRehearsalRecord, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """保存环节展示布局：素材须来自本项目资源库或 https 外链，不下载外部文件。"""
+        from .lessons import normalize_presentation
+        stage_id = str(payload.get("stage_id") or "")
+        stage = self._find_stage(record, stage_id)
+        layout = normalize_presentation(payload.get("presentation"))
+        if not layout:
+            raise ValueError("展示布局没有可保存的区块。")
+        allowed_urls = {
+            str(artifact.get("metadata", {}).get("public_url") or "")
+            for artifact in self.store.list_outputs(project_id=record.project_id)
+            if artifact.get("artifact_type") in {"uploaded_image", "generated_image", "uploaded_video"}
+        }
+        question_ids = {str(question.get("question_id") or "") for question in stage.get("questions") or []}
+        for block in layout["blocks"]:
+            asset = block.get("asset") or {}
+            url = str(asset.get("url") or "")
+            if url and url not in allowed_urls and not url.lower().startswith("https://"):
+                raise ValueError(f"区块素材必须来自当前项目资源库或 https 链接：{url}")
+            if block["type"] == "question":
+                if asset.get("question_id") and asset["question_id"] not in question_ids:
+                    raise ValueError(f"问题区块引用的题目不存在于本环节：{asset.get('question_id')}")
+                if not asset.get("question_id") and not block.get("text"):
+                    raise ValueError("问题区块需要引用环节题目或填写题干。")
+            if block["type"] == "text" and not block.get("text"):
+                raise ValueError("文字区块需要填写文字内容。")
+        stage["presentation"] = layout
+        return {"action": "presentation_update", "stage_id": stage_id, "blocks": len(layout["blocks"]), "at": utc_now()}
 
     def _capture_scene(self, record: LessonRehearsalRecord, payload: Dict[str, Any]) -> Dict[str, Any]:
         stage_id = str(payload.get("stage_id") or "")
