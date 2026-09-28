@@ -1,15 +1,23 @@
 import { ThinkingIndicator } from "./ThinkingIndicator";
 import "./LessonDesignWorkspace.css";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { LessonCellEditor } from "./LessonCellEditor";
+import { LessonProcessTable } from "./LessonProcessTable";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  applyLessonMigration,
   bindLessonDesignQuestion,
   createLessonDesign,
+  exportDesignDocx,
+  exportDesignPdf,
   exportLessonDocx,
+  exportLessonPdf,
   fetchJob,
   fetchLesson,
   fetchLessonDesign,
+  fetchLessonMigrationPreview,
   fetchQuestionBanks,
   finalizeLessonDesign,
+  importLessonDocx,
   importQuestionBanks,
   resolveLessonDesignSection,
   searchQuestionBanks,
@@ -18,15 +26,16 @@ import {
 import type {
   DesignPlanItem,
   LessonDesignSession,
-  LessonDesignTurnResult,
+  LessonDocxImportResult,
+  LessonMigrationPreview,
+  LessonPlanProfile,
   LessonQuestion,
   LessonRecord,
-  LessonPlanProfile,
   LessonStage,
   QuestionBankQuestion,
-  QuestionBankSummary,
-  QuestionRetrievalCandidate
+  QuestionBankSummary
 } from "../types";
+import { PRESET_METHODS, STEP_FOR_SECTION, diffStages, formatQuestion, splitLines, stageList } from "../lib/lessonSheet";
 
 type Props = {
   projectId: string;
@@ -37,67 +46,6 @@ type Props = {
   onEnterRehearsal?: (lesson: LessonRecord) => void;
 };
 
-// 九步固定流程（与后端 STEP_KEYS / STEP_LABELS 一致）
-const STEPS: Array<[string, string]> = [
-  ["requirements", "需求确认"],
-  ["analysis", "课标与学情"],
-  ["objectives", "目标与重难点"],
-  ["core_questions", "核心问题与问题链"],
-  ["process", "教学过程"],
-  ["question_matching", "题目匹配"],
-  ["capabilities", "GIS/AI能力"],
-  ["rehearsal", "预演检查"],
-  ["confirmation", "确认发布"]
-];
-const STEP_SECTION_KEYS: Record<string, string[]> = {
-  requirements: ["requirements"],
-  analysis: ["curriculum_interpretation", "student_analysis", "textbook_analysis"],
-  objectives: ["objectives", "key_difficulties", "methods", "knowledge_structure"],
-  core_questions: ["core_questions"],
-  process: ["stages", "board_design"],
-  question_matching: ["question_citations", "homework"],
-  capabilities: ["capabilities"],
-  rehearsal: [],
-  confirmation: ["design_thinking", "reflection"]
-};
-const REQUIRED_STEP_SECTIONS: Record<string, string[]> = {
-  // 与后端 lesson_design.REQUIRED_SECTIONS 在各步骤的归属保持一致。
-  requirements: ["requirements"],
-  analysis: ["curriculum_interpretation", "student_analysis", "textbook_analysis"],
-  objectives: ["objectives", "key_difficulties"],
-  core_questions: ["core_questions"],
-  process: ["stages"],
-  capabilities: ["capabilities"]
-};
-const SECTION_LABELS: Record<string, string> = {
-  requirements: "教学需求", curriculum_interpretation: "课标解读", student_analysis: "学情分析",
-  textbook_analysis: "教材分析", objectives: "教学目标", key_difficulties: "教学重难点",
-  methods: "教学方法", knowledge_structure: "知识结构", core_questions: "核心问题与问题链",
-  stages: "教学过程", board_design: "板书设计", question_citations: "题库引用",
-  homework: "课后作业", capabilities: "GIS/AI能力", references: "参考资料", design_thinking: "设计思路", reflection: "教学反思"
-};
-const PAPER_PAGES = [
-  { title: "教学依据与目标", sections: ["requirements", "curriculum_interpretation", "student_analysis", "textbook_analysis", "objectives", "key_difficulties", "methods", "knowledge_structure", "core_questions"] },
-  { title: "教学实施", sections: ["stages", "board_design", "homework"] },
-  { title: "资源与反思", sections: ["question_citations", "capabilities", "references", "design_thinking", "reflection"] }
-];
-
-const splitItems = (value: string) => value.split(/\r?\n|[；;]/).map((item) => item.trim()).filter(Boolean);
-const asText = (value: unknown): string => (typeof value === "string" ? value : "");
-
-function formatQuestion(q: LessonQuestion): string {
-  const tags: string[] = [];
-  if (q.source === "question_bank") tags.push(`题库 ${q.number || ""}`.trim());
-  else if (q.source === "teacher_manual") tags.push("手动");
-  if (q.year) tags.push(q.year);
-  if (q.region) tags.push(q.region);
-  if (q.answer_complete === false) tags.push("答案缺失");
-  if (q.images?.length) tags.push(`${q.images.length}图`);
-  const prefix = tags.length ? `（${tags.join(" · ")}）` : "";
-  const optionLine = q.options?.length ? `\n选项：${q.options.join(" ｜ ")}` : "";
-  return `${prefix}${q.text || q.task_text || ""}${optionLine}`;
-}
-
 type DesignRehearsalReport = {
   ready: boolean;
   errors?: string[];
@@ -106,71 +54,62 @@ type DesignRehearsalReport = {
   duration_minutes?: number;
 };
 
-type FocusSummary = {
-  changed_labels?: string[];
-  confirmed_labels?: string[];
-  missing?: string[];
-  next_confirm_sections?: string[];
-  next_confirm_question?: string;
-  unverified_note?: string;
+type DiffModalState = {
+  sectionId: string;
+  sectionLabel: string;
+  before: unknown;
+  stageDiffs: ReturnType<typeof diffStages>;
+  oldText: string;
+  newText: string;
 };
-type CompletionIssue = { target: string; message: string };
 
-function issueTarget(message: string): string | null {
-  if (/课题名称/.test(message)) return "title";
-  // 活动与题目会在后续步骤补全，不能阻塞前面步骤的确认。
-  if (/目标.*活动/.test(message)) return "stages";
-  if (/明确问题|题库题目|手动题目|题图|题目.*答案|题目.*解析/.test(message)) return "question_citations";
-  if (/教学目标/.test(message)) return "objectives";
-  if (/核心问题|递进子问题/.test(message)) return "core_questions";
-  if (/设计思路/.test(message)) return "design_thinking";
-  if (/基础作业/.test(message)) return "homework";
-  if (/教学过程|环节|时长|分钟|学生活动|知识结论|题目|题图/.test(message)) return "stages";
-  if (/能力|数据/.test(message)) return "capabilities";
-  return null;
+const SECTION_LABELS: Record<string, string> = {
+  title: "课题", grade: "年级", duration_minutes: "课时", subject: "学科",
+  requirements: "教学需求", curriculum_interpretation: "课标解读", student_analysis: "学情分析",
+  textbook_analysis: "教材分析", objectives: "教学目标", key_difficulties: "教学重难点",
+  methods: "教学方法", knowledge_structure: "知识结构", board_design: "板书设计",
+  homework: "课后作业", design_thinking: "设计思路", reflection: "教学反思", references: "参考资料",
+  stages: "教学过程"
+};
+
+function asText(value: unknown): string {
+  return typeof value === "string" ? value : "";
 }
 
-function sectionHasContent(value: unknown): boolean {
-  if (Array.isArray(value)) return value.some((item) => sectionHasContent(item));
-  if (value && typeof value === "object") return Object.entries(value).some(([key, item]) => key !== "trigger" && sectionHasContent(item));
-  if (typeof value === "string") return value.trim().length > 0;
-  return value !== null && value !== undefined && value !== false && value !== 0;
+function openArtifactUrl(url: unknown) {
+  if (typeof url === "string" && url) window.open(url, "_blank", "noopener,noreferrer");
+}
+
+function draftRecord(draft: LessonPlanProfile): Record<string, unknown> {
+  return (draft || {}) as Record<string, unknown>;
 }
 
 export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose, onFinalized, onEnterRehearsal }: Props) {
   const [design, setDesign] = useState<LessonDesignSession | null>(null);
   const [planItems, setPlanItems] = useState<DesignPlanItem[]>([]);
-  const [candidates, setCandidates] = useState<QuestionRetrievalCandidate[]>([]);
   const [messages, setMessages] = useState<Array<{ role: "assistant" | "teacher"; text: string }>>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [focusStep, setFocusStep] = useState("");
-  const [paperMode, setPaperMode] = useState(true);
-  const [paperEdit, setPaperEdit] = useState("");
-  const [paperText, setPaperText] = useState("");
-  const [paperEditRevision, setPaperEditRevision] = useState(0);
   const [checkedPlan, setCheckedPlan] = useState<{ designId: string; revision: number; report: DesignRehearsalReport } | null>(null);
-  const checkRequest = useRef(0);
-  useEffect(() => () => { checkRequest.current += 1; }, [projectId, initialDesignId]);
   const [banks, setBanks] = useState<QuestionBankSummary[]>([]);
   const [importBusy, setImportBusy] = useState(false);
   const [importNote, setImportNote] = useState("");
-  const [manualOpen, setManualOpen] = useState(false);
-  const [manualForm, setManualForm] = useState({ text: "", answer: "", explanation: "" });
   const [searchText, setSearchText] = useState("");
   const [searchResults, setSearchResults] = useState<QuestionBankQuestion[]>([]);
-  const [finalResult, setFinalResult] = useState<{ lesson: LessonRecord; export?: { status: string; artifact?: { metadata?: { public_url?: string } } } } | null>(null);
-  const [focus, setFocus] = useState<FocusSummary | null>(null);
-  const [completionIssues, setCompletionIssues] = useState<CompletionIssue[]>([]);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [finalResult, setFinalResult] = useState<{ lesson: LessonRecord } | null>(null);
+  const [migration, setMigration] = useState<LessonMigrationPreview | null>(null);
+  const [migrationDismissed, setMigrationDismissed] = useState(false);
+  const [importInfo, setImportInfo] = useState<LessonDocxImportResult | null>(null);
+  const [diffModal, setDiffModal] = useState<DiffModalState | null>(null);
+  const [aiTarget, setAiTarget] = useState<{ sectionId: string; label: string } | null>(null);
+  const docxInputRef = useRef<HTMLInputElement | null>(null);
+  const bankInputRef = useRef<HTMLInputElement | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
-  const applySession = useCallback((payload: LessonDesignSession & Partial<{ plan_items: DesignPlanItem[]; active_design_question: string; focus_summary: FocusSummary }>) => {
+  const applySession = useCallback((payload: LessonDesignSession & Partial<{ plan_items: DesignPlanItem[] }>) => {
     setDesign(payload);
     if (payload.plan_items) setPlanItems(payload.plan_items);
-    if (payload.focus_summary !== undefined) setFocus(payload.focus_summary);
-    setCompletionIssues([]);
   }, []);
 
   useEffect(() => {
@@ -179,23 +118,19 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
     setError("");
     setDesign(null);
     setFinalResult(null);
-    setFocusStep("");
-    setPaperMode(true);
-    setPaperEdit("");
-    setPaperText("");
-    setFocus(null);
     setCheckedPlan(null);
     setPlanItems([]);
-    setCompletionIssues([]);
-    setCandidates([]);
     setMessages([]);
     setInput("");
     setBanks([]);
     setSearchResults([]);
     setSearchText("");
-    setManualOpen(false);
-    setManualForm({ text: "", answer: "", explanation: "" });
     setImportNote("");
+    setImportInfo(null);
+    setDiffModal(null);
+    setAiTarget(null);
+    setMigration(null);
+    setMigrationDismissed(false);
     const load = initialDesignId
       ? fetchLessonDesign(initialDesignId)
       : createLessonDesign(projectId);
@@ -203,17 +138,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
       .then((payload) => {
         if (cancelled) return;
         applySession(payload);
-        if (["question_matching", "rehearsal", "confirmation"].includes(payload.current_step)) setPaperMode(false);
-        const history = (payload.turns || []).flatMap((turn) => [
-          { role: "teacher" as const, text: turn.message },
-          { role: "assistant" as const, text: turn.reply }
-        ]);
-        setMessages(
-          history.length
-            ? history
-            : [{ role: "assistant", text: "我们开始教案设计。先告诉我年级、课题与课时，我会按九步流程逐步推进，每轮只问一个关键问题。" }]
-        );
-        // 已定稿的会话：回读课时，恢复「下载 Word / 进入模拟测试」入口。
+        setMessages([{ role: "assistant", text: "这是一页表格式教案：点击任意单元格直接修改，也可以让 AI 只改指定环节，展示差异后由你采用。" }]);
         if (payload.status === "finalized" && payload.final_lesson_id) {
           fetchLesson(payload.final_lesson_id)
             .then((lesson) => {
@@ -242,124 +167,96 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
     chatEndRef.current?.scrollIntoView({ block: "end" });
   }, [messages]);
 
+  // 旧草稿迁移预览：core_questions / capabilities 有内容且未迁移时加载。
+  useEffect(() => {
+    if (!design || design.status === "finalized" || migrationDismissed) return;
+    const values = draftRecord(design.draft);
+    const core = values.core_questions as { core?: string; sub_questions?: string[] } | undefined;
+    const hasLegacy = Boolean((core?.core || core?.sub_questions?.length) || (Array.isArray(values.capabilities) && values.capabilities.length));
+    if (!hasLegacy || values.legacy_migration_applied) {
+      setMigration(null);
+      return;
+    }
+    let cancelled = false;
+    fetchLessonMigrationPreview(design.design_id)
+      .then((preview) => {
+        if (!cancelled) setMigration(preview);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [design, migrationDismissed]);
+
   const draft = design?.draft || {};
   const isFinalized = design?.status === "finalized";
-  const currentStep = design?.current_step || "requirements";
-  useEffect(() => {
-    if (["question_matching", "rehearsal", "confirmation"].includes(currentStep)) setPaperMode(false);
-  }, [currentStep]);
-  const viewStep = focusStep || currentStep;
-  const currentLabel = STEPS.find(([key]) => key === viewStep)?.[1] || "需求确认";
-  const stepIndex = STEPS.findIndex(([key]) => key === viewStep);
-  const isReviewingEarlierStep = stepIndex < STEPS.findIndex(([key]) => key === currentStep);
+  const values = draftRecord(draft);
+  const stages = stageList(draft);
   const currentReport = checkedPlan?.designId === design?.design_id && checkedPlan?.revision === design?.revision ? checkedPlan?.report : null;
-  const confirmedCount = useMemo(
-    () => Object.values(design?.section_status || {}).filter((status) => status === "confirmed").length,
-    [design?.section_status]
-  );
-  // 一键智能优化仅在已有初稿内容时可用（空稿无内容可优化）。
-  const hasDraftContent = useMemo(() => {
-    if (!design || design.status === "finalized") return false;
-    const values = draft as Record<string, unknown>;
-    return Object.keys(SECTION_LABELS).some((key) => sectionHasContent(values[key]));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [design, draft]);
 
-  function generateFullDraft() {
-    const requirement = input.trim();
-    if (!requirement && !asText(draft.topic || draft.title).trim() && !asText((draft.requirements as { raw?: unknown } | undefined)?.raw).trim()) {
-      setError("请先填写课题或教学需求，再生成整份初稿。");
-      return;
+  function showError(exc: unknown) {
+    setError(exc instanceof Error ? exc.message : String(exc));
+  }
+
+  async function directEdit(sectionId: string, value: unknown): Promise<boolean> {
+    if (!design || busy || isFinalized) return false;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await resolveLessonDesignSection(design.design_id, sectionId, "edit", "", design.revision, value);
+      applySession(result.design);
+      return true;
+    } catch (exc) {
+      showError(exc);
+      return false;
+    } finally {
+      setBusy(false);
     }
-    void runTurn(requirement ? `生成完整初稿：${requirement}` : "生成完整初稿", currentStep);
   }
 
-  function smartOptimize() {
-    const requirement = input.trim();
-    void runTurn(requirement ? `一键智能优化：${requirement}` : "一键智能优化", currentStep);
-  }
-
-  function showCompletionIssues(issues: CompletionIssue[]) {
-    setCompletionIssues(issues);
-    setPaperMode(true);
-    setPaperEdit("");
-    const first = issues[0]?.target;
-    if (first) setTimeout(() => document.getElementById(`ldw-paper-${first}`)?.scrollIntoView?.({ block: "center", behavior: "smooth" }), 0);
-  }
-
-  function confirmStep(step: string) {
+  async function acceptAll() {
     if (!design || busy || isFinalized) return;
-    const values = draft as Record<string, unknown>;
-    const issues: CompletionIssue[] = (REQUIRED_STEP_SECTIONS[step] || [])
-      .filter((key) => !sectionHasContent(values[key]))
-      .map((key) => ({ target: key, message: `${SECTION_LABELS[key]}尚未填写。` }));
-    if (step === "requirements" && !asText(draft.title || draft.topic).trim()) {
-      issues.unshift({ target: "title", message: "请填写课题名称。" });
+    setBusy(true);
+    setError("");
+    try {
+      const result = await resolveLessonDesignSection(design.design_id, "all", "accept", "", design.revision);
+      applySession(result.design);
+      setMessages((previous) => [...previous, { role: "assistant", text: result.message || "已确认整份教案。" }]);
+    } catch (exc) {
+      showError(exc);
+    } finally {
+      setBusy(false);
     }
-    for (const message of focus?.missing || []) {
-      const target = issueTarget(message);
-      if (target && ((target === "title" && step === "requirements") || (STEP_SECTION_KEYS[step] || []).includes(target))) {
-        if (!issues.some((issue) => issue.target === target && issue.message === message)) issues.push({ target, message });
-      }
-    }
-    if (!issues.length && !(STEP_SECTION_KEYS[step] || []).some((key) => sectionHasContent(values[key]))) {
-      const target = STEP_SECTION_KEYS[step]?.[0];
-      if (target) issues.push({ target, message: `${SECTION_LABELS[target]}尚未填写。` });
-    }
-    if (issues.length) {
-      showCompletionIssues(issues);
-      return;
-    }
-    setCompletionIssues([]);
-    void acceptStep(step);
-  }
-
-  function confirmPublish() {
-    const issues = (focus?.missing || []).map((message) => ({ target: issueTarget(message) || "", message }));
-    if (issues.length) {
-      showCompletionIssues(issues);
-      return;
-    }
-    void finalize();
-  }
-
-  function stepState(key: string): "done" | "active" | "todo" {
-    const sections = STEP_SECTION_KEYS[key] || [];
-    if (!sections.length) return key === currentStep ? "active" : "todo";
-    const statuses = sections.map((section) => design?.section_status?.[section] || "pending");
-    if (statuses.every((status) => status === "confirmed")) return "done";
-    if (key === currentStep || statuses.some((status) => status === "proposed")) return "active";
-    return "todo";
   }
 
   async function runPlanCheck() {
     if (!design || busy) return;
-    const request = ++checkRequest.current;
     setBusy(true);
     setError("");
     setCheckedPlan(null);
     try {
       const latest: LessonDesignSession & { rehearsal_report?: DesignRehearsalReport } = await fetchLessonDesign(design.design_id);
-      if (request !== checkRequest.current) return;
       if (!latest.rehearsal_report || typeof latest.rehearsal_report.ready !== "boolean") {
         throw new Error("当前后端未返回预演报告，请更新后端后重试。");
       }
       applySession(latest);
       setCheckedPlan({ designId: latest.design_id, revision: latest.revision, report: latest.rehearsal_report });
     } catch (exc) {
-      if (request === checkRequest.current) setError(exc instanceof Error ? exc.message : String(exc));
+      showError(exc);
     } finally {
-      if (request === checkRequest.current) setBusy(false);
+      setBusy(false);
     }
   }
 
   async function runTurn(text: string, step = "") {
     if (!design || isFinalized || !text.trim() || busy) return;
+    const target = aiTarget;
+    const before = target ? JSON.parse(JSON.stringify(design.draft || {})) : null;
     setMessages((previous) => [...previous, { role: "teacher", text }]);
     setBusy(true);
     setError("");
     try {
-      const result = await turnLessonDesign(design.design_id, text, design.revision, step || viewStep);
+      const result = await turnLessonDesign(design.design_id, text, design.revision, step || (target ? STEP_FOR_SECTION[target.sectionId] || "" : ""));
       applySession({
         ...design,
         draft: result.draft,
@@ -371,86 +268,153 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
         revision: result.revision
       });
       setPlanItems(result.plan_items || []);
-      setCandidates(result.retrieval_candidates || []);
-      setFocus((result as LessonDesignTurnResult & { focus_summary?: FocusSummary }).focus_summary || null);
       setMessages((previous) => [...previous, { role: "assistant", text: result.assistant_message }]);
       setInput("");
-      if (result.rehearsal_report) {
-        const report = result.rehearsal_report as DesignRehearsalReport;
-        if (typeof report.ready === "boolean") {
-          setCheckedPlan({ designId: design.design_id, revision: result.revision, report });
+      if (result.rehearsal_report && typeof (result.rehearsal_report as DesignRehearsalReport).ready === "boolean") {
+        setCheckedPlan({ designId: design.design_id, revision: result.revision, report: result.rehearsal_report as DesignRehearsalReport });
+      }
+      // AI 定位修改：仅当目标明确时给出差异弹层，教师采用或放弃。
+      if (target && before) {
+        const sectionLabel = target.label;
+        const after = result.draft || {};
+        if (target.sectionId === "stages") {
+          const stageDiffs = diffStages(before, after);
+          if (stageDiffs.length) {
+            setDiffModal({ sectionId: "stages", sectionLabel, before: (before as { stages?: unknown }).stages ?? [], stageDiffs, oldText: "", newText: "" });
+          }
+        } else {
+          const oldValue = (before as Record<string, unknown>)[target.sectionId];
+          const newValue = (after as Record<string, unknown>)[target.sectionId];
+          if (JSON.stringify(oldValue ?? null) !== JSON.stringify(newValue ?? null)) {
+            setDiffModal({
+              sectionId: target.sectionId,
+              sectionLabel,
+              before: oldValue,
+              stageDiffs: [],
+              oldText: typeof oldValue === "string" ? oldValue : JSON.stringify(oldValue ?? "", null, 2),
+              newText: typeof newValue === "string" ? newValue : JSON.stringify(newValue ?? "", null, 2)
+            });
+          }
         }
-        setMessages((previous) => [
-          ...previous,
-          { role: "assistant", text: `预演检查：${report.ready ? "结构已通过" : "仍有需要补充的内容"}。` }
-        ]);
       }
     } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
+      showError(exc);
     } finally {
       setBusy(false);
     }
   }
 
-  async function acceptStep(step = viewStep) {
+  async function adoptDiff() {
+    if (!design || !diffModal) return;
+    setDiffModal(null);
+    setBusy(true);
+    setError("");
+    try {
+      const result = await resolveLessonDesignSection(design.design_id, diffModal.sectionId, "accept", "", design.revision);
+      applySession(result.design);
+      setMessages((previous) => [...previous, { role: "assistant", text: `「${diffModal.sectionLabel}」的 AI 修改已采用并确认。` }]);
+    } catch (exc) {
+      showError(exc);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function discardDiff() {
+    if (!design || !diffModal) return;
+    const target = diffModal;
+    setDiffModal(null);
+    await directEdit(target.sectionId, target.before);
+  }
+
+  async function finalize() {
     if (!design) return;
     setBusy(true);
     setError("");
     try {
-      const result = await resolveLessonDesignSection(design.design_id, step, "accept", "", design.revision);
+      const result = await finalizeLessonDesign(design.design_id, design.revision);
       applySession(result.design);
-      setPlanItems(result.design.plan_items || []);
-      setFocus(
-        (result as { focus_summary?: FocusSummary }).focus_summary || null
-      );
-      setMessages((previous) => [...previous, { role: "assistant", text: result.message || "这一部分已确认。" }]);
+      setFinalResult({ lesson: result.lesson });
+      setMessages((previous) => [...previous, { role: "assistant", text: "教案草稿已生成第一版 Word。进入「模拟测试」试讲一遍，通过后即可发布为正式课堂。" }]);
+      onFinalized?.(result.lesson);
     } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
+      showError(exc);
     } finally {
       setBusy(false);
     }
   }
 
-  async function directEdit(sectionId: string, value: unknown): Promise<boolean> {
-    if (!design) return false;
+  async function exportDraftWord() {
+    if (!design) return;
     setBusy(true);
     setError("");
     try {
-      const result = await resolveLessonDesignSection(design.design_id, sectionId, "edit", "", design.revision, value);
-      applySession(result.design);
-      setPlanItems(result.design.plan_items || []);
-      setFocus((result as { focus_summary?: FocusSummary }).focus_summary || null);
-      return true;
+      if (design.final_lesson_id) {
+        const result = await exportLessonDocx(design.final_lesson_id, projectId, design.design_id);
+        openArtifactUrl(result.artifact?.metadata?.public_url);
+      } else {
+        const result = await exportDesignDocx(design.design_id, projectId);
+        openArtifactUrl(result.artifact?.metadata?.public_url);
+      }
     } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-      return false;
+      showError(exc);
     } finally {
       setBusy(false);
     }
   }
 
-  function openPaperEdit(sectionId: string) {
-    setPaperEdit(sectionId);
-    setPaperEditRevision(design?.revision || 0);
-    setPaperText(["title", "grade", "duration_minutes"].includes(sectionId)
-      ? String((draft as unknown as Record<string, unknown>)[sectionId] || "")
-      : serializeSection(sectionId, draft));
+  async function exportDraftPdf() {
+    if (!design) return;
+    setBusy(true);
+    setError("");
+    try {
+      if (design.final_lesson_id) {
+        const result = await exportLessonPdf(design.final_lesson_id, projectId, design.design_id);
+        openArtifactUrl(result.artifact?.metadata?.public_url);
+      } else {
+        const result = await exportDesignPdf(design.design_id, projectId);
+        openArtifactUrl(result.artifact?.metadata?.public_url);
+      }
+    } catch (exc) {
+      showError(exc);
+    } finally {
+      setBusy(false);
+    }
   }
 
-  async function savePaperEdit() {
-    if (!paperEdit || busy) return;
-    if (paperEditRevision !== design?.revision) {
-      setError("教案已更新，请关闭编辑窗口并重新打开后保存。");
-      return;
+  async function importDocx(file: File | null | undefined) {
+    if (!file) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await importLessonDocx(projectId, file);
+      applySession(result.design);
+      setImportInfo(result);
+      setCheckedPlan(null);
+      setFinalResult(null);
+      setMessages([{ role: "assistant", text: result.summary }]);
+      window.history.replaceState(null, "", `${window.location.pathname}?view=design&design_id=${encodeURIComponent(result.design.design_id)}`);
+    } catch (exc) {
+      showError(exc);
+    } finally {
+      setBusy(false);
     }
-    let value: unknown = paperText;
-    if (paperEdit === "requirements") value = { requirements: { ...(draft.requirements as object), raw: paperText.trim() } };
-    else if (paperEdit === "stages") value = parseStages(paperText, draft);
-    else if (paperEdit === "capabilities") value = { capabilities: parseCapabilities(paperText) };
-    else if (paperEdit === "references") value = parseReferences(paperText, draft.references);
-    else if (paperEdit === "duration_minutes") value = Number(paperText);
-    else if (!["title", "grade"].includes(paperEdit)) value = parseSection(paperEdit, paperText);
-    if (await directEdit(paperEdit, value)) setPaperEdit("");
+  }
+
+  async function applyMigration() {
+    if (!design) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await applyLessonMigration(design.design_id, design.revision);
+      applySession(result.design);
+      setMigration(null);
+      setMessages((previous) => [...previous, { role: "assistant", text: result.message || "旧版内容已写入教学环节。" }]);
+    } catch (exc) {
+      showError(exc);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function bindQuestion(stageId: string, questionId = "", manual?: Record<string, unknown>) {
@@ -465,10 +429,9 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
         expected_revision: design.revision
       });
       applySession(result.design);
-      setCandidates([]);
       return true;
     } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
+      showError(exc);
       return false;
     } finally {
       setBusy(false);
@@ -488,7 +451,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
       });
       applySession(result.design);
     } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
+      showError(exc);
     } finally {
       setBusy(false);
     }
@@ -507,24 +470,18 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
         await new Promise((resolve) => setTimeout(resolve, 1000));
         job = await fetchJob(start.job_id);
         guard += 1;
-        setImportNote(`正在解析题库…（${Object.values(job.stages || {}).find((stage) => stage.status === "running")?.summary || job.status}）`);
       }
       if (job.status === "failed") {
         setImportNote("");
         setError(job.error || "题库导入失败。");
         return;
       }
-      const result = job.result as { banks?: QuestionBankSummary[]; summary?: string; assistant_message?: string } | undefined;
-      const note = result?.summary || result?.assistant_message || "题库导入完成。";
-      setImportNote(note);
+      setImportNote("题库导入完成。");
       const list = await fetchQuestionBanks(projectId);
       setBanks(list.items || []);
-      if (viewStep === "question_matching") {
-        await runTurn("刷新题目匹配");
-      }
     } catch (exc) {
       setImportNote("");
-      setError(exc instanceof Error ? exc.message : String(exc));
+      showError(exc);
     } finally {
       setImportBusy(false);
     }
@@ -543,103 +500,84 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
       });
       setSearchResults(result.items || []);
     } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
+      showError(exc);
     } finally {
       setBusy(false);
     }
   }
 
-  async function finalize() {
+  // ------------------------------------------------------------------
+  // 教学过程表操作
+  // ------------------------------------------------------------------
+
+  function replaceStages(mutate: (stages: LessonStage[]) => LessonStage[]) {
     if (!design) return;
-    setBusy(true);
-    setError("");
-    try {
-      const result = await finalizeLessonDesign(design.design_id, design.revision);
-      applySession(result.design);
-      setPlanItems(result.design.plan_items || []);
-      setFinalResult({ lesson: result.lesson, export: (result as { export?: { status: string; artifact?: { metadata?: { public_url?: string } } } }).export });
-      setMessages((previous) => [...previous, { role: "assistant", text: "教案草稿已生成第一版 Word。进入「模拟测试」试讲一遍，通过后即可发布为正式课堂。" }]);
-      onFinalized?.(result.lesson);
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    } finally {
-      setBusy(false);
-    }
+    const next = mutate(JSON.parse(JSON.stringify(stages)) as LessonStage[]);
+    void directEdit("stages", next);
   }
 
-  async function exportWord() {
-    if (!design?.final_lesson_id && !finalResult?.lesson) return;
-    const lessonId = finalResult?.lesson.lesson_id || design?.final_lesson_id || "";
-    setBusy(true);
-    setError("");
-    try {
-      const result = await exportLessonDocx(lessonId, projectId, design?.design_id || "");
-      const url = result.artifact.metadata?.public_url;
-      if (typeof url === "string") window.open(url, "_blank", "noopener,noreferrer");
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    } finally {
-      setBusy(false);
-    }
+  function handleStageFieldChange(stageIndex: number, field: string, value: unknown) {
+    replaceStages((list) => {
+      if (list[stageIndex]) (list[stageIndex] as unknown as Record<string, unknown>)[field] = value;
+      return list;
+    });
+  }
+
+  function handleAddStage() {
+    replaceStages((list) => [
+      ...list,
+      {
+        ...({
+          stage_id: `stage_${Date.now()}_${list.length + 1}`,
+          title: `环节${list.length + 1}`,
+          minutes: 5,
+          kind: "presentation",
+          scene: {},
+          questions: []
+        } as unknown as LessonStage)
+      }
+    ]);
+  }
+
+  function handleRemoveStage(stageIndex: number) {
+    replaceStages((list) => list.filter((_, index) => index !== stageIndex));
   }
 
   // ------------------------------------------------------------------
-  // 中栏：各章节编辑卡片
+  // 渲染
   // ------------------------------------------------------------------
-  function renderSectionEditor(sectionId: string) {
-    const status = design?.section_status?.[sectionId] || "pending";
-    const label = SECTION_LABELS[sectionId] || sectionId;
-    const card = (
-      <div key={sectionId} className="ldw-card" data-testid={`ldw-section-${sectionId}`}>
-        <div className="ldw-card-head">
-          <strong>{label}</strong>
-          <span className={`ldw-status ldw-status-${status}`}>{status === "confirmed" ? "已确认" : status === "proposed" ? "待确认" : "待补充"}</span>
-        </div>
-        <SectionBody
-          sectionId={sectionId}
-          design={design}
-          busy={busy || isFinalized}
-          onSave={(value) => void directEdit(sectionId, value)}
-          onRemoveQuestion={(stageId, questionId) => void removeQuestion(stageId, questionId)}
-          onBindCandidate={(stageId, questionId) => void bindQuestion(stageId, questionId)}
-        />
-      </div>
-    );
-    return card;
-  }
 
-  function renderPaperSection(sectionId: string) {
-    const status = design?.section_status?.[sectionId] || "pending";
-    const issues = completionIssues.filter((issue) => issue.target === sectionId);
+  function renderSheetCard(sectionId: string, title: string, content: React.ReactNode) {
+    const status = design?.section_status?.[sectionId];
     return (
-      <section className={`ldw-paper-section ${issues.length ? "ldw-paper-incomplete" : ""}`} id={`ldw-paper-${sectionId}`} key={sectionId} data-testid={`ldw-paper-section-${sectionId}`}>
-        <div className="ldw-paper-section-head">
-          <h5>{SECTION_LABELS[sectionId]}</h5>
-          <span className={`ldw-status ${issues.length ? "ldw-status-incomplete" : `ldw-status-${status}`}`}>{issues.length ? "待补全" : status === "confirmed" ? "已确认" : status === "proposed" ? "待确认" : "待补充"}</span>
-          {sectionId === "question_citations" ? (
-            <button type="button" className="ldw-paper-edit-button" onClick={() => { setFocusStep("question_matching"); setPaperMode(false); }}>匹配题目</button>
-          ) : (
-            <button type="button" className="ldw-paper-edit-button" disabled={busy || isFinalized} onClick={() => openPaperEdit(sectionId)} aria-label={`编辑${SECTION_LABELS[sectionId]}`}>
-              编辑
-            </button>
-          )}
-        </div>
-        {issues.length ? <ul className="ldw-paper-issue-list">{issues.map((issue, index) => <li key={`${issue.target}-${index}`}>{issue.message}</li>)}</ul> : null}
-        <SectionBody
-          sectionId={sectionId}
-          design={design}
-          busy={busy || isFinalized}
-          paperMode
-          onSave={(value) => void directEdit(sectionId, value)}
-          onRemoveQuestion={(stageId, questionId) => void removeQuestion(stageId, questionId)}
-          onBindCandidate={(stageId, questionId) => void bindQuestion(stageId, questionId)}
-        />
+      <section className="ldw-sheet-card" data-testid={`ldw-sheet-${sectionId}`}>
+        <header className="ldw-sheet-card-head">
+          <h4>{title}</h4>
+          <span className={`ldw-status ldw-status-${status || "pending"}`}>{status === "confirmed" ? "已确认" : status === "proposed" ? "待确认" : "待补充"}</span>
+          <button
+            type="button"
+            className="toolbar-button compact"
+            disabled={busy || isFinalized}
+            aria-label={`让 AI 修改${title}`}
+            onClick={() => {
+              setAiTarget({ sectionId, label: title });
+              setMessages((previous) => [...previous, { role: "assistant", text: `AI 修改目标已定为「${title}」。在下方输入要求，我会给出修改差异，由你决定是否采用。` }]);
+            }}
+          >
+            AI 改
+          </button>
+        </header>
+        {content}
       </section>
     );
   }
 
-  const viewSections = STEP_SECTION_KEYS[viewStep] || [];
-  const stages = stageList(draft);
+  const requirementsRaw = asText((values.requirements as { raw?: unknown } | undefined)?.raw);
+  const difficulties = (values.key_difficulties as { key?: string[]; difficult?: string[] } | undefined) || {};
+  const homework = (values.homework as { basic?: string[]; inquiry?: string[] } | undefined) || {};
+  const methods = Array.isArray(values.methods) ? (values.methods as string[]) : [];
+  const references = Array.isArray(values.references) ? values.references : [];
+  const core = (values.core_questions as { core?: string; sub_questions?: string[] } | undefined) || {};
 
   return (
     <section className="ldw-backdrop" data-testid="lesson-design-workspace">
@@ -657,35 +595,57 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
               ×
             </button>
           </header>
-          <button type="button" className={`ldw-overview-link ${paperMode ? "active" : ""}`} onClick={() => { setPaperMode(true); setPaperEdit(""); }} data-testid="ldw-open-paper">
-            <span>▤</span> A4 教案总览 <small>整份阅读与编辑</small>
-          </button>
-          {paperMode ? <nav className="ldw-paper-outline" aria-label="教案目录">
-            {PAPER_PAGES.map((page, index) => <div key={page.title}>
-              <strong>{index + 1}. {page.title}</strong>
-              {page.sections.map((sectionId) => <button type="button" key={sectionId} onClick={() => document.getElementById(`ldw-paper-${sectionId}`)?.scrollIntoView?.({ block: "start", behavior: "smooth" })}>
-                <span>{SECTION_LABELS[sectionId]}</span><i className={`ldw-step-dot ldw-dot-${design?.section_status?.[sectionId] === "confirmed" ? "done" : design?.section_status?.[sectionId] === "proposed" ? "active" : "todo"}`} />
-              </button>)}
-            </div>)}
-          </nav> : null}
-          <nav className="ldw-steps" aria-label="教案设计九步流程" data-testid="ldw-steps">
-            {STEPS.map(([key, label], index) => {
-              const state = stepState(key);
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  className={`ldw-step ${state} ${key === viewStep ? "viewing" : ""}`}
-                  onClick={() => { setFocusStep(key === currentStep ? "" : key); setPaperMode(false); setPaperEdit(""); }}
-                  data-testid={`ldw-step-${key}`}
-                >
-                  <span className="ldw-step-no">{index + 1}</span>
-                  <em>{label}</em>
-                  <i className={`ldw-step-dot ldw-dot-${state}`} />
-                </button>
-              );
-            })}
-          </nav>
+          <div className="ldw-sheet-tools">
+            <button type="button" className="toolbar-button compact" disabled={busy || isFinalized} onClick={() => docxInputRef.current?.click()} data-testid="ldw-import-docx">
+              导入 Word 教案
+            </button>
+            <input
+              ref={docxInputRef}
+              type="file"
+              accept=".docx"
+              hidden
+              aria-label="选择 Word 教案文件"
+              onChange={(event) => {
+                void importDocx(event.target.files?.[0]);
+                event.target.value = "";
+              }}
+            />
+            <button type="button" className="toolbar-button compact" disabled={busy || !design} onClick={() => void exportDraftWord()} data-testid="ldw-export-docx">
+              下载 Word
+            </button>
+            <button type="button" className="toolbar-button compact" disabled={busy || !design} onClick={() => void exportDraftPdf()} data-testid="ldw-export-pdf">
+              下载 PDF
+            </button>
+          </div>
+          {importInfo ? (
+            <details className="ldw-import-card" data-testid="ldw-import-card" open>
+              <summary>Word 导入校对（{importInfo.mapping.length} 处映射 · {importInfo.unclassified.length} 条待归类）</summary>
+              <ul className="ldw-import-mapping">
+                {importInfo.mapping.map((item, index) => (
+                  <li key={index}>
+                    <strong>{item.label}</strong>
+                    <small>{item.origin}</small>
+                    <span>{item.content}</span>
+                  </li>
+                ))}
+              </ul>
+              <ul className="ldw-import-unclassified">
+                {importInfo.unclassified.map((item, index) => (
+                  <li key={index}>
+                    {item.kind === "image" ? (
+                      item.url ? <img src={item.url} alt={item.name || "导入图片"} /> : <span>{item.name}</span>
+                    ) : (
+                      <span>
+                        {item.heading ? <strong>{item.heading}：</strong> : null}
+                        {item.text}
+                      </span>
+                    )}
+                  </li>
+                ))}
+                {!importInfo.unclassified.length ? <li>没有待归类内容。</li> : null}
+              </ul>
+            </details>
+          ) : null}
           <div className="ldw-banks" data-testid="ldw-banks">
             <div className="ldw-card-head">
               <strong>题库</strong>
@@ -693,18 +653,19 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
                 type="button"
                 className="toolbar-button compact"
                 disabled={importBusy}
-                onClick={() => fileInputRef.current?.click()}
+                onClick={() => bankInputRef.current?.click()}
                 data-testid="ldw-import-bank"
               >
                 导入题库
               </button>
             </div>
             <input
-              ref={fileInputRef}
+              ref={bankInputRef}
               type="file"
               accept=".docx"
               multiple
               hidden
+              aria-label="选择题库文件"
               onChange={(event) => {
                 void importBanks(event.target.files);
                 event.target.value = "";
@@ -719,7 +680,6 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
                     <small>
                       {bank.question_count} 题 · 答案覆盖 {Math.round(bank.answer_coverage * 100)}%
                       {bank.answer_missing ? " · 答案缺失" : ""}
-                      {bank.image_count ? ` · ${bank.image_count} 图` : ""}
                     </small>
                   </li>
                 ))}
@@ -732,193 +692,317 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
 
         <main className="ldw-mid">
           <header className="ldw-mid-head">
-            <h3>
-              {paperMode ? "教案总览 · A4 编辑" : `第 ${stepIndex < 0 ? 1 : stepIndex + 1} 步 · ${currentLabel}`}
-              {!paperMode && focusStep && focusStep !== currentStep ? (isReviewingEarlierStep ? "（回看）" : "（查看）") : ""}
-            </h3>
-            <span className="ldw-progress">已确认 {confirmedCount} 项</span>
-            <div className="ldw-view-switch" role="group" aria-label="教案视图">
-              <button type="button" aria-pressed={paperMode} className={paperMode ? "active" : ""} onClick={() => { setPaperMode(true); setPaperEdit(""); }}>A4 教案</button>
-              <button type="button" aria-pressed={!paperMode} className={!paperMode ? "active" : ""} onClick={() => { setPaperMode(false); setPaperEdit(""); }}>步骤详情</button>
-            </div>
-            {focusStep && focusStep !== currentStep ? (
-              <button type="button" className="toolbar-button compact" onClick={() => setFocusStep("")}>
-                回到当前步骤
-              </button>
-            ) : null}
+            <h3>表格式教案</h3>
+            <span className="ldw-progress">
+              {isFinalized ? "已发布课时草稿" : "设计中"}
+            </span>
           </header>
-          <section className="ldw-whole-draft-tools" data-testid="ldw-draft-tools" aria-label="整份教案工具">
-            <div className="ldw-whole-draft-copy">
-              <span className="ldw-tool-eyebrow">全局操作</span>
-              <strong>整份教案工具</strong>
-              <p>用于整份起草或系统优化，不会自动确认步骤，也不会直接发布。</p>
-            </div>
-            <div className="ldw-draft-tool-grid">
-              <button
-                type="button"
-                className="ldw-draft-tool"
-                disabled={busy || !design || design.status === "finalized"}
-                onClick={generateFullDraft}
-                title="根据已填写的信息补齐尚未完成的步骤；右侧输入框有补充要求时会一并采用"
-                data-testid="ldw-full-draft"
-              >
-                <span>生成整份初稿</span>
-                <small>补齐尚未填写的步骤，生成内容仍需教师逐步确认</small>
-              </button>
-              <button
-                type="button"
-                className="ldw-draft-tool"
-                disabled={busy || !design || !hasDraftContent}
-                onClick={smartOptimize}
-                title="保留已确认章节，只系统优化整份教案中尚未确认的内容"
-                data-testid="ldw-smart-optimize"
-              >
-                <span>优化整份教案</span>
-                <small>保留已确认章节，只优化尚未确认的内容</small>
-              </button>
-            </div>
-            <p className="ldw-whole-draft-note" data-testid="ldw-draft-tools-hint">
-              {input.trim()
-                ? "将同时采用右侧输入框中的补充要求；处理完成后仍需逐步核对。"
-                : "当前未填写额外要求，将依据已有课题、年级、课时与已确认内容处理。"}
-            </p>
-          </section>
           <div className="ldw-mid-scroll" data-testid="ldw-plan">
-            {paperMode ? (
-              <div className="ldw-paper-stack" data-testid="ldw-paper-stack">
-                {PAPER_PAGES.map((page, index) => (
-                  <article className="ldw-paper-page" key={page.title} aria-label={`教案第 ${index + 1} 页`}>
-                    <div className="ldw-paper-kicker">WEBGIS-AI · 教学设计</div>
-                    {index === 0 ? (
-                      <>
-                        <h4 className="ldw-paper-title">
-                          <span id="ldw-paper-title" className={completionIssues.some((issue) => issue.target === "title") ? "ldw-paper-title-incomplete" : ""}>{draft.title || draft.topic || "待填写课题名称"}</span>
-                          <button type="button" disabled={busy || isFinalized} onClick={() => openPaperEdit("title")} aria-label="编辑课题">编辑</button>
-                        </h4>
-                        {completionIssues.filter((issue) => issue.target === "title").map((issue, issueIndex) => <p className="ldw-paper-title-issue" key={issueIndex}>{issue.message}</p>)}
-                        <div className="ldw-paper-meta">
-                          <button type="button" disabled={busy || isFinalized} onClick={() => openPaperEdit("grade")}>年级：{draft.grade || "待填写"} ✎</button>
-                          <button type="button" disabled={busy || isFinalized} onClick={() => openPaperEdit("duration_minutes")}>课时：{draft.duration_minutes || 40} 分钟 ✎</button>
-                          <span>状态：{isFinalized ? "已发布" : "设计中"}</span>
-                        </div>
-                      </>
-                    ) : null}
-                    {index === 0 && completionIssues.length ? (
-                      <div className="ldw-paper-completion" role="alert" data-testid="ldw-paper-missing">
-                        <strong>教案还有 {completionIssues.length} 处待补全</strong>
-                        <p>红色标记处可直接点击“编辑”填写；保存后再确认本节。</p>
-                        {completionIssues.some((issue) => !issue.target) ? <ul>{completionIssues.filter((issue) => !issue.target).map((issue, issueIndex) => <li key={issueIndex}>{issue.message}</li>)}</ul> : null}
-                      </div>
-                    ) : null}
-                    <h4 className="ldw-paper-page-heading">{index + 1}. {page.title}</h4>
-                    {page.sections.map(renderPaperSection)}
-                    <footer className="ldw-paper-footer">教师确认后方可用于课堂 · 第 {index + 1} 页</footer>
-                  </article>
-                ))}
-              </div>
-            ) : null}
-            {!paperMode && viewStep === "rehearsal" ? <RehearsalCard design={design} report={currentReport} onRun={() => void runPlanCheck()} busy={busy} /> : null}
-            {!paperMode ? viewSections.map((sectionId) => renderSectionEditor(sectionId)) : null}
-            {!paperMode && viewStep === "question_matching" ? (
-              <QuestionMatchingCard
-                design={design}
-                banks={banks}
-                candidates={candidates}
-                searchText={searchText}
-                searchResults={searchResults}
-                busy={busy || isFinalized}
-                manualOpen={manualOpen}
-                manualForm={manualForm}
-                onSearchText={setSearchText}
-                onRunSearch={() => void runSearch()}
-                onToggleManual={() => setManualOpen((value) => !value)}
-                onManualForm={(patch) => setManualForm((previous) => ({ ...previous, ...patch }))}
-                onBindManual={(stageId) => {
-                  const manual: Record<string, unknown> = { text: manualForm.text };
-                  if (manualForm.answer.trim()) manual.answer = manualForm.answer.trim();
-                  if (manualForm.explanation.trim()) manual.explanation = manualForm.explanation.trim();
-                  void bindQuestion(stageId, "", manual).then((saved) => {
-                    if (saved) setManualForm({ text: "", answer: "", explanation: "" });
-                  });
-                }}
-                onBindSearchResult={(stageId, questionId) => void bindQuestion(stageId, questionId)}
-              />
-            ) : null}
-            {!paperMode && viewStep === "confirmation" ? (
-              <div className="ldw-card ldw-finalize-card" data-testid="ldw-finalize">
-                <div className="ldw-card-head">
-                  <strong>发布</strong>
-                </div>
-                {design?.status === "finalized" || finalResult ? (
-                  <div className="ldw-final-result">
-                    <p>
-                      已生成课时草稿：<strong>{finalResult?.lesson.title || draft.title || ""}</strong>
-                      （版本 {String((finalResult?.lesson.metadata || {}).lesson_version || 1)}，
-                      {String((finalResult?.lesson.metadata || {}).ready_for_class) === "true" ? "可进入课堂" : "待模拟测试"}）
-                    </p>
-                    <div className="ldw-actions">
-                      <button type="button" className="toolbar-button compact" disabled={busy} onClick={() => void exportWord()}>
-                        下载教案 Word
-                      </button>
-                      {onEnterRehearsal && finalResult ? (
-                        <button
-                          type="button"
-                          className="toolbar-button compact primary"
-                          disabled={busy}
-                          onClick={() => onEnterRehearsal(finalResult.lesson)}
-                          data-testid="ldw-enter-rehearsal"
-                        >
-                          进入模拟测试
-                        </button>
-                      ) : null}
-                    </div>
-                    <p className="ldw-hint">进入「模拟测试」试讲一遍，通过后即可发布为正式课堂。</p>
+            <div className="ldw-sheet" data-testid="ldw-sheet">
+              {renderSheetCard(
+                "requirements",
+                "基础信息",
+                <div className="ldw-sheet-body">
+                  <div className="ldw-sheet-grid">
+                    <label>课题
+                      <LessonCellEditor value={asText(draft.title || draft.topic)} label="课题" placeholder="待填写课题" disabled={busy || isFinalized} testId="ldw-cell-title" onSave={(value) => void directEdit("title", value)} />
+                    </label>
+                    <label>年级
+                      <LessonCellEditor value={asText(draft.grade)} label="年级" placeholder="如：高一" disabled={busy || isFinalized} testId="ldw-cell-grade" onSave={(value) => void directEdit("grade", value)} />
+                    </label>
+                    <label>课时（分钟）
+                      <LessonCellEditor value={String(draft.duration_minutes ?? "")} label="课时" placeholder="40" numeric disabled={busy || isFinalized} testId="ldw-cell-duration" onSave={(value) => void directEdit("duration_minutes", Number(value))} />
+                    </label>
                   </div>
-                ) : (
+                  <div className="ldw-sheet-field">
+                    <span>教学需求</span>
+                    <LessonCellEditor
+                      value={requirementsRaw}
+                      label="教学需求"
+                      placeholder="年级、课题、教材与额外要求…"
+                      multiline
+                      disabled={busy || isFinalized}
+                      onSave={(value) => void directEdit("requirements", { ...(draft.requirements as object), raw: value })}
+                    />
+                  </div>
+                </div>
+              )}
+              {renderSheetCard(
+                "objectives",
+                "目标与重难点",
+                <div className="ldw-sheet-body">
+                  <div className="ldw-sheet-field">
+                    <span>教学目标（每行一条）</span>
+                    <LessonCellEditor
+                      value={Array.isArray(values.objectives) ? (values.objectives as string[]).join("\n") : ""}
+                      label="教学目标"
+                      multiline
+                      disabled={busy || isFinalized}
+                      testId="ldw-cell-objectives"
+                      onSave={(value) => void directEdit("objectives", splitLines(value))}
+                    />
+                  </div>
+                  <div className="ldw-sheet-grid">
+                    <div className="ldw-sheet-field">
+                      <span>教学重点（每行一条）</span>
+                      <LessonCellEditor
+                        value={(difficulties.key || []).join("\n")}
+                        label="教学重点"
+                        multiline
+                        disabled={busy || isFinalized}
+                        onSave={(value) => void directEdit("key_difficulties", { key: splitLines(value), difficult: difficulties.difficult || [] })}
+                      />
+                    </div>
+                    <div className="ldw-sheet-field">
+                      <span>教学难点（每行一条）</span>
+                      <LessonCellEditor
+                        value={(difficulties.difficult || []).join("\n")}
+                        label="教学难点"
+                        multiline
+                        disabled={busy || isFinalized}
+                        onSave={(value) => void directEdit("key_difficulties", { key: difficulties.key || [], difficult: splitLines(value) })}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+              {renderSheetCard(
+                "methods",
+                "教学方法",
+                <div className="ldw-sheet-body" data-testid="ldw-methods">
+                  <div className="ldw-method-chips">
+                    {Array.from(new Set([...PRESET_METHODS, ...methods])).map((method) => {
+                      const active = methods.includes(method);
+                      return (
+                        <button
+                          key={method}
+                          type="button"
+                          className={`ldw-method-chip ${active ? "active" : ""}`}
+                          disabled={busy || isFinalized}
+                          aria-pressed={active}
+                          aria-label={`教学方法${method}`}
+                          onClick={() => void directEdit("methods", active ? methods.filter((item) => item !== method) : [...methods, method])}
+                        >
+                          {method}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <CustomMethodInput
+                    disabled={busy || isFinalized}
+                    onAdd={(method) => {
+                      if (!methods.includes(method)) void directEdit("methods", [...methods, method]);
+                    }}
+                  />
+                </div>
+              )}
+              {renderSheetCard(
+                "stages",
+                "教学过程",
+                <LessonProcessTable
+                  draft={draft}
+                  busy={busy || isFinalized}
+                  searchResults={searchResults}
+                  searchText={searchText}
+                  onStageFieldChange={handleStageFieldChange}
+                  onAddStage={handleAddStage}
+                  onRemoveStage={handleRemoveStage}
+                  onRemoveQuestion={(stageId, questionId) => void removeQuestion(stageId, questionId)}
+                  onBindSearchResult={(stageId, questionId) => void bindQuestion(stageId, questionId)}
+                  onBindManual={(stageId, manual) => void bindQuestion(stageId, "", manual)}
+                  onSearchText={setSearchText}
+                  onRunSearch={() => void runSearch()}
+                  onStageAiEdit={(stageIndex) => {
+                    setAiTarget({ sectionId: "stages", label: `环节${stageIndex + 1}｜活动与素材` });
+                    setMessages((previous) => [...previous, { role: "assistant", text: `AI 修改目标已定为「环节${stageIndex + 1}｜活动与素材」。在下方输入要求，我会给出修改差异，由你决定是否采用。` }]);
+                  }}
+                />
+              )}
+              {migration && migration.available && !migrationDismissed ? (
+                <section className="ldw-sheet-card ldw-migration" data-testid="ldw-migration">
+                  <header className="ldw-sheet-card-head">
+                    <h4>旧版内容迁移</h4>
+                  </header>
+                  <p className="ldw-hint">检测到旧版「核心问题与问题链」「GIS/AI 能力」。确认后将按以下方式写入教学环节（原字段保留可读）：</p>
+                  <ul className="ldw-migration-list">
+                    {migration.items.map((item, index) => (
+                      <li key={index}>
+                        {item.kind === "question" ? "问题" : item.kind === "template" ? "教学模板" : item.kind === "dataset" ? "数据图层" : "保留原字段"}
+                        ：{item.detail}
+                        {item.target_stage_title ? <> → <strong>{item.target_stage_title}</strong></> : null}
+                      </li>
+                    ))}
+                  </ul>
                   <div className="ldw-actions">
-                    <button
-                      type="button"
-                      className="toolbar-button compact primary"
-                      disabled={busy || !design}
-                      onClick={confirmPublish}
-                      data-testid="ldw-finalize-button"
-                    >
-                      确认发布为课时草稿
+                    <button type="button" className="toolbar-button compact" onClick={() => setMigrationDismissed(true)}>
+                      暂不迁移
                     </button>
-                    <span className="ldw-hint">发布前会再次运行预演检查；通过后生成第一版 Word。</span>
+                    <button type="button" className="toolbar-button compact primary" disabled={busy || isFinalized} onClick={() => void applyMigration()} data-testid="ldw-migration-apply">
+                      确认写入环节
+                    </button>
+                  </div>
+                </section>
+              ) : null}
+              <section className="ldw-sheet-card" data-testid="ldw-sheet-extras">
+                <header className="ldw-sheet-card-head">
+                  <h4>补充栏目</h4>
+                </header>
+                <details className="ldw-extras">
+                  <summary>板书设计 / 作业 / 设计思路 / 反思 / 参考资料 / 独立问题链（旧）</summary>
+                  <div className="ldw-sheet-body">
+                    {([
+                      ["board_design", "板书设计", asText(values.board_design), (value: string) => void directEdit("board_design", value)],
+                      ["design_thinking", "设计思路（100-150字）", asText(values.design_thinking), (value: string) => void directEdit("design_thinking", value)],
+                      ["reflection", "教学反思", asText(values.reflection), (value: string) => void directEdit("reflection", value)]
+                    ] as Array<[string, string, string, (value: string) => void]>).map(([id, label, text, onSave]) => (
+                      <div className="ldw-sheet-field" key={id}>
+                        <span>{label}</span>
+                        <LessonCellEditor value={text} label={label} multiline disabled={busy || isFinalized} onSave={onSave} />
+                      </div>
+                    ))}
+                    <div className="ldw-sheet-grid">
+                      <div className="ldw-sheet-field">
+                        <span>基础作业（每行一条）</span>
+                        <LessonCellEditor
+                          value={(homework.basic || []).join("\n")}
+                          label="基础作业"
+                          multiline
+                          disabled={busy || isFinalized}
+                          onSave={(value) => void directEdit("homework", { basic: splitLines(value), inquiry: homework.inquiry || [] })}
+                        />
+                      </div>
+                      <div className="ldw-sheet-field">
+                        <span>探究作业（每行一条）</span>
+                        <LessonCellEditor
+                          value={(homework.inquiry || []).join("\n")}
+                          label="探究作业"
+                          multiline
+                          disabled={busy || isFinalized}
+                          onSave={(value) => void directEdit("homework", { basic: homework.basic || [], inquiry: splitLines(value) })}
+                        />
+                      </div>
+                    </div>
+                    <div className="ldw-sheet-field">
+                      <span>参考资料（每行：标题｜年份｜链接）</span>
+                      <LessonCellEditor
+                        value={references.map((item) => (typeof item === "object" && item ? [item.title || "", item.year || "", item.url || ""].join("｜") : String(item))).join("\n")}
+                        label="参考资料"
+                        multiline
+                        disabled={busy || isFinalized}
+                        onSave={(value) =>
+                          void directEdit(
+                            "references",
+                            value.split(/\r?\n/).map((line) => {
+                              const [title = "", year = "", url = ""] = line.split("｜").map((part) => part.trim());
+                              return { title, year, url };
+                            }).filter((item) => item.title || item.url)
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="ldw-sheet-field">
+                      <span>独立问题链（旧字段，已并入环节；可保留）</span>
+                      <LessonCellEditor
+                        value={[core.core || "", ...(core.sub_questions || [])].filter(Boolean).join("\n")}
+                        label="独立问题链"
+                        multiline
+                        disabled={busy || isFinalized}
+                        onSave={(value) => {
+                          const lines = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+                          void directEdit("core_questions", { core: lines[0] || "", sub_questions: lines.slice(1) });
+                        }}
+                      />
+                    </div>
+                  </div>
+                </details>
+              </section>
+            </div>
+          </div>
+          {diffModal ? (
+            <div className="ldw-diff-backdrop" role="dialog" aria-label="AI 修改差异" data-testid="ldw-diff-modal">
+              <div className="ldw-diff-panel">
+                <header>
+                  <strong>AI 修改差异 · {diffModal.sectionLabel}</strong>
+                  <button type="button" aria-label="关闭差异" onClick={() => setDiffModal(null)}>×</button>
+                </header>
+                {diffModal.stageDiffs.length ? (
+                  <ul className="ldw-diff-list">
+                    {diffModal.stageDiffs.map((item, index) => (
+                      <li key={index}>
+                        <strong>{item.stageTitle} · {item.fieldLabel}</strong>
+                        <div className="ldw-diff-old"><span>原</span><pre>{item.oldValue || "（空）"}</pre></div>
+                        <div className="ldw-diff-new"><span>新</span><pre>{item.newValue || "（空）"}</pre></div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div>
+                    <div className="ldw-diff-old"><span>原</span><pre>{diffModal.oldText || "（空）"}</pre></div>
+                    <div className="ldw-diff-new"><span>新</span><pre>{diffModal.newText || "（空）"}</pre></div>
                   </div>
                 )}
-              </div>
-            ) : null}
-          </div>
-          {paperEdit ? (
-            <div className="ldw-paper-edit-panel" role="dialog" aria-label={`编辑${SECTION_LABELS[paperEdit] || (paperEdit === "title" ? "课题" : paperEdit === "grade" ? "年级" : "课时")}`} data-testid="ldw-paper-editor">
-              <div className="ldw-paper-edit-head">
-                <strong>编辑{SECTION_LABELS[paperEdit] || (paperEdit === "title" ? "课题" : paperEdit === "grade" ? "年级" : "课时")}</strong>
-                <button type="button" onClick={() => setPaperEdit("")} aria-label="关闭编辑">×</button>
-              </div>
-              <p>修改后保存为待确认，仍需按左侧步骤核对。</p>
-              <textarea value={paperText} onChange={(event) => setPaperText(event.target.value)} aria-label="教案纸张编辑内容" disabled={busy || isFinalized} />
-              {paperEdit === "stages" ? <small>按“环节｜名称｜时长”及各字段逐行编辑；已有题目绑定会保留。</small> : null}
-              <div className="ldw-paper-edit-actions">
-                <button type="button" className="toolbar-button compact" onClick={() => setPaperEdit("")}>取消</button>
-                <button type="button" className="toolbar-button compact primary" disabled={busy || isFinalized || (paperEdit === "duration_minutes" && (!Number.isInteger(Number(paperText)) || Number(paperText) < 1))} onClick={() => void savePaperEdit()}>保存修改</button>
+                <footer>
+                  <button type="button" className="toolbar-button compact" onClick={() => void discardDiff()} data-testid="ldw-diff-discard">
+                    放弃修改
+                  </button>
+                  <button type="button" className="toolbar-button compact primary" onClick={() => void adoptDiff()} data-testid="ldw-diff-adopt">
+                    采用修改
+                  </button>
+                </footer>
               </div>
             </div>
           ) : null}
-          <footer className="ldw-confirm-bar" data-testid="ldw-step-navigation">
-            {viewStep === "rehearsal" ? (
-              <button type="button" className="toolbar-button compact primary" disabled={busy || !currentReport?.ready} onClick={() => setFocusStep("confirmation")} data-testid="ldw-continue-to-confirmation">进入确认发布</button>
-            ) : focusStep && focusStep !== currentStep ? (
-              <button type="button" className="toolbar-button compact primary" disabled={busy || !design || isFinalized} onClick={() => confirmStep(viewStep)} data-testid="ldw-accept-step">确认“{currentLabel}”</button>
+          <footer className="ldw-confirm-bar" data-testid="ldw-action-bar">
+            {finalResult || isFinalized ? (
+              <div className="ldw-actions ldw-final-actions">
+                <span className="ldw-hint">
+                  课时草稿：{finalResult?.lesson.title || draft.title}（版本 {String((finalResult?.lesson.metadata || {}).lesson_version || 1)}，
+                  {String((finalResult?.lesson.metadata || {}).ready_for_class) === "true" ? "可进入课堂" : "待模拟测试"}）
+                </span>
+                <button type="button" className="toolbar-button compact" disabled={busy} onClick={() => void exportDraftWord()}>
+                  下载 Word
+                </button>
+                <button type="button" className="toolbar-button compact" disabled={busy} onClick={() => void exportDraftPdf()}>
+                  下载 PDF
+                </button>
+                {onEnterRehearsal && finalResult ? (
+                  <button type="button" className="toolbar-button compact primary" disabled={busy} onClick={() => onEnterRehearsal(finalResult.lesson)} data-testid="ldw-enter-rehearsal">
+                    进入模拟测试
+                  </button>
+                ) : null}
+              </div>
             ) : (
-              <button type="button" className="toolbar-button compact primary" disabled={busy || !design || isFinalized} onClick={() => confirmStep(currentStep)} data-testid="ldw-adopt-continue">确认“{currentLabel}”并进入下一步</button>
+              <>
+                <button type="button" className="toolbar-button compact" disabled={busy || !design} onClick={() => void runPlanCheck()} data-testid="ldw-run-rehearsal">
+                  核对整份草稿
+                </button>
+                <button type="button" className="toolbar-button compact" disabled={busy || !design || isFinalized} onClick={() => void acceptAll()} data-testid="ldw-accept-all">
+                  确认整份教案
+                </button>
+                <button type="button" className="toolbar-button compact primary" disabled={busy || !design || isFinalized} onClick={() => void finalize()} data-testid="ldw-finalize-button">
+                  发布为课时草稿
+                </button>
+              </>
             )}
           </footer>
+          {currentReport ? (
+            <div className={`ldw-report ${currentReport.ready ? "ok" : "bad"}`} role="status" data-testid="ldw-rehearsal-report">
+              <strong>{currentReport.ready ? "结构检查通过，可发布为课时草稿" : "仍有需要补充的内容"}</strong>
+              {currentReport.total_minutes !== undefined ? <small>环节合计 {currentReport.total_minutes} 分钟 / 计划 {currentReport.duration_minutes ?? "—"} 分钟</small> : null}
+              {currentReport.errors?.length ? <small className="ldw-report-errors">必须处理：{currentReport.errors.join("；")}</small> : null}
+              {currentReport.warnings?.length ? <small>建议关注：{currentReport.warnings.join("；")}</small> : null}
+            </div>
+          ) : null}
         </main>
 
         <aside className="ldw-right">
           <header className="ldw-right-head"><strong>AI 共创</strong></header>
+          {aiTarget ? (
+            <p className="ldw-ai-target" data-testid="ldw-ai-target">
+              修改目标：<strong>{aiTarget.label}</strong>
+              <button type="button" onClick={() => setAiTarget(null)} aria-label="取消 AI 修改目标">取消</button>
+            </p>
+          ) : null}
           <div className="ldw-chat" aria-live="polite" data-testid="ldw-chat">
             {messages.map((message, index) => (
               <div key={`${message.role}-${index}`} className={`lesson-design-message ${message.role}`}>
@@ -928,7 +1012,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
             ))}
             <div ref={chatEndRef} />
           </div>
-          {busy ? <ThinkingIndicator label={`正在处理${STEPS.find(([key]) => key === viewStep)?.[1] || "教案"}…`} testId="lesson-design-thinking" /> : null}
+          {busy ? <ThinkingIndicator label="正在处理教案…" testId="lesson-design-thinking" /> : null}
           {error ? <p className="lesson-design-error" data-testid="ldw-error">{error}</p> : null}
           <div className="ldw-composer" data-testid="ldw-composer">
             <div className="ldw-composer-input">
@@ -942,7 +1026,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
                     void runTurn(input);
                   }
                 }}
-                placeholder="描述要补充或修改的内容…"
+                placeholder={aiTarget ? `描述要如何修改「${aiTarget.label}」…` : "描述要补充或修改的内容…"}
                 disabled={busy || isFinalized}
                 aria-label="教案设计对话输入"
               />
@@ -955,504 +1039,39 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
   );
 }
 
-// ----------------------------------------------------------------------
-// 章节编辑卡片内容（按 sectionId 分发）
-// ----------------------------------------------------------------------
-function SectionBody({
-  sectionId,
-  design,
-  busy,
-  paperMode = false,
-  onSave,
-  onRemoveQuestion,
-  onBindCandidate
-}: {
-  sectionId: string;
-  design: LessonDesignSession | null;
-  busy: boolean;
-  paperMode?: boolean;
-  onSave: (value: unknown) => void;
-  onRemoveQuestion: (stageId: string, questionId: string) => void;
-  onBindCandidate: (stageId: string, questionId: string) => void;
-}) {
-  const draft = design?.draft || {};
+function CustomMethodInput({ disabled, onAdd }: { disabled: boolean; onAdd: (method: string) => void }) {
   const [text, setText] = useState("");
-  useEffect(() => {
-    setText(serializeSection(sectionId, draft));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sectionId, design?.revision]);
-
-  if (sectionId === "stages") {
-    return (
-      <div className="ldw-stages" data-testid="ldw-stages">
-        {stageList(draft).map((stage, index) => (
-          <div key={stage.stage_id || index} className="ldw-stage">
-            <div className="ldw-card-head">
-              <strong>
-                环节{index + 1}｜{stage.title}｜{stage.minutes}分钟
-              </strong>
-              <span className="ldw-hint">{stage.knowledge_point || ""}</span>
-            </div>
-            <dl className="ldw-stage-fields">
-              {stage.material ? <div><dt>材料</dt><dd>{stage.material}</dd></div> : null}
-              {stage.question_chain?.length ? <div><dt>问题链</dt><dd>{stage.question_chain.join("；")}</dd></div> : null}
-              {stage.teacher_activities?.length ? <div><dt>教师活动</dt><dd>{stage.teacher_activities.join("；")}</dd></div> : null}
-              {stage.student_activities?.length ? <div><dt>学生活动</dt><dd>{stage.student_activities.join("；")}</dd></div> : null}
-              {stage.knowledge_conclusion ? <div><dt>知识结论</dt><dd>{stage.knowledge_conclusion}</dd></div> : null}
-              {stage.design_intent ? <div><dt>设计意图</dt><dd>{stage.design_intent}</dd></div> : null}
-            </dl>
-            {stage.questions?.length ? (
-              <ul className="ldw-question-list">
-                {stage.questions.map((question) => (
-                  <li key={question.question_id}>
-                    <p>{formatQuestion(question)}</p>
-                    {!paperMode ? <button
-                      type="button"
-                      className="ldw-remove-question"
-                      disabled={busy}
-                      onClick={() => onRemoveQuestion(stage.stage_id, question.question_id)}
-                      aria-label="移除题目"
-                    >
-                      移除
-                    </button> : null}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </div>
-        ))}
-        {!paperMode ? <details className="ldw-direct-edit">
-          <summary>直接编辑教学过程</summary>
-          <textarea value={text} onChange={(event) => setText(event.target.value)} aria-label="直接编辑教学过程" />
-          <button
-            type="button"
-            className="toolbar-button compact"
-            disabled={busy || !text.trim()}
-            onClick={() => onSave(parseStages(text, draft))}
-          >
-            保存教学过程
-          </button>
-        </details> : null}
-      </div>
-    );
-  }
-
-  if (sectionId === "question_citations") {
-    const citations = draft.question_citations || [];
-    if (!citations.length) {
-      return <p className="ldw-hint">还没有引用题库题目。在下方按环节检索并选用，或录入手动题目。</p>;
-    }
-    return (
-      <ul className="ldw-citation-list" data-testid="ldw-citations">
-        {citations.map((citation, index) => (
-          <li key={`${citation.question_id}-${index}`}>
-            <strong>{citation.number || citation.question_id.slice(-12)}</strong>
-            <small>
-              {[citation.year, citation.region, citation.source_paper].filter(Boolean).join(" · ")}
-              {citation.selection_reason ? ` · ${citation.selection_reason}` : ""}
-            </small>
-          </li>
-        ))}
-      </ul>
-    );
-  }
-
-  if (sectionId === "capabilities") {
-    const bindings = design?.capability_bindings || [];
-    return (
-      <div>
-        <ul className="ldw-cap-list">
-          {bindings.map((binding) => (
-            <li key={binding.id}>
-              <strong>{binding.label || binding.id}</strong>
-              <small>{binding.reason || ""}</small>
-            </li>
-          ))}
-          {!bindings.length ? <li className="ldw-hint">尚未匹配系统能力。</li> : null}
-        </ul>
-        {!paperMode ? <details className="ldw-direct-edit">
-          <summary>直接编辑能力配置</summary>
-          <textarea value={text} onChange={(event) => setText(event.target.value)} aria-label="直接编辑能力配置" />
-          <button
-            type="button"
-            className="toolbar-button compact"
-            disabled={busy || !text.trim()}
-            onClick={() =>
-              onSave({
-                capabilities: parseCapabilities(text)
-              })
-            }
-          >
-            保存能力配置
-          </button>
-        </details> : null}
-      </div>
-    );
-  }
-
-  if (sectionId === "requirements") {
-    return (
-      <div>
-        <p className="ldw-section-text">{asText((draft.requirements as { raw?: unknown } | undefined)?.raw) || "尚未填写教学需求。"}</p>
-        {!paperMode ? <details className="ldw-direct-edit">
-          <summary>直接编辑教学需求</summary>
-          <textarea value={text} onChange={(event) => setText(event.target.value)} aria-label="直接编辑教学需求" />
-          <button type="button" className="toolbar-button compact" disabled={busy || !text.trim()} onClick={() => onSave({ requirements: { ...(draft.requirements as object), raw: text.trim() } })}>
-            保存教学需求
-          </button>
-        </details> : null}
-      </div>
-    );
-  }
-
-  // 纯文本 / 列表型章节的通用编辑器
   return (
-    <div>
-      <p className="ldw-section-text">{text || "待补充。"}</p>
-      {!paperMode ? <details className="ldw-direct-edit">
-        <summary>直接编辑{SECTION_LABELS[sectionId] || "本节内容"}</summary>
-        <textarea value={text} onChange={(event) => setText(event.target.value)} aria-label={`直接编辑${SECTION_LABELS[sectionId] || sectionId}`} />
-        <button type="button" className="toolbar-button compact" disabled={busy || !text.trim()} onClick={() => onSave(parseSection(sectionId, text))}>
-          保存{SECTION_LABELS[sectionId] || "本节"}
-        </button>
-      </details> : null}
-    </div>
-  );
-}
-
-function parseCapabilities(text: string) {
-  return text.split(/\r?\n/)
-    .map((line) => line.split("｜"))
-    .map(([id, reason]) => ({ id: (id || "").trim(), reason: (reason || "").trim() || "教师直接配置" }))
-    .filter((item) => item.id);
-}
-
-function parseReferences(text: string, previous: LessonPlanProfile["references"]): NonNullable<LessonPlanProfile["references"]> {
-  const old = Array.isArray(previous) ? previous : [];
-  return text.split(/\r?\n/).map((line) => {
-    const [title = "", year = "", url = ""] = line.split("｜").map((part) => part.trim());
-    const prior = old.find((item) => typeof item === "object" && item && ((url && item.url === url) || (title && item.title === title)));
-    return { ...(typeof prior === "object" && prior ? prior : {}), title, year, url };
-  }).filter((item) => item.title || item.url);
-}
-
-function serializeSection(sectionId: string, draft: Record<string, unknown> & { [key: string]: any }): string {
-  switch (sectionId) {
-    case "requirements":
-      return asText((draft.requirements as { raw?: unknown } | undefined)?.raw);
-    case "curriculum_interpretation":
-    case "student_analysis":
-    case "textbook_analysis":
-    case "board_design":
-    case "design_thinking":
-    case "reflection":
-      return asText(draft[sectionId]);
-    case "objectives":
-      return (draft.objectives || []).join("\n");
-    case "key_difficulties": {
-      const kd = draft.key_difficulties || {};
-      return [`重点：${(kd.key || []).join("；")}`, `难点：${(kd.difficult || []).join("；")}`].join("\n");
-    }
-    case "methods":
-      return (draft.methods || []).join("；");
-    case "knowledge_structure":
-      return (draft.knowledge_structure || []).join(" → ");
-    case "core_questions": {
-      const cq = draft.core_questions || { core: "", sub_questions: [] };
-      return [`核心问题：${cq.core || ""}`, ...(cq.sub_questions || []).map((item: string, index: number) => `子问题${index + 1}：${item}`)].join("\n");
-    }
-    case "homework": {
-      const hw = draft.homework || { basic: [], inquiry: [] };
-      return [`基础作业：${(hw.basic || []).join("；")}`, `探究作业：${(hw.inquiry || []).join("；")}`].join("\n");
-    }
-    case "capabilities":
-      return (draft.capabilities || []).map((item: { id: string; reason?: string; label?: string }) => `${item.id}｜${item.reason || item.label || ""}`).join("\n");
-    case "references":
-      return (draft.references || []).map((item: string | { title?: string; year?: string; url?: string }) =>
-        typeof item === "string" ? item : [item.title || "", item.year || "", item.url || ""].join("｜")
-      ).join("\n");
-    case "stages":
-      return stageList(draft).map((stage: LessonStage, index: number) =>
-        [
-          `环节${index + 1}｜${stage.title}｜${stage.minutes}分钟`,
-          `知识点：${stage.knowledge_point || ""}`,
-          `材料：${stage.material || ""}`,
-          `问题链：${(stage.question_chain || []).join("；")}`,
-          `教师活动：${(stage.teacher_activities || []).join("；")}`,
-          `学生活动：${(stage.student_activities || []).join("；")}`,
-          `知识结论：${stage.knowledge_conclusion || ""}`,
-          `设计意图：${stage.design_intent || ""}`
-        ].join("\n")
-      ).join("\n\n");
-    default:
-      return "";
-  }
-}
-
-function parseSection(sectionId: string, text: string): unknown {
-  const lines = () => text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  switch (sectionId) {
-    case "curriculum_interpretation":
-    case "student_analysis":
-    case "textbook_analysis":
-    case "board_design":
-    case "design_thinking":
-    case "reflection":
-      return text.trim();
-    case "objectives":
-      return splitItems(text);
-    case "key_difficulties":
-      return {
-        key: splitItems(text.split(/\r?\n/).find((line) => line.startsWith("重点"))?.split("：")[1] || ""),
-        difficult: splitItems(text.split(/\r?\n/).find((line) => line.startsWith("难点"))?.split("：")[1] || "")
-      };
-    case "methods":
-      return splitItems(text);
-    case "knowledge_structure":
-      return text.split(/→|->/).map((item) => item.trim()).filter(Boolean);
-    case "core_questions":
-      return {
-        core: text.split(/\r?\n/).find((line) => line.startsWith("核心问题"))?.split("：").slice(1).join("：").trim() || "",
-        sub_questions: lines()
-          .filter((line) => line.startsWith("子问题"))
-          .map((line) => line.split("：").slice(1).join("：").trim())
-          .filter(Boolean)
-      };
-    case "homework":
-      return {
-        basic: splitItems(text.split(/\r?\n/).find((line) => line.startsWith("基础作业"))?.split("：")[1] || ""),
-        inquiry: splitItems(text.split(/\r?\n/).find((line) => line.startsWith("探究作业"))?.split("：")[1] || "")
-      };
-    default:
-      return text.trim();
-  }
-}
-
-function stageList(draft: { stages?: unknown } | undefined): LessonStage[] {
-  // 历史数据可能存在被写坏的非数组 stages（直接编辑缺陷），渲染层统一容错。
-  return Array.isArray(draft?.stages) ? (draft.stages as LessonStage[]) : [];
-}
-
-function parseStages(text: string, draft: { stages?: Array<Record<string, any>> }): unknown {
-  const previous = Array.isArray(draft.stages) ? draft.stages : [];
-  const blocks = text.split(/\r?\n\s*\r?\n/).filter((block) => block.trim());
-  const sameStageCount = blocks.length === previous.length;
-  const usedStages = new Set<Record<string, any>>();
-  const stages = blocks
-    .map((block, index) => {
-      const header = (block.split(/\r?\n/)[0] || "").split("｜");
-      const title = (header[1] || "").trim();
-      const old = previous.find((item) => item.title === title && !usedStages.has(item))
-        || (sameStageCount && previous[index] && !usedStages.has(previous[index]) ? previous[index] : null)
-        || {};
-      usedStages.add(old);
-      const minutes = Number.parseInt(String(header[2] || "").replace(/[^0-9]/g, ""), 10);
-      const lineValue = (label: string) => {
-        const line = block.split(/\r?\n/).find((item) => item.trim().startsWith(label));
-        return line ? line.split("：").slice(1).join("：").trim() : "";
-      };
-      return {
-        ...old,
-        stage_id: old.stage_id || `paper_${Date.now()}_${index}`,
-        title: title || old.title || `环节${index + 1}`,
-        minutes: Number.isFinite(minutes) ? minutes : old.minutes || 0,
-        knowledge_point: lineValue("知识点") || old.knowledge_point || "",
-        material: lineValue("材料"),
-        question_chain: splitItems(lineValue("问题链")),
-        teacher_activities: splitItems(lineValue("教师活动")),
-        student_activities: splitItems(lineValue("学生活动")),
-        knowledge_conclusion: lineValue("知识结论"),
-        design_intent: lineValue("设计意图") || old.design_intent || ""
-      };
-    })
-    .filter((stage) => stage.title);
-  // 直接编辑走 SECTION 级 resolve：value 必须是 stages 数组本身；
-  // 包一层 {stages:[…]} 会被原样写入 draft.stages 导致白屏（历史缺陷）。
-  return stages;
-}
-
-// ----------------------------------------------------------------------
-// 预演检查卡片
-// ----------------------------------------------------------------------
-function RehearsalCard({ design, report, onRun, busy }: {
-  design: LessonDesignSession | null;
-  report: DesignRehearsalReport | null | undefined;
-  onRun: () => void;
-  busy: boolean;
-}) {
-  return (
-    <div className="ldw-card ldw-rehearsal" data-testid="ldw-rehearsal">
-      <div className="ldw-card-head">
-        <strong>预演检查</strong>
-        <button type="button" className="toolbar-button compact" disabled={busy || !design} onClick={onRun}>
-          重新检查
-        </button>
-      </div>
-      <p className="ldw-hint">检查课时、目标活动对应、题目完整性与地图能力引用。结构检查不代表知识事实、资料来源和教学效果已核实。</p>
-      {report ? (
-        <div className={`ldw-report ${report.ready ? "ok" : "bad"}`} role="status">
-          <strong>{report.ready ? "结构检查通过，仍需教师核对内容并确认章节" : "仍有需要补充的内容"}</strong>
-          {report.total_minutes !== undefined ? <small>环节合计 {report.total_minutes} 分钟 / 计划 {report.duration_minutes ?? "—"} 分钟</small> : null}
-          {report.errors?.length ? <small className="ldw-report-errors">必须处理：{report.errors.join("；")}</small> : null}
-          {report.warnings?.length ? <small>建议关注：{report.warnings.join("；")}</small> : null}
-        </div>
-      ) : <p className="ldw-hint">尚未检查当前草稿，请运行预演。</p>}
-      <button type="button" className="toolbar-button compact primary" disabled={busy || !design} onClick={onRun} data-testid="ldw-run-rehearsal">
-        {busy ? "正在检查…" : "运行完整预演"}
+    <div className="ldw-method-custom">
+      <input
+        type="text"
+        value={text}
+        disabled={disabled}
+        aria-label="自定义教学方法"
+        placeholder="自定义教学方法…"
+        onChange={(event) => setText(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && text.trim()) {
+            event.preventDefault();
+            onAdd(text.trim());
+            setText("");
+          }
+        }}
+      />
+      <button
+        type="button"
+        className="toolbar-button compact"
+        disabled={disabled || !text.trim()}
+        onClick={() => {
+          onAdd(text.trim());
+          setText("");
+        }}
+      >
+        添加
       </button>
     </div>
   );
 }
 
-// ----------------------------------------------------------------------
-// 题目匹配卡片（检索 / 候选 / 手动录入）
-// ----------------------------------------------------------------------
-function QuestionMatchingCard({
-  design,
-  banks,
-  candidates,
-  searchText,
-  searchResults,
-  busy,
-  manualOpen,
-  manualForm,
-  onSearchText,
-  onRunSearch,
-  onToggleManual,
-  onManualForm,
-  onBindManual,
-  onBindSearchResult
-}: {
-  design: LessonDesignSession | null;
-  banks: QuestionBankSummary[];
-  candidates: QuestionRetrievalCandidate[];
-  searchText: string;
-  searchResults: QuestionBankQuestion[];
-  busy: boolean;
-  manualOpen: boolean;
-  manualForm: { text: string; answer: string; explanation: string };
-  onSearchText: (value: string) => void;
-  onRunSearch: () => void;
-  onToggleManual: () => void;
-  onManualForm: (patch: Partial<{ text: string; answer: string; explanation: string }>) => void;
-  onBindManual: (stageId: string) => void;
-  onBindSearchResult: (stageId: string, questionId: string) => void;
-}) {
-  const stages = stageList(design?.draft || {});
-  const [targetStage, setTargetStage] = useState("");
-  const activeStage = targetStage && stages.some((stage) => stage.stage_id === targetStage) ? targetStage : stages[0]?.stage_id || "";
-  if (!banks.length) {
-    return <p className="ldw-hint">先在左侧导入题库（原卷版 + 解析版 成对上传），才能自动匹配题目。</p>;
-  }
-  return (
-    <div className="ldw-card ldw-matching" data-testid="ldw-matching">
-      <div className="ldw-card-head">
-        <strong>题目检索与绑定</strong>
-        <select value={activeStage} onChange={(event) => setTargetStage(event.target.value)} aria-label="目标教学环节">
-          {stages.map((stage) => (
-            <option key={stage.stage_id} value={stage.stage_id}>
-              {stage.title}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="ldw-search-row">
-        <input
-          value={searchText}
-          onChange={(event) => onSearchText(event.target.value)}
-          placeholder="输入考点 / 知识点关键词检索，例如：人口分布 自然因素 地形"
-          aria-label="题目检索关键词"
-          data-testid="ldw-search-input"
-        />
-        <button type="button" className="toolbar-button compact" disabled={busy || !searchText.trim()} onClick={onRunSearch} data-testid="ldw-search-button">
-          检索
-        </button>
-      </div>
-      {searchResults.length ? (
-        <ul className="ldw-candidate-list" data-testid="ldw-search-results">
-          {searchResults.map((item) => (
-            <li key={item.question_id}>
-              <div className="ldw-candidate-main">
-                <strong>
-                  {item.number || ""} {item.stem || item.task_text || ""}
-                </strong>
-                <small>
-                  {[item.year, item.region, item.section_title].filter(Boolean).join(" · ")}
-                  {item.answer_complete ? " · 答案完备" : " · 答案缺失"}
-                  {item.relevance !== undefined ? ` · 相关度 ${(item.relevance * 100).toFixed(0)}%` : ""}
-                </small>
-              </div>
-              <button
-                type="button"
-                className="toolbar-button compact"
-                disabled={busy || !activeStage}
-                onClick={() => onBindSearchResult(activeStage, item.question_id)}
-              >
-                选用
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {candidates.length ? (
-        <div className="ldw-candidate-block">
-          <strong>本轮自动检索候选</strong>
-          <ul className="ldw-candidate-list" data-testid="ldw-candidates">
-            {candidates.map((candidate) => (
-              <li key={`${candidate.stage_id}-${candidate.question_id}`}>
-                <div className="ldw-candidate-main">
-                  <strong>
-                    {candidate.number || ""} {candidate.stem}
-                  </strong>
-                  <small>
-                    {candidate.stage_title} · {[candidate.year, candidate.region].filter(Boolean).join(" · ")} · 相关度{" "}
-                    {(candidate.relevance * 100).toFixed(0)}%
-                    {candidate.auto_selectable ? " · 可自动选用" : ""}
-                    {candidate.answer_complete ? "" : " · 答案缺失"}
-                  </small>
-                  {candidate.selection_reason ? <small className="ldw-hint">{candidate.selection_reason}</small> : null}
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-      <div className="ldw-manual">
-        <button type="button" className="toolbar-button compact" onClick={onToggleManual} data-testid="ldw-manual-toggle">
-          {manualOpen ? "收起手动录入" : "录入手动题目"}
-        </button>
-        {manualOpen ? (
-          <div className="ldw-manual-form">
-            <textarea
-              value={manualForm.text}
-              onChange={(event) => onManualForm({ text: event.target.value })}
-              placeholder="题干（可含材料；如需选项请每行一个写「选项：」开头）"
-              aria-label="手动题目题干"
-            />
-            <textarea
-              value={manualForm.answer}
-              onChange={(event) => onManualForm({ answer: event.target.value })}
-              placeholder="参考答案（进入真实课堂或课后练习前必填）"
-              aria-label="手动题目参考答案"
-            />
-            <textarea
-              value={manualForm.explanation}
-              onChange={(event) => onManualForm({ explanation: event.target.value })}
-              placeholder="解析（建议填写）"
-              aria-label="手动题目解析"
-            />
-            <button
-              type="button"
-              className="toolbar-button compact primary"
-              disabled={busy || !manualForm.text.trim() || !activeStage}
-              onClick={() => onBindManual(activeStage)}
-              data-testid="ldw-manual-bind"
-            >
-              加入环节
-            </button>
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
-}
+// 保留题目格式化展示（题库绑定 UI 使用）。
+export { formatQuestion };
