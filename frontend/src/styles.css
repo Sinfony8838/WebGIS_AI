@@ -8030,3 +8030,10 @@ button {
 .workflow-distance { display: flex; gap: 6px; }
 .workflow-distance input { flex: 1; width: 80px; }
 .workflow-parameters [role="alert"] { color: #a33d18; font-size: 13px; padding-left: 20px; }
+
+/* 地图工具默认呈简洁图标栏：名称与快捷键保留在 DOM（无障碍/测试），视觉上收进悬停提示。 */
+.tool-rail-grid .tool-rail-button,
+.tool-rail-layers.tool-rail-button { justify-content: center; padding: 9px 6px; gap: 0; }
+.tool-rail-grid .tool-rail-label,
+.tool-rail-grid .tool-rail-shortcut,
+.tool-rail-layers .tool-rail-label { display: none; }
