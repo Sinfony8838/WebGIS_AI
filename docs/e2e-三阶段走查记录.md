@@ -33,7 +33,16 @@
 - 课中面板 x≈226 列被 `.basic-knowledge-launcher`（既有悬浮层）遮挡——在本次改动前即存在，建议后续统一管理地图悬浮层层级。
 - IAB 对部分区域的真实点击不稳定（同一按钮多次点击才生效/超时），区块拖动/缩放、管理条按钮等 pointer 密集交互的自动化受阻；相应逻辑已由组件级测试覆盖（含 PointerEvent shim 的拖拽/缩放/关闭/暂收用例，前端 479 用例全绿）。
 
+## 数据包真实验收（2026-09-30 补录）
+
+- 原始全国 GeoTIFF（877MB，SHA-256 7300057B…AB65）下载后运行 `scripts/build_shanghai_worldpop_2020.py`：
+  网格 1716×1485，行政边界精确掩膜后有效像元 812,395，**界内估算总人口 25,098,675 vs 七普 24,870,895，比值 1.0092**。
+- `GET /population-raster/packages` 返回真实包（title/year 2020/res 100m/alpha caveats）。
+- 真实剖面实测（121.20,31.10 → 121.60,31.30，44.1km，46 点）：数值 227–45,382 人/km²，nodata 2 点；
+  响应含「每像元估计人数换算为人/km²，非逐建筑实测」、alpha 声明与 CC BY 4.0 署名。
+- 过程中发现并修复：剖面端点 fallback 拼包路径漏掉 `population/` 子目录（测试只覆盖了显式 population_root 的路径）；
+  补充说明见 `docs/上海WorldPop2020数据包.md`。
+
 ## 未完成/待补
 
-- 上海 WorldPop 数据包真实数据 E2E：原始全国 GeoTIFF（877MB）下载中，完成后运行 `scripts/build_shanghai_worldpop_2020.py` 产出校验值并补做剖面实测（构建、部署验收步骤见 `docs/上海WorldPop2020数据包.md`）。
 - Word 导入 GUI 上传（受运行时能力限制，见 T7）。

@@ -226,10 +226,10 @@ def preview(
 ) -> Dict[str, Any]:
     vertices, distances = _line(coordinates)
     if kind == "population" and source_id == "shanghai_worldpop_2020":
-        package_root = population_root
-        if package_root is None:
-            parents = list(cache_root.parents)
-            package_root = parents[1] if len(parents) >= 2 else cache_root.parent
+        # population_root 未显式给出时，从 cache_root 上溯到数据目录并拼 population/ 子目录。
+        package_root = population_root or (
+            cache_root.parents[1] if len(cache_root.parents) >= 2 else cache_root.parent
+        ) / "population"
         package = load_package(Path(package_root) / source_id)
         if package is None:
             raise ProfileError(
