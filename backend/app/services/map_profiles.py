@@ -10,8 +10,10 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from uuid import uuid4
+
+from .raster_dataset import load_package
 
 from PIL import Image
 from pyproj import Geod
@@ -130,7 +132,30 @@ def _terrain_value(point: Dict[str, Any], cache_root: Path) -> float | None:
     return round(red * 256 + green + blue / 256 - 32768, 2)
 
 
+def _raster_population_profile(vertices: List[Tuple[float, float]], distances: List[float], package: Any) -> Dict[str, Any]:
+    """本地裁剪人口栅格包（WorldPop ~100m）：逐点最近邻取样。"""
+    samples = _sample_points(vertices, distances, 241)
+    values = package.sample_line([(point["lon"], point["lat"]) for point in samples])
+    for point, value in zip(samples, values):
+        point["value"] = value
+    header = package.header
+    source = header.get("source") or {}
+    return {
+        "samples": samples,
+        "source_name": str(header.get("title") or "本地人口栅格包"),
+        "source_year": str(source.get("year") or "未标明"),
+        "sampling": "本地裁剪栅格最近邻取值（WorldPop ~100m / 3 角秒）",
+        "resolution_m": int(source.get("resolution_m") or 100),
+        "source_url": source.get("url"),
+        "source_attribution": str(header.get("attribution") or ""),
+        "source_caveats": [str(item) for item in header.get("caveats") or []],
+        "value_note": "原始每像元估计人数已按像元实际面积换算为人/km²，非逐建筑实测。",
+    }
+
+
 def _polygon_profile(project: Any, source_id: str, vertices: List[Tuple[float, float]], distances: List[float]) -> Dict[str, Any]:
+    if project is None:
+        raise ProfileError("INVALID_SOURCE", "不支持所选剖面数据源。")
     layer = next((item for item in project.layers if item.layer_id == source_id and item.visible), None)
     if layer is None or layer.kind != "vector" or "Polygon" not in layer.geometry_type:
         raise ProfileError("INVALID_SOURCE", "请选择当前可见的人口密度面图层。")
@@ -191,9 +216,30 @@ def _polygon_profile(project: Any, source_id: str, vertices: List[Tuple[float, f
             "source_url": None}
 
 
-def preview(project: Any, coordinates: Sequence[Sequence[float]], kind: str, source_id: str, cache_root: Path) -> Dict[str, Any]:
+def preview(
+    project: Any,
+    coordinates: Sequence[Sequence[float]],
+    kind: str,
+    source_id: str,
+    cache_root: Path,
+    population_root: Optional[Path] = None,
+) -> Dict[str, Any]:
     vertices, distances = _line(coordinates)
-    if kind == "population" and source_id == "gpw_2020":
+    if kind == "population" and source_id == "shanghai_worldpop_2020":
+        package_root = population_root
+        if package_root is None:
+            parents = list(cache_root.parents)
+            package_root = parents[1] if len(parents) >= 2 else cache_root.parent
+        package = load_package(Path(package_root) / source_id)
+        if package is None:
+            raise ProfileError(
+                "SOURCE_UNAVAILABLE",
+                "上海人口数据包未部署：请在部署目录 data/population/shanghai_worldpop_2020 放置数据包后重试。",
+                503,
+            )
+        details = _raster_population_profile(vertices, distances, package)
+        unit = "人/km²"
+    elif kind == "population" and source_id == "gpw_2020":
         samples = _sample_points(vertices, distances, 121)
         with ThreadPoolExecutor(max_workers=8) as pool:
             values = list(pool.map(_gpw_value, samples))
@@ -222,5 +268,5 @@ def preview(project: Any, coordinates: Sequence[Sequence[float]], kind: str, sou
     samples = details["samples"]
     return {"kind": kind, "source_id": source_id, "unit": unit,
             "total_distance_km": round(distances[-1] / 1_000, 4),
-            "sample_spacing_m": None if kind == "population" and source_id != "gpw_2020" else round(distances[-1] / max(1, len(samples) - 1), 1),
+            "sample_spacing_m": None if kind == "population" and source_id not in {"gpw_2020", "shanghai_worldpop_2020"} else round(distances[-1] / max(1, len(samples) - 1), 1),
             "no_data_count": sum(point["value"] is None for point in samples), **details}
