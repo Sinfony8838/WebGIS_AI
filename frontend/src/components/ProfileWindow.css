@@ -67,7 +67,8 @@
   z-index: 19;
   left: 50%;
   transform: translateX(-50%);
-  bottom: 12px;
+  /* 抬离底部经纬度状态栏，避免重叠遮挡 */
+  bottom: 48px;
   display: flex;
   align-items: center;
   gap: 8px;
