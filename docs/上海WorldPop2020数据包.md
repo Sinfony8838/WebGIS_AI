@@ -39,6 +39,12 @@
 - 写出自描述包：`package.json`（含来源/授权/换算方法/SHA-256/校验值）+ `density.f32`（float32 小端、北→南、nodata=NaN）；
 - 打印校验值：估算总人口、像元数、nodata 数，并与 **2020 年七普上海 24,870,895 人** 对照（比值写入 `package.json.validation.ratio_vs_census`）。
 
+## 实测校验值（2026-09-30，R2025A v1，精确行政边界掩膜）
+
+- 源文件 SHA-256：见 `package.json.validation.source_sha256`（919,833,659 字节）
+- 上海市界内有效像元：812,395（nodata/界外 1,735,865）
+- **界内估算总人口 25,098,675 人 vs 七普 24,870,895 人 → 比值 1.0092（+0.9%）**
+
 ## 部署与验收（部署包单独验收项）
 
 1. 数据包位于运行数据目录：`<WEBGIS_AI_DATA_DIR 或 backend/data>/population/shanghai_worldpop_2020/`（`package.json` + `density.f32`）。

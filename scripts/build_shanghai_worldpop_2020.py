@@ -48,8 +48,18 @@ CENSUS_2020_SHANGHAI = 24_870_895  # 七普上海常住人口（2020）
 PACKAGE_ID = "shanghai_worldpop_2020"
 
 
+BOUNDARY_GEOJSON = None
+
+
+def load_boundary() -> dict:
+    global BOUNDARY_GEOJSON
+    if BOUNDARY_GEOJSON is None:
+        BOUNDARY_GEOJSON = json.loads(BOUNDARY_PATH.read_text(encoding="utf-8"))
+    return BOUNDARY_GEOJSON
+
+
 def shanghai_bbox(buffer_deg: float) -> list[float]:
-    geometry = json.loads(BOUNDARY_PATH.read_text(encoding="utf-8"))
+    geometry = load_boundary()
 
     def walk(coords: Any) -> None:
         nonlocal minx, miny, maxx, maxy
@@ -103,12 +113,24 @@ def main() -> None:
         lat_step = float(abs(dataset.transform.e))
         if abs(lon_step - 3 / 3600) > 1e-9 or abs(lat_step - 3 / 3600) > 1e-9:
             raise SystemExit(f"源栅格分辨率不是 3 角秒（~100m）：lon={lon_step}, lat={lat_step}")
+        src_nodata = dataset.nodata
         window = from_bounds(minx, miny, maxx, maxy, transform=dataset.transform)
         window = window.round_offsets().round_lengths()
         block = dataset.read(1, window=window, boundless=True, fill_value=np.nan).astype("float64")
         transform = dataset.window_transform(window)
+        # 行政边界精确掩膜：校验与课堂数据只统计上海市界内像元（缓冲区仅留渲染余量）。
+        from rasterio.features import rasterize
+        geoms = [f["geometry"] for f in load_boundary().get("features", []) if f.get("geometry")]
+        boundary_mask = rasterize(
+            [(g, 1) for g in geoms], out_shape=block.shape, transform=transform, fill=0, dtype="uint8"
+        )
+        block = np.where(boundary_mask == 1, block, np.nan)
 
+    # nodata 兼容：源元数据 nodata（WorldPop 常为负哨兵值）、非有限值与负值均视为无数据。
     nodata_mask = ~np.isfinite(block)
+    if src_nodata is not None:
+        nodata_mask |= np.isclose(block, float(src_nodata))
+    nodata_mask |= block < 0
     pixel_count = int(block.size - int(nodata_mask.sum()))
     if pixel_count == 0:
         raise SystemExit("裁剪范围内没有有效像元，请检查范围与源数据。")
@@ -134,6 +156,8 @@ def main() -> None:
         "package_id": PACKAGE_ID,
         "title": "上海 2020 年人口网格（WorldPop ~100m 估计）",
         "bbox": bbox,
+        "width": width,
+        "height": height,
         "lon_step": lon_step,
         "lat_step": lat_step,
         "source": {
