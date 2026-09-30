@@ -528,10 +528,16 @@ export function LessonWorkflowShell({
         if (lesson?.lesson_id) {
           const fetched = await fetchLesson(lesson.lesson_id);
           setActiveLesson(fetched);
+          // 引导进入与 Word 导入一致的校对流程：以导入课时为底稿打开表格式教案。
+          if (onOpenDesignWorkspace) {
+            const design = await createLessonDesign(project.project_id, fetched.lesson_id);
+            setLessonMode("off");
+            onOpenDesignWorkspace(design.design_id);
+          }
         }
       });
     },
-    [loadLessons, project, runWithBusy]
+    [loadLessons, onOpenDesignWorkspace, project, runWithBusy]
   );
 
   const prepareLesson = useCallback(

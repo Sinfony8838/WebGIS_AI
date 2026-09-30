@@ -218,3 +218,91 @@
   .ldw-paper-page { min-height: 0; padding: 20px; }
   .ldw-paper-edit-panel { position: fixed; top: 12vh; right: 5vw; width: 90vw; max-height: 76vh; }
 }
+
+/* ------------------------------------------------------------------
+   一页表格式教案（sheet）+ 单元格编辑器 + 过程表 + 差异弹层
+   ------------------------------------------------------------------ */
+.ldw-sheet-tools { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--panel-border); }
+.ldw-import-card { margin: 8px 10px; padding: 8px 10px; border: 1px solid #bfdbfe; border-radius: 9px; background: #eff6ff; font-size: 11px; }
+.ldw-import-card summary { cursor: pointer; color: #1d4ed8; font-weight: 700; }
+.ldw-import-mapping, .ldw-import-unclassified { margin: 8px 0 0; padding-left: 16px; color: #334155; display: grid; gap: 4px; }
+.ldw-import-mapping strong { color: #1e3a8a; }
+.ldw-import-mapping small { display: block; color: #64748b; }
+.ldw-import-unclassified img { max-width: 100%; border-radius: 6px; }
+.ldw-sheet { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px 24px; }
+.ldw-sheet-card { border: 1px solid var(--panel-border); border-radius: 12px; background: #fff; padding: 12px 14px; }
+.ldw-sheet-card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.ldw-sheet-card-head h4 { flex: 1; margin: 0; font-size: 14px; color: var(--text-main); }
+.ldw-sheet-body { display: flex; flex-direction: column; gap: 10px; }
+.ldw-sheet-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.ldw-sheet-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ldw-sheet-field > span, .ldw-sheet-grid label { color: var(--text-dim); font-size: 11px; font-weight: 700; }
+.ldw-sheet-grid label { display: flex; flex-direction: column; gap: 4px; }
+.ldw-method-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ldw-method-chip { padding: 5px 11px; border: 1px solid var(--panel-border); border-radius: 999px; background: var(--surface); color: var(--text-soft); font: inherit; font-size: 11px; cursor: pointer; }
+.ldw-method-chip.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+.ldw-method-custom { display: flex; gap: 6px; }
+.ldw-method-custom input { flex: 1; min-width: 0; padding: 6px 9px; border: 1px solid var(--panel-border); border-radius: 7px; font: inherit; font-size: 12px; }
+.ldw-ai-target { display: flex; align-items: center; gap: 8px; margin: 0; padding: 7px 10px; border-radius: 8px; background: #eff6ff; color: #1d4ed8; font-size: 11px; }
+.ldw-ai-target button { margin-left: auto; border: 0; background: transparent; color: #64748b; font: inherit; cursor: pointer; }
+
+/* 单元格 */
+.lse-cell { display: block; width: 100%; min-height: 30px; padding: 6px 9px; border: 1px dashed #cbd5e1; border-radius: 7px; background: #f8fafc; color: var(--text-main); font: inherit; font-size: 12px; line-height: 1.55; text-align: left; cursor: text; white-space: pre-wrap; }
+.lse-cell:hover:not(:disabled) { border-color: var(--accent); background: #f0f7ff; }
+.lse-cell:disabled { cursor: default; opacity: .7; }
+.lse-cell-empty { color: #94a3b8; }
+.lse-cell-editing { display: flex; gap: 6px; align-items: flex-start; }
+.lse-cell-editing textarea, .lse-cell-editing input { flex: 1; min-width: 0; box-sizing: border-box; padding: 6px 9px; border: 1px solid var(--accent); border-radius: 7px; background: #fff; color: var(--text-main); font: inherit; font-size: 12px; line-height: 1.55; }
+.lse-cell-editing textarea { min-height: 64px; resize: vertical; }
+.lse-cell-actions { display: flex; flex-direction: column; gap: 4px; }
+
+/* 教学过程表 */
+.lpt-table { display: flex; flex-direction: column; gap: 10px; }
+.lpt-head { display: grid; grid-template-columns: 200px 1fr; gap: 8px; padding: 6px 8px; border-radius: 7px; background: #e2e8f0; color: #1e293b; font-size: 12px; font-weight: 700; }
+.lpt-row { display: grid; grid-template-columns: 200px 1fr; gap: 8px; border: 1px solid var(--panel-border); border-radius: 9px; padding: 8px; background: #fcfdff; }
+.lpt-stage-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.lpt-stage-head { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.lpt-stage-head strong { font-size: 12px; }
+.lpt-stage-actions { display: flex; gap: 4px; }
+.lpt-minutes { display: flex; align-items: center; gap: 5px; color: var(--text-dim); font-size: 11px; }
+.lpt-minutes .lse-cell { min-height: 26px; }
+.lpt-content-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.lpt-field { display: grid; grid-template-columns: 64px 1fr; gap: 8px; align-items: start; }
+.lpt-field-label { color: var(--text-dim); font-size: 11px; font-weight: 700; padding-top: 8px; }
+.lpt-question-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.lpt-question-list li { display: flex; gap: 8px; align-items: flex-start; justify-content: space-between; padding: 6px 8px; border: 1px solid var(--panel-border); border-radius: 7px; background: #fff; }
+.lpt-question-list p { margin: 0; font-size: 12px; white-space: pre-wrap; }
+.lpt-question-tools { display: grid; gap: 6px; padding: 8px; border: 1px dashed var(--panel-border); border-radius: 7px; background: #fff; }
+.lpt-question-tools summary { cursor: pointer; color: var(--accent); font-size: 12px; font-weight: 700; }
+.lpt-question-search { display: flex; gap: 6px; }
+.lpt-question-search input { flex: 1; min-width: 0; padding: 6px 9px; border: 1px solid var(--panel-border); border-radius: 7px; font: inherit; font-size: 12px; }
+.lpt-question-candidates { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.lpt-question-candidates li { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--text-soft); }
+.lpt-manual-form { display: grid; gap: 6px; }
+.lpt-manual-form textarea { box-sizing: border-box; min-height: 40px; padding: 6px 9px; border: 1px solid var(--panel-border); border-radius: 7px; font: inherit; font-size: 12px; }
+
+/* 迁移 / 报告 / 差异弹层 */
+.ldw-migration { border-color: #fcd34d; background: #fffbeb; }
+.ldw-migration-list { margin: 6px 0; padding-left: 18px; color: #92400e; font-size: 12px; display: grid; gap: 3px; }
+.ldw-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ldw-final-actions { justify-content: flex-end; width: 100%; }
+.ldw-report { margin: 0 16px 12px; padding: 9px 12px; border-radius: 9px; font-size: 12px; display: grid; gap: 3px; }
+.ldw-report.ok { border: 1px solid #86efac; background: #f0fdf4; color: #166534; }
+.ldw-report.bad { border: 1px solid #fca5a5; background: #fef2f2; color: #b91c1c; }
+.ldw-report-errors { color: #b91c1c; }
+.ldw-diff-backdrop { position: absolute; z-index: 8; inset: 0; display: grid; place-items: center; background: rgba(15, 23, 42, .38); padding: 24px; }
+.ldw-diff-panel { box-sizing: border-box; width: min(680px, 100%); max-height: 100%; overflow: auto; display: flex; flex-direction: column; gap: 10px; padding: 16px; border-radius: 12px; background: #fff; box-shadow: 0 18px 50px rgba(15, 23, 42, .3); }
+.ldw-diff-panel header { display: flex; align-items: center; justify-content: space-between; }
+.ldw-diff-panel header button { border: 0; background: transparent; font-size: 20px; cursor: pointer; color: #64748b; }
+.ldw-diff-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.ldw-diff-list strong { display: block; margin-bottom: 4px; font-size: 12px; color: var(--text-main); }
+.ldw-diff-old, .ldw-diff-new { display: grid; grid-template-columns: 34px 1fr; gap: 6px; align-items: start; }
+.ldw-diff-old span { color: #b91c1c; font-weight: 700; font-size: 11px; }
+.ldw-diff-new span { color: #166534; font-weight: 700; font-size: 11px; }
+.ldw-diff-old pre, .ldw-diff-new pre { margin: 0; padding: 7px 9px; border-radius: 7px; font: inherit; font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+.ldw-diff-old pre { background: #fef2f2; color: #7f1d1d; }
+.ldw-diff-new pre { background: #f0fdf4; color: #14532d; }
+.ldw-diff-panel footer { display: flex; justify-content: flex-end; gap: 8px; }
+@media (max-width: 1100px) {
+  .lpt-head, .lpt-row { grid-template-columns: 1fr; }
+}

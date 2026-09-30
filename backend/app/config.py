@@ -295,6 +295,9 @@ class AppConfig:
     max_question_bank_upload_bytes: int = field(
         default_factory=lambda: int(os.getenv("WEBGIS_AI_MAX_QUESTION_BANK_UPLOAD_BYTES", str(50 * 1024 * 1024)))
     )
+    max_lesson_docx_upload_bytes: int = field(
+        default_factory=lambda: int(os.getenv("WEBGIS_AI_MAX_LESSON_DOCX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
+    )
     max_timeline_upload_bytes: int = field(
         default_factory=lambda: int(os.getenv("WEBGIS_AI_MAX_TIMELINE_UPLOAD_BYTES", str(20 * 1024 * 1024)))
     )

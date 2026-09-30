@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from ..models import LessonDesignRecord, LessonRecord
 from ..store import RuntimeStore
-from .lessons import LessonService
+from .lessons import LessonService, default_scene
 from .minimax_client import MiniMaxClient
 from .population_lesson_prep import ALLOWED_GLOBE_THEME_IDS
 from .question_bank import QuestionBankService
@@ -51,8 +51,10 @@ STEP_SECTIONS = {
     "confirmation": ("design_thinking", "reflection"),
 }
 REQUIRED_SECTIONS = (
+    # 一页表格式教案：问题与系统操作已并入教学环节，
+    # core_questions / capabilities 不再作为独立确认门槛。
     "requirements", "curriculum_interpretation", "student_analysis", "textbook_analysis",
-    "objectives", "key_difficulties", "core_questions", "stages", "capabilities",
+    "objectives", "key_difficulties", "stages",
 )
 SECTION_LABELS = {
     "requirements": "教学需求", "curriculum_interpretation": "课标解读", "student_analysis": "学情分析",
@@ -417,8 +419,10 @@ class LessonDesignService:
         design = self.get(design_id)
         if expected_revision is not None and expected_revision != design.revision:
             raise ValueError("教案草稿已更新，请刷新后再操作。")
-        if section_id not in SECTION_KEYS and section_id not in STEP_SECTIONS and section_id not in {"title", "grade", "duration_minutes"}:
+        if section_id not in SECTION_KEYS and section_id not in STEP_SECTIONS and section_id not in {"title", "grade", "duration_minutes", "all"}:
             raise ValueError("未知教案章节")
+        if section_id == "all":
+            return self._resolve_accept_all(design, decision)
         section_ids = STEP_SECTIONS.get(section_id, (section_id,))
         normalized_decision = str(decision).lower()
         if normalized_decision in {"edit", "direct_edit", "直接编辑"}:
@@ -510,6 +514,200 @@ class LessonDesignService:
         confirmed_keys = accepted if normalized_decision in {"accept", "accepted", "确认", "接受"} else []
         return {"status": "success", "message": message, "design": design.to_dict(),
                 **self.session_view(design), "focus_summary": self._focus_summary(design, confirmed_keys=confirmed_keys)}
+
+    def _resolve_accept_all(self, design: LessonDesignRecord, decision: str) -> Dict[str, Any]:
+        """一次核对：教师查看整份教案后一键确认全部非空章节。
+
+        这是教师主动的整份确认动作：空章节不会被确认为“已确认”。
+        """
+        normalized_decision = str(decision).lower()
+        if normalized_decision in {"reject", "edit", "直接编辑"} or normalized_decision not in {"accept", "accepted", "确认", "接受"}:
+            raise ValueError("整份核对仅支持确认操作；单章节修改请直接编辑对应单元格。")
+        accepted: List[str] = []
+        for key in SECTION_KEYS:
+            if self._section_has_content(design.draft.get(key)):
+                design.section_status[key] = "confirmed"
+                accepted.append(key)
+        if not accepted:
+            raise ValueError("教案还没有可确认的内容")
+        design.revision += 1
+        message = f"已确认整份教案（{len(accepted)} 个章节）。"
+        self.store.upsert_lesson_design(design)
+        return {"status": "success", "message": message, "design": design.to_dict(),
+                **self.session_view(design), "focus_summary": self._focus_summary(design, confirmed_keys=accepted)}
+
+    # ------------------------------------------------------------------
+    # 旧草稿一次性迁移：核心问题与问题链 / GIS·AI 能力 → 各教学环节
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _capability_id(item: Any) -> str:
+        if isinstance(item, dict):
+            return str(item.get("id") or item.get("capability_id") or "").strip()
+        return str(item or "").strip()
+
+    def _migration_plan(self, draft: Dict[str, Any]) -> Dict[str, Any]:
+        """确定性映射（无副作用）：旧字段内容 → 目标环节与写入位置。"""
+        stages = [stage for stage in draft.get("stages") or [] if isinstance(stage, dict)]
+        items: List[Dict[str, Any]] = []
+        applied = bool(draft.get("legacy_migration_applied"))
+        if not stages or applied:
+            return {"available": False, "applied": applied, "items": []}
+
+        def stage_ref(index: int) -> Dict[str, Any]:
+            return {"target_stage_id": str(stages[index].get("stage_id") or f"stage{index + 1}"),
+                    "target_stage_title": str(stages[index].get("title") or f"环节{index + 1}")}
+
+        core = draft.get("core_questions") if isinstance(draft.get("core_questions"), dict) else {}
+        core_text = str((core or {}).get("core") or "").strip()
+        if core_text:
+            items.append({"kind": "question", "detail": core_text, "position": 0, **stage_ref(0)})
+        for offset, question in enumerate((core or {}).get("sub_questions") or []):
+            text = str(question).strip()
+            if text:
+                items.append({"kind": "question", "detail": text, "position": -1,
+                              **stage_ref(offset % len(stages))})
+        catalog = {str(item["id"]): str(item.get("kind") or "") for item in self.capability_catalog()}
+        for entry in draft.get("capabilities") or []:
+            capability_id = self._capability_id(entry)
+            if not capability_id:
+                continue
+            kind = catalog.get(capability_id, "")
+            if kind in {"template", "dataset"}:
+                items.append({"kind": kind, "detail": capability_id, "position": -1, **stage_ref(0)})
+            else:
+                items.append({"kind": "unmappable", "detail": capability_id, "position": -1,
+                              "target_stage_id": "", "target_stage_title": "",
+                              "note": "非场景类能力，保留在原字段，不写入环节。"})
+        return {"available": any(item["kind"] != "unmappable" for item in items),
+                "applied": bool(draft.get("legacy_migration_applied")), "items": items}
+
+    def migration_preview(self, design_id: str) -> Dict[str, Any]:
+        design = self.get(design_id)
+        return self._migration_plan(design.draft)
+
+    def apply_migration(self, design_id: str, expected_revision: Optional[int] = None) -> Dict[str, Any]:
+        design = self.get(design_id)
+        if expected_revision is not None and expected_revision != design.revision:
+            raise ValueError("教案草稿已更新，请刷新后再操作。")
+        if design.draft.get("legacy_migration_applied"):
+            raise ValueError("旧版内容已迁移过，不能重复应用。")
+        plan = self._migration_plan(design.draft)
+        if not plan["available"]:
+            raise ValueError("没有可迁移到教学环节的旧版内容。")
+        stages = [stage for stage in design.draft.get("stages") or [] if isinstance(stage, dict)]
+        stage_by_id = {str(stage.get("stage_id") or f"stage{index + 1}"): stage for index, stage in enumerate(stages)}
+        core = design.draft.get("core_questions") if isinstance(design.draft.get("core_questions"), dict) else {}
+        for item in plan["items"]:
+            if item["kind"] not in {"question", "template", "dataset"}:
+                continue
+            stage = stage_by_id.get(item["target_stage_id"])
+            if stage is None:
+                continue
+            if item["kind"] == "question":
+                chain = stage.setdefault("question_chain", [])
+                if not isinstance(chain, list):
+                    chain = []
+                    stage["question_chain"] = chain
+                if item["position"] == 0:
+                    chain.insert(0, item["detail"])
+                elif item["detail"] not in chain:
+                    chain.append(item["detail"])
+            else:
+                scene = stage.get("scene")
+                if not isinstance(scene, dict) or not scene:
+                    scene = default_scene()
+                    stage["scene"] = scene
+                key = "templates" if item["kind"] == "template" else "catalog_layers"
+                values = scene.setdefault(key, [])
+                if not isinstance(values, list):
+                    values = []
+                    scene[key] = values
+                if item["detail"] not in values:
+                    values.append(item["detail"])
+        # 能力写入环节后同步 capability_bindings，保持既有视图一致。
+        bindings = {self._capability_id(binding) for binding in design.capability_bindings or []}
+        for entry in design.draft.get("capabilities") or []:
+            capability_id = self._capability_id(entry)
+            if capability_id and capability_id not in bindings and capability_id in {i["detail"] for i in plan["items"]}:
+                design.capability_bindings = list(design.capability_bindings or []) + [
+                    {"id": capability_id, "reason": "旧版能力迁移"}]
+                bindings.add(capability_id)
+        design.draft["legacy_migration_applied"] = True
+        design.section_status["stages"] = "proposed"
+        design.revision += 1
+        design.diff_summary = self._build_diff_summary(design)
+        self.store.upsert_lesson_design(design)
+        count = sum(1 for item in plan["items"] if item["kind"] != "unmappable")
+        return {"status": "success", "message": f"已把 {count} 条旧版内容写入教学环节，请核对。",
+                "design": design.to_dict(), **self.session_view(design)}
+
+    # ------------------------------------------------------------------
+    # Word 教案导入：解析 → 新建未确认草稿（绝不覆盖现有草稿）
+    # ------------------------------------------------------------------
+
+    def import_docx_draft(self, project_id: str, owner_user_id: str, data: bytes, filename: str) -> Dict[str, Any]:
+        from .lesson_docx_import import parse_lesson_docx
+        name = str(filename or "").strip()
+        if not name.lower().endswith(".docx"):
+            raise ValueError("仅支持 .docx 格式的 Word 教案，旧 .doc 请先另存为 .docx。")
+        parsed = parse_lesson_docx(data)
+        draft = default_draft()
+        for key, value in parsed["draft"].items():
+            draft[key] = copy.deepcopy(value)
+        for index, stage in enumerate(draft.get("stages") or [], 1):
+            if not isinstance(stage, dict):
+                continue
+            stage.setdefault("stage_id", f"import_{uuid4().hex[:6]}_{index}")
+            stage.setdefault("kind", "presentation")
+            scene = stage.get("scene")
+            if not isinstance(scene, dict) or not scene:
+                stage["scene"] = default_scene()
+        self._backfill_draft(draft)
+        design = LessonDesignRecord.create(
+            project_id=project_id, owner_user_id=owner_user_id, base_lesson_id="",
+            requirements={}, draft=draft, base_draft={},
+        )
+        design.section_status = {
+            key: ("proposed" if self._section_has_content(draft.get(key)) else "pending")
+            for key in SECTION_KEYS
+        }
+        job = self.store.create_job(
+            project_id=project_id, job_type="lesson_design_import",
+            title=f"导入 Word 教案：{name}", workflow_type="lesson_design_import",
+            request={"filename": name},
+        )
+        image_index = 0
+        saved_images: List[Dict[str, Any]] = []
+        for item in parsed["unclassified"]:
+            if item.get("kind") != "image":
+                continue
+            image_index += 1
+            target_dir = self.config.project_upload_dir(project_id) / "lesson_imports" / design.design_id
+            path = self.config.unique_path(target_dir, str(item.get("name") or f"image_{image_index}.png"))
+            path.write_bytes(item["data"])
+            url = self.config.public_url_for_path(path)
+            artifact = self.store.register_artifact(
+                project_id=project_id, job_id=job.job_id, artifact_type="lesson_import_image",
+                title=path.name, path=str(path),
+                metadata={"public_url": url, "mime_type": item.get("content_type"), "design_id": design.design_id},
+            )
+            saved_images.append({
+                "kind": "image", "name": path.name, "content_type": item.get("content_type"),
+                "url": url, "artifact_id": artifact.artifact_id,
+            })
+        text_count = sum(1 for item in parsed["unclassified"] if item.get("kind") != "image")
+        summary = f"Word 导入：映射 {len(parsed['mapping'])} 处，待归类文本 {text_count} 条"
+        if saved_images:
+            summary += f"，待归类图片 {len(saved_images)} 张"
+        summary += "。请逐项校对后再确认。"
+        design.diff_summary = summary
+        self.store.upsert_lesson_design(design)
+        self.store.set_job_status(job.job_id, "success", {"design_id": design.design_id})
+        unclassified = [item for item in parsed["unclassified"] if item.get("kind") != "image"] + saved_images
+        return {"status": "success", "summary": summary,
+                "design": {**design.to_dict(), **self.session_view(design)},
+                "mapping": parsed["mapping"], "unclassified": unclassified}
 
     # ------------------------------------------------------------------
     # 题目匹配：题库快照绑定 / 手动录入 / 替换 / 移除
@@ -1348,17 +1546,18 @@ class LessonDesignService:
             errors.append("至少需要一个可观察的教学目标。")
         elif len(objectives) > 4:
             warnings.append(f"教学目标有 {len(objectives)} 个，建议精简到 3-4 个可观察目标。")
-        # 核心问题与递进问题链
+        # 核心问题与递进问题链：已并入各教学环节，仅作提示；
+        # 环节缺少问题时仍按下方环节检查报错。
         core = draft.get("core_questions") or {}
         if not isinstance(core, dict):
             core = {}
+        core_chain = [str(item).strip() for item in (core.get("sub_questions") or []) if str(item).strip()]
         if not str(core.get("core") or "").strip():
-            errors.append("还缺少一个贯穿课堂的核心问题。")
-        chain = [str(item).strip() for item in (core.get("sub_questions") or []) if str(item).strip()]
-        if len(chain) < 2:
-            errors.append("核心问题需要拆成至少 2 个递进子问题。")
-        elif len(chain) > 4:
-            errors.append(f"递进子问题有 {len(chain)} 个，请精简到 2-4 个。")
+            warnings.append("独立的核心问题字段已并入教学环节；请确认各环节问题链覆盖核心问题。")
+        if len(core_chain) < 2:
+            warnings.append("独立问题链少于 2 条：递进子问题建议拆入各环节问题链。")
+        elif len(core_chain) > 4:
+            warnings.append(f"独立问题链有 {len(core_chain)} 条，请精简后拆入各环节。")
         # 设计思路 100-150 字
         thinking = str(draft.get("design_thinking") or "").strip()
         if not thinking:
@@ -1397,6 +1596,8 @@ class LessonDesignService:
             stage_label = stage.get('title') or f'环节{index}'
             if not str(stage.get("title") or "").strip():
                 errors.append(f"第{index}个环节缺少名称。")
+            if minutes <= 0:
+                errors.append(f"环节“{stage_label}”未设置时长。")
             if not str(stage.get("design_intent") or stage.get("content") or "").strip():
                 warnings.append(f"“{stage_label}”还可以补充设计意图。")
             if not str(stage.get("knowledge_conclusion") or "").strip():
@@ -1479,6 +1680,10 @@ class LessonDesignService:
             raise ValueError("教案还不能保存：" + " ".join(report["errors"]))
         unconfirmed = [key for key in REQUIRED_SECTIONS if design.section_status.get(key) != "confirmed"]
         if unconfirmed:
+            empty = [key for key in unconfirmed if not self._section_has_content(design.draft.get(key))]
+            if empty:
+                labels = "、".join(SECTION_LABELS.get(key, key) for key in empty)
+                raise ValueError("以下必填章节还没有内容，请先在教学案中填写：" + labels)
             labels = "、".join(SECTION_LABELS.get(key, key) for key in unconfirmed)
             raise ValueError("请先逐项确认这些章节：" + labels)
         if design.base_lesson_id and apply_base:
@@ -1515,6 +1720,32 @@ class LessonDesignService:
             "next_hint": "教案草稿已生成。进入「模拟测试」试讲一遍，通过后即可发布为正式课堂。",
         }
 
+    def _register_lesson_export(self, project_id: str, title: str, path: Path, artifact_type: str, artifact_title: str, request: Dict[str, Any]) -> Dict[str, Any]:
+        job = self.store.create_job(project_id=project_id, job_type="lesson_plan_export", title=f"导出教案：{title}", workflow_type="lesson_plan_export", request=request)
+        artifact = self.store.register_artifact(project_id=project_id, job_id=job.job_id, artifact_type=artifact_type, title=artifact_title, path=str(path), metadata={**request, "public_url": self.config.public_url_for_path(path)})
+        self.store.set_job_status(job.job_id, "success", {"artifact": artifact.to_dict()})
+        return {"status": "success", "artifact": artifact.to_dict(), "job_id": job.job_id}
+
+    @staticmethod
+    def _lesson_status_label(lesson: Any) -> str:
+        metadata = getattr(lesson, "metadata", None) or {}
+        if metadata.get("ready_for_class"):
+            return f"已确认 · 版本 {metadata.get('lesson_version', 1)}"
+        return "草稿（未发布）"
+
+    def _draft_lesson_proxy(self, design: LessonDesignRecord) -> Any:
+        from types import SimpleNamespace
+        draft = design.draft
+        return SimpleNamespace(
+            title=str(draft.get("title") or draft.get("topic") or "未命名教案"),
+            subject=str(draft.get("subject") or "地理"),
+            grade=str(draft.get("grade") or ""),
+            objectives=list(draft.get("objectives") or []),
+            stages=[stage for stage in draft.get("stages") or [] if isinstance(stage, dict)],
+            plan=copy.deepcopy(draft),
+            metadata={"duration_minutes": draft.get("duration_minutes", 40), "lesson_version": None},
+        )
+
     def export_docx(self, lesson_id: str, project_id: str, design_id: str = "") -> Dict[str, Any]:
         lesson = self.store.get_lesson(lesson_id)
         if lesson is None:
@@ -1528,12 +1759,62 @@ class LessonDesignService:
                 raise ValueError("教案会话与当前项目或课时不匹配")
         output_dir = self.config.project_output_dir(project_id) / "lesson_plans"
         output_dir.mkdir(parents=True, exist_ok=True)
+        status_label = self._lesson_status_label(lesson)
         path = output_dir / f"lesson_plan_{lesson.lesson_id}_{uuid4().hex[:8]}.docx"
-        self._write_docx(path, lesson)
-        job = self.store.create_job(project_id=project_id, job_type="lesson_plan_export", title=f"导出教案：{lesson.title}", workflow_type="lesson_plan_export", request={"lesson_id": lesson_id, "design_id": design_id})
-        artifact = self.store.register_artifact(project_id=project_id, job_id=job.job_id, artifact_type="lesson_plan_docx", title=f"{lesson.title} 教案", path=str(path), metadata={"lesson_id": lesson_id, "design_id": design_id, "public_url": self.config.public_url_for_path(path)})
-        self.store.set_job_status(job.job_id, "success", {"artifact": artifact.to_dict()})
-        return {"status": "success", "artifact": artifact.to_dict(), "job_id": job.job_id}
+        self._write_docx(path, lesson, status_label=status_label)
+        return self._register_lesson_export(
+            project_id, lesson.title, path, "lesson_plan_docx", f"{lesson.title} 教案",
+            {"lesson_id": lesson_id, "design_id": design_id, "format": "docx", "status_label": status_label},
+        )
+
+    def export_lesson_pdf(self, lesson_id: str, project_id: str, design_id: str = "") -> Dict[str, Any]:
+        from .lesson_pdf_export import write_lesson_pdf
+        lesson = self.store.get_lesson(lesson_id)
+        if lesson is None:
+            raise KeyError("Unknown lesson")
+        lesson_project_id = str((lesson.metadata or {}).get("project_id") or "")
+        if lesson.source != "builtin" and lesson_project_id and lesson_project_id != project_id:
+            raise ValueError("课时不属于当前项目")
+        status_label = self._lesson_status_label(lesson)
+        output_dir = self.config.project_output_dir(project_id) / "lesson_plans"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / f"lesson_plan_{lesson.lesson_id}_{uuid4().hex[:8]}.pdf"
+        write_lesson_pdf(path, title=lesson.title, subject=lesson.subject, grade=lesson.grade,
+                         plan=lesson.plan or {}, stages=lesson.stages, status_label=status_label)
+        return self._register_lesson_export(
+            project_id, lesson.title, path, "lesson_plan_pdf", f"{lesson.title} 教案（PDF）",
+            {"lesson_id": lesson_id, "design_id": design_id, "format": "pdf", "status_label": status_label},
+        )
+
+    def export_design_docx(self, design_id: str, project_id: str) -> Dict[str, Any]:
+        design = self.get(design_id)
+        if design.project_id != project_id:
+            raise ValueError("教案会话不属于当前项目")
+        proxy = self._draft_lesson_proxy(design)
+        output_dir = self.config.project_output_dir(project_id) / "lesson_plans"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / f"lesson_plan_draft_{design.design_id}_{uuid4().hex[:8]}.docx"
+        self._write_docx(path, proxy, status_label="草稿（未发布）")
+        return self._register_lesson_export(
+            project_id, proxy.title, path, "lesson_plan_docx", f"{proxy.title} 教案（草稿）",
+            {"design_id": design_id, "format": "docx", "status_label": "草稿（未发布）"},
+        )
+
+    def export_design_pdf(self, design_id: str, project_id: str) -> Dict[str, Any]:
+        from .lesson_pdf_export import write_lesson_pdf
+        design = self.get(design_id)
+        if design.project_id != project_id:
+            raise ValueError("教案会话不属于当前项目")
+        proxy = self._draft_lesson_proxy(design)
+        output_dir = self.config.project_output_dir(project_id) / "lesson_plans"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / f"lesson_plan_draft_{design.design_id}_{uuid4().hex[:8]}.pdf"
+        write_lesson_pdf(path, title=proxy.title, subject=proxy.subject, grade=proxy.grade,
+                         plan=proxy.plan, stages=proxy.stages, status_label="草稿（未发布）")
+        return self._register_lesson_export(
+            project_id, proxy.title, path, "lesson_plan_pdf", f"{proxy.title} 教案（草稿·PDF）",
+            {"design_id": design_id, "format": "pdf", "status_label": "草稿（未发布）"},
+        )
 
     def _retrieve(self, message: str, owner_user_id: str) -> tuple[str, List[Dict[str, Any]]]:
         lowered = str(message or "").lower()
@@ -2110,7 +2391,9 @@ class LessonDesignService:
                     run._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
                 run.font.size = Pt(size)
 
-    def _write_docx(self, path: Path, lesson: LessonRecord) -> None:
+    def _write_docx(self, path: Path, lesson: Any, status_label: str = "当前草稿") -> None:
+        # lesson 可为 LessonRecord，也可为草稿代理（title/subject/grade/objectives/stages/plan/metadata），
+        # 设计草稿与已发布课时从同一份教案数据导出。
         from docx import Document
         from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
         from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -2212,7 +2495,7 @@ class LessonDesignService:
             ("学科", lesson.subject, "年级", lesson.grade),
             ("课题", lesson.title, "课时", f"{plan.get('duration_minutes', lesson.metadata.get('duration_minutes', 40))}分钟"),
             ("课型", plan.get("lesson_type", "专题探究课"), "平台", "WebGIS-AI"),
-            ("设计来源", "教师与智能体共创", "版本", "当前草稿"),
+            ("设计来源", "教师与智能体共创", "版本", status_label),
         ]
         for row, values in zip(info.rows, rows):
             for cell, value in zip(row.cells, values):
@@ -2257,7 +2540,21 @@ class LessonDesignService:
         for stage in lesson.stages:
             row = table.add_row()
             activities = stage.get("activities") or []
-            content = stage.get("content") or "；".join(str(x) for x in activities) or "待补充"
+            if stage.get("content"):
+                content = str(stage.get("content"))
+            else:
+                parts: List[str] = []
+                if stage.get("material"):
+                    parts.append("材料：" + str(stage.get("material")))
+                for label, key in (("教师活动", "teacher_activities"), ("学生活动", "student_activities")):
+                    values = stage.get(key) or []
+                    if values:
+                        parts.append(label + "：" + "；".join(str(item) for item in values))
+                if stage.get("question_chain"):
+                    parts.append("问题链：" + "；".join(str(item) for item in stage["question_chain"]))
+                if stage.get("knowledge_conclusion"):
+                    parts.append("结论：" + str(stage["knowledge_conclusion"]))
+                content = "\n".join(parts) or "；".join(str(x) for x in activities) or "待补充"
             if stage.get("system_steps"):
                 content += "\n系统操作：" + "；".join(str(x) for x in stage["system_steps"])
             values = [
