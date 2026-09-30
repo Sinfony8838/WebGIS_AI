@@ -70,6 +70,11 @@ class LessonRehearsalApiTest(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["status"], "success")
         self.assertTrue(body["rehearsal"]["rehearsal_id"])
+        start = self.client.post("/class-sessions", json={
+            "project_id": project_id, "lesson_id": lesson.lesson_id
+        }, headers=headers)
+        self.assertEqual(start.status_code, 400, start.text)
+        self.assertIn("模拟测试", start.json()["detail"])
 
 
 if __name__ == "__main__":

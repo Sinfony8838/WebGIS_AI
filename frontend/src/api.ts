@@ -669,12 +669,14 @@ export async function turnLessonDesign(
   designId: string,
   message: string,
   revision?: number,
-  step?: string
+  step?: string,
+  previewSection?: string,
+  previewStageId?: string
 ): Promise<LessonDesignTurnResult> {
   return requestJson(`/lesson-design/sessions/${encodeURIComponent(designId)}/turns`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, expected_revision: revision, step })
+    body: JSON.stringify({ message, expected_revision: revision, step, preview_section: previewSection, preview_stage_id: previewStageId })
   });
 }
 

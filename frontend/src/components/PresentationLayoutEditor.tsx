@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import "./PresentationLayoutEditor.css";
 import type { LessonStage, PresentationBlock, PresentationBlockType, PresentationLayout } from "../types";
-import { buildAuthenticatedUrl } from "../api";
+import { buildAuthenticatedUrl, uploadVideoAsset } from "../api";
 import { defaultLayoutFromStage, isDirectVideo, isExternalUrl, makeBlock } from "../lib/presentationLayout";
 
 export type LibraryAsset = {
@@ -92,7 +92,10 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
   stageRef.current = stage;
   const [layout, setLayout] = useState<PresentationLayout>(() => stage.presentation || defaultLayoutFromStage(stage));
   const [selectedId, setSelectedId] = useState("");
-  const [picker, setPicker] = useState<"image" | "video" | "question" | "">("");
+  const [picker, setPicker] = useState<"image" | "chart" | "video" | "question" | "">("");
+  const [replaceId, setReplaceId] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
   const [videoLink, setVideoLink] = useState("");
   const [dirty, setDirty] = useState(false);
   const canvasRef = useRef<HTMLDivElement | null>(null);
@@ -103,6 +106,9 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
     setLayout(stageRef.current.presentation || defaultLayoutFromStage(stageRef.current));
     setDirty(false);
     setSelectedId("");
+    setPicker("");
+    setReplaceId("");
+    setUploadError("");
   }, [stage.stage_id]);
 
   const sortedBlocks = useMemo(() => [...layout.blocks].sort((a, b) => a.order - b.order), [layout.blocks]);
@@ -128,13 +134,13 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
   }
 
   function attachAsset(asset: { url?: string; mime_type?: string; name?: string; question_id?: string }) {
-    const target = sortedBlocks.find((block) => block.id === selectedId && ["image", "video", "chart", "question"].includes(block.type));
+    const target = sortedBlocks.find((block) => block.id === replaceId && block.type === picker);
     if (target) {
       updateBlock(target.id, { asset });
       setPicker("");
       return;
     }
-    const type: PresentationBlockType = asset.question_id ? "question" : "image";
+    const type: PresentationBlockType = picker || (asset.question_id ? "question" : "image");
     const block = makeBlock(type, { order: layout.blocks.length, x: 0.3, y: 0.34, w: 0.4, h: 0.32, asset });
     setLayout((previous) => ({ blocks: [...previous.blocks, block] }));
     setSelectedId(block.id);
@@ -157,7 +163,7 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
     const insertAt = Math.max(0, Math.min(others.length, index + (direction === 1 ? 1 : -1)));
     const next = [...others];
     next.splice(insertAt, 0, { ...target, order: 0 });
-    setLayout({ blocks: next.map((block, position) => ({ ...block, order: position })) });
+    setLayout({ blocks: next.map((block, position) => ({ ...block, order: position, z: position })) });
     setDirty(true);
   }
 
@@ -181,13 +187,13 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
     const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
     if (drag.mode === "move") {
       updateBlock(drag.id, {
-        x: clamp01(drag.origin.x + dx),
-        y: clamp01(drag.origin.y + dy)
+        x: Math.min(1 - drag.origin.w, clamp01(drag.origin.x + dx)),
+        y: Math.min(1 - drag.origin.h, clamp01(drag.origin.y + dy))
       });
     } else {
       updateBlock(drag.id, {
-        w: Math.min(1, Math.max(0.05, drag.origin.w + dx)),
-        h: Math.min(1, Math.max(0.05, drag.origin.h + dy))
+        w: Math.min(1 - drag.origin.x, Math.max(0.05, drag.origin.w + dx)),
+        h: Math.min(1 - drag.origin.y, Math.max(0.05, drag.origin.h + dy))
       });
     }
   }
@@ -215,8 +221,10 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
             disabled={busy}
             aria-label={`插入${label}区块`}
             onClick={() => {
+              setReplaceId("");
+              setUploadError("");
               if (type === "image" || type === "chart") {
-                setPicker(picker === "image" ? "" : "image");
+                setPicker(picker === type ? "" : type);
               } else if (type === "video") {
                 setPicker(picker === "video" ? "" : "video");
               } else if (type === "question") {
@@ -236,14 +244,14 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
         <button
           type="button"
           className="toolbar-button compact primary"
-          disabled={busy || !dirty || !layout.blocks.length}
+          disabled={busy || uploading || !dirty}
           onClick={() => onSave({ blocks: layout.blocks })}
           data-testid="ple-save"
         >
           保存展示编排
         </button>
       </div>
-      {picker === "image" ? (
+      {picker === "image" || picker === "chart" ? (
         <div className="ple-picker" data-testid="ple-image-picker">
           {libraryAssets.length ? (
             libraryAssets.map((asset) => (
@@ -251,7 +259,7 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
                 key={asset.artifact_id}
                 type="button"
                 className="ple-picker-item"
-                disabled={busy}
+                disabled={busy || uploading}
                 onClick={() => attachAsset({ url: asset.url, mime_type: asset.mime_type, name: asset.title })}
               >
                 <img src={buildAuthenticatedUrl(asset.url)} alt={asset.title} />
@@ -279,14 +287,19 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
               const file = event.target.files?.[0];
               event.target.value = "";
               if (!file) return;
-              import("../api").then(({ uploadVideoAsset }) =>
-                uploadVideoAsset(projectId, file, `${stage.title} 视频`)
+              const uploadStageId = stage.stage_id;
+              setUploading(true);
+              setUploadError("");
+              uploadVideoAsset(projectId, file, `${stage.title} 视频`)
                   .then((result) => {
+                    if (stageRef.current.stage_id !== uploadStageId) return;
                     const url = String(result.artifact.metadata?.public_url || "");
                     if (url) attachAsset({ url, mime_type: String(result.artifact.metadata?.mime_type || "video/mp4"), name: file.name });
                   })
-                  .catch(() => undefined)
-              );
+                  .catch((error) => {
+                    if (stageRef.current.stage_id === uploadStageId) setUploadError(error instanceof Error ? error.message : "视频上传失败，请重试。");
+                  })
+                  .finally(() => setUploading(false));
             }}
           />
           <span className="ple-hint">或填写 https 直链：</span>
@@ -300,8 +313,14 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
           <button
             type="button"
             className="toolbar-button compact"
-            disabled={busy || !videoLink.trim()}
+            disabled={busy || uploading || !videoLink.trim()}
             onClick={() => {
+              try {
+                if (new URL(videoLink.trim()).protocol !== "https:") throw new Error();
+              } catch {
+                setUploadError("请填写有效的 https 视频链接。");
+                return;
+              }
               attachAsset({ url: videoLink.trim(), name: "外部链接" });
               setVideoLink("");
             }}
@@ -310,6 +329,8 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
           </button>
         </div>
       ) : null}
+      {uploading ? <p role="status">正在上传视频…</p> : null}
+      {uploadError ? <p role="alert">{uploadError}</p> : null}
       {picker === "question" ? (
         <div className="ple-picker" data-testid="ple-question-picker">
           {(stage.questions || []).length ? (
@@ -335,6 +356,7 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
         data-testid="ple-canvas"
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
         onPointerLeave={onPointerUp}
       >
         {sortedBlocks.map((block) => (
@@ -374,13 +396,16 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
       {selected ? (
         <div className="ple-selection" data-testid="ple-selection">
           <span>选中：{BLOCK_LABELS[selected.type]}（{selected.id.slice(-6)}）</span>
-          <button type="button" className="toolbar-button compact" disabled={busy} onClick={() => reorder(-1)}>
+          <button type="button" className="toolbar-button compact" disabled={busy} onClick={() => reorder(1)}>
             上移层级
           </button>
-          <button type="button" className="toolbar-button compact" disabled={busy} onClick={() => reorder(1)}>
+          <button type="button" className="toolbar-button compact" disabled={busy} onClick={() => reorder(-1)}>
             下移层级
           </button>
-          <button type="button" className="toolbar-button compact" disabled={busy} onClick={() => setPicker("image")}>
+          <button type="button" className="toolbar-button compact" disabled={busy || uploading || !["image", "chart", "video", "question"].includes(selected.type)} onClick={() => {
+            setReplaceId(selected.id);
+            setPicker(selected.type as "image" | "chart" | "video" | "question");
+          }}>
             替换素材
           </button>
           <button type="button" className="toolbar-button compact" disabled={busy} onClick={removeSelected}>

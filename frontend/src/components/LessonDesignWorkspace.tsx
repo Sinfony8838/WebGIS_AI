@@ -5,6 +5,7 @@ import { LessonProcessTable } from "./LessonProcessTable";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   applyLessonMigration,
+  buildAuthenticatedUrl,
   bindLessonDesignQuestion,
   createLessonDesign,
   exportDesignDocx,
@@ -58,6 +59,7 @@ type DiffModalState = {
   sectionId: string;
   sectionLabel: string;
   before: unknown;
+  after: unknown;
   stageDiffs: ReturnType<typeof diffStages>;
   oldText: string;
   newText: string;
@@ -77,7 +79,7 @@ function asText(value: unknown): string {
 }
 
 function openArtifactUrl(url: unknown) {
-  if (typeof url === "string" && url) window.open(url, "_blank", "noopener,noreferrer");
+  if (typeof url === "string" && url) window.open(buildAuthenticatedUrl(url), "_blank", "noopener,noreferrer");
 }
 
 function draftRecord(draft: LessonPlanProfile): Record<string, unknown> {
@@ -102,7 +104,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
   const [migrationDismissed, setMigrationDismissed] = useState(false);
   const [importInfo, setImportInfo] = useState<LessonDocxImportResult | null>(null);
   const [diffModal, setDiffModal] = useState<DiffModalState | null>(null);
-  const [aiTarget, setAiTarget] = useState<{ sectionId: string; label: string } | null>(null);
+  const [aiTarget, setAiTarget] = useState<{ sectionId: string; label: string; stageId?: string } | null>(null);
   const docxInputRef = useRef<HTMLInputElement | null>(null);
   const bankInputRef = useRef<HTMLInputElement | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
@@ -110,6 +112,8 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
   const applySession = useCallback((payload: LessonDesignSession & Partial<{ plan_items: DesignPlanItem[] }>) => {
     setDesign(payload);
     if (payload.plan_items) setPlanItems(payload.plan_items);
+    const review = draftRecord(payload.draft).import_review as Pick<LessonDocxImportResult, "mapping" | "unclassified" | "summary"> | undefined;
+    setImportInfo(review ? { ...review, status: "success", design: payload } : null);
   }, []);
 
   useEffect(() => {
@@ -256,8 +260,8 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
     setBusy(true);
     setError("");
     try {
-      const result = await turnLessonDesign(design.design_id, text, design.revision, step || (target ? STEP_FOR_SECTION[target.sectionId] || "" : ""));
-      applySession({
+      const result = await turnLessonDesign(design.design_id, text, design.revision, step || (target ? STEP_FOR_SECTION[target.sectionId] || "" : ""), target?.sectionId, target?.stageId);
+      if (!target) applySession({
         ...design,
         draft: result.draft,
         section_status: result.section_status,
@@ -280,7 +284,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
         if (target.sectionId === "stages") {
           const stageDiffs = diffStages(before, after);
           if (stageDiffs.length) {
-            setDiffModal({ sectionId: "stages", sectionLabel, before: (before as { stages?: unknown }).stages ?? [], stageDiffs, oldText: "", newText: "" });
+            setDiffModal({ sectionId: "stages", sectionLabel, before: (before as { stages?: unknown }).stages ?? [], after: (after as { stages?: unknown }).stages ?? [], stageDiffs, oldText: "", newText: "" });
           }
         } else {
           const oldValue = (before as Record<string, unknown>)[target.sectionId];
@@ -290,6 +294,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
               sectionId: target.sectionId,
               sectionLabel,
               before: oldValue,
+              after: newValue,
               stageDiffs: [],
               oldText: typeof oldValue === "string" ? oldValue : JSON.stringify(oldValue ?? "", null, 2),
               newText: typeof newValue === "string" ? newValue : JSON.stringify(newValue ?? "", null, 2)
@@ -306,13 +311,13 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
 
   async function adoptDiff() {
     if (!design || !diffModal) return;
-    setDiffModal(null);
     setBusy(true);
     setError("");
     try {
-      const result = await resolveLessonDesignSection(design.design_id, diffModal.sectionId, "accept", "", design.revision);
+      const result = await resolveLessonDesignSection(design.design_id, diffModal.sectionId, "edit", "", design.revision, diffModal.after);
       applySession(result.design);
-      setMessages((previous) => [...previous, { role: "assistant", text: `「${diffModal.sectionLabel}」的 AI 修改已采用并确认。` }]);
+      setDiffModal(null);
+      setMessages((previous) => [...previous, { role: "assistant", text: `「${diffModal.sectionLabel}」的 AI 修改已采用，待整份核对确认。` }]);
     } catch (exc) {
       showError(exc);
     } finally {
@@ -322,9 +327,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
 
   async function discardDiff() {
     if (!design || !diffModal) return;
-    const target = diffModal;
     setDiffModal(null);
-    await directEdit(target.sectionId, target.before);
   }
 
   async function finalize() {
@@ -393,7 +396,11 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
       setCheckedPlan(null);
       setFinalResult(null);
       setMessages([{ role: "assistant", text: result.summary }]);
-      window.history.replaceState(null, "", `${window.location.pathname}?view=design&design_id=${encodeURIComponent(result.design.design_id)}`);
+      const params = new URLSearchParams(window.location.search);
+      params.delete("view");
+      params.set("workspace", "lesson-design");
+      params.set("design_id", result.design.design_id);
+      window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
     } catch (exc) {
       showError(exc);
     } finally {
@@ -633,7 +640,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
                 {importInfo.unclassified.map((item, index) => (
                   <li key={index}>
                     {item.kind === "image" ? (
-                      item.url ? <img src={item.url} alt={item.name || "导入图片"} /> : <span>{item.name}</span>
+                      item.url ? <img src={buildAuthenticatedUrl(item.url)} alt={item.name || "导入图片"} /> : <span>{item.name}</span>
                     ) : (
                       <span>
                         {item.heading ? <strong>{item.heading}：</strong> : null}
@@ -727,6 +734,21 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
                   </div>
                 </div>
               )}
+              {(["curriculum_interpretation", "student_analysis", "textbook_analysis"] as const).map((field) => (
+                <div key={field}>
+                  {renderSheetCard(field, SECTION_LABELS[field],
+                    <LessonCellEditor
+                      value={asText(values[field])}
+                      label={SECTION_LABELS[field]}
+                      placeholder="点击填写"
+                      multiline
+                      disabled={busy || isFinalized}
+                      testId={`ldw-cell-${field}`}
+                      onSave={(value) => void directEdit(field, value)}
+                    />
+                  )}
+                </div>
+              ))}
               {renderSheetCard(
                 "objectives",
                 "目标与重难点",
@@ -813,7 +835,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
                   onSearchText={setSearchText}
                   onRunSearch={() => void runSearch()}
                   onStageAiEdit={(stageIndex) => {
-                    setAiTarget({ sectionId: "stages", label: `环节${stageIndex + 1}｜活动与素材` });
+                    setAiTarget({ sectionId: "stages", stageId: stages[stageIndex].stage_id, label: `环节${stageIndex + 1}｜活动与素材` });
                     setMessages((previous) => [...previous, { role: "assistant", text: `AI 修改目标已定为「环节${stageIndex + 1}｜活动与素材」。在下方输入要求，我会给出修改差异，由你决定是否采用。` }]);
                   }}
                 />
@@ -923,7 +945,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
               <div className="ldw-diff-panel">
                 <header>
                   <strong>AI 修改差异 · {diffModal.sectionLabel}</strong>
-                  <button type="button" aria-label="关闭差异" onClick={() => setDiffModal(null)}>×</button>
+                  <button type="button" disabled={busy} aria-label="关闭差异" onClick={() => setDiffModal(null)}>×</button>
                 </header>
                 {diffModal.stageDiffs.length ? (
                   <ul className="ldw-diff-list">
@@ -942,10 +964,10 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
                   </div>
                 )}
                 <footer>
-                  <button type="button" className="toolbar-button compact" onClick={() => void discardDiff()} data-testid="ldw-diff-discard">
+                  <button type="button" className="toolbar-button compact" disabled={busy} onClick={() => void discardDiff()} data-testid="ldw-diff-discard">
                     放弃修改
                   </button>
-                  <button type="button" className="toolbar-button compact primary" onClick={() => void adoptDiff()} data-testid="ldw-diff-adopt">
+                  <button type="button" className="toolbar-button compact primary" disabled={busy} onClick={() => void adoptDiff()} data-testid="ldw-diff-adopt">
                     采用修改
                   </button>
                 </footer>

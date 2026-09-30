@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./PresentationLayoutEditor.css";
 import "./StagePresentationSurface.css";
 import type { LessonStage, PresentationBlock } from "../types";
@@ -33,6 +33,7 @@ function SurfaceBlock({
 }) {
   const [broken, setBroken] = useState(false);
   const asset = block.asset || {};
+  useEffect(() => setBroken(false), [asset.url]);
   if (block.type === "map") {
     return (
       <div className="sps-block sps-map">
@@ -76,8 +77,7 @@ function SurfaceBlock({
           className="sps-media"
           src={buildAuthenticatedUrl(asset.url)}
           controls
-          autoPlay
-          preload="auto"
+          preload="metadata"
           onError={() => setBroken(true)}
         />
       );
@@ -101,16 +101,24 @@ function SurfaceBlock({
 
 // 课堂主区域的环节展示面：仅渲染学生可见区块；无布局时按环节内容生成默认展示。
 export function StagePresentationSurface({ stage, onProjectQuestion, onPresentScene }: Props) {
+  const [revealed, setRevealed] = useState(false);
+  useEffect(() => setRevealed(false), [stage.stage_id]);
   const layout = stage.presentation || defaultLayoutFromStage(stage);
   const blocks = [...layout.blocks].sort((a, b) => a.order - b.order);
+  const isConclusion = (block: PresentationBlock) => block.teacher_reveal || (
+    block.type === "text" && !!stage.knowledge_conclusion && block.text === `结论：${stage.knowledge_conclusion}`
+  );
   return (
     <div className="sps" data-testid="stage-presentation-surface">
       <div className="sps-stage-title">
         {stage.title}
         <small> · {stage.minutes} 分钟</small>
+        {blocks.some(isConclusion) ? <button type="button" className="toolbar-button compact" onClick={() => setRevealed(value => !value)}>
+          {revealed ? "收起结论" : "显示本环节结论"}
+        </button> : null}
       </div>
       <div className="sps-canvas">
-        {blocks.map((block) => (
+        {blocks.filter(block => revealed || !isConclusion(block)).map((block) => (
           <div
             key={block.id}
             className="sps-cell"

@@ -584,6 +584,8 @@ class LessonDesignCreateRequest(BaseModel):
 class LessonDesignTurnRequest(BaseModel):
     message: str
     step: str = ""
+    preview_section: str = ""
+    preview_stage_id: str = ""
     expected_revision: Optional[int] = None
 
 
@@ -2061,7 +2063,7 @@ def get_lesson_design_session(design_id: str, request: Request) -> Dict[str, Any
 def turn_lesson_design(design_id: str, payload: LessonDesignTurnRequest, request: Request) -> Dict[str, Any]:
     design = _require_lesson_design_access(request, design_id)
     try:
-        result = runtime.classroom.turn_lesson_design(design_id, payload.message, payload.expected_revision, payload.step)
+        result = runtime.classroom.turn_lesson_design(design_id, payload.message, payload.expected_revision, payload.step, payload.preview_section, payload.preview_stage_id)
         _grant_response_files(request, result, allowed_roots=_lesson_design_grant_roots(design))
         return result
     except KeyError as exc:
@@ -2657,6 +2659,8 @@ def create_class_session(payload: ClassSessionCreateRequest, request: Request) -
         return runtime.classroom.create_class_session(payload.lesson_id, payload.project_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/class-sessions")

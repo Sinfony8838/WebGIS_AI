@@ -104,7 +104,7 @@ export function RehearsalPanel({
       .then((result) => {
         if (cancelled) return;
         const assets = (result.items || [])
-          .filter((item) => item.artifact_type === "uploaded_image" || item.artifact_type === "generated_image")
+          .filter((item) => ["uploaded_image", "generated_image", "lesson_import_image"].includes(item.artifact_type))
           .map((item) => ({
             artifact_id: item.artifact_id,
             title: item.title,

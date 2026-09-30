@@ -403,7 +403,7 @@ class LessonRehearsalService:
         allowed_urls = {
             str(artifact.get("metadata", {}).get("public_url") or "")
             for artifact in self.store.list_outputs(project_id=record.project_id)
-            if artifact.get("artifact_type") in {"uploaded_image", "generated_image", "uploaded_video"}
+            if artifact.get("artifact_type") in {"uploaded_image", "generated_image", "lesson_import_image", "uploaded_video"}
         }
         question_ids = {str(question.get("question_id") or "") for question in stage.get("questions") or []}
         for block in layout["blocks"]:

@@ -1031,6 +1031,7 @@ export type PresentationBlockAsset = {
 };
 
 export type PresentationBlock = {
+  teacher_reveal?: boolean;
   id: string;
   type: PresentationBlockType;
   text?: string;

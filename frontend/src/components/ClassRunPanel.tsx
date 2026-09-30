@@ -319,10 +319,6 @@ export function ClassRunPanel({
         />
       </div>
 
-      <details className="class-stage-navigation" key={currentStageId}>
-        <summary>
-          {currentStageIndex + 1}/{lesson.stages.length} · {currentStage?.title || "选择环节"} · 切换
-        </summary>
         <div className="class-stage-steps">
           <button
             type="button"
@@ -354,6 +350,10 @@ export function ClassRunPanel({
             </button>
           ) : null}
         </div>
+      <details className="class-stage-navigation" key={currentStageId}>
+        <summary>
+          {currentStageIndex + 1}/{lesson.stages.length} · {currentStage?.title || "选择环节"} · 切换
+        </summary>
       <nav className="class-panel-stages" aria-label="课堂环节">
         {lesson.stages.map((stage, index) => {
           const active = stage.stage_id === currentStageId;

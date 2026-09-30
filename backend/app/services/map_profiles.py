@@ -71,9 +71,9 @@ def _at(vertices: List[Tuple[float, float]], distances: List[float], meters: flo
     return vertices[-1]
 
 
-def _sample_points(vertices: List[Tuple[float, float]], distances: List[float], max_count: int) -> List[Dict[str, Any]]:
+def _sample_points(vertices: List[Tuple[float, float]], distances: List[float], max_count: int, spacing_m: float = 1_000) -> List[Dict[str, Any]]:
     total = distances[-1]
-    count = min(max_count, max(2, math.ceil(total / 1_000) + 1))
+    count = min(max_count, max(2, math.ceil(total / spacing_m) + 1))
     positions = sorted(set([total * i / (count - 1) for i in range(count)] + distances))
     return [{"distance_km": round(m / 1_000, 4), "lon": lon, "lat": lat, "value": None}
             for m in positions for lon, lat in [_at(vertices, distances, m)]]
@@ -134,7 +134,7 @@ def _terrain_value(point: Dict[str, Any], cache_root: Path) -> float | None:
 
 def _raster_population_profile(vertices: List[Tuple[float, float]], distances: List[float], package: Any) -> Dict[str, Any]:
     """本地裁剪人口栅格包（WorldPop ~100m）：逐点最近邻取样。"""
-    samples = _sample_points(vertices, distances, 241)
+    samples = _sample_points(vertices, distances, 20_001, spacing_m=100)
     values = package.sample_line([(point["lon"], point["lat"]) for point in samples])
     for point, value in zip(samples, values):
         point["value"] = value

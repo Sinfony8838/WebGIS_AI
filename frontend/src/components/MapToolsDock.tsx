@@ -2,7 +2,7 @@ import { useId, useState, type ReactNode } from "react";
 import "./MapToolsDock.css";
 
 export function MapToolsDock({ children }: { children: ReactNode }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const contentId = useId();
   return (
     <aside className={`right-rail map-tools-dock${collapsed ? " is-collapsed" : ""}`} aria-label="地图工具与可视化地图">

@@ -73,7 +73,7 @@ export function defaultLayoutFromStage(stage: LessonStage): PresentationLayout {
     );
   });
   if (stage.knowledge_conclusion) {
-    push(makeBlock("text", { text: `结论：${stage.knowledge_conclusion}`, x: 0.06, y: 0.8, w: 0.88, h: 0.14 }));
+    push(makeBlock("text", { text: `结论：${stage.knowledge_conclusion}`, teacher_reveal: true, x: 0.06, y: 0.8, w: 0.88, h: 0.14 }));
   }
   return { blocks };
 }

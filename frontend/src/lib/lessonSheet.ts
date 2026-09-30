@@ -4,6 +4,10 @@ import type { LessonPlanProfile, LessonStage, LessonQuestion } from "../types";
 
 export const PRESET_METHODS: string[] = [
   "讲授法",
+  "演示法",
+  "讨论法",
+  "实验法",
+  "角色扮演",
   "情境教学",
   "问题式教学",
   "小组合作探究",

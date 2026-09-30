@@ -197,8 +197,11 @@ def normalize_presentation(raw: Any) -> Dict[str, Any]:
         w = _clamp01(item.get("w"), 0.4)
         h = _clamp01(item.get("h"), 0.2)
         block.update({
-            "x": x, "y": y, "w": max(0.04, w), "h": max(0.04, h),
+            "x": min(x, 1 - max(0.04, w)), "y": min(y, 1 - max(0.04, h)),
+            "w": max(0.04, w), "h": max(0.04, h),
         })
+        if item.get("teacher_reveal") is True:
+            block["teacher_reveal"] = True
         asset = item.get("asset")
         if isinstance(asset, dict) and block_type in {"image", "video", "question", "chart", "map"}:
             normalized_asset: Dict[str, Any] = {}
@@ -216,7 +219,7 @@ def normalize_presentation(raw: Any) -> Dict[str, Any]:
             if normalized_asset:
                 block["asset"] = normalized_asset
         blocks.append(block)
-    if not blocks:
+    if not blocks and raw_blocks:
         return {}
     return {"blocks": blocks}
 

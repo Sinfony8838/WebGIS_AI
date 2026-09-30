@@ -40,7 +40,11 @@ describe("StagePresentationSurface", () => {
     const surface = screen.getByTestId("stage-presentation-surface");
     expect(surface).toHaveTextContent("情境导入");
     expect(surface).toHaveTextContent("材料：人口密度图");
+    expect(surface).not.toHaveTextContent("东多西少");
+    fireEvent.click(screen.getByRole("button", { name: "显示本环节结论" }));
     expect(surface).toHaveTextContent("东多西少");
+    fireEvent.click(screen.getByRole("button", { name: "收起结论" }));
+    expect(surface).not.toHaveTextContent("东多西少");
   });
 
   it("shows question stems and options but never answers or explanations", () => {

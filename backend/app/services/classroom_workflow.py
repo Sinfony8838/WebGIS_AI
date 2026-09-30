@@ -160,8 +160,8 @@ class ClassroomWorkflowRuntime:
         return {"status": "success", **design.to_dict(), **self.lesson_design.session_view(design),
                 "capabilities": self.lesson_design.capability_catalog(), "rehearsal_report": report}
 
-    def turn_lesson_design(self, design_id: str, message: str, expected_revision: Optional[int] = None, step: str = "") -> Dict[str, Any]:
-        return self.lesson_design.turn(design_id, message, expected_revision, step)
+    def turn_lesson_design(self, design_id: str, message: str, expected_revision: Optional[int] = None, step: str = "", preview_section: str = "", preview_stage_id: str = "") -> Dict[str, Any]:
+        return self.lesson_design.turn(design_id, message, expected_revision, step, preview_section, preview_stage_id)
 
     def resolve_lesson_design(self, design_id: str, section_id: str, decision: str = "accept", teacher_note: str = "", expected_revision: Optional[int] = None, value: Any = None) -> Dict[str, Any]:
         return self.lesson_design.resolve(design_id, section_id, decision, teacher_note, expected_revision, value)

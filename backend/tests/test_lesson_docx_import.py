@@ -58,6 +58,24 @@ def _sample_docx_bytes(with_image: bool = True) -> bytes:
 
 
 class LessonDocxImportTest(unittest.TestCase):
+    def test_unknown_table_cells_and_rows_are_preserved_in_full(self) -> None:
+        doc = Document()
+        table = doc.add_table(rows=3, cols=2)
+        for row, values in zip(table.rows, [["课题", "地图判读"], ["学情分析", "学生掌握比例尺"], ["课堂观察记录", "未知内容尾部" * 60]]):
+            for cell, text in zip(row.cells, values):
+                cell.text = text
+        stages = doc.add_table(rows=2, cols=3)
+        for row, values in zip(stages.rows, [["环节", "时长", "评价证据"], ["读图", "10", "观察学生绘制图形"]]):
+            for cell, text in zip(row.cells, values):
+                cell.text = text
+        output = BytesIO()
+        doc.save(output)
+        result = parse_lesson_docx(output.getvalue())
+        self.assertEqual(result["draft"]["student_analysis"], "学生掌握比例尺")
+        unknown = "\n".join(item.get("text", "") for item in result["unclassified"])
+        self.assertIn("未知内容尾部" * 60, unknown)
+        self.assertIn("观察学生绘制图形", unknown)
+
     """Word 教案导入：段落/表格/图片解析 → 新建未确认教案草稿。"""
 
     def setUp(self) -> None:
@@ -123,6 +141,7 @@ class LessonDocxImportTest(unittest.TestCase):
             self.project, "local_admin", _sample_docx_bytes(), "人口迁移教案.docx"
         )
         design = self.service.get(result["design"]["design_id"])
+        self.assertEqual(design.draft["import_review"]["unclassified"], result["unclassified"])
         self.assertNotEqual(design.design_id, existing.design_id)
         self.assertEqual(design.status, "active")
         self.assertEqual(design.draft["title"], "人口的空间变化")

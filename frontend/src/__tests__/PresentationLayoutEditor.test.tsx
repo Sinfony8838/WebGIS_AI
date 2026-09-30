@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { PresentationLayoutEditor } from "../components/PresentationLayoutEditor";
 import { defaultLayoutFromStage } from "../lib/presentationLayout";
 import type { LessonStage } from "../types";
+import { uploadVideoAsset } from "../api";
 
 // jsdom 没有 PointerEvent：退化为普通 Event 会丢 clientX，用 MouseEvent 派生最小实现。
 class JsdomPointerEvent extends MouseEvent {
@@ -33,10 +34,49 @@ const stage = (overrides: Partial<LessonStage> = {}): LessonStage =>
     questions: [{ question_id: "q1", text: "人口集中在哪里？" }],
     script: [],
     assistant_prompts: [],
-    scene: {}
+    scene: {},
+    ...overrides
   }) as LessonStage;
 
 describe("PresentationLayoutEditor", () => {
+  it("raises the selected block above its neighbour and persists the stacking order", () => {
+    const onSave = vi.fn();
+    const presentation = { blocks: [
+      { id: "a", type: "text" as const, text: "A", x: 0, y: 0, w: 0.4, h: 0.2, z: 0, order: 0 },
+      { id: "b", type: "text" as const, text: "B", x: 0, y: 0, w: 0.4, h: 0.2, z: 1, order: 1 }
+    ] };
+    render(<PresentationLayoutEditor stage={stage({ presentation })} projectId="p1" busy={false} libraryAssets={[]} onSave={onSave} />);
+    fireEvent.pointerDown(screen.getByTestId("ple-block-a"), { pointerId: 1, clientX: 0, clientY: 0 });
+    fireEvent.pointerUp(screen.getByTestId("ple-canvas"));
+    fireEvent.click(screen.getByRole("button", { name: "上移层级" }));
+    fireEvent.click(screen.getByTestId("ple-save"));
+    expect(onSave.mock.calls[0][0].blocks.map((block: { id: string; z: number }) => [block.id, block.z])).toEqual([["b", 0], ["a", 1]]);
+  });
+
+  it("inserts video links as videos and charts as charts", async () => {
+    const onSave = vi.fn();
+    const assets = [{ artifact_id: "a1", title: "图表图", url: "/files/chart.png", mime_type: "image/png" }];
+    render(<PresentationLayoutEditor stage={stage()} projectId="p1" busy={false} libraryAssets={assets} onSave={onSave} />);
+    fireEvent.click(screen.getByRole("button", { name: "插入视频区块" }));
+    fireEvent.change(screen.getByLabelText("视频 https 链接"), { target: { value: "https://example.com/video.mp4" } });
+    fireEvent.click(screen.getByRole("button", { name: "使用链接" }));
+    fireEvent.click(screen.getByRole("button", { name: "插入图表区块" }));
+    fireEvent.click(screen.getByRole("button", { name: /图表图/ }));
+    fireEvent.click(screen.getByTestId("ple-save"));
+    const blocks = onSave.mock.calls[0][0].blocks;
+    expect(blocks.find((block: { type: string }) => block.type === "video")?.asset.url).toBe("https://example.com/video.mp4");
+    expect(blocks.find((block: { type: string }) => block.type === "chart")?.asset.url).toBe("/files/chart.png");
+  });
+
+  it("reports a failed video upload and keeps unsaved blocks unchanged", async () => {
+    vi.mocked(uploadVideoAsset).mockRejectedValueOnce(new Error("文件超过限制"));
+    render(<PresentationLayoutEditor stage={stage()} projectId="p1" busy={false} libraryAssets={[]} onSave={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "插入视频区块" }));
+    fireEvent.change(screen.getByLabelText("选择视频文件"), { target: { files: [new File(["bad"], "bad.mp4")] } });
+    expect(await screen.findByRole("alert")).toHaveTextContent("文件超过限制");
+    expect(screen.getByTestId("ple-save")).toBeDisabled();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -74,7 +114,7 @@ describe("PresentationLayoutEditor", () => {
     fireEvent.click(screen.getByTestId("ple-save"));
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     const layout = onSave.mock.calls[0][0];
-    expect(layout.blocks[0].x).toBeCloseTo(before.x + 0.2, 5);
+    expect(layout.blocks[0].x).toBeCloseTo(1 - before.w, 5);
     expect(layout.blocks[0].y).toBeCloseTo(before.y + 0.1, 5);
   });
 

@@ -19,6 +19,7 @@ const migrationPreviewMock = vi.fn();
 const migrationApplyMock = vi.fn();
 
 vi.mock("../api", () => ({
+  buildAuthenticatedUrl: (path: string) => path,
   createLessonDesign: (...args: unknown[]) => createMock(...args),
   fetchLessonDesign: (...args: unknown[]) => fetchDesignMock(...args),
   turnLessonDesign: (...args: unknown[]) => turnMock(...args),
@@ -180,16 +181,16 @@ describe("LessonDesignWorkspace（一页表格式教案）", () => {
     expect(screen.getByTestId("ldw-ai-target")).toHaveTextContent("环节1｜活动与素材");
     fireEvent.change(screen.getByLabelText("教案设计对话输入"), { target: { value: "补充材料：中国人口密度图" } });
     fireEvent.click(screen.getByTestId("ldw-send"));
-    await waitFor(() => expect(turnMock).toHaveBeenCalledWith("design_1", "补充材料：中国人口密度图", 0, "process"));
+    await waitFor(() => expect(turnMock).toHaveBeenCalledWith("design_1", "补充材料：中国人口密度图", 0, "process", "stages", "s1"));
     const modal = await screen.findByTestId("ldw-diff-modal");
     expect(modal).toHaveTextContent("材料");
     expect(modal).toHaveTextContent("中国人口密度图");
     fireEvent.click(screen.getByTestId("ldw-diff-adopt"));
-    await waitFor(() => expect(resolveMock).toHaveBeenCalledWith("design_1", "stages", "accept", "", 1));
+    await waitFor(() => expect(resolveMock).toHaveBeenCalledWith("design_1", "stages", "edit", "", 0, afterDraft.stages));
     expect(openSpy).not.toHaveBeenCalled();
   });
 
-  it("discards the AI diff by restoring the previous stages", async () => {
+  it("discards the AI preview without writing or restoring the draft", async () => {
     const afterDraft = {
       ...baseDraft,
       stages: [{ stage_id: "s1", title: "地图观察", minutes: 10, material: "被 AI 添加的材料", questions: [{ question_id: "q1", text: "人口集中在哪里？" }] }]
@@ -202,7 +203,8 @@ describe("LessonDesignWorkspace（一页表格式教案）", () => {
     fireEvent.click(screen.getByTestId("ldw-send"));
     await screen.findByTestId("ldw-diff-modal");
     fireEvent.click(screen.getByTestId("ldw-diff-discard"));
-    await waitFor(() => expect(resolveMock).toHaveBeenCalledWith("design_1", "stages", "edit", "", 1, baseDraft.stages));
+    expect(resolveMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId("ldw-process-table")).not.toHaveTextContent("被 AI 添加的材料");
   });
 
   it("shows the migration card for legacy drafts and applies it once", async () => {
@@ -250,6 +252,22 @@ describe("LessonDesignWorkspace（一页表格式教案）", () => {
     const card = await screen.findByTestId("ldw-import-card");
     expect(card).toHaveTextContent("人口的空间变化");
     expect(card).toHaveTextContent("多余段落");
+    expect(new URLSearchParams(window.location.search).get("workspace")).toBe("lesson-design");
+    expect(new URLSearchParams(window.location.search).get("design_id")).toBe("design_import");
+  });
+
+  it("restores the full import review and exposes editable required analysis fields", async () => {
+    createMock.mockResolvedValue(session({ draft: {
+      ...baseDraft,
+      student_analysis: "学生能读地图",
+      import_review: { mapping: [], unclassified: [{ kind: "text", text: "刷新保留的待归类内容" }], summary: "导入" }
+    } }));
+    render(<LessonDesignWorkspace projectId="p1" onClose={vi.fn()} />);
+    expect(await screen.findByTestId("ldw-import-card")).toHaveTextContent("刷新保留的待归类内容");
+    fireEvent.click(screen.getByTestId("ldw-cell-student_analysis"));
+    fireEvent.change(screen.getByLabelText("学情分析", { exact: true }), { target: { value: "学生需要空间分析支架" } });
+    fireEvent.click(screen.getByLabelText("保存学情分析"));
+    await waitFor(() => expect(resolveMock).toHaveBeenCalledWith("design_1", "student_analysis", "edit", "", 0, "学生需要空间分析支架"));
   });
 
   it("exports the draft as Word and PDF", async () => {

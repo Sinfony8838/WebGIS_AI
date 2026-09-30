@@ -163,7 +163,7 @@ def _assign(draft: Dict[str, Any], field: str, text: str) -> None:
             draft[field] = value
 
 
-def _stage_table_to_stages(table: Table) -> Tuple[List[Dict[str, Any]], List[str]]:
+def _stage_table_to_stages(table: Table, unclassified: Optional[List[Dict[str, Any]]] = None) -> Tuple[List[Dict[str, Any]], List[str]]:
     rows = list(table.rows)
     if not rows:
         return [], []
@@ -189,6 +189,9 @@ def _stage_table_to_stages(table: Table) -> Tuple[List[Dict[str, Any]], List[str
         for index, value in enumerate(values):
             field = column_field.get(index)
             if not field:
+                if value and unclassified is not None:
+                    unclassified.append({"kind": "table", "heading": "教学过程未识别列",
+                                         "text": f"{values[0]}｜{header_cells[index]}：{value}"})
                 continue
             if field == "minutes":
                 digits = re.sub(r"[^0-9]", "", value)
@@ -201,6 +204,8 @@ def _stage_table_to_stages(table: Table) -> Tuple[List[Dict[str, Any]], List[str
                 stage[field] = value
         if str(stage.get("title") or "").strip():
             stages.append(stage)
+        elif unclassified is not None:
+            unclassified.append({"kind": "table", "heading": "教学过程未识别行", "text": "｜".join(values)})
     return stages, header_cells
 
 
@@ -278,22 +283,26 @@ def parse_lesson_docx(data: bytes) -> Dict[str, Any]:
             continue
         if element.tag == qn("w:tbl"):
             table = Table(element, document)
-            stages, _ = _stage_table_to_stages(table)
+            stages, _ = _stage_table_to_stages(table, unclassified)
             if stages:
                 draft["stages"] = (draft.get("stages") or []) + stages
                 record("stages", f"table:{heading or '教学过程表'}", f"{len(stages)} 个环节")
                 pending_field = None
                 continue
-            pairs = _scalar_table_pairs(table)
-            if pairs:
-                for key, value in pairs.items():
-                    target = _match_keyword(key)
-                    if target and value:
-                        _assign(draft, target, value)
-                        record(target, f"table:{key}", value)
-                continue
-            preview = "；".join(cell.text.strip() for cell in table.rows[0].cells if cell.text.strip())
-            unclassified.append({"kind": "table", "heading": heading, "text": preview[:160]})
+            # Key/value lesson tables may contain every section, mixed unknown
+            # rows and more than two columns. Keep every unrecognized cell.
+            for row in table.rows:
+                cells = [cell.text.strip() for cell in row.cells]
+                if not any(cells):
+                    continue
+                target = _match_keyword(cells[0]) if len(cells) >= 2 else None
+                if target and target != "stages" and cells[1] and not _has_scalar_value(draft, target):
+                    _assign(draft, target, cells[1])
+                    record(target, f"table:{cells[0]}", cells[1])
+                    if any(cells[2:]):
+                        unclassified.append({"kind": "table", "heading": cells[0], "text": "｜".join(cells[2:])})
+                else:
+                    unclassified.append({"kind": "table", "heading": heading, "text": "｜".join(cells)})
             pending_field = None
 
     seen_parts = set()
