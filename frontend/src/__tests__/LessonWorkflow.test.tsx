@@ -361,7 +361,8 @@ describe("ClassRunPanel", () => {
     expect(screen.queryByTestId("oral-prompt-s2q1")).toBeNull();
   });
 
-  it("keeps teacher guidance out of the projected classroom panel", () => {
+  it("keeps teacher guidance in a collapsed teacher-only panel", () => {
+    // 阶段二设计：教师提示收入默认收起的小面板；展开才可见，默认投屏不可见。
     const lesson = makeLesson();
     lesson.stages[0].teacher_guidance = {
       observation_prompt: "先找图例、年份和空间差异。",
@@ -373,8 +374,10 @@ describe("ClassRunPanel", () => {
       fallback: "三维异常时使用二维图。"
     };
     renderPanel({ lesson });
-    expect(screen.queryByTestId("stage-teacher-guidance")).toBeNull();
-    expect(screen.queryByText("先找图例、年份和空间差异。")).toBeNull();
+    const panel = screen.getByTestId("class-teacher-hints");
+    expect(panel).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByText("教师提示（学生不可见）"));
+    expect(screen.getByText("先找图例、年份和空间差异。")).toBeVisible();
   });
 
   it("applies the map without opening a lecture overlay and reports failures", async () => {

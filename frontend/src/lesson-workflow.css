@@ -2842,3 +2842,11 @@
 .qpm-mini .qpm-body { padding: 10px 12px; gap: 10px; }
 .qpm-mini .qpm-footer { padding: 8px 10px; }
 .qpm-mini .qpm-footer-hint { font-size: 11px; }
+
+/* 课堂展示面（阶段二）：前后切换、展示板开关与教师提示小面板 */
+.class-stage-steps { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 4px 2px; }
+.class-teacher-hints { margin: 8px; padding: 8px 10px; border: 1px dashed var(--panel-border); border-radius: 9px; background: #fffbeb; font-size: 12px; }
+.class-teacher-hints summary { cursor: pointer; color: #92400e; font-weight: 700; }
+.class-teacher-hints dl { margin: 6px 0 0; display: grid; gap: 5px; }
+.class-teacher-hints dt { color: #a16207; font-size: 10px; font-weight: 700; }
+.class-teacher-hints dd { margin: 0; color: #78350f; line-height: 1.5; white-space: pre-wrap; }

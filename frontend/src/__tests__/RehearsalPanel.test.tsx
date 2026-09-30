@@ -24,6 +24,8 @@ vi.mock("../api", () => ({
   updateLessonRehearsal: (...args: unknown[]) => updateMock(...args),
   searchQuestionBanks: (...args: unknown[]) => searchMock(...args),
   fetchLessonRehearsalReport: (...args: unknown[]) => reportMock(...args),
+  fetchOutputs: vi.fn().mockResolvedValue({ items: [] }),
+  buildAuthenticatedUrl: (path: string) => path,
   completeLessonRehearsal: (...args: unknown[]) => completeMock(...args),
   cancelLessonRehearsal: (...args: unknown[]) => cancelMock(...args),
   applyRehearsalStageScene: (...args: unknown[]) => applySceneMock(...args),

@@ -619,6 +619,7 @@ class LessonRehearsalUpdateRequest(BaseModel):
     image_bind: Optional[Dict[str, Any]] = None
     scene_capture: Optional[Dict[str, Any]] = None
     test_result: Optional[Dict[str, Any]] = None
+    presentation_update: Optional[Dict[str, Any]] = None
     expected_revision: int = Field(ge=0)
 
 
@@ -1534,6 +1535,30 @@ def submit_assistant_message(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/media/video-upload")
+async def upload_video_library_asset(
+    request: Request,
+    project_id: str = Form(...),
+    file: UploadFile = File(...),
+    title: str = Form(""),
+) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
+    try:
+        raw = await request_limits.read_upload_limited(file, config.max_video_upload_bytes)
+        return runtime.upload_video_asset(
+            project_id=project_id,
+            filename=file.filename or "uploaded_video",
+            raw_bytes=raw,
+            title=title,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except request_limits.PayloadTooLarge as exc:
+        raise HTTPException(status_code=413, detail="视频文件超过大小限制") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/image-library/upload")
 async def upload_image_library_asset(
     request: Request,
@@ -2152,6 +2177,7 @@ def update_lesson_rehearsal(rehearsal_id: str, payload: LessonRehearsalUpdateReq
             image_bind=payload.image_bind,
             scene_capture=payload.scene_capture,
             test_result=payload.test_result,
+            presentation_update=payload.presentation_update,
             expected_revision=payload.expected_revision,
         )
     except KeyError as exc:

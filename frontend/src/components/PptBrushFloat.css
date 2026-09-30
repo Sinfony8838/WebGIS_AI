@@ -1,0 +1,28 @@
+/* PptBrushFloat：放映界面轻量画笔浮层 */
+.ppt-brush-float {
+  position: fixed;
+  z-index: 95;
+  top: 14px;
+  right: 16px;
+  display: grid;
+  gap: 7px;
+  padding: 9px 11px;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  border-radius: 11px;
+  background: rgba(15, 23, 42, 0.9);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.4);
+}
+.ppt-brush-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ppt-brush-chip { padding: 5px 10px; border: 1px solid rgba(148, 163, 184, 0.5); border-radius: 7px; background: transparent; color: #e2e8f0; font: inherit; font-size: 11px; cursor: pointer; }
+.ppt-brush-chip.active { border-color: #60a5fa; background: #1d4ed8; color: #fff; font-weight: 700; }
+.ppt-brush-color { width: 20px; height: 20px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
+.ppt-brush-color.active { border-color: #fff; }
+.ppt-brush-width { display: grid; place-items: center; width: 26px; height: 24px; border: 1px solid rgba(148, 163, 184, 0.5); border-radius: 6px; background: transparent; cursor: pointer; }
+.ppt-brush-width.active { border-color: #60a5fa; }
+.ppt-brush-width span { display: block; border-radius: 50%; background: #e2e8f0; }
+.ppt-brush-action, .ppt-brush-exit { padding: 5px 10px; border: 1px solid rgba(148, 163, 184, 0.5); border-radius: 7px; background: transparent; color: #e2e8f0; font: inherit; font-size: 11px; cursor: pointer; }
+.ppt-brush-exit { border-color: #f87171; color: #fecaca; font-weight: 700; }
+.ppt-brush-action:disabled { opacity: 0.4; cursor: not-allowed; }
+.ppt-brush-spacer { flex: 1; }
+.ppt-brush-mini { display: flex; align-items: center; gap: 7px; padding: 6px 9px; }
+.ppt-brush-handle { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid rgba(148, 163, 184, 0.5); border-radius: 50%; background: #1d4ed8; color: #fff; font-size: 15px; cursor: pointer; }

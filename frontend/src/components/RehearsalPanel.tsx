@@ -5,10 +5,12 @@ import {
   completeLessonRehearsal,
   createLessonRehearsal,
   fetchLessonRehearsalReport,
+  fetchOutputs,
   searchQuestionBanks,
   updateLessonRehearsal,
   uploadImageLibraryAsset
 } from "../api";
+import { PresentationLayoutEditor, type LibraryAsset } from "./PresentationLayoutEditor";
 import type {
   LessonGlobeScene,
   LessonPlanProfile,
@@ -83,6 +85,7 @@ export function RehearsalPanel({
   const [editStageId, setEditStageId] = useState("");
   const [editMinutes, setEditMinutes] = useState(5);
   const [captureHint, setCaptureHint] = useState("");
+  const [libraryAssets, setLibraryAssets] = useState<LibraryAsset[]>([]);
   const [swapTarget, setSwapTarget] = useState<{ stageId: string; position: number; questionId: string } | null>(null);
   const [swapSearch, setSwapSearch] = useState("");
   const [swapResults, setSwapResults] = useState<QuestionBankQuestion[]>([]);
@@ -93,6 +96,29 @@ export function RehearsalPanel({
   const [completedExportUrl, setCompletedExportUrl] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const uploadTargetRef = useRef<{ stageId: string; questionId: string } | null>(null);
+
+  // 展示编排素材源：项目图片库（上传图片 + AI 生成图）。
+  useEffect(() => {
+    let cancelled = false;
+    fetchOutputs(projectId)
+      .then((result) => {
+        if (cancelled) return;
+        const assets = (result.items || [])
+          .filter((item) => item.artifact_type === "uploaded_image" || item.artifact_type === "generated_image")
+          .map((item) => ({
+            artifact_id: item.artifact_id,
+            title: item.title,
+            url: String(item.metadata?.public_url || ""),
+            mime_type: String(item.metadata?.mime_type || "image/png")
+          }))
+          .filter((item) => item.url);
+        setLibraryAssets(assets);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
 
   // 开启（或续用）本课时的模拟测试：同一课时同时只有一个进行中的模拟测试。
   useEffect(() => {
@@ -125,6 +151,10 @@ export function RehearsalPanel({
   const totalMinutes = stages.reduce((sum, stage) => sum + (stage.minutes || 0), 0);
   const durationMinutes = Number(workingCopy?.duration_minutes || lesson.stages.reduce((sum, stage) => sum + (stage.minutes || 0), 0) || 40);
   const active = rehearsal?.status === "active";
+
+  function savePresentation(stageId: string, presentation: { blocks: unknown[] }) {
+    void applyUpdate({ presentation_update: { stage_id: stageId, presentation: presentation as { blocks: never[] } } });
+  }
 
   async function run<T>(operation: () => Promise<T>): Promise<T | null> {
     setBusy(true);
@@ -393,6 +423,17 @@ export function RehearsalPanel({
 
                   {expanded ? (
                     <div className="lesson-stage-detail">
+                      <div className="lesson-stage-block">
+                        <span className="lesson-block-label">展示编排（课堂主区域）</span>
+                        <PresentationLayoutEditor
+                          stage={stage}
+                          projectId={projectId}
+                          busy={busy || !active}
+                          libraryAssets={libraryAssets}
+                          onSave={(presentation) => savePresentation(stage.stage_id, presentation)}
+                        />
+                      </div>
+
                       <div className="lesson-stage-block">
                         <span className="lesson-block-label">课中题目</span>
                         {(stage.questions || []).map((question, position) => (

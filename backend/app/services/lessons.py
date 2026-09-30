@@ -154,6 +154,73 @@ def normalize_teacher_guidance(raw: Any) -> Dict[str, Any]:
     return result
 
 
+PRESENTATION_BLOCK_TYPES = frozenset({"text", "image", "video", "question", "chart", "map"})
+
+
+def _clamp01(value: Any, fallback: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return min(1.0, max(0.0, number))
+
+
+def normalize_presentation(raw: Any) -> Dict[str, Any]:
+    """环节展示布局：区块有稳定 ID、素材引用、层级与归一化位置尺寸。
+
+    非法区块整体丢弃；坐标越界收敛到 [0,1]；未知字段不保留。
+    """
+    if not isinstance(raw, dict):
+        return {}
+    raw_blocks = raw.get("blocks")
+    if not isinstance(raw_blocks, list):
+        return {}
+    blocks: List[Dict[str, Any]] = []
+    for index, item in enumerate(raw_blocks, start=1):
+        if not isinstance(item, dict):
+            continue
+        block_type = str(item.get("type") or "")
+        if block_type not in PRESENTATION_BLOCK_TYPES:
+            continue
+        block_id = str(item.get("id") or "").strip()
+        if not block_id:
+            continue
+        block: Dict[str, Any] = {
+            "id": block_id,
+            "type": block_type,
+            "text": str(item.get("text") or ""),
+            "z": max(0, int(item.get("z") or 0)) if str(item.get("z") or "0").lstrip("-").isdigit() else 0,
+            "order": max(0, int(item.get("order") or index)),
+        }
+        x = _clamp01(item.get("x"), 0.0)
+        y = _clamp01(item.get("y"), 0.0)
+        w = _clamp01(item.get("w"), 0.4)
+        h = _clamp01(item.get("h"), 0.2)
+        block.update({
+            "x": x, "y": y, "w": max(0.04, w), "h": max(0.04, h),
+        })
+        asset = item.get("asset")
+        if isinstance(asset, dict) and block_type in {"image", "video", "question", "chart", "map"}:
+            normalized_asset: Dict[str, Any] = {}
+            url = str(asset.get("url") or "").strip()
+            if url:
+                normalized_asset["url"] = url
+            if asset.get("mime_type"):
+                normalized_asset["mime_type"] = str(asset["mime_type"])
+            if asset.get("name"):
+                normalized_asset["name"] = str(asset["name"])
+            if asset.get("question_id"):
+                normalized_asset["question_id"] = str(asset["question_id"])
+            if asset.get("chart_ref"):
+                normalized_asset["chart_ref"] = str(asset["chart_ref"])
+            if normalized_asset:
+                block["asset"] = normalized_asset
+        blocks.append(block)
+    if not blocks:
+        return {}
+    return {"blocks": blocks}
+
+
 def normalize_brainstorm(raw: Any) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
@@ -700,6 +767,7 @@ class LessonService:
                     "brainstorm": normalize_brainstorm(raw.get("brainstorm")),
                     "evidence_refs": normalize_evidence_refs(raw.get("evidence_refs")),
                     "teacher_guidance": normalize_teacher_guidance(raw.get("teacher_guidance")),
+                    "presentation": normalize_presentation(raw.get("presentation")),
                 }
             )
         return normalized

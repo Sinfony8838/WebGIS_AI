@@ -72,6 +72,23 @@ def _detect_image_mime(raw_bytes: bytes) -> str:
     return ""
 
 
+SUPPORTED_VIDEO_MIME_BY_SUFFIX = {
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+}
+
+MAX_VIDEO_LIBRARY_BYTES = 100 * 1024 * 1024
+
+
+def _detect_video_mime(raw_bytes: bytes) -> str:
+    # MP4/MOV：偏移 4-8 为 "ftyp"；WebM：EBML 魔数。
+    if len(raw_bytes) >= 12 and raw_bytes[4:8] == b"ftyp":
+        return "video/mp4"
+    if raw_bytes.startswith(bytes([0x1A, 0x45, 0xDF, 0xA3])):
+        return "video/webm"
+    return ""
+
+
 def _is_relative_to(path: Path, root: Path) -> bool:
     try:
         path.relative_to(root)
@@ -1155,6 +1172,72 @@ class WebGISRuntime:
             self._fail_job(job.job_id, "image_library_upload", str(exc))
             raise
 
+    def upload_video_asset(
+        self,
+        project_id: str,
+        filename: str,
+        raw_bytes: bytes,
+        title: str = "",
+    ) -> Dict[str, Any]:
+        """项目级视频资源：魔数+后缀校验；不下载外链、不触碰其他项目文件。"""
+        self._require_project(project_id)
+        if not raw_bytes:
+            raise ValueError("视频文件为空。")
+        if len(raw_bytes) > MAX_VIDEO_LIBRARY_BYTES:
+            raise ValueError("视频不能超过 100MB。")
+        detected_mime = _detect_video_mime(raw_bytes)
+        if not detected_mime:
+            raise ValueError("仅支持 MP4 或 WebM 视频文件。")
+
+        original_suffix = Path(filename or "").suffix.lower()
+        expected_mime = SUPPORTED_VIDEO_MIME_BY_SUFFIX.get(original_suffix)
+        if expected_mime and expected_mime != detected_mime:
+            raise ValueError("视频扩展名与实际文件格式不一致。")
+        suffix = original_suffix if expected_mime else next(
+            key for key, value in SUPPORTED_VIDEO_MIME_BY_SUFFIX.items() if value == detected_mime
+        )
+        safe_stem = _safe_id(Path(filename or "uploaded_video").stem)[:80]
+        output_dir = self.config.project_upload_dir(project_id) / "video_library"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = self.config.unique_path(output_dir, f"{safe_stem}{suffix}")
+
+        job = self.store.create_job(
+            project_id=project_id,
+            job_type="video_upload",
+            title=title.strip() or Path(filename or "视频").stem or "视频",
+            workflow_type="video_library_upload",
+            request={"filename": filename, "size": len(raw_bytes)},
+        )
+        try:
+            self.store.set_job_status(job.job_id, "running")
+            self.store.update_job_stage(job.job_id, "artifacts", "running", "正在保存视频。")
+            output_path.write_bytes(raw_bytes)
+            public_url = self.config.public_url_for_path(output_path)
+            artifact = self.store.register_artifact(
+                project_id=project_id,
+                job_id=job.job_id,
+                artifact_type="uploaded_video",
+                title=title.strip() or Path(filename or "视频").stem or "视频",
+                path=str(output_path),
+                metadata={
+                    "public_url": public_url,
+                    "mime_type": detected_mime,
+                    "source": "upload",
+                    "original_filename": filename,
+                    "size": len(raw_bytes),
+                },
+            )
+            self.store.update_job_stage(job.job_id, "artifacts", "success", "视频已保存到项目资源库。")
+            self.store.set_job_status(
+                job.job_id,
+                "completed",
+                result={"status": "success", "artifact": artifact.to_dict()},
+            )
+            return {"status": "success", "job_id": job.job_id, "artifact": artifact.to_dict()}
+        except Exception as exc:
+            self._fail_job(job.job_id, "video_library_upload", str(exc))
+            raise
+
     def generate_image_asset(
         self,
         project_id: str,
@@ -1384,6 +1467,7 @@ class WebGISRuntime:
         teacher_facing = {
             "map_snapshot",
             "uploaded_image",
+            "uploaded_video",
             "generated_image",
             "annotation_export",
             "dataset_import",

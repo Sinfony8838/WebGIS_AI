@@ -893,6 +893,8 @@ export type LessonStage = {
   student_activities?: string[];
   knowledge_conclusion?: string;
   objective_refs?: number[];
+  /** 课堂展示布局（阶段二）：区块有稳定 ID 与归一化位置尺寸。 */
+  presentation?: PresentationLayout;
 };
 
 // ------------------------------------------------------------------
@@ -1001,6 +1003,33 @@ export type DesignPlanItem = {
   label: string;
   status: string;
   value: string | Array<Record<string, unknown>>;
+};
+
+export type PresentationBlockType = "text" | "image" | "video" | "question" | "chart" | "map";
+
+export type PresentationBlockAsset = {
+  url?: string;
+  mime_type?: string;
+  name?: string;
+  question_id?: string;
+  chart_ref?: string;
+};
+
+export type PresentationBlock = {
+  id: string;
+  type: PresentationBlockType;
+  text?: string;
+  asset?: PresentationBlockAsset;
+  z: number;
+  order: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+
+export type PresentationLayout = {
+  blocks: PresentationBlock[];
 };
 
 export type LessonMigrationItem = {

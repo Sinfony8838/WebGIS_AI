@@ -48,6 +48,7 @@ import { ClassRunPanel } from "./ClassRunPanel";
 import { LessonPanel } from "./LessonPanel";
 import { QuestionPracticeModal } from "./QuestionPracticeModal";
 import { RehearsalPanel } from "./RehearsalPanel";
+import { StagePresentationSurface } from "./StagePresentationSurface";
 import { ReportPanel } from "./ReportPanel";
 import { VisualQueryPopup, type VisualizationItem } from "./VisualQueryPopup";
 
@@ -769,6 +770,7 @@ export function LessonWorkflowShell({
   );
 
   const workflowBusy = busy || localBusy;
+  const [presentationVisible, setPresentationVisible] = useState(false);
   const teachPanelVisible = lessonMode === "teach" && activeSession?.status === "running" && Boolean(activeLesson);
 
   return (
@@ -808,7 +810,26 @@ export function LessonWorkflowShell({
           onRequestPlaneView={onRequestPlaneView}
           onAssistantPrompt={onAssistantPrompt}
           assistantBusy={assistantBusy}
+          presentationVisible={presentationVisible}
+          onTogglePresentation={() => setPresentationVisible((value) => !value)}
         />
+      ) : null}
+      {teachPanelVisible && presentationVisible && activeSession && activeLesson ? (
+        (() => {
+          const stage = activeLesson.stages.find((item) => item.stage_id === activeSession.current_stage_id);
+          if (!stage) return null;
+          return (
+            <StagePresentationSurface
+              stage={stage}
+              onProjectQuestion={(questionId, stageId) => void projectQuestion(questionId, stageId)}
+              onPresentScene={async (target) => {
+                const response = await presentClassroomScene(activeSession.session_id, activeSession.current_stage_id, target);
+                onApplyGlobeScene?.(response.scene.globe || {});
+                await onRefresh();
+              }}
+            />
+          );
+        })()
       ) : null}
       {teachPanelVisible && projectionQuestion && projectionSurface === "full" ? (
         <QuestionPracticeModal

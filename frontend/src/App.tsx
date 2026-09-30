@@ -112,6 +112,7 @@ import { UserMenu } from "./components/UserMenu";
 import { PptViewer } from "./components/PptViewer";
 import { type BrushOverlayHandle, type BrushSettings } from "./components/BrushOverlay";
 import { BrushToolbar } from "./components/BrushToolbar";
+import { PptBrushFloat } from "./components/PptBrushFloat";
 import {
   DOUBLE_CLICK_LANDING_ALTITUDE,
   PLANE_TO_GLOBE_ZOOM_THRESHOLD,
@@ -4123,7 +4124,18 @@ export default function App({
           />
         </aside>
 
-      {interactionMode === "brush" ? (
+      {interactionMode === "brush" && pptViewerOpen && pptPresentationReady ? (
+        // 放映界面：画笔设置收入轻量浮层，选完工具收起，结束画笔退出绘制状态。
+        <PptBrushFloat
+          settings={brushSettings}
+          hasContent={brushTargetHasContent}
+          onChangeSettings={(next) => setBrushSettings((prev) => ({ ...prev, ...next }))}
+          onUndo={() => brushTargetRef.current?.undo()}
+          onClear={() => brushTargetRef.current?.clear()}
+          onExit={() => setInteractionMode("browse")}
+        />
+      ) : null}
+      {interactionMode === "brush" && !(pptViewerOpen && pptPresentationReady) ? (
         <BrushToolbar
           settings={brushSettings}
           hasContent={brushTargetHasContent}

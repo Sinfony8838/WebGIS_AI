@@ -17,6 +17,7 @@ import type {
   ConversationResponse,
   DatasetCatalogResponse,
   DatasetUploadResponse,
+  PresentationBlock,
   LessonDocxImportResult,
   LessonMigrationPreview,
   DatasetStatsResponse,
@@ -504,6 +505,21 @@ export async function sendAssistantMessage(
   });
 }
 
+export async function uploadVideoAsset(
+  projectId: string,
+  file: File,
+  title = ""
+): Promise<{ status: string; artifact: ArtifactRecord }> {
+  const formData = new FormData();
+  formData.set("project_id", projectId);
+  formData.set("title", title);
+  formData.append("file", file);
+  return requestJson<{ status: string; artifact: ArtifactRecord }>("/media/video-upload", {
+    method: "POST",
+    body: formData
+  });
+}
+
 export async function uploadImageLibraryAsset(
   projectId: string,
   file: File,
@@ -914,6 +930,7 @@ export async function updateLessonRehearsal(
     };
     scene_capture?: { stage_id: string; snapshot: SceneSnapshot };
     test_result?: { key: string; passed: boolean; note?: string };
+    presentation_update?: { stage_id: string; presentation: { blocks: PresentationBlock[] } };
     expected_revision?: number;
   }
 ): Promise<{ status: string; rehearsal: LessonRehearsalRecord }> {
