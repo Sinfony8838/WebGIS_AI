@@ -140,35 +140,35 @@ const TOOLS: ToolDescriptor[] = [
   {
     mode: "browse",
     label: "选择",
-    hint: "点击地图要素查看属性 (B)",
+    hint: "点击地图要素查看属性",
     shortcut: "B",
     icon: <CursorIcon />
   },
   {
     mode: "annotate",
     label: "标注",
-    hint: "在地图上添加教学标注 (A)",
+    hint: "在地图上添加教学标注，点击地图后填写内容",
     shortcut: "A",
     icon: <PinIcon />
   },
   {
     mode: "measure",
     label: "测距",
-    hint: "连续点击量算多段距离 (M)",
+    hint: "连续点击量算多段距离，双击结束并生成剖面",
     shortcut: "M",
     icon: <RulerIcon />
   },
   {
     mode: "draw-search",
     label: "绘区",
-    hint: "绘制多边形作为检索范围 (D)",
+    hint: "绘制多边形作为检索范围",
     shortcut: "D",
     icon: <PolygonIcon />
   },
   {
     mode: "brush",
     label: "画笔",
-    hint: "在地图上自由圈画标注 (P)",
+    hint: "在地图上自由圈画标注",
     shortcut: "P",
     icon: <BrushIcon />
   }
@@ -224,6 +224,8 @@ export function MapToolRail({
       >
         {visibleTools.map((tool) => {
           const active = mode === tool.mode;
+          // 2D/3D 可用性提示：标注/测距/绘区依赖 OpenLayers 交互，仅 2D 可用。
+          const availability = tool.mode === "browse" ? "2D/3D 均可用" : "仅 2D 地图可用";
           return (
             <button
               key={tool.mode}
@@ -231,7 +233,7 @@ export function MapToolRail({
               className={`tool-rail-button ${active ? "active" : ""}`}
               aria-pressed={active}
               aria-label={`${tool.label}模式 · 快捷键 ${tool.shortcut}`}
-              title={tool.hint}
+              title={`${tool.label}（快捷键 ${tool.shortcut}）· ${availability} · ${tool.hint}`}
               onClick={() => onChangeMode(tool.mode)}
             >
               <span className="tool-rail-icon" aria-hidden="true">

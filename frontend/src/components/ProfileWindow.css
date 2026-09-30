@@ -1,0 +1,82 @@
+/* ProfileWindow：每条测线的独立剖面小窗（可拖动、缩放、关闭） */
+.profile-window {
+  position: fixed;
+  z-index: 19;
+  display: flex;
+  flex-direction: column;
+  min-width: 320px;
+  min-height: 220px;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  box-shadow: 0 14px 40px rgba(15, 23, 42, 0.22);
+  overflow: hidden;
+}
+.profile-window.is-hidden { display: none; }
+.profile-window-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--panel-border);
+  background: var(--surface-raised, #f1f5f9);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.profile-window-head:active { cursor: grabbing; }
+.profile-window-head strong { flex: 1; min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-window-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+.profile-window-close {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #64748b;
+  font-size: 16px;
+  cursor: pointer;
+}
+.profile-window-close:hover { background: #fee2e2; color: #b91c1c; }
+.profile-window-body { flex: 1; min-height: 0; overflow: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 7px; }
+.profile-window-controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.profile-window-controls select { max-width: 180px; padding: 4px 6px; border: 1px solid var(--panel-border); border-radius: 6px; font: inherit; font-size: 11px; }
+.profile-window-error { margin: 0; color: #b91c1c; font-size: 11px; }
+.profile-window-meta { color: var(--text-soft, #475569); font-size: 11px; }
+.profile-window-chart { width: 100%; height: auto; color: #334155; }
+.profile-window-readout { margin: 0; color: #0f172a; font-size: 11px; }
+.profile-window-footnote { margin: 0; color: var(--text-dim, #64748b); font-size: 10px; line-height: 1.5; }
+.profile-window-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 50%, #94a3b8 50%);
+  border-bottom-right-radius: 10px;
+  touch-action: none;
+}
+
+/* 多窗管理条 */
+.profile-windows-bar {
+  position: fixed;
+  z-index: 19;
+  left: 50%;
+  transform: translateX(-50%);
+  /* 抬离底部经纬度状态栏，避免重叠遮挡 */
+  bottom: 48px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: var(--surface, #fff);
+  box-shadow: 0 8px 26px rgba(15, 23, 42, 0.18);
+  color: var(--text-soft, #475569);
+  font-size: 11px;
+}

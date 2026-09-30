@@ -3,7 +3,7 @@ import MultiPolygon from "ol/geom/MultiPolygon";
 import type { UrbanSource, UrbanStatus } from "./components/UrbanStudyPanel";
 import { shanghaiAgeColor, shanghaiDensityColor, densityColor, densityRadius, rankColor } from "./lib/populationVisual";
 import { MapEvidenceLegend } from "./components/MapEvidenceLegend";
-import { MapProfilePanel } from "./components/MapProfilePanel";
+import { ProfileWindow, type MeasureRecord } from "./components/ProfileWindow";
 import { JobActivity } from "./lib/jobActivity";
 import { forgetPendingJob, rememberPendingJob, type PendingJob } from "./lib/pendingJobs";
 import { usePendingJobs } from "./hooks/usePendingJobs";
@@ -48,6 +48,7 @@ import {
   exportSnapshot,
   fetchDatasetCatalog,
   fetchJob,
+  fetchPopulationRasterPackages,
   fetchLessonResources,
   fetchUiCapabilities,
   fetchKbManifest,
@@ -123,6 +124,7 @@ import { parsePptxFile, releaseSlideObjectUrls } from "./lib/pptxRenderer";
 import { decideLessonGlobeScene } from "./lib/lessonGlobeScene";
 import { MapBrushOverlay } from "./components/MapBrushOverlay";
 import type { MapInkProjection } from "./lib/mapInk";
+import type { PopulationRasterPackageSummary } from "./types";
 import type { ViewMode } from "./lib/viewMode";
 import type {
   AssistantInputMode,
@@ -457,6 +459,8 @@ function layerStyle(record: LayerRecord, showFit = false) {
   };
 }
 
+const MEASURE_COLORS = ["#087cad", "#d97706", "#7c3aed", "#059669", "#dc2626", "#2563eb"];
+
 export default function App({
   currentUser,
   onLogout,
@@ -482,6 +486,7 @@ export default function App({
   const highlightSourceRef = useRef<VectorSource | null>(null);
   const annotationSourceRef = useRef<VectorSource | null>(null);
   const measureSourceRef = useRef<VectorSource | null>(null);
+  const measureSeqRef = useRef(0);
   const measureHoverFeatureRef = useRef<Feature<Point> | null>(null);
   const graticuleLayerRef = useRef<Graticule | null>(null);
   const drawInteractionRef = useRef<Draw | null>(null);
@@ -561,8 +566,9 @@ export default function App({
   const [measureText, setMeasureText] = useState("");
   const [measureTotalKm, setMeasureTotalKm] = useState<number | null>(null);
   const [annotationCount, setAnnotationCount] = useState(0);
-  const [measurementCount, setMeasurementCount] = useState(0);
-  const [measureCoordinates, setMeasureCoordinates] = useState<[number, number][] | null>(null);
+  const [measureRecords, setMeasureRecords] = useState<MeasureRecord[]>([]);
+  const [profilesCollapsed, setProfilesCollapsed] = useState(false);
+  const [populationPackages, setPopulationPackages] = useState<PopulationRasterPackageSummary[]>([]);
   const [annotationDraft, setAnnotationDraft] = useState<{ lonLat: [number, number] } | null>(null);
   const [selectedFeatureText, setSelectedFeatureText] = useState("");
   const [brushSettings, setBrushSettings] = useState<BrushSettings>({
@@ -721,12 +727,25 @@ export default function App({
     return () => window.removeEventListener("popstate", readWorkspace);
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    fetchPopulationRasterPackages()
+      .then((result) => {
+        if (!cancelled) setPopulationPackages(result.items || []);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const onlinePoiEnabled = health?.online_services.amap_poi_enabled ?? false;
   const basemapItems = health?.basemaps.items || [];
   const activeBasemapId = layerState?.base_map.id || health?.basemaps.default_id || "";
   const densityProfileSources = useMemo(() => {
     const choices: { id: string; name: string }[] = [];
     if (activeBasemapId === "nasa_population_2020") choices.push({ id: "gpw_2020", name: "全球 GPW 2020 栅格" });
+    for (const pkg of populationPackages) choices.push({ id: pkg.package_id, name: pkg.title });
     for (const layer of layerState?.items || []) {
       if (!layer.visible || layer.kind !== "vector" || !layer.geometry_type.includes("Polygon")) continue;
       const features = layer.data.features;
@@ -736,7 +755,7 @@ export default function App({
       }
     }
     return choices;
-  }, [activeBasemapId, layerState?.items]);
+  }, [activeBasemapId, layerState?.items, populationPackages]);
   const weatherBasemapEnabled = Boolean(health?.online_services.weather_basemap_enabled);
   const weatherBasemapActive = isWeatherBasemapId(activeBasemapId);
   const kbActiveLayerId = layerState?.active_layer_id || "";
@@ -1997,8 +2016,8 @@ export default function App({
     setMeasureText("");
     setMeasureTotalKm(null);
     setAnnotationCount(0);
-    setMeasurementCount(0);
-    setMeasureCoordinates(null);
+    setMeasureRecords([]);
+    setProfilesCollapsed(false);
     setAnnotationDraft(null);
     setInteractionMode("browse");
 
@@ -3460,9 +3479,7 @@ export default function App({
     let liveListenerKey: ReturnType<typeof draw.getOverlay>["on"] extends (...args: infer A) => infer R ? R : null = null as any;
 
     draw.on("drawstart", (event) => {
-      measureSourceRef.current?.clear();
       measureHoverFeatureRef.current = null;
-      setMeasureCoordinates(null);
       setMeasureText("绘制中…双击结束当前测线，按 Esc 取消。");
       setMeasureTotalKm(0);
       const geometry = event.feature.getGeometry();
@@ -3488,12 +3505,23 @@ export default function App({
       const lengthKm = lengthMeters / 1000;
       const pretty =
         lengthKm >= 1 ? `${lengthKm.toFixed(2)} 千米` : `${lengthMeters.toFixed(0)} 米`;
-      setMeasureText(`测量完成：${pretty}`);
       setMeasureTotalKm(lengthKm);
-      if (geometry instanceof LineString) setMeasureCoordinates(
-        geometry.getCoordinates().map(point => toLonLat(point) as [number, number])
-      );
-      setMeasurementCount((value) => value + 1);
+      if (geometry instanceof LineString) {
+        const coordinates = geometry.getCoordinates().map(point => toLonLat(point) as [number, number]);
+        const recordId = `msr_${Date.now().toString(36)}_${(measureSeqRef.current += 1)}`;
+        setMeasureRecords(previous => [
+          ...previous,
+          {
+            id: recordId,
+            name: `测线 ${previous.length + 1}`,
+            coordinates,
+            totalKm: lengthKm,
+            color: MEASURE_COLORS[previous.length % MEASURE_COLORS.length]
+          }
+        ]);
+        setProfilesCollapsed(false);
+      }
+      setMeasureText(`测量完成：${pretty}`);
       pushToast("success", "测距完成", `本段共 ${pretty}`);
       setInteractionMode("browse");
     });
@@ -3727,10 +3755,27 @@ export default function App({
         />
       ) : null}
       <MapEvidenceLegend basemapId={activeBasemapId} layers={layerState?.items || []} globe={viewMode === "globe"} themeIds={globeThemeIds} showFit={showTeachingFit} onShowFit={setShowTeachingFit} busy={mapBusy} onTogglePrecipitation={value => handleToggleTextbookMap("china_precipitation_400mm", value)} />
-      {viewMode === "plane" && project && measureCoordinates && <MapProfilePanel
+      {viewMode === "plane" && project && measureRecords.length > 0 ? (
+        <div className="profile-windows-bar" data-testid="profile-windows-bar">
+          <span>已测 {measureRecords.length} 条测线</span>
+          <button type="button" className="toolbar-button compact" onClick={() => setProfilesCollapsed(value => !value)} data-testid="profiles-collapse-all">
+            {profilesCollapsed ? "恢复显示全部剖面" : "一键暂收全部剖面"}
+          </button>
+          <button type="button" className="toolbar-button compact" onClick={() => {
+            measureSourceRef.current?.clear();
+            measureHoverFeatureRef.current = null;
+            setMeasureRecords([]);
+          }} data-testid="profiles-clear-all">
+            清除全部测线
+          </button>
+        </div>
+      ) : null}
+      {viewMode === "plane" && project && measureRecords.map(record => <ProfileWindow
+        key={record.id}
         projectId={project.project_id}
-        coordinates={measureCoordinates}
+        record={record}
         densitySources={densityProfileSources}
+        hidden={profilesCollapsed}
         onHover={sample => {
           const source = measureSourceRef.current;
           if (!source) return;
@@ -3743,7 +3788,12 @@ export default function App({
             measureHoverFeatureRef.current = feature;
           }
         }}
-      />}
+        onClose={recordId => setMeasureRecords(previous => {
+          const remaining = previous.filter(item => item.id !== recordId);
+          if (!remaining.length) measureSourceRef.current?.clear();
+          return remaining;
+        })}
+      />)}
       <MapBrushOverlay
         projection={mapInkProjection}
         scope={project?.project_id || ""}
@@ -3992,7 +4042,7 @@ export default function App({
             mode={interactionMode}
             viewMode={viewMode}
             hasSearchArea={Boolean(searchAreaGeometry)}
-            hasMeasurements={measurementCount > 0}
+            hasMeasurements={measureRecords.length > 0}
             hasAnnotations={annotationCount > 0}
             busy={mapBusy}
             showGraticule={showGraticule}

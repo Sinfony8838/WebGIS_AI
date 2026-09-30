@@ -2,7 +2,12 @@
 .sps {
   position: fixed;
   z-index: 80;
-  inset: 70px 18px 18px;
+  /* 给左侧课中教师面板（fixed left 12px + 324px 宽）让位：
+     展示板打开时教师面板保持可见可操作（切换环节 / 回到地图）。 */
+  top: calc(var(--header-height, 56px) + 14px);
+  left: 352px;
+  right: 18px;
+  bottom: 16px;
   display: grid;
   grid-template-rows: auto 1fr;
   gap: 10px;

@@ -1349,6 +1349,19 @@ def search_resources(
     )
 
 
+@app.get("/population-raster/packages")
+def list_population_raster_packages() -> Dict[str, Any]:
+    """本地预处理人口栅格包（如上海 WorldPop ~100m）可用性列表。"""
+    from .services.raster_dataset import load_package
+
+    items = []
+    for package_id in ("shanghai_worldpop_2020",):
+        package = load_package(config.data_dir / "population" / package_id)
+        if package is not None:
+            items.append(package.public_summary())
+    return {"status": "success", "items": items}
+
+
 @app.get("/basemaps")
 def list_basemaps() -> Dict[str, Any]:
     return runtime.list_basemaps()

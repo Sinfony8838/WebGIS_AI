@@ -18,6 +18,7 @@ import type {
   DatasetCatalogResponse,
   DatasetUploadResponse,
   PresentationBlock,
+  PopulationRasterPackageSummary,
   LessonDocxImportResult,
   LessonMigrationPreview,
   DatasetStatsResponse,
@@ -503,6 +504,10 @@ export async function sendAssistantMessage(
       image_attachments: options?.imageAttachments || []
     })
   });
+}
+
+export async function fetchPopulationRasterPackages(): Promise<{ status: string; items: PopulationRasterPackageSummary[] }> {
+  return requestJson(`/population-raster/packages`);
 }
 
 export async function uploadVideoAsset(

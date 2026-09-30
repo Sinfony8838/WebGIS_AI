@@ -116,6 +116,21 @@ export type MapProfileResult = {
   sample_spacing_m: number | null;
   no_data_count: number;
   samples: MapProfileSample[];
+  /** 本地栅格包（上海 WorldPop）附加的换算与署名说明。 */
+  source_attribution?: string;
+  source_caveats?: string[];
+  value_note?: string;
+};
+
+export type PopulationRasterPackageSummary = {
+  package_id: string;
+  title: string;
+  bbox: number[] | null;
+  resolution_m: number | null;
+  year: number | null;
+  unit: string;
+  caveats: string[];
+  attribution: string;
 };
 
 export type LayerRecord = {
