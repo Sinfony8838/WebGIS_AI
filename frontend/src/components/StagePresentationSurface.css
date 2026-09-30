@@ -1,13 +1,13 @@
 /* StagePresentationSurface：课堂主区域展示面 */
 .sps {
   position: fixed;
-  z-index: 80;
+  z-index: 60;
   /* 给左侧课中教师面板（fixed left 12px + 324px 宽）让位：
      展示板打开时教师面板保持可见可操作（切换环节 / 回到地图）。 */
   top: calc(var(--header-height, 56px) + 14px);
   left: 352px;
   right: 18px;
-  bottom: 16px;
+  bottom: 84px;
   display: grid;
   grid-template-rows: auto 1fr;
   gap: 10px;
@@ -18,8 +18,14 @@
 }
 .sps-stage-title { color: #f8fafc; font-size: 17px; font-weight: 700; }
 .sps-stage-title small { color: #94a3b8; font-weight: 400; }
+.sps-stage-title button { float: right; }
+.screen-shell:has(.class-run-panel-tab) .sps { left: 64px; }
 .sps-canvas {
   position: relative;
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  max-height: 100%;
+  align-self: center;
   border-radius: 10px;
   background: linear-gradient(180deg, #f8fafc, #e2e8f0);
   overflow: hidden;
@@ -34,3 +40,6 @@
 .sps-media { width: 100%; height: 100%; object-fit: contain; border-radius: 8px; background: #0f172a; }
 .sps-link { display: grid; gap: 3px; place-content: center; height: 100%; border-radius: 8px; background: rgba(255, 255, 255, 0.95); color: #1d4ed8; font-size: 14px; text-align: center; text-decoration: none; }
 .sps-broken { display: grid; place-items: center; border: 1px dashed #fca5a5; color: #b91c1c; font-size: 13px; background: #fef2f2; }
+@media (max-width: 800px) {
+  .sps { left: 12px; right: 12px; bottom: 126px; }
+}

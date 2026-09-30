@@ -249,15 +249,22 @@ class LessonDesignService:
                 result.append(item)
         return result
 
-    def turn(self, design_id: str, message: str, expected_revision: Optional[int] = None, step: str = "") -> Dict[str, Any]:
+    def turn(self, design_id: str, message: str, expected_revision: Optional[int] = None, step: str = "", preview_section: str = "", preview_stage_id: str = "") -> Dict[str, Any]:
         design = self.get(design_id)
+        original = copy.deepcopy(design)
+        if preview_section and preview_section not in {*SECTION_KEYS, *SCALAR_LABELS}:
+            raise ValueError("请选择有效的修改位置。")
+        if preview_stage_id and (preview_section != "stages" or not any(
+            stage.get("stage_id") == preview_stage_id for stage in design.draft.get("stages") or []
+        )):
+            raise ValueError("请选择有效的教学环节。")
         if expected_revision is not None and expected_revision != design.revision:
             raise ValueError("教案草稿已更新，请刷新后再继续。")
         message = str(message or "").strip()
         if not message:
             raise ValueError("请先告诉我你的教学想法或修改要求。")
         current_step = step if step in STEP_KEYS else design.current_step
-        if any(token in message for token in ("返回上一步", "回到上一步")):
+        if not preview_section and any(token in message for token in ("返回上一步", "回到上一步")):
             # 「返回上一步」是流程控制指令：短路处理，不进 LLM/规则需求解析，
             # 否则会被当成课题文本（如“我理解你想做一节‘返回上一步’”）。
             current_index = STEP_KEYS.index(current_step) if current_step in STEP_KEYS else 0
@@ -309,13 +316,15 @@ class LessonDesignService:
         if full_draft_extra is None and not scoped_message and current_step in FULL_DRAFT_INTENT_STEPS \
                 and FULL_DRAFT_INTENT_PATTERN.search(message):
             full_draft_extra = message
-        if full_draft_extra is not None:
+        if full_draft_extra is not None and not preview_section:
             return self._full_draft_turn(design, message, full_draft_extra, current_step)
         # 「一键智能优化」：用模型对整份非确认初稿做一次系统性优化；AI 不可用时规则补齐空缺。
         optimize_focus = self._smart_optimize_focus(message)
-        if optimize_focus is not None:
+        if optimize_focus is not None and not preview_section:
             return self._optimize_draft_turn(design, message, optimize_focus, current_step)
         generation_message = scoped_message or message
+        if preview_stage_id:
+            generation_message += f"\n只修改 stage_id={preview_stage_id} 的环节，保留该 ID 与已有题目。"
         schedule = self._requested_schedule(generation_message) if current_step == "process" else []
         result = self._ask_minimax(design, current_step, generation_message)
         generation_mode = "model" if result is not None else "rules"
@@ -335,11 +344,22 @@ class LessonDesignService:
             scope = STEP_PATCH_SCOPES.get(current_step, set())
             patch = {key: value for key, value in patch.items() if key in scope}
             result["section_patch"] = patch
+        if preview_section:
+            patch = {key: value for key, value in patch.items() if key == preview_section}
+        if preview_stage_id and "stages" in patch:
+            suggestion = next((stage for stage in patch["stages"] if isinstance(stage, dict)
+                               and stage.get("stage_id") == preview_stage_id), None)
+            if suggestion is None:
+                raise ValueError("AI 未返回指定环节，原草稿已保留，请重试。")
+            patch["stages"] = [
+                {**stage, **suggestion} if stage.get("stage_id") == preview_stage_id else copy.deepcopy(stage)
+                for stage in original.draft.get("stages") or []
+            ]
         protected_questions = self._questions_to_preserve(design.draft, generation_message)
         if "stages" in patch and not self._preserves_questions(patch["stages"], protected_questions):
             raise ValueError("本次生成改动或遗漏了需保留的题目，原草稿已保留。请重试；题库题和教师录入题请通过题目编辑入口修改。")
         # 已确认章节默认是稳定约束；只有教师明确提出修改/返回时才重新打开。
-        reopen = any(token in message for token in ("修改", "调整", "返回", "重做", "换一种"))
+        reopen = bool(preview_section) or any(token in message for token in ("修改", "调整", "返回", "重做", "换一种"))
         for key in list(patch):
             if design.section_status.get(key) == "confirmed" and not reopen:
                 patch.pop(key, None)
@@ -372,7 +392,7 @@ class LessonDesignService:
         # 题目匹配步骤：按环节自动检索题库候选并快照可自动选用的题目。
         retrieval_candidates: List[Dict[str, Any]] = []
         auto_bound: List[Dict[str, Any]] = []
-        if current_step == "question_matching":
+        if current_step == "question_matching" and not preview_section:
             retrieval_candidates, auto_bound = self._auto_bind_questions(design)
         rehearsal_report = None
         if current_step in {"rehearsal", "confirmation"}:
@@ -396,7 +416,15 @@ class LessonDesignService:
             "reply": str(result.get("reply") or ""), "section_patch": copy.deepcopy(patch),
             "generation_mode": generation_mode,
         })
-        self.store.upsert_lesson_design(design)
+        if preview_section:
+            # Suggestions are ephemeral. Refresh/close/discard must keep the saved
+            # draft, revision and confirmation states exactly as they were.
+            proposed_value = copy.deepcopy(design.draft.get(preview_section))
+            design = original
+            if preview_section in patch:
+                design.draft[preview_section] = proposed_value
+        else:
+            self.store.upsert_lesson_design(design)
         return {
             "status": "success", "assistant_message": str(result.get("reply") or self._natural_prompt(next_step)),
             "generation_mode": generation_mode,
@@ -431,8 +459,8 @@ class LessonDesignService:
             # Single-section payloads and grouped step payloads are both supported.
             if section_id == "objectives" and isinstance(patch_value, list):
                 patch_value = {"objectives": patch_value}
-            elif section_id == "core_questions" and isinstance(patch_value, dict) and "core_questions" not in patch_value:
-                patch_value = {"core_questions": patch_value}
+            elif section_id in {"core_questions", "requirements"} and isinstance(patch_value, dict) and section_id not in patch_value:
+                patch_value = {section_id: patch_value}
             if section_id in STEP_SECTIONS:
                 if not isinstance(patch_value, dict):
                     raise ValueError("当前步骤的直接编辑内容格式不正确")
@@ -702,9 +730,10 @@ class LessonDesignService:
             summary += f"，待归类图片 {len(saved_images)} 张"
         summary += "。请逐项校对后再确认。"
         design.diff_summary = summary
+        unclassified = [item for item in parsed["unclassified"] if item.get("kind") != "image"] + saved_images
+        design.draft["import_review"] = {"mapping": parsed["mapping"], "unclassified": unclassified, "summary": summary}
         self.store.upsert_lesson_design(design)
         self.store.set_job_status(job.job_id, "success", {"design_id": design.design_id})
-        unclassified = [item for item in parsed["unclassified"] if item.get("kind") != "image"] + saved_images
         return {"status": "success", "summary": summary,
                 "design": {**design.to_dict(), **self.session_view(design)},
                 "mapping": parsed["mapping"], "unclassified": unclassified}

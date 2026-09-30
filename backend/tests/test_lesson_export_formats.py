@@ -69,6 +69,20 @@ def _proxy(draft: dict) -> SimpleNamespace:
 
 
 class LessonExportFormatsTest(unittest.TestCase):
+    def test_long_stage_pdf_continues_across_pages_without_losing_tail(self) -> None:
+        draft = _draft()
+        draft["stages"][0]["teacher_activities"] = ["观察地图并解释空间分布。" * 600 + "长环节结束标记"]
+        path = self.tmp / "long.pdf"
+        write_lesson_pdf(path, draft["title"], draft["subject"], draft["grade"], draft, draft["stages"], "草稿")
+        with fitz.open(path) as document:
+            text = "".join(page.get_text() for page in document).replace("\n", "")
+            self.assertIn("长环节结束标记", text)
+            self.assertIn("成因探究", text)
+            self.assertGreater(document.page_count, 2)
+            for page in document:
+                for block in page.get_text("blocks"):
+                    self.assertLess(block[3], page.rect.height)
+
     """同一份教案数据 → Word 与 PDF；保留环节顺序、素材出处与草稿/已确认状态。"""
 
     def setUp(self) -> None:

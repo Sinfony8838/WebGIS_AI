@@ -27,8 +27,8 @@
   background: rgba(255, 255, 255, 0.94);
   box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
   cursor: grab;
-  min-width: 48px;
-  min-height: 30px;
+  min-width: 0;
+  min-height: 0;
 }
 .ple-block.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25); }
 .ple-block-head { display: flex; align-items: center; gap: 6px; }

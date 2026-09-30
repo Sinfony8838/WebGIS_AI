@@ -66,6 +66,12 @@ class RasterPopulationPackage:
         self.lon_step = float(header["lon_step"])
         self.lat_step = float(header["lat_step"])
         self.density_path = self.root / DENSITY_FILENAME
+        if self.width <= 0 or self.height <= 0 or not all(math.isfinite(v) for v in (
+            self.minx, self.miny, self.maxx, self.maxy, self.lon_step, self.lat_step
+        )) or self.lon_step <= 0 or self.lat_step <= 0 or self.minx >= self.maxx or self.miny >= self.maxy:
+            raise ValueError("人口数据包网格无效。")
+        if self.density_path.stat().st_size != self.width * self.height * 4:
+            raise ValueError("人口数据包文件长度与网格尺寸不一致。")
 
     @property
     def package_id(self) -> str:
@@ -82,12 +88,23 @@ class RasterPopulationPackage:
         with self.density_path.open("rb") as handle:
             handle.seek((row * self.width + col) * 4)
             (value,) = struct.unpack("<f", handle.read(4))
-        if math.isnan(value):
+        if not math.isfinite(value) or value < 0:
             return None
         return round(float(value), 3)
 
     def sample_line(self, points: Sequence[Tuple[float, float]]) -> List[Optional[float]]:
-        return [self.sample(lon, lat) for lon, lat in points]
+        values: List[Optional[float]] = []
+        with self.density_path.open("rb") as handle:
+            for lon, lat in points:
+                if not self.contains(lon, lat):
+                    values.append(None)
+                    continue
+                col = min(self.width - 1, max(0, int((lon - self.minx) / self.lon_step)))
+                row = min(self.height - 1, max(0, int((self.maxy - lat) / self.lat_step)))
+                handle.seek((row * self.width + col) * 4)
+                (value,) = struct.unpack("<f", handle.read(4))
+                values.append(round(float(value), 3) if math.isfinite(value) and value >= 0 else None)
+        return values
 
     def public_summary(self) -> Dict[str, Any]:
         source = self.header.get("source") or {}

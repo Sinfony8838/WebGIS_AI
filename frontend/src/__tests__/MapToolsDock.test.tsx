@@ -6,6 +6,8 @@ afterEach(cleanup);
 function Tools() { const [selected, setSelected] = useState(false); return <button aria-pressed={selected} onClick={() => setSelected(!selected)}>人口密度</button>; }
 it("collapses both panels and preserves selection when reopened", () => {
   render(<MapToolsDock><button>地图测距</button><Tools /></MapToolsDock>);
+  expect(screen.queryByRole("button", { name: "地图测距" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "展开地图工具与可视化地图" }));
   fireEvent.click(screen.getByRole("button", { name: "人口密度" }));
   fireEvent.click(screen.getByRole("button", { name: "收起地图工具与可视化地图" }));
   expect(screen.queryByRole("button", { name: "地图测距" })).not.toBeInTheDocument();

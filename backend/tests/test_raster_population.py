@@ -64,6 +64,13 @@ def _build_synthetic_package(root: Path) -> RasterPopulationPackage:
 
 
 class CellAreaConversionTest(unittest.TestCase):
+    def test_local_raster_sampling_matches_hundred_meter_grid(self) -> None:
+        from backend.app.services.map_profiles import _line, _sample_points
+        vertices, distances = _line([[121.1, 31.1], [121.6, 31.3]])
+        samples = _sample_points(vertices, distances, 20_001, spacing_m=100)
+        self.assertGreater(len(samples), 400)
+        self.assertLessEqual(distances[-1] / (len(samples) - 1), 100)
+
     """人口像元面积换算：随纬度变化的正确性。"""
 
     def test_area_shrinks_with_latitude_by_cosine(self) -> None:

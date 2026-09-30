@@ -118,4 +118,15 @@ describe("ProfileWindow", () => {
     fireEvent.click(screen.getByTestId("profile-window-close-msr_1"));
     expect(onClose).toHaveBeenCalledWith("msr_1");
   });
+
+  it("keeps its full header and close button inside the viewport after dragging", () => {
+    render(<ProfileWindow projectId="p1" record={record} densitySources={densitySources} onHover={vi.fn()} onClose={vi.fn()} />);
+    const win = screen.getByTestId("profile-window-msr_1");
+    const header = win.querySelector(".profile-window-head") as HTMLElement;
+    fireEvent.pointerDown(header, { pointerId: 1, clientX: 200, clientY: 200 });
+    fireEvent.pointerMove(header, { pointerId: 1, clientX: 3000, clientY: 3000 });
+    fireEvent.pointerUp(header, { pointerId: 1 });
+    expect(parseFloat(win.style.left) + parseFloat(win.style.width)).toBeLessThanOrEqual(window.innerWidth - 8);
+    expect(parseFloat(win.style.top) + parseFloat(win.style.height)).toBeLessThanOrEqual(window.innerHeight - 8);
+  });
 });

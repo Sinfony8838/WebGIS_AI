@@ -34,7 +34,7 @@ _MEASURE_PAGE = _MEASURE_DOC.new_page(width=4000.0, height=10000.0)
 def _measure_height(text: str, size: float, width: float) -> Optional[float]:
     """insert_textbox 实测高度；返回 None 表示单行都放不下（理论不发生）。"""
     rect = fitz.Rect(0.0, 0.0, width, 10000.0)
-    leftover = _MEASURE_PAGE.insert_textbox(rect, str(text or ""), fontname=BODY_FONT,
+    leftover = _MEASURE_PAGE.new_shape().insert_textbox(rect, str(text or ""), fontname=BODY_FONT,
                                             fontsize=size, lineheight=LINE_FACTOR)
     if leftover < 0:
         return None
@@ -159,23 +159,54 @@ class _PdfCanvas:
                 self.page.draw_rect(rect, color=(0.55, 0.55, 0.6), width=0.5,
                                     fill=fill, fill_opacity=1.0 if fill else 0.0)
                 if str(value).strip():
-                    self.page.insert_textbox(
+                    leftover = self.page.insert_textbox(
                         fitz.Rect(x + padding, self.y + padding, x + width - padding,
                                   self.y + height - padding),
                         str(value), fontname=BODY_FONT, fontsize=size,
                         lineheight=LINE_FACTOR, align=0)
+                    if leftover < 0:
+                        raise ValueError("PDF 表格文字未能完整排版，请重试。")
                 x += width
             self.y += height
 
         header_values = list(headers)
         header_height = row_height(header_values)
+        if self.y + header_height + 2 * line_height > BOTTOM:
+            self._new_page()
         draw_row(header_values, header_height, fill=(0.85, 0.9, 0.96))
         for values in rows:
-            height = row_height(values)
-            if self.y + height > BOTTOM:
-                self._new_page()
-                draw_row(header_values, header_height, fill=(0.85, 0.9, 0.96))
-            draw_row(values, height)
+            remaining = list(values)
+            while any(remaining):
+                available = BOTTOM - self.y
+                if available < 2 * line_height + 2 * padding + 1:
+                    self._new_page()
+                    draw_row(header_values, header_height, fill=(0.85, 0.9, 0.96))
+                    available = BOTTOM - self.y
+                chunks = []
+                tails = []
+                for value, width in zip(remaining, widths):
+                    low, high = 0, len(value)
+                    budget = available - 2 * padding - 1
+                    # Split each cell into the largest prefix that fits. Continue
+                    # all columns on the next page with a repeated header.
+                    while low < high:
+                        middle = (low + high + 1) // 2
+                        measured = _measure_height(value[:middle], size, width - 2 * padding)
+                        if measured is not None and measured <= budget:
+                            low = middle
+                        else:
+                            high = middle - 1
+                    chunks.append(value[:low])
+                    tails.append(value[low:])
+                if not any(chunks):
+                    raise ValueError("PDF 表格单元格无法排版。")
+                height = max(_measure_height(value, size, width - 2 * padding) or line_height
+                             for value, width in zip(chunks, widths)) + 2 * padding + 1
+                draw_row(chunks, height)
+                remaining = tails
+                if any(remaining):
+                    self._new_page()
+                    draw_row(header_values, header_height, fill=(0.85, 0.9, 0.96))
         self.y += 6.0
 
     def save(self, path: Path) -> None:

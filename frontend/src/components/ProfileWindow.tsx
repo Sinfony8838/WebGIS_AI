@@ -32,6 +32,20 @@ export function ProfileWindow({ projectId, record, densitySources, hidden, onHov
     top: 120 + ((record.id.charCodeAt(record.id.length - 1) * 11) % 140)
   }));
   const [size, setSize] = useState({ width: 560, height: 330 });
+  useEffect(() => {
+    const fitViewport = () => {
+      const width = Math.min(size.width, Math.max(1, window.innerWidth - 16));
+      const height = Math.min(size.height, Math.max(1, window.innerHeight - 80));
+      setSize(previous => previous.width === width && previous.height === height ? previous : { width, height });
+      setPosition(previous => ({
+        left: Math.max(8, Math.min(window.innerWidth - width - 8, previous.left)),
+        top: Math.max(64, Math.min(window.innerHeight - height - 8, previous.top))
+      }));
+    };
+    fitViewport();
+    window.addEventListener("resize", fitViewport);
+    return () => window.removeEventListener("resize", fitViewport);
+  }, [size.width, size.height]);
   const [sourceId, setSourceId] = useState(densitySources[0]?.id || "");
   const [result, setResult] = useState<MapProfileResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -116,11 +130,11 @@ export function ProfileWindow({ projectId, record, densitySources, hidden, onHov
   function onHeaderPointerMove(event: React.PointerEvent<HTMLDivElement>) {
     const drag = dragRef.current;
     if (!drag) return;
-    const maxLeft = window.innerWidth - 120;
-    const maxTop = window.innerHeight - 80;
+    const maxLeft = window.innerWidth - size.width - 8;
+    const maxTop = window.innerHeight - size.height - 8;
     setPosition({
-      left: Math.max(4, Math.min(maxLeft, drag.origin.left + event.clientX - drag.startX)),
-      top: Math.max(4, Math.min(maxTop, drag.origin.top + event.clientY - drag.startY))
+      left: Math.max(8, Math.min(maxLeft, drag.origin.left + event.clientX - drag.startX)),
+      top: Math.max(64, Math.min(maxTop, drag.origin.top + event.clientY - drag.startY))
     });
   }
   function onHeaderPointerUp() {
@@ -136,8 +150,8 @@ export function ProfileWindow({ projectId, record, densitySources, hidden, onHov
     const resize = resizeRef.current;
     if (!resize) return;
     setSize({
-      width: Math.max(MIN_W, Math.min(window.innerWidth - position.left - 8, resize.origin.width + event.clientX - resize.startX)),
-      height: Math.max(MIN_H, Math.min(window.innerHeight - position.top - 8, resize.origin.height + event.clientY - resize.startY))
+      width: Math.min(window.innerWidth - position.left - 8, Math.max(MIN_W, resize.origin.width + event.clientX - resize.startX)),
+      height: Math.min(window.innerHeight - position.top - 8, Math.max(MIN_H, resize.origin.height + event.clientY - resize.startY))
     });
   }
   function onResizePointerUp() {

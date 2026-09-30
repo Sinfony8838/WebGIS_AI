@@ -820,12 +820,14 @@ export function LessonWorkflowShell({
           if (!stage) return null;
           return (
             <StagePresentationSurface
+              key={`${activeSession.session_id}:${stage.stage_id}`}
               stage={stage}
               onProjectQuestion={(questionId, stageId) => void projectQuestion(questionId, stageId)}
               onPresentScene={async (target) => {
                 const response = await presentClassroomScene(activeSession.session_id, activeSession.current_stage_id, target);
                 onApplyGlobeScene?.(response.scene.globe || {});
                 await onRefresh();
+                setPresentationVisible(false);
               }}
             />
           );

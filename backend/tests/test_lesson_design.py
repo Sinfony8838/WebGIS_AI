@@ -13,6 +13,45 @@ from backend.app.store import RuntimeStore
 
 
 class LessonDesignServiceTest(unittest.TestCase):
+    def test_requirement_cell_saves_raw_text_without_step_wrapper(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        result = service.resolve(design.design_id, "requirements", "edit", "", 0, {"raw": "高一人口分布，40分钟"})
+        self.assertEqual(result["design"]["draft"]["requirements"]["raw"], "高一人口分布，40分钟")
+
+    def test_targeted_ai_preview_does_not_write_draft_or_other_sections(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        before = service.get(design.design_id).to_dict()
+        with patch.object(service, "_ask_minimax", return_value={
+            "section_patch": {"student_analysis": "新学情", "textbook_analysis": "越界改教材"},
+            "reply": "建议", "source_refs": [{"title": "越界参考"}],
+        }):
+            result = service.turn(design.design_id, "生成完整初稿并修改学情", 0, "analysis", "student_analysis")
+        self.assertEqual(result["draft"]["student_analysis"], "新学情")
+        self.assertEqual(result["draft"]["textbook_analysis"], before["draft"]["textbook_analysis"])
+        self.assertEqual(result["draft"]["references"], before["draft"]["references"])
+        self.assertEqual(result["revision"], 0)
+        self.assertEqual(service.get(design.design_id).to_dict(), before)
+        adopted = service.resolve(design.design_id, "student_analysis", "edit", "", 0, result["draft"]["student_analysis"])
+        self.assertEqual(adopted["design"]["draft"]["student_analysis"], "新学情")
+        self.assertEqual(adopted["design"]["section_status"]["student_analysis"], "proposed")
+
+    def test_ai_preview_only_changes_selected_stage(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        stages = [{"stage_id": "s1", "title": "观察", "minutes": 10}, {"stage_id": "s2", "title": "探究", "minutes": 30}]
+        service.resolve(design.design_id, "stages", "edit", "", 0, stages)
+        with patch.object(service, "_ask_minimax", return_value={"section_patch": {
+            "stages": [{**stages[0], "material": "新材料"}, {**stages[1], "title": "越界改环节"}],
+            "board_design": "越界改板书",
+        }}):
+            result = service.turn(design.design_id, "补充材料", 1, "process", "stages", "s1")
+        self.assertEqual(result["draft"]["stages"][0]["material"], "新材料")
+        self.assertEqual(result["draft"]["stages"][1], stages[1])
+        self.assertEqual(result["draft"]["board_design"], "")
+        self.assertEqual(service.get(design.design_id).draft["stages"], stages)
+
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         root_dir = Path(__file__).resolve().parents[2]
