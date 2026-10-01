@@ -1663,6 +1663,8 @@ export type PptxParsedPresentation = {
   slideWidth: number;
   slideHeight: number;
   slides: SlideContent[];
+  /** "simple" marks the client-side fallback parser (labeled 简易预览 in UI). */
+  mode?: "rendered" | "simple";
 };
 
 export type PptRenderSlide = {
@@ -1679,6 +1681,22 @@ export type PptRenderResponse = {
   slide_width: number;
   slide_height: number;
   slides: PptRenderSlide[];
+  attempts?: Array<Record<string, string>>;
+};
+
+export type PptRenderJobStatus = "queued" | "rendering" | "complete" | "failed";
+
+export type PptRenderJobState = {
+  render_id: string;
+  status: PptRenderJobStatus;
+  cached?: boolean;
+  file_name: string;
+  renderer: string;
+  slide_width: number;
+  slide_height: number;
+  expected_slides?: number;
+  slides: PptRenderSlide[];
+  error?: { code: string; message: string; details?: Record<string, unknown> } | null;
   attempts?: Array<Record<string, string>>;
 };
 
