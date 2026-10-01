@@ -150,4 +150,49 @@ describe("PresentationLayoutEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "插入问题区块" }));
     expect(screen.getByRole("button", { name: "人口集中在哪里？" })).toBeVisible();
   });
+
+  it("uploads a local image into the project library and attaches it as a block", async () => {
+    const onSave = vi.fn();
+    render(<PresentationLayoutEditor stage={stage()} projectId="p1" busy={false} libraryAssets={[]} onSave={onSave} />);
+    fireEvent.click(screen.getByRole("button", { name: "插入图片区块" }));
+    fireEvent.click(screen.getByTestId("ple-upload-image"));
+    fireEvent.change(screen.getByLabelText("选择本地图片"), { target: { files: [new File(["img"], "local.png", { type: "image/png" })] } });
+    await waitFor(() => expect(screen.getByTestId("ple-save")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("ple-save"));
+    const blocks = onSave.mock.calls[0][0].blocks;
+    expect(blocks.some((block: { type: string; asset?: { url?: string } }) => block.type === "image" && block.asset?.url === "/files/uploads/p1/image_library/local.png")).toBe(true);
+  });
+
+  it("adopts an external presentation update while the teacher has no unsaved edits", async () => {
+    const onSave = vi.fn();
+    const initial = stage();
+    const { rerender } = render(<PresentationLayoutEditor stage={initial} projectId="p1" busy={false} libraryAssets={[]} onSave={onSave} />);
+    const external = stage({
+      presentation: { blocks: [{ id: "blk_ext", type: "image", text: "", asset: { url: "/files/ext.png", mime_type: "image/png", name: "ext.png" }, x: 0.3, y: 0.34, w: 0.4, h: 0.3, z: 0, order: 0 }] }
+    });
+    rerender(<PresentationLayoutEditor stage={external} projectId="p1" busy={false} libraryAssets={[]} onSave={onSave} />);
+    await waitFor(() => expect(screen.getByTestId("ple-canvas")).toHaveTextContent("图片"));
+    fireEvent.click(screen.getByRole("button", { name: "插入文字区块" }));
+    expect(screen.getByTestId("ple-save")).toBeEnabled();
+    fireEvent.click(screen.getByTestId("ple-save"));
+    const blocks = onSave.mock.calls[0][0].blocks;
+    expect(blocks.some((block: { id: string }) => block.id === "blk_ext")).toBe(true);
+    expect(blocks.some((block: { type: string }) => block.type === "text")).toBe(true);
+  });
+
+  it("keeps unsaved local edits when an external presentation update arrives", async () => {
+    const onSave = vi.fn();
+    const initial = stage();
+    const { rerender } = render(<PresentationLayoutEditor stage={initial} projectId="p1" busy={false} libraryAssets={[]} onSave={onSave} />);
+    fireEvent.click(screen.getByRole("button", { name: "插入文字区块" }));
+    const external = stage({
+      presentation: { blocks: [{ id: "blk_ext", type: "image", text: "", asset: { url: "/files/ext.png", mime_type: "image/png", name: "ext.png" }, x: 0.3, y: 0.34, w: 0.4, h: 0.3, z: 0, order: 0 }] }
+    });
+    rerender(<PresentationLayoutEditor stage={external} projectId="p1" busy={false} libraryAssets={[]} onSave={onSave} />);
+    expect(screen.getByTestId("ple-save")).toBeEnabled();
+    fireEvent.click(screen.getByTestId("ple-save"));
+    const blocks = onSave.mock.calls[0][0].blocks;
+    expect(blocks.some((block: { id: string }) => block.id === "blk_ext")).toBe(false);
+    expect(blocks.some((block: { type: string }) => block.type === "text")).toBe(true);
+  });
 });

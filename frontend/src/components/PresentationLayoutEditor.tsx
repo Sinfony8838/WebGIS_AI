@@ -102,6 +102,25 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
   const dragRef = useRef<{ id: string; mode: "move" | "resize"; startX: number; startY: number; origin: PresentationBlock } | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+  // 外部 presentation 变化（如 Word 导入校对把图片绑定到本环节）时：
+  // 本地没有未保存修改就采纳外部布局，避免旧状态在保存时覆盖外部更新。
+  const incomingSig = useMemo(() => JSON.stringify(stage.presentation ?? null), [stage.presentation]);
+  const lastIncomingSig = useRef<string>(incomingSig);
+  const dirtyRef = useRef(false);
+  dirtyRef.current = dirty;
+
+  useEffect(() => {
+    if (incomingSig !== lastIncomingSig.current) {
+      lastIncomingSig.current = incomingSig;
+      if (!dirtyRef.current) {
+        setLayout(stageRef.current.presentation || defaultLayoutFromStage(stageRef.current));
+        setSelectedId("");
+        setPicker("");
+        setReplaceId("");
+        setUploadError("");
+      }
+    }
+  }, [incomingSig]);
 
   function handleLocalImageFile(file: File | undefined) {
     if (!file) return;
@@ -129,6 +148,7 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
   useEffect(() => {
     setLayout(stageRef.current.presentation || defaultLayoutFromStage(stageRef.current));
     setDirty(false);
+    lastIncomingSig.current = JSON.stringify(stageRef.current.presentation ?? null);
     setSelectedId("");
     setPicker("");
     setReplaceId("");
@@ -269,7 +289,12 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
           type="button"
           className="toolbar-button compact primary"
           disabled={busy || uploading || !dirty}
-          onClick={() => onSave({ blocks: layout.blocks })}
+          onClick={() => {
+            const payload = { blocks: layout.blocks };
+            setDirty(false);
+            lastIncomingSig.current = JSON.stringify(payload);
+            onSave(payload);
+          }}
           data-testid="ple-save"
         >
           保存展示编排
