@@ -224,6 +224,79 @@ def normalize_presentation(raw: Any) -> Dict[str, Any]:
     return {"blocks": blocks}
 
 
+PROFILE_WINDOW_KINDS = frozenset({"population", "terrain"})
+
+
+def normalize_profile_preset(raw: Any) -> Dict[str, Any]:
+    """课前剖面预设：测线 + 窗口布局。
+
+    窗口坐标保存为视口占比（x/y/w/h ∈ [0,1]），课堂加载时按实际屏幕换算，
+    保证不同分辨率下可见且可拖动。没有可用测线时返回空对象。
+    """
+    if not isinstance(raw, dict):
+        return {}
+    lines: List[Dict[str, Any]] = []
+    for item in raw.get("lines") or []:
+        if not isinstance(item, dict):
+            continue
+        raw_points = item.get("coordinates")
+        if not isinstance(raw_points, list):
+            continue
+        coordinates: List[List[float]] = []
+        for point in raw_points:
+            if not isinstance(point, (list, tuple)) or len(point) != 2:
+                continue
+            try:
+                lon, lat = float(point[0]), float(point[1])
+            except (TypeError, ValueError):
+                continue
+            if -180 <= lon <= 180 and -90 <= lat <= 90:
+                coordinates.append([lon, lat])
+        if len(coordinates) < 2:
+            continue
+        try:
+            total_km = float(item.get("total_km") or 0)
+        except (TypeError, ValueError):
+            total_km = 0
+        lines.append({
+            "id": str(item.get("id") or "")[:48],
+            "name": str(item.get("name") or "")[:48],
+            "coordinates": coordinates,
+            "total_km": round(total_km, 3),
+            "color": str(item.get("color") or "#2f6fd6")[:24],
+        })
+    if not lines:
+        return {}
+    windows: List[Dict[str, Any]] = []
+    for item in raw.get("windows") or []:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "")
+        if kind not in PROFILE_WINDOW_KINDS:
+            continue
+        try:
+            record_index = int(item.get("record_index") or 0)
+        except (TypeError, ValueError):
+            record_index = 0
+        if not 0 <= record_index < len(lines):
+            continue
+        try:
+            width_fraction = min(max(_clamp01(item.get("w"), 0.3), 0.14), 0.9)
+            height_fraction = min(max(_clamp01(item.get("h"), 0.42), 0.2), 0.9)
+            windows.append({
+                "kind": kind,
+                "record_index": record_index,
+                "source_id": str(item.get("source_id") or "")[:48],
+                "x": min(_clamp01(item.get("x"), 0.04), 1 - width_fraction),
+                "y": min(max(_clamp01(item.get("y"), 0.1), 0.0), 1 - height_fraction),
+                "w": width_fraction,
+                "h": height_fraction,
+            })
+        except (TypeError, ValueError):
+            continue
+    return {"lines": lines, "windows": windows}
+
+
 def normalize_brainstorm(raw: Any) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
@@ -771,6 +844,7 @@ class LessonService:
                     "evidence_refs": normalize_evidence_refs(raw.get("evidence_refs")),
                     "teacher_guidance": normalize_teacher_guidance(raw.get("teacher_guidance")),
                     "presentation": normalize_presentation(raw.get("presentation")),
+                    "profile_preset": normalize_profile_preset(raw.get("profile_preset")),
                 }
             )
         return normalized

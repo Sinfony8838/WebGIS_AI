@@ -19,6 +19,7 @@ import type {
   LessonRehearsalRecord,
   LessonRehearsalReport,
   LessonStage,
+  ProfilePreset,
   QuestionBankQuestion,
   SceneSnapshot
 } from "../types";
@@ -33,6 +34,10 @@ type Props = {
   /** 完成发布后回传新版课时（工作台刷新课程卡片）。 */
   onLessonCommitted: (lesson: LessonRecord) => void;
   onClose: () => void;
+  /** 读取当前测线记录与剖面窗口布局（任务4 课前剖面预设）。 */
+  getProfilePreset?: () => ProfilePreset | null;
+  /** 进入本面板环节时加载该环节已保存的剖面预设。 */
+  onApplyProfilePreset?: (stage: LessonStage) => void;
 };
 
 // 试讲检查清单：模拟测试中教师逐项自测；结果只留在模拟测试记录里。
@@ -73,6 +78,8 @@ export function RehearsalPanel({
   projectId,
   lesson,
   getSceneSnapshot,
+  getProfilePreset,
+  onApplyProfilePreset,
   onApplyGlobeScene,
   onRefresh,
   onLessonCommitted,
@@ -85,6 +92,7 @@ export function RehearsalPanel({
   const [editStageId, setEditStageId] = useState("");
   const [editMinutes, setEditMinutes] = useState(5);
   const [captureHint, setCaptureHint] = useState("");
+  const [profileHint, setProfileHint] = useState("");
   const [libraryAssets, setLibraryAssets] = useState<LibraryAsset[]>([]);
   const [swapTarget, setSwapTarget] = useState<{ stageId: string; position: number; questionId: string } | null>(null);
   const [swapSearch, setSwapSearch] = useState("");
@@ -237,6 +245,10 @@ export function RehearsalPanel({
     const result = await run(() => applyRehearsalStageScene(rehearsal.rehearsal_id, stageId));
     if (result) {
       onApplyGlobeScene(result.globe || {});
+      const stage = (rehearsal.working_copy?.stages || lesson.stages || []).find(
+        (item) => item.stage_id === stageId
+      );
+      if (stage?.profile_preset?.lines?.length) onApplyProfilePreset?.(stage);
       await onRefresh();
     }
   }
@@ -249,6 +261,20 @@ export function RehearsalPanel({
     if (result) {
       setCaptureHint(stageId);
       window.setTimeout(() => setCaptureHint(""), 2500);
+    }
+  }
+
+  // 任务4：把当前测线记录 + 剖面窗口布局保存为本环节课前预设（随草稿/模拟测试/版本发布进入课时）。
+  async function saveProfilePreset(stage: LessonStage) {
+    const preset = getProfilePreset?.();
+    if (!preset) {
+      setError("还没有可保存的剖面：请先在地图上画测线并打开剖面窗口。");
+      return;
+    }
+    const done = await applyUpdate({ profile_preset: { stage_id: stage.stage_id, preset } });
+    if (done) {
+      setProfileHint(stage.stage_id);
+      setTimeout(() => setProfileHint((value) => (value === stage.stage_id ? "" : value)), 2000);
     }
   }
 
@@ -591,6 +617,18 @@ export function RehearsalPanel({
                         >
                           {captureHint === stage.stage_id ? "✓ 已保存" : "存当前地图为场景"}
                         </button>
+                        {getProfilePreset ? (
+                          <button
+                            type="button"
+                            className="toolbar-button compact"
+                            disabled={busy || !active}
+                            data-testid={`rehearsal-save-profile-${stage.stage_id}`}
+                            aria-label={`保存当前剖面预设到环节：${stage.title}`}
+                            onClick={() => void saveProfilePreset(stage)}
+                          >
+                            {profileHint === stage.stage_id ? "✓ 预设已存" : "存当前剖面为预设"}
+                          </button>
+                        ) : null}
                         {active ? (
                           <button
                             type="button"

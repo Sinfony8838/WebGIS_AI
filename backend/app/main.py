@@ -2201,6 +2201,7 @@ def update_lesson_rehearsal(rehearsal_id: str, payload: LessonRehearsalUpdateReq
             scene_capture=payload.scene_capture,
             test_result=payload.test_result,
             presentation_update=payload.presentation_update,
+            profile_preset=payload.profile_preset,
             expected_revision=payload.expected_revision,
         )
     except KeyError as exc:
