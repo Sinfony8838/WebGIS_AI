@@ -88,7 +88,7 @@ type Props = {
   onCaptureEvidence?: (sessionId: string, stageId: string) => void;
 };
 
-function currentLayerSnapshot(
+export function currentLayerSnapshot(
   layerState: LayersResponse | null,
   globe?: LessonGlobeScene
 ): SceneSnapshot {

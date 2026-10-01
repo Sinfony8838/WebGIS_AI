@@ -35,22 +35,23 @@ KEYWORD_TARGETS: Tuple[Tuple[str, str], ...] = (
     ("课题", "title"), ("标题", "title"), ("学科", "subject"),
     ("年级", "grade"), ("课时", "duration_minutes"),
     ("教学目标", "objectives"), ("学习目标", "objectives"),
-    ("教学重难点", "key_difficulties"), ("教学重点", "kd_key"), ("重点", "kd_key"),
+    ("教学重难点", "key_difficulties"), ("重点难点", "key_difficulties"),
+    ("教学重点", "kd_key"), ("重点", "kd_key"),
     ("教学难点", "kd_difficult"), ("难点", "kd_difficult"),
     ("教学方法", "methods"), ("教学策略", "methods"),
     ("课标解读", "curriculum_interpretation"), ("课标要求", "curriculum_interpretation"),
     ("学情分析", "student_analysis"), ("教材分析", "textbook_analysis"),
     ("核心问题", "core_questions"), ("问题链", "core_questions"),
     ("知识结构", "knowledge_structure"),
-    ("设计思路", "design_thinking"), ("板书设计", "board_design"),
+    ("设计思路", "design_thinking"), ("板书设计", "board_design"), ("板书", "board_design"),
     ("作业", "homework"), ("教学反思", "reflection"), ("参考资料", "references"),
-    ("教学过程", "stages"), ("教学环节", "stages"),
+    ("教学过程", "stages"), ("教学环节", "stages"), ("教学流程", "stages"), ("学习过程", "stages"),
 )
 
 INLINE_KEY_PATTERN = re.compile(
     r"^(?:[一二三四五六七八九十\d]+\s*[、\.．]?\s*)?"
     r"(?P<key>课题|标题|学科|年级|课时|教学目标|教学重点|重点|教学难点|难点|教学方法|"
-    r"课标解读|课标要求|学情分析|教材分析|核心问题|知识结构|设计思路|板书设计|作业|教学反思|参考资料)"
+    r"课标解读|课标要求|学情分析|教材分析|核心问题|知识结构|设计思路|板书设计|板书|作业|教学反思|参考资料)"
     r"\s*[:：]\s*(?P<value>.*)$"
 )
 NUMBERING_PREFIX = re.compile(r"^[一二三四五六七八九十\d]+\s*[、\.．]\s*")
@@ -58,15 +59,18 @@ BULLET_PREFIX = re.compile(r"^[•·\-–—*\d]+[、\.．\)）]?\s*")
 TERMINAL_PUNCT = ("。", "！", "？", "；")
 
 STAGE_COLUMN_ALIASES: Tuple[Tuple[str, str], ...] = (
-    ("环节名称", "title"), ("教学环节", "title"), ("环节", "title"), ("阶段", "title"), ("名称", "title"),
-    ("环节时长", "minutes"), ("时长", "minutes"), ("时间", "minutes"), ("分钟", "minutes"),
-    ("知识点", "knowledge_point"), ("知识单元", "knowledge_point"),
-    ("教师活动", "teacher_activities"), ("教师行为", "teacher_activities"),
-    ("学生活动", "student_activities"), ("学生行为", "student_activities"),
-    ("材料", "material"), ("素材", "material"), ("资源", "material"), ("教学材料", "material"),
-    ("问题链", "question_chain"), ("问题设计", "question_chain"), ("问题", "question_chain"),
-    ("知识结论", "knowledge_conclusion"), ("结论", "knowledge_conclusion"), ("小结", "knowledge_conclusion"),
-    ("设计意图", "design_intent"), ("意图", "design_intent"),
+    ("环节名称", "title"), ("教学环节", "title"), ("环节", "title"), ("阶段", "title"),
+    ("教学步骤", "title"), ("学习任务", "title"), ("步骤", "title"), ("流程", "title"), ("名称", "title"),
+    ("环节时长", "minutes"), ("时间分配", "minutes"), ("所需时间", "minutes"), ("环节时间", "minutes"),
+    ("时长", "minutes"), ("时间", "minutes"), ("分钟", "minutes"),
+    ("知识点", "knowledge_point"), ("知识单元", "knowledge_point"), ("考点", "knowledge_point"),
+    ("教师活动", "teacher_activities"), ("教师行为", "teacher_activities"), ("老师活动", "teacher_activities"),
+    ("学生活动", "student_activities"), ("学生行为", "student_activities"), ("学生任务", "student_activities"),
+    ("材料", "material"), ("素材", "material"), ("教具", "material"), ("资源", "material"), ("教学材料", "material"),
+    ("问题链", "question_chain"), ("问题设计", "question_chain"), ("提问设计", "question_chain"), ("问题", "question_chain"),
+    ("知识结论", "knowledge_conclusion"), ("课堂小结", "knowledge_conclusion"), ("归纳小结", "knowledge_conclusion"),
+    ("结论", "knowledge_conclusion"), ("小结", "knowledge_conclusion"),
+    ("设计意图", "design_intent"), ("设计说明", "design_intent"), ("意图", "design_intent"),
 )
 
 SCALAR_TABLE_KEYS = ("课题", "标题", "学科", "年级", "课时", "课型")
@@ -163,6 +167,39 @@ def _assign(draft: Dict[str, Any], field: str, text: str) -> None:
             draft[field] = value
 
 
+def _merged_cell_value(value: str, field: str, stage: Dict[str, Any]) -> None:
+    """续行（纵向合并单元格）内容并入上一环节：列表列追加，材料/文本列拼接。"""
+    if not value:
+        return
+    if field == "minutes":
+        if not stage.get("minutes"):
+            digits = re.sub(r"[^0-9]", "", value)
+            if digits:
+                stage["minutes"] = int(digits)
+    elif field in {"teacher_activities", "student_activities", "question_chain"}:
+        stage[field] = (stage.get(field) or []) + _split_items(value)
+    elif field == "material":
+        parts = [str(stage.get("material") or "")] if str(stage.get("material") or "").strip() else []
+        parts.extend(part for part in value.splitlines() if part.strip())
+        stage["material"] = "；".join(parts)
+    else:
+        stage[field] = str(stage.get(field) or value or "")
+
+
+def _is_vmerge_continue(cell: Any) -> bool:
+    """python-docx 单元格是否处于纵向合并的延续行（w:vMerge 无 val 或 val=continue）。"""
+    tc = getattr(cell, "_tc", None)
+    if tc is None:
+        return False
+    tc_pr = tc.find(qn("w:tcPr"))
+    if tc_pr is None:
+        return False
+    vmerge = tc_pr.find(qn("w:vMerge"))
+    if vmerge is None:
+        return False
+    return vmerge.get(qn("w:val")) in (None, "continue")
+
+
 def _stage_table_to_stages(table: Table, unclassified: Optional[List[Dict[str, Any]]] = None) -> Tuple[List[Dict[str, Any]], List[str]]:
     rows = list(table.rows)
     if not rows:
@@ -176,17 +213,38 @@ def _stage_table_to_stages(table: Table, unclassified: Optional[List[Dict[str, A
                 break
     if not any(field == "title" for field in column_field.values()):
         return [], []
+    title_indexes = [index for index, field in column_field.items() if field == "title"]
     stages: List[Dict[str, Any]] = []
     for row in rows[1:]:
-        values = [cell.text.strip() for cell in row.cells]
+        cells = list(row.cells)
+        values = [cell.text.strip() for cell in cells]
         if not any(values):
+            continue
+        # 纵向合并：本行标题格是上一格的延续（w:vMerge=continue 或同一 tc）→ 续行并入上一环节。
+        title_index = title_indexes[0]
+        is_continuation = bool(stages) and title_index < len(cells) and (
+            _is_vmerge_continue(cells[title_index])
+            or (stages[-1].get("_last_title_tc") is not None and cells[title_index]._tc is stages[-1].get("_last_title_tc"))
+        )
+        if is_continuation:
+            previous = stages[-1]
+            for index, value in enumerate(values):
+                if index > 0 and cells[index]._tc is cells[index - 1]._tc:
+                    continue  # 横向合并：同一 tc 跨多列，只在首列消费一次
+                field = column_field.get(index)
+                if not field:
+                    continue
+                _merged_cell_value(value, field, previous)
             continue
         stage: Dict[str, Any] = {
             "stage_id": f"import_{uuid4().hex[:6]}_{len(stages) + 1}",
             "kind": "presentation",
             "scene": {},
         }
+        consumed_title = False
         for index, value in enumerate(values):
+            if index > 0 and cells[index]._tc is cells[index - 1]._tc:
+                continue  # 横向合并：同一 tc 跨多列，只在首列消费一次
             field = column_field.get(index)
             if not field:
                 if value and unclassified is not None:
@@ -202,10 +260,15 @@ def _stage_table_to_stages(table: Table, unclassified: Optional[List[Dict[str, A
                 stage["material"] = "；".join(part for part in value.splitlines() if part.strip())
             elif field in {"title", "knowledge_point", "knowledge_conclusion", "design_intent"}:
                 stage[field] = value
+                if field == "title" and value:
+                    consumed_title = True
+        stage["_last_title_tc"] = cells[title_index]._tc if title_index < len(cells) else None
         if str(stage.get("title") or "").strip():
             stages.append(stage)
-        elif unclassified is not None:
+        elif unclassified is not None and not consumed_title:
             unclassified.append({"kind": "table", "heading": "教学过程未识别行", "text": "｜".join(values)})
+    for stage in stages:
+        stage.pop("_last_title_tc", None)
     return stages, header_cells
 
 

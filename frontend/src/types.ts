@@ -1077,6 +1077,17 @@ export type LessonDocxUnclassified = {
   name?: string;
   content_type?: string;
   url?: string;
+  status?: "unassigned" | "assigned" | "ignored";
+  assignment?: {
+    kind: "section" | "stage_column" | "stage_material";
+    section?: string;
+    label?: string;
+    stage_id?: string;
+    stage_title?: string;
+    column?: string;
+    block_id?: string;
+    mode?: string;
+  };
 };
 
 export type LessonDocxImportResult = {

@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { PresentationLayoutEditor } from "../components/PresentationLayoutEditor";
 import { defaultLayoutFromStage } from "../lib/presentationLayout";
 import type { LessonStage } from "../types";
-import { uploadVideoAsset } from "../api";
+import { uploadImageLibraryAsset, uploadVideoAsset } from "../api";
 
 // jsdom 没有 PointerEvent：退化为普通 Event 会丢 clientX，用 MouseEvent 派生最小实现。
 class JsdomPointerEvent extends MouseEvent {
@@ -19,7 +19,8 @@ if (typeof window.PointerEvent === "undefined") {
 
 vi.mock("../api", () => ({
   buildAuthenticatedUrl: (path: string) => path,
-  uploadVideoAsset: vi.fn().mockResolvedValue({ status: "success", artifact: { metadata: { public_url: "/files/uploads/p1/video_library/intro.mp4", mime_type: "video/mp4" } } })
+  uploadVideoAsset: vi.fn().mockResolvedValue({ status: "success", artifact: { metadata: { public_url: "/files/uploads/p1/video_library/intro.mp4", mime_type: "video/mp4" } } }),
+  uploadImageLibraryAsset: vi.fn().mockResolvedValue({ job_id: "j1", artifact: { metadata: { public_url: "/files/uploads/p1/image_library/local.png", mime_type: "image/png" } } })
 }));
 
 const stage = (overrides: Partial<LessonStage> = {}): LessonStage =>
@@ -75,6 +76,19 @@ describe("PresentationLayoutEditor", () => {
     fireEvent.change(screen.getByLabelText("选择视频文件"), { target: { files: [new File(["bad"], "bad.mp4")] } });
     expect(await screen.findByRole("alert")).toHaveTextContent("文件超过限制");
     expect(screen.getByTestId("ple-save")).toBeDisabled();
+  });
+
+  it("uploads a local image into the project library and attaches it as a block", async () => {
+    const { uploadImageLibraryAsset } = await import("../api");
+    const onSave = vi.fn();
+    render(<PresentationLayoutEditor stage={stage()} projectId="p1" busy={false} libraryAssets={[]} onSave={onSave} />);
+    fireEvent.click(screen.getByRole("button", { name: "插入图片区块" }));
+    fireEvent.click(screen.getByTestId("ple-upload-image"));
+    fireEvent.change(screen.getByLabelText("选择本地图片"), { target: { files: [new File(["img"], "local.png", { type: "image/png" })] } });
+    await waitFor(() => expect(screen.getByTestId("ple-save")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("ple-save"));
+    const blocks = onSave.mock.calls[0][0].blocks;
+    expect(blocks.some((block: { type: string; asset?: { url?: string } }) => block.type === "image" && block.asset?.url === "/files/uploads/p1/image_library/local.png")).toBe(true);
   });
 
   beforeEach(() => {

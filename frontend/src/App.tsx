@@ -100,7 +100,7 @@ import { Map3DGlobe, type CameraState, type Map3DGlobeHandle } from "./component
 import { MapInstructionStrip } from "./components/MapInstructionStrip";
 import { MapStatusBar } from "./components/MapStatusBar";
 import { MapToolRail } from "./components/MapToolRail";
-import { LessonWorkflowShell } from "./components/LessonWorkflowShell";
+import { LessonWorkflowShell, currentLayerSnapshot } from "./components/LessonWorkflowShell";
 import { RegionFocusOverlay } from "./components/RegionFocusOverlay";
 import { SearchResultsCard, StatsResultsCard } from "./components/HeaderResultCards";
 import { ScreenshotSelector, type ScreenshotDestination, type ScreenshotSelection } from "./components/ScreenshotSelector";
@@ -4338,6 +4338,7 @@ export default function App({
             projectId={project.project_id}
             initialDesignId={lessonDesignWorkspace.designId}
             onClose={closeLessonDesignWorkspace}
+            getSceneSnapshot={() => currentLayerSnapshot(layerState, getLessonGlobeSceneSnapshot())}
             onFinalized={() => {
               if (project) void refreshProjectState(project.project_id);
             }}

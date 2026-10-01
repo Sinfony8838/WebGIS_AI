@@ -2,8 +2,11 @@ import { ThinkingIndicator } from "./ThinkingIndicator";
 import "./LessonDesignWorkspace.css";
 import { LessonCellEditor } from "./LessonCellEditor";
 import { LessonProcessTable } from "./LessonProcessTable";
+import { DocxImportReview, type ImportReviewApplyPayload } from "./DocxImportReview";
+import type { LibraryAsset } from "./PresentationLayoutEditor";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  applyLessonImportReview,
   applyLessonMigration,
   buildAuthenticatedUrl,
   bindLessonDesignQuestion,
@@ -16,6 +19,7 @@ import {
   fetchLesson,
   fetchLessonDesign,
   fetchLessonMigrationPreview,
+  fetchOutputs,
   fetchQuestionBanks,
   finalizeLessonDesign,
   importLessonDocx,
@@ -34,7 +38,8 @@ import type {
   LessonRecord,
   LessonStage,
   QuestionBankQuestion,
-  QuestionBankSummary
+  QuestionBankSummary,
+  SceneSnapshot
 } from "../types";
 import { PRESET_METHODS, STEP_FOR_SECTION, diffStages, formatQuestion, splitLines, stageList } from "../lib/lessonSheet";
 
@@ -45,6 +50,8 @@ type Props = {
   onFinalized?: (lesson: LessonRecord) => void;
   /** 定稿后直接进入该课时的模拟测试（试讲 → 发布为可上课版本）。 */
   onEnterRehearsal?: (lesson: LessonRecord) => void;
+  /** 读取当前地图/地球场景快照（供环节绑定当前场景）。 */
+  getSceneSnapshot?: () => SceneSnapshot;
 };
 
 type DesignRehearsalReport = {
@@ -86,9 +93,10 @@ function draftRecord(draft: LessonPlanProfile): Record<string, unknown> {
   return (draft || {}) as Record<string, unknown>;
 }
 
-export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose, onFinalized, onEnterRehearsal }: Props) {
+export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose, onFinalized, onEnterRehearsal, getSceneSnapshot }: Props) {
   const [design, setDesign] = useState<LessonDesignSession | null>(null);
   const [planItems, setPlanItems] = useState<DesignPlanItem[]>([]);
+  const [libraryAssets, setLibraryAssets] = useState<LibraryAsset[]>([]);
   const [messages, setMessages] = useState<Array<{ role: "assistant" | "teacher"; text: string }>>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -170,6 +178,29 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ block: "end" });
   }, [messages]);
+
+  // 展示编排素材源：项目图片库（上传图片 + AI 生成图 + Word 导入图），与模拟测试一致。
+  useEffect(() => {
+    let cancelled = false;
+    fetchOutputs(projectId)
+      .then((result) => {
+        if (cancelled) return;
+        const assets = (result.items || [])
+          .filter((item) => ["uploaded_image", "generated_image", "lesson_import_image"].includes(item.artifact_type))
+          .map((item) => ({
+            artifact_id: item.artifact_id,
+            title: item.title,
+            url: String(item.metadata?.public_url || ""),
+            mime_type: String(item.metadata?.mime_type || "image/png")
+          }))
+          .filter((item) => item.url);
+        setLibraryAssets(assets);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
 
   // 旧草稿迁移预览：core_questions / capabilities 有内容且未迁移时加载。
   useEffect(() => {
@@ -408,6 +439,23 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
     }
   }
 
+  async function applyImportReview(payload: ImportReviewApplyPayload) {
+    if (!design) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await applyLessonImportReview(design.design_id, {
+        ...payload,
+        expected_revision: design.revision
+      });
+      applySession(result.design);
+    } catch (exc) {
+      showError(exc);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function applyMigration() {
     if (!design) return;
     setBusy(true);
@@ -627,30 +675,13 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
           {importInfo ? (
             <details className="ldw-import-card" data-testid="ldw-import-card" open>
               <summary>Word 导入校对（{importInfo.mapping.length} 处映射 · {importInfo.unclassified.length} 条待归类）</summary>
-              <ul className="ldw-import-mapping">
-                {importInfo.mapping.map((item, index) => (
-                  <li key={index}>
-                    <strong>{item.label}</strong>
-                    <small>{item.origin}</small>
-                    <span>{item.content}</span>
-                  </li>
-                ))}
-              </ul>
-              <ul className="ldw-import-unclassified">
-                {importInfo.unclassified.map((item, index) => (
-                  <li key={index}>
-                    {item.kind === "image" ? (
-                      item.url ? <img src={buildAuthenticatedUrl(item.url)} alt={item.name || "导入图片"} /> : <span>{item.name}</span>
-                    ) : (
-                      <span>
-                        {item.heading ? <strong>{item.heading}：</strong> : null}
-                        {item.text}
-                      </span>
-                    )}
-                  </li>
-                ))}
-                {!importInfo.unclassified.length ? <li>没有待归类内容。</li> : null}
-              </ul>
+              <DocxImportReview
+                mapping={importInfo.mapping}
+                unclassified={importInfo.unclassified}
+                stages={stages}
+                busy={busy}
+                onApply={(payload) => void applyImportReview(payload)}
+              />
             </details>
           ) : null}
           <div className="ldw-banks" data-testid="ldw-banks">
@@ -824,6 +855,8 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
                 <LessonProcessTable
                   draft={draft}
                   busy={busy || isFinalized}
+                  projectId={projectId}
+                  libraryAssets={libraryAssets}
                   searchResults={searchResults}
                   searchText={searchText}
                   onStageFieldChange={handleStageFieldChange}
@@ -834,6 +867,10 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
                   onBindManual={(stageId, manual) => void bindQuestion(stageId, "", manual)}
                   onSearchText={setSearchText}
                   onRunSearch={() => void runSearch()}
+                  onCaptureScene={() => {
+                    const snapshot = getSceneSnapshot?.();
+                    return (snapshot && Object.keys(snapshot).length ? snapshot : null) as Record<string, unknown> | null;
+                  }}
                   onStageAiEdit={(stageIndex) => {
                     setAiTarget({ sectionId: "stages", stageId: stages[stageIndex].stage_id, label: `环节${stageIndex + 1}｜活动与素材` });
                     setMessages((previous) => [...previous, { role: "assistant", text: `AI 修改目标已定为「环节${stageIndex + 1}｜活动与素材」。在下方输入要求，我会给出修改差异，由你决定是否采用。` }]);

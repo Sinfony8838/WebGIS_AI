@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import "./PresentationLayoutEditor.css";
 import type { LessonStage, PresentationBlock, PresentationBlockType, PresentationLayout } from "../types";
-import { buildAuthenticatedUrl, uploadVideoAsset } from "../api";
+import { buildAuthenticatedUrl, uploadImageLibraryAsset, uploadVideoAsset } from "../api";
 import { defaultLayoutFromStage, isDirectVideo, isExternalUrl, makeBlock } from "../lib/presentationLayout";
 
 export type LibraryAsset = {
@@ -101,6 +101,30 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ id: string; mode: "move" | "resize"; startX: number; startY: number; origin: PresentationBlock } | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+
+  function handleLocalImageFile(file: File | undefined) {
+    if (!file) return;
+    setUploading(true);
+    setUploadError("");
+    uploadImageLibraryAsset(projectId, file, `${stageRef.current.title} 素材图`)
+      .then((result) => {
+        const url = String(result.artifact.metadata?.public_url || "");
+        if (!url) {
+          setUploadError("图片上传成功但未返回可访问地址，请稍后重试。");
+          return;
+        }
+        attachAsset({
+          url,
+          mime_type: String(result.artifact.metadata?.mime_type || file.type || "image/png"),
+          name: file.name
+        });
+      })
+      .catch((error) => {
+        setUploadError(error instanceof Error ? error.message : "图片上传失败，请重试。");
+      })
+      .finally(() => setUploading(false));
+  }
 
   useEffect(() => {
     setLayout(stageRef.current.presentation || defaultLayoutFromStage(stageRef.current));
@@ -267,8 +291,31 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
               </button>
             ))
           ) : (
-            <span className="ple-hint">项目图片库为空，可先在地图面板上传图片。</span>
+            <span className="ple-hint">项目图片库为空，可上传本地图片或先在地图面板上传。</span>
           )}
+          <div className="ple-picker-actions">
+            <button
+              type="button"
+              className="toolbar-button compact"
+              disabled={busy || uploading}
+              data-testid="ple-upload-image"
+              onClick={() => imageInputRef.current?.click()}
+            >
+              上传本地图片
+            </button>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              hidden
+              aria-label="选择本地图片"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                handleLocalImageFile(file);
+              }}
+            />
+          </div>
           <span className="ple-hint">图表区块同样引用图片快照；选中已有图片/图表区块后再点选可直接替换素材。</span>
         </div>
       ) : null}
@@ -329,7 +376,7 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
           </button>
         </div>
       ) : null}
-      {uploading ? <p role="status">正在上传视频…</p> : null}
+      {uploading ? <p role="status">正在上传素材…</p> : null}
       {uploadError ? <p role="alert">{uploadError}</p> : null}
       {picker === "question" ? (
         <div className="ple-picker" data-testid="ple-question-picker">
