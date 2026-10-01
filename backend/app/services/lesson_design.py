@@ -840,6 +840,229 @@ class LessonDesignService:
         """手动题目规范化；逻辑收敛在题库服务，教案设计与模拟测试共用。"""
         return QuestionBankService.build_manual_question(manual, stage_id, index)
 
+    # ------------------------------------------------------------------
+    # Word 导入校对：把待归类内容分配到教案字段或环节栏目（教师逐项操作）
+    # ------------------------------------------------------------------
+
+    IMPORT_REVIEW_SCALAR_SECTIONS = frozenset({"title", "subject", "grade", "duration_minutes"})
+    IMPORT_REVIEW_LIST_SECTIONS = frozenset({"objectives", "methods", "references", "knowledge_structure", "homework"})
+    IMPORT_REVIEW_LONGTEXT_SECTIONS = frozenset({
+        "curriculum_interpretation", "student_analysis", "textbook_analysis",
+        "design_thinking", "board_design", "reflection",
+    })
+    IMPORT_REVIEW_STAGE_COLUMNS = frozenset({
+        "title", "minutes", "knowledge_point", "material", "teacher_activities",
+        "student_activities", "question_chain", "knowledge_conclusion", "design_intent",
+    })
+    IMPORT_REVIEW_STAGE_TEXT_COLUMNS = frozenset({
+        "title", "knowledge_point", "material", "knowledge_conclusion", "design_intent",
+    })
+
+    def apply_import_review(
+        self,
+        design_id: str,
+        item_index: int,
+        action: str = "assign",
+        target: Optional[Dict[str, Any]] = None,
+        mode: str = "append",
+        expected_revision: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """把待归类条目分配到指定教案字段或环节栏目，或绑定图片到环节素材。
+
+        - 未处理条目永远保留在 unclassified 中（仅打状态标记），刷新后进度可恢复；
+        - ``mode``: append 追加 / replace 替换（仅对文本条目有意义）；
+        - 采用时按 expected_revision 检查草稿版本，避免覆盖彼此的修改。
+        """
+        from .lesson_docx_import import _split_items
+
+        design = self.get(design_id)
+        if expected_revision is not None and expected_revision != design.revision:
+            raise ValueError("教案草稿已更新，请刷新后再操作。")
+        review = design.draft.get("import_review")
+        if not isinstance(review, dict):
+            raise ValueError("这份草稿没有 Word 导入校对记录。")
+        items = review.get("unclassified")
+        if not isinstance(items, list) or not isinstance(item_index, int) or not 0 <= item_index < len(items):
+            raise ValueError("待归类条目不存在，请刷新后重试。")
+        item = items[item_index]
+        if not isinstance(item, dict):
+            raise ValueError("待归类条目格式不正确。")
+        normalized_action = str(action or "assign").strip().lower()
+        target = target if isinstance(target, dict) else {}
+        touched_sections: List[str] = []
+
+        if normalized_action == "ignore":
+            item["status"] = "ignored"
+            message = "已忽略这条待归类内容，可随时重新归类。"
+        elif normalized_action == "assign":
+            if str(item.get("kind") or "") == "image":
+                assignment = self._assign_import_image(design, item, target)
+                message = f"图片已绑定到环节「{assignment['stage_title']}」的素材列表。"
+                touched_sections.append("stages")
+            else:
+                text = str(item.get("text") or "").strip()
+                if not text:
+                    raise ValueError("这条待归类内容没有可用文字。")
+                stage_id = str(target.get("stage_id") or "").strip()
+                if stage_id:
+                    assignment = self._assign_import_stage_text(design, item, stage_id, target, text, mode)
+                    message = f"文字已{ '替换' if mode == 'replace' else '追加' }到环节「{assignment['stage_title']}」。"
+                    touched_sections.append("stages")
+                else:
+                    section_id = str(target.get("section") or "").strip()
+                    if not section_id:
+                        raise ValueError("请选择要写入的教案字段或环节栏目。")
+                    assignment = self._assign_import_section_text(design, item, section_id, text, mode)
+                    message = f"文字已{ '替换' if mode == 'replace' else '追加' }到「{assignment['label']}」。"
+                    touched_sections.append(section_id)
+        else:
+            raise ValueError("未知校对操作。")
+
+        for key in touched_sections:
+            if key in design.section_status and design.section_status.get(key) == "confirmed":
+                design.section_status[key] = "proposed"
+        assigned = sum(1 for entry in items if isinstance(entry, dict) and entry.get("status") == "assigned")
+        ignored = sum(1 for entry in items if isinstance(entry, dict) and entry.get("status") == "ignored")
+        base_summary = str(review.get("summary") or "").split("；已归类")[0]
+        review["summary"] = f"{base_summary}；已归类 {assigned} 条，忽略 {ignored} 条。"
+        self._normalize_text_lists(design.draft)
+        design.revision += 1
+        design.diff_summary = self._build_diff_summary(design)
+        self.store.upsert_lesson_design(design)
+        return {"status": "success", "message": message, "design": design.to_dict(),
+                **self.session_view(design), "focus_summary": self._focus_summary(design)}
+
+    def _import_review_section_label(self, section_id: str) -> str:
+        from .lesson_docx_import import FIELD_LABELS
+        return str(FIELD_LABELS.get(section_id) or section_id)
+
+    def _assign_import_section_text(self, design: LessonDesignRecord, item: Dict[str, Any], section_id: str, text: str, mode: str) -> Dict[str, Any]:
+        from .lesson_docx_import import _split_items
+
+        draft = design.draft
+        label = self._import_review_section_label(section_id)
+        if section_id in self.IMPORT_REVIEW_SCALAR_SECTIONS:
+            if section_id == "duration_minutes":
+                digits = re.sub(r"[^0-9]", "", text)
+                if not digits:
+                    raise ValueError("课时需要包含分钟数字。")
+                draft["duration_minutes"] = int(digits)
+            else:
+                draft[section_id] = text if mode == "replace" or not str(draft.get(section_id) or "").strip() \
+                    else f"{draft.get(section_id)}；{text}"
+        elif section_id in self.IMPORT_REVIEW_LIST_SECTIONS:
+            if section_id == "homework":
+                homework = draft.setdefault("homework", {"basic": [], "inquiry": []})
+                if mode == "replace":
+                    homework = draft["homework"] = {"basic": [], "inquiry": []}
+                target_bucket = "inquiry" if text.startswith(("探究", "开放")) else "basic"
+                homework[target_bucket] = homework.get(target_bucket, []) + _split_items(text)
+            else:
+                values = _split_items(text)
+                draft[section_id] = values if mode == "replace" else (draft.get(section_id) or []) + values
+        elif section_id == "key_difficulties":
+            key = draft.setdefault("key_difficulties", {"key": [], "difficult": []})
+            if mode == "replace":
+                key = draft["key_difficulties"] = {"key": [], "difficult": []}
+            for line in _split_items(text):
+                if line.startswith(("重点", "难点")):
+                    bucket = "key" if line.startswith("重点") else "difficult"
+                    key[bucket] = key.get(bucket, []) + _split_items(line.split("：", 1)[-1])
+                else:
+                    key["key"] = key.get("key", []) + [line]
+        elif section_id == "core_questions":
+            core = draft.setdefault("core_questions", {"core": "", "sub_questions": []})
+            if mode == "replace":
+                core = draft["core_questions"] = {"core": "", "sub_questions": []}
+            if not core.get("core"):
+                core["core"] = text
+            else:
+                core.setdefault("sub_questions", []).extend(_split_items(text))
+        elif section_id in self.IMPORT_REVIEW_LONGTEXT_SECTIONS:
+            existing = str(draft.get(section_id) or "").strip()
+            draft[section_id] = text if (mode == "replace" or not existing) else f"{existing}\n{text}"
+        else:
+            raise ValueError(f"不支持的教案字段：{section_id}")
+        if design.section_status.get(section_id) in (None, "pending") or mode == "replace":
+            if self._section_has_content(draft.get(section_id)):
+                design.section_status[section_id] = "proposed"
+        item["status"] = "assigned"
+        item["assignment"] = {"kind": "section", "section": section_id, "label": label, "mode": mode}
+        return {"label": label}
+
+    def _assign_import_stage_text(self, design: LessonDesignRecord, item: Dict[str, Any], stage_id: str, target: Dict[str, Any], text: str, mode: str) -> Dict[str, Any]:
+        from .lesson_docx_import import _split_items
+
+        column = str(target.get("column") or "").strip()
+        if column not in self.IMPORT_REVIEW_STAGE_COLUMNS:
+            raise ValueError("不支持的教学环节栏目，可选：材料、教师活动、学生活动、问题链、知识结论、设计意图等。")
+        stage = self._design_stage(design, stage_id)
+        if column == "minutes":
+            digits = re.sub(r"[^0-9]", "", text)
+            if not digits:
+                raise ValueError("环节时长需要包含分钟数字。")
+            stage["minutes"] = int(digits)
+        elif column in self.IMPORT_REVIEW_STAGE_TEXT_COLUMNS:
+            existing = str(stage.get(column) or "").strip()
+            stage[column] = text if (mode == "replace" or not existing) else f"{existing}；{text}"
+        else:
+            values = _split_items(text)
+            stage[column] = values if mode == "replace" else (stage.get(column) or []) + values
+        item["status"] = "assigned"
+        item["assignment"] = {
+            "kind": "stage_column", "stage_id": stage_id,
+            "stage_title": str(stage.get("title") or "未命名环节"),
+            "column": column, "mode": mode,
+        }
+        return {"stage_title": item["assignment"]["stage_title"]}
+
+    def _assign_import_image(self, design: LessonDesignRecord, item: Dict[str, Any], target: Dict[str, Any]) -> Dict[str, Any]:
+        from .lessons import normalize_presentation
+
+        stage_id = str(target.get("stage_id") or "").strip()
+        if not stage_id:
+            raise ValueError("请选择图片要绑定到的教学环节。")
+        url = str(item.get("url") or "").strip()
+        if not url:
+            raise ValueError("该图片还没有上传完成，请稍后重试。")
+        stage = self._design_stage(design, stage_id)
+        # 重新归类：先把上一次绑定的同一张图从旧环节移除，避免重复残留。
+        previous = item.get("assignment") if isinstance(item.get("assignment"), dict) else {}
+        previous_block_id = str(previous.get("block_id") or "")
+        if previous.get("kind") == "stage_material" and previous_block_id:
+            for other in design.draft.get("stages") or []:
+                if not isinstance(other, dict):
+                    continue
+                blocks = ((other.get("presentation") or {}).get("blocks") or [])
+                if any(str(block.get("id")) == previous_block_id for block in blocks if isinstance(block, dict)):
+                    other["presentation"] = normalize_presentation({
+                        "blocks": [block for block in blocks if str(block.get("id")) != previous_block_id]
+                    })
+                    if not other["presentation"].get("blocks"):
+                        other["presentation"] = {}
+        presentation = stage.get("presentation") if isinstance(stage.get("presentation"), dict) else {"blocks": []}
+        blocks = [block for block in (presentation.get("blocks") or []) if isinstance(block, dict)]
+        block_id = f"blk_{uuid4().hex[:8]}"
+        blocks.append({
+            "id": block_id, "type": "image", "text": "",
+            "asset": {"url": url, "mime_type": str(item.get("content_type") or "image/png"), "name": str(item.get("name") or "导入图片")},
+            "z": len(blocks), "order": len(blocks), "x": 0.3, "y": 0.34, "w": 0.4, "h": 0.3,
+        })
+        stage["presentation"] = normalize_presentation({"blocks": blocks}) or {"blocks": blocks}
+        item["status"] = "assigned"
+        item["assignment"] = {
+            "kind": "stage_material", "stage_id": stage_id,
+            "stage_title": str(stage.get("title") or "未命名环节"),
+            "block_id": block_id,
+        }
+        return {"stage_title": item["assignment"]["stage_title"]}
+
+    def _design_stage(self, design: LessonDesignRecord, stage_id: str) -> Dict[str, Any]:
+        for stage in design.draft.get("stages") or []:
+            if isinstance(stage, dict) and str(stage.get("stage_id") or "") == stage_id:
+                return stage
+        raise ValueError("没有找到目标环节，请刷新后重试。")
+
     def session_view(self, design: LessonDesignRecord) -> Dict[str, Any]:
         """会话响应的扩展字段（Plan 卡片与当前推进问题），create/get/turn 共用。"""
         return {

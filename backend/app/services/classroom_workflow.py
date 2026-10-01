@@ -197,6 +197,19 @@ class ClassroomWorkflowRuntime:
     def import_lesson_design_docx(self, project_id: str, owner_user_id: str, data: bytes, filename: str) -> Dict[str, Any]:
         return self.lesson_design.import_docx_draft(project_id, owner_user_id, data, filename)
 
+    def apply_lesson_design_import_review(
+        self,
+        design_id: str,
+        item_index: int,
+        action: str = "assign",
+        target: Optional[Dict[str, Any]] = None,
+        mode: str = "append",
+        expected_revision: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        return self.lesson_design.apply_import_review(
+            design_id, item_index, action=action, target=target, mode=mode, expected_revision=expected_revision,
+        )
+
     def export_design_docx(self, design_id: str, project_id: str) -> Dict[str, Any]:
         return self.lesson_design.export_design_docx(design_id, project_id)
 

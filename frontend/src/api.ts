@@ -891,6 +891,29 @@ export async function bindLessonDesignQuestion(
   });
 }
 
+export async function applyLessonImportReview(
+  designId: string,
+  payload: {
+    item_index: number;
+    action?: "assign" | "ignore";
+    target?: { section?: string; stage_id?: string; column?: string } | null;
+    mode?: "append" | "replace";
+    expected_revision?: number;
+  }
+): Promise<{ status: string; message: string; design: LessonDesignSession }> {
+  return requestJson(`/lesson-design/sessions/${encodeURIComponent(designId)}/import-review/apply`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      item_index: payload.item_index,
+      action: payload.action || "assign",
+      target: payload.target || null,
+      mode: payload.mode || "append",
+      expected_revision: payload.expected_revision
+    })
+  });
+}
+
 // ------------------------------------------------------------------
 // 上课模拟测试（lesson rehearsal）
 // ------------------------------------------------------------------

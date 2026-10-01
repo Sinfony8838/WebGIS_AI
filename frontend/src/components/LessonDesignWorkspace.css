@@ -306,3 +306,44 @@
 @media (max-width: 1100px) {
   .lpt-head, .lpt-row { grid-template-columns: 1fr; }
 }
+
+/* 教学过程表：环节素材入口（任务1） */
+.lpt-material-field { margin-top: 4px; }
+.lpt-material-field summary {
+  cursor: pointer; color: #1d4ed8; font-weight: 600; font-size: 12px;
+  padding: 5px 8px; border-radius: 7px; background: #eff6ff; border: 1px solid #bfdbfe;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.lpt-material-field summary:hover { background: #dbeafe; }
+.lpt-material-hint { color: #64748b; font-weight: 400; font-size: 11px; }
+.lpt-material-actions { display: flex; align-items: center; gap: 8px; margin: 8px 0 6px; flex-wrap: wrap; }
+.lpt-material-note { color: #166534; font-size: 11px; }
+.lpt-material-field > details > div:last-child { margin-top: 6px; }
+.lpt-material-field .ple { padding: 10px; border: 1px solid #e2e8f0; border-radius: 9px; background: #f8fafc; }
+
+/* 展示编排图片选择器：本地上传按钮行 */
+.ple-picker-actions { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+
+/* Word 导入校对界面（任务2） */
+.dir { display: grid; gap: 10px; margin-top: 8px; }
+.dir-summary { margin: 0; font-size: 12px; color: #334155; }
+.dir-mapping summary { cursor: pointer; font-size: 12px; color: #475569; }
+.dir-mapping-list { list-style: none; margin: 6px 0 0; padding-left: 14px; display: grid; gap: 4px; font-size: 12px; color: #334155; }
+.dir-mapping-list small { display: block; color: #94a3b8; }
+.dir-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.dir-empty { color: #64748b; font-size: 12px; }
+.dir-item { border: 1px solid #e2e8f0; border-radius: 9px; padding: 8px 10px; display: grid; gap: 6px; background: #fff; }
+.dir-item[data-status="assigned"] { border-color: #86efac; background: #f6fef8; }
+.dir-item[data-status="ignored"] { opacity: .6; }
+.dir-item-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.dir-origin { font-size: 11px; color: #64748b; }
+.dir-status { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: #f1f5f9; color: #475569; }
+.dir-status-assigned { background: #dcfce7; color: #166534; }
+.dir-status-ignored { background: #f1f5f9; color: #94a3b8; }
+.dir-body { margin: 0; }
+.dir-text { white-space: pre-wrap; word-break: break-word; font-size: 12px; color: #0f172a; line-height: 1.55; }
+.dir-image { max-width: 100%; max-height: 120px; border-radius: 6px; border: 1px solid #e2e8f0; }
+.dir-note { font-size: 12px; color: #94a3b8; }
+.dir-result { margin: 0; font-size: 11px; color: #475569; }
+.dir-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.dir-controls select { max-width: 210px; font-size: 12px; padding: 3px 5px; border-radius: 6px; border: 1px solid #cbd5e1; }

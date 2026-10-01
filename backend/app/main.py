@@ -601,6 +601,14 @@ class LessonDesignFinalizeRequest(BaseModel):
     apply_base: bool = False
 
 
+class LessonDesignImportReviewRequest(BaseModel):
+    item_index: int
+    action: str = "assign"
+    target: Optional[Dict[str, Any]] = None
+    mode: str = "append"
+    expected_revision: Optional[int] = None
+
+
 class LessonDesignMigrationApplyRequest(BaseModel):
     expected_revision: Optional[int] = None
 
@@ -2578,6 +2586,26 @@ async def import_lesson_design_docx(
         return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/lesson-design/sessions/{design_id}/import-review/apply")
+def apply_lesson_design_import_review(design_id: str, payload: LessonDesignImportReviewRequest, request: Request) -> Dict[str, Any]:
+    design = _require_lesson_design_access(request, design_id)
+    try:
+        result = runtime.classroom.apply_lesson_design_import_review(
+            design_id,
+            payload.item_index,
+            action=payload.action,
+            target=payload.target,
+            mode=payload.mode,
+            expected_revision=payload.expected_revision,
+        )
+        _grant_response_files(request, result, allowed_roots=_lesson_design_grant_roots(design))
+        return result
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409 if "更新" in str(exc) else 400, detail=str(exc)) from exc
 
 
 @app.post("/lesson-design/sessions/{design_id}/export/docx")

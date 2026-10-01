@@ -1,11 +1,14 @@
-import { useState } from "react";
-import type { LessonPlanProfile, LessonStage, QuestionBankQuestion } from "../types";
+import { useMemo, useState } from "react";
+import type { LessonPlanProfile, LessonStage, PresentationLayout, QuestionBankQuestion } from "../types";
 import { LessonCellEditor } from "./LessonCellEditor";
+import { PresentationLayoutEditor, type LibraryAsset } from "./PresentationLayoutEditor";
 import { formatQuestion, splitLines, stageList } from "../lib/lessonSheet";
 
 type Props = {
   draft: LessonPlanProfile;
   busy: boolean;
+  projectId: string;
+  libraryAssets: LibraryAsset[];
   searchResults: QuestionBankQuestion[];
   searchText: string;
   onStageFieldChange: (stageIndex: number, field: string, value: unknown) => void;
@@ -17,6 +20,16 @@ type Props = {
   onSearchText: (value: string) => void;
   onRunSearch: () => void;
   onStageAiEdit: (stageIndex: number) => void;
+  onCaptureScene: () => Record<string, unknown> | null;
+};
+
+const MATERIAL_TYPE_LABELS: Record<string, string> = {
+  image: "图片",
+  video: "视频",
+  chart: "图表",
+  map: "地图",
+  text: "文字",
+  question: "题目"
 };
 
 const STAGE_TEXT_FIELDS: Array<[string, string, boolean]> = [
@@ -104,10 +117,84 @@ function StageQuestionTools({
   );
 }
 
+// 每个环节的素材入口：图片 / 视频 / 图表 / 地图（绑定当前场景），复用展示编排编辑器。
+function StageMaterialTools({
+  stage,
+  index,
+  busy,
+  projectId,
+  libraryAssets,
+  onStageFieldChange,
+  onCaptureScene
+}: {
+  stage: LessonStage;
+  index: number;
+  busy: boolean;
+  projectId: string;
+  libraryAssets: LibraryAsset[];
+  onStageFieldChange: (stageIndex: number, field: string, value: unknown) => void;
+  onCaptureScene: () => Record<string, unknown> | null;
+}) {
+  const [sceneHint, setSceneHint] = useState("");
+  const blocks = stage.presentation?.blocks || [];
+  const counts = useMemo(() => {
+    const tally: Record<string, number> = {};
+    for (const block of blocks) tally[block.type] = (tally[block.type] || 0) + 1;
+    return tally;
+  }, [blocks]);
+  const summary = ["image", "video", "chart", "map", "question"]
+    .filter((type) => counts[type])
+    .map((type) => `${MATERIAL_TYPE_LABELS[type]} ${counts[type]}`)
+    .join(" · ");
+
+  function bindScene() {
+    const snapshot = onCaptureScene();
+    if (!snapshot || !Object.keys(snapshot).length) {
+      setSceneHint("当前没有可绑定的地图场景。");
+      return;
+    }
+    onStageFieldChange(index, "scene", snapshot);
+    setSceneHint("已把当前地图场景绑定到本环节。");
+  }
+
+  return (
+    <div className="lpt-field lpt-material-field" data-testid={`lpt-material-${index}`}>
+      <details>
+        <summary>
+          本环节素材{summary ? `（${summary}）` : "（暂无）"}
+          <span className="lpt-material-hint">图片 / 视频 / 图表 / 地图 / 展示编排</span>
+        </summary>
+        <div className="lpt-material-actions">
+          <button
+            type="button"
+            className="toolbar-button compact"
+            disabled={busy}
+            data-testid={`lpt-bind-scene-${index}`}
+            aria-label={`绑定当前地图场景到环节${index + 1}`}
+            onClick={bindScene}
+          >
+            绑定当前地图场景
+          </button>
+          {sceneHint ? <span className="lpt-material-note" role="status">{sceneHint}</span> : null}
+        </div>
+        <PresentationLayoutEditor
+          stage={stage}
+          projectId={projectId}
+          busy={busy}
+          libraryAssets={libraryAssets}
+          onSave={(presentation: PresentationLayout) => onStageFieldChange(index, "presentation", presentation)}
+        />
+      </details>
+    </div>
+  );
+}
+
 // 两列教学过程表：环节列（名称/时长/知识点）＋ 活动与素材列。
 export function LessonProcessTable({
   draft,
   busy,
+  projectId,
+  libraryAssets,
   searchResults,
   searchText,
   onStageFieldChange,
@@ -118,7 +205,8 @@ export function LessonProcessTable({
   onBindManual,
   onSearchText,
   onRunSearch,
-  onStageAiEdit
+  onStageAiEdit,
+  onCaptureScene
 }: Props) {
   const stages = stageList(draft);
   return (
@@ -193,6 +281,15 @@ export function LessonProcessTable({
                 </div>
               )
             )}
+            <StageMaterialTools
+              stage={stage}
+              index={index}
+              busy={busy}
+              projectId={projectId}
+              libraryAssets={libraryAssets}
+              onStageFieldChange={onStageFieldChange}
+              onCaptureScene={onCaptureScene}
+            />
             <div className="lpt-field">
               <span className="lpt-field-label">环节题目</span>
               {stage.questions?.length ? (

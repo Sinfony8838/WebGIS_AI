@@ -37,7 +37,9 @@ vi.mock("../api", () => ({
   applyLessonMigration: (...args: unknown[]) => migrationApplyMock(...args),
   fetchLesson: vi.fn().mockResolvedValue({ lesson_id: "lesson_1", title: "人口分布", metadata: {} }),
   importQuestionBanks: vi.fn().mockResolvedValue({ job_id: "j1" }),
-  fetchJob: vi.fn().mockResolvedValue({ status: "completed", stages: {} })
+  fetchJob: vi.fn().mockResolvedValue({ status: "completed", stages: {} }),
+  fetchOutputs: vi.fn().mockResolvedValue({ items: [] }),
+  applyLessonImportReview: vi.fn().mockResolvedValue({ status: "success", message: "ok", design: {} })
 }));
 
 const baseDraft = {
