@@ -627,6 +627,7 @@ export default function App({
   const brushRef = useRef<BrushOverlayHandle | null>(null);
   const pptBrushRef = useRef<BrushOverlayHandle | null>(null);
   const [mapBrushHasContent, setMapBrushHasContent] = useState(false);
+  const [mapBrushCanUndo, setMapBrushCanUndo] = useState(false);
   const [pptBrushHasContent, setPptBrushHasContent] = useState(false);
   // ── 3D digital-globe state ───────────────────────────────────────────
   // Boot into the 3D globe view; users land on the digital earth first
@@ -4025,6 +4026,7 @@ export default function App({
         settings={brushSettings}
         onWheelZoom={handleBrushWheelZoom}
         onContentChange={setMapBrushHasContent}
+        onUndoAvailabilityChange={setMapBrushCanUndo}
       />
       <div className="map-vignette" />
       <div className="map-grid-overlay" />
@@ -4413,6 +4415,7 @@ export default function App({
         <BrushToolbar
           settings={brushSettings}
           hasContent={brushTargetHasContent}
+          canUndo={mapBrushCanUndo}
           onChangeSettings={(next) => setBrushSettings((prev) => ({ ...prev, ...next }))}
           onUndo={() => brushTargetRef.current?.undo()}
           onClear={() => brushTargetRef.current?.clear()}

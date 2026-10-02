@@ -3,6 +3,7 @@ import type { BrushTool, BrushSettings } from "./BrushOverlay";
 type Props = {
   settings: BrushSettings;
   hasContent: boolean;
+  canUndo?: boolean;
   onChangeSettings: (next: Partial<BrushSettings>) => void;
   onUndo: () => void;
   onClear: () => void;
@@ -121,7 +122,7 @@ const TOOL_ICONS: Record<BrushTool, () => JSX.Element> = {
   eraser: EraserIcon
 };
 
-export function BrushToolbar({ settings, hasContent, onChangeSettings, onUndo, onClear }: Props) {
+export function BrushToolbar({ settings, hasContent, canUndo = hasContent, onChangeSettings, onUndo, onClear }: Props) {
   return (
     <div className="brush-toolbar glass-panel" role="toolbar" aria-label="画笔工具">
       <div className="brush-toolbar-section">
@@ -198,6 +199,7 @@ export function BrushToolbar({ settings, hasContent, onChangeSettings, onUndo, o
           className="brush-tool-btn"
           aria-label="撤销"
           title="撤销上一步绘制"
+          disabled={!canUndo}
           onClick={onUndo}
         >
           <UndoIcon />

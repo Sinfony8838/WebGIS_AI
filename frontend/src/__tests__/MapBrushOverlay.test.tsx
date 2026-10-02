@@ -59,8 +59,8 @@ it("reprojects a geographic line after pan, zoom, and return to the same scene",
 });
 
 it("preserves geographic erasure after zoom and restores ink with undo",()=>{
-  const ref=createRef<BrushOverlayHandle>(),changed=vi.fn();
-  const props={active:true,projection,scope:"a",onContentChange:changed};
+  const ref=createRef<BrushOverlayHandle>(),changed=vi.fn(),canUndo=vi.fn();
+  const props={active:true,projection,scope:"a",onContentChange:changed,onUndoAvailabilityChange:canUndo};
   const {getByTestId,rerender}=render(<MapBrushOverlay {...props} ref={ref} settings={{tool:"line",color:"red",lineWidth:4}}/>);
   const canvas=getByTestId("map-brush-overlay");
   fireEvent.pointerDown(canvas,{clientX:110,clientY:120,button:0});fireEvent.pointerMove(canvas,{clientX:210,clientY:120});fireEvent.pointerUp(canvas);
@@ -70,10 +70,11 @@ it("preserves geographic erasure after zoom and restores ink with undo",()=>{
   expect(context.moveTo.mock.calls.length).toBe(2);
   act(()=>ref.current?.undo());
   vi.clearAllMocks();act(()=>renderMap());expect(context.moveTo.mock.calls.length).toBe(1);
-  act(()=>ref.current?.clear());expect(changed).toHaveBeenLastCalledWith(false);
+  act(()=>ref.current?.clear());expect(changed).toHaveBeenLastCalledWith(false);expect(canUndo).toHaveBeenLastCalledWith(true);
   act(()=>ref.current?.undo());expect(changed).toHaveBeenLastCalledWith(true);
   rerender(<MapBrushOverlay {...props} scope="another-project" ref={ref} settings={{tool:"line",color:"red",lineWidth:4}}/>);
   expect(changed).toHaveBeenLastCalledWith(false);
+  expect(canUndo).toHaveBeenLastCalledWith(false);
 });
 
 it("splits unprojectable gaps and ignores gestures that start in the sky",()=>{

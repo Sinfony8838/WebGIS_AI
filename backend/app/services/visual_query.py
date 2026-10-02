@@ -65,6 +65,19 @@ class VisualQueryService:
 
     def run(self, project_id: str, query: Dict[str, Any]) -> Dict[str, Any]:
         dataset = str(query.get("dataset") or DEFAULT_DATASET)
+        # Normalize the explicit aliases observed from the model's ranking tool.
+        # These describe the same supported dataset; all other values still pass
+        # through the handler's strict scope/year/metric/operation validation.
+        if dataset in {DEFAULT_DATASET, "population"}:
+            dataset = DEFAULT_DATASET
+            query = {**query, "dataset": dataset}
+            aliases = {"geo_level": {"city": "prefecture", "地级市": "prefecture"},
+                       "metric": {"常住人口": "population"},
+                       "operation": {"rank": "top"}}
+            for field, values in aliases.items():
+                value = query.get(field)
+                if isinstance(value, str) and value in values:
+                    query[field] = values[value]
         handler = self._resolve_handler(dataset)
         result = handler(project_id, query)
         if not isinstance(result, VisualQueryResult):

@@ -7,7 +7,7 @@ from pathlib import Path
 from backend.app.config import AppConfig
 from backend.app.models import LayerRecord, ProjectRecord
 from backend.app.runtime import WebGISRuntime
-from backend.app.services.visual_query import VisualQueryError, VisualQueryService
+from backend.app.services.visual_query import DEFAULT_DATASET, VisualQueryError, VisualQueryService
 from backend.app.store import RuntimeStore
 
 
@@ -138,6 +138,29 @@ class VisualQueryServiceTest(unittest.TestCase):
                     "limit": 20,
                 },
             )
+
+    def test_population_alias_matches_canonical_ranking_without_mutating_input(self) -> None:
+        service = self.build_service()
+        query = {"dataset": "population", "year": 2020, "limit": 20,
+                 "geo_level": "city", "metric": "常住人口", "operation": "rank"}
+        canonical_query = {**query, "dataset": DEFAULT_DATASET, "geo_level": "prefecture",
+                           "metric": "population", "operation": "top"}
+        canonical = service.run("project-test", canonical_query)
+        result = service.run("project-test", query)
+        self.assertEqual(result["items"], canonical["items"])
+        self.assertEqual(result["layer"]["data"], canonical["layer"]["data"])
+        self.assertEqual(result["layer"]["metadata"]["query"]["dataset"], DEFAULT_DATASET)
+        self.assertEqual(result["layer"]["metadata"]["query"], canonical_query)
+        self.assertEqual(query, {"dataset": "population", "year": 2020, "limit": 20,
+                                 "geo_level": "city", "metric": "常住人口", "operation": "rank"})
+        self.assertEqual(service.run("project-test", {"dataset": "population"})["items"], canonical["items"])
+        self.assertEqual(service.run("project-test", {"geo_level": "地级市", "metric": "常住人口", "operation": "rank", "limit": 20})["items"], canonical["items"])
+
+    def test_population_alias_does_not_relax_scope_or_year_checks(self) -> None:
+        service = self.build_service()
+        for changes in ({"geo_level": "province"}, {"metric": "gdp"}, {"operation": "sum"}, {"year": 2024}):
+            with self.subTest(changes=changes), self.assertRaises(VisualQueryError):
+                service.run("project-test", {"dataset": "population", **changes})
 
     def test_unsupported_dataset_raises(self) -> None:
         service = self.build_service()
