@@ -368,6 +368,7 @@ class ClassroomWorkflowRuntime:
         scene_capture: Optional[Dict[str, Any]] = None,
         test_result: Optional[Dict[str, Any]] = None,
         presentation_update: Optional[Dict[str, Any]] = None,
+        profile_preset: Optional[Dict[str, Any]] = None,
         expected_revision: Optional[int] = None,
     ) -> Dict[str, Any]:
         return self.lesson_rehearsal.update(
@@ -379,6 +380,7 @@ class ClassroomWorkflowRuntime:
             scene_capture=scene_capture,
             test_result=test_result,
             presentation_update=presentation_update,
+            profile_preset=profile_preset,
             expected_revision=expected_revision,
         )
 

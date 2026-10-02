@@ -18,6 +18,7 @@ import type {
   DatasetCatalogResponse,
   DatasetUploadResponse,
   PresentationBlock,
+  ProfilePreset,
   PopulationRasterPackageSummary,
   LessonDocxImportResult,
   LessonMigrationPreview,
@@ -961,6 +962,7 @@ export async function updateLessonRehearsal(
     scene_capture?: { stage_id: string; snapshot: SceneSnapshot };
     test_result?: { key: string; passed: boolean; note?: string };
     presentation_update?: { stage_id: string; presentation: { blocks: PresentationBlock[] } };
+    profile_preset?: { stage_id: string; preset: ProfilePreset };
     expected_revision?: number;
   }
 ): Promise<{ status: string; rehearsal: LessonRehearsalRecord }> {
