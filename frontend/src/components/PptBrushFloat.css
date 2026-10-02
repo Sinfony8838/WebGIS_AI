@@ -2,12 +2,12 @@
 .ppt-brush-float {
   position: fixed;
   z-index: 95;
-  top: 14px;
+  top: 72px;
   right: 16px;
   display: grid;
   gap: 7px;
   max-width: calc(100vw - 32px);
-  max-height: calc(100dvh - 28px);
+  max-height: calc(100dvh - 144px);
   overflow-y: auto;
   box-sizing: border-box;
   padding: 8px;

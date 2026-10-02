@@ -75,4 +75,22 @@ describe("PptViewer keyboard ownership", () => {
     fireEvent.keyDown(window, { key: "Home" });
     expect(screen.getByText("第1页")).toBeInTheDocument();
   });
+
+  it("returns keyboard focus to the drawing surface after a toolbar interaction", () => {
+    const { container } = render(<><button type="button">画笔把手</button><PptViewer {...base} /></>);
+    screen.getByRole("button", { name: "画笔把手" }).focus();
+    fireEvent.pointerDown(screen.getByText("第1页"));
+    const stage = container.querySelector(".ppt-viewer-stage")!;
+    expect(document.activeElement).toBe(stage);
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowRight" });
+    expect(screen.getByText("第2页")).toBeInTheDocument();
+  });
+
+  it("does not take focus from an interactive control inside the slide", () => {
+    render(<PptViewer {...base} slides={[{ ...slides[0], html: '<input aria-label="页内输入" />' }]} />);
+    const input = screen.getByLabelText("页内输入");
+    input.focus();
+    fireEvent.pointerDown(input);
+    expect(document.activeElement).toBe(input);
+  });
 });

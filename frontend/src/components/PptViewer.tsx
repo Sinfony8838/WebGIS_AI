@@ -2,6 +2,7 @@ import { type MutableRefObject, useState, useEffect, useRef, useCallback } from 
 import type { SlideContent } from "../types";
 import { BrushOverlay, type BrushOverlayHandle, type BrushSettings } from "./BrushOverlay";
 import { isEditableKeyboardTarget, isInteractiveKeyboardTarget } from "../lib/keyboard";
+import "./PptViewer.css";
 
 type Props = {
   open: boolean;
@@ -187,7 +188,11 @@ export function PptViewer({
         </div>
       </div>
 
-      <div className="ppt-viewer-stage" ref={stageRef}>
+      <div className="ppt-viewer-stage" ref={stageRef} tabIndex={-1}
+        onPointerDown={event => {
+          // Return keyboard ownership to the canvas after a drawing-tool button was used.
+          if (!isInteractiveKeyboardTarget(event.target)) stageRef.current?.focus({ preventScroll: true });
+        }}>
         <div
           className="ppt-viewer-slide"
           style={{

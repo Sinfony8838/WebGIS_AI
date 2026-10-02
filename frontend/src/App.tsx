@@ -1877,6 +1877,7 @@ export default function App({
       });
       setPptFileName(rendered.file_name || file.name);
       setPptBrushHasContent(false);
+      setInteractionMode("browse");
       setPptViewerOpen(true);
       pushToast("success", "PPT 已导入", `已使用 ${rendered.renderer} 渲染 ${rendered.slides.length} 张幻灯片`);
     } catch (err) {
@@ -1889,6 +1890,7 @@ export default function App({
         });
         setPptFileName(result.fileName);
         setPptBrushHasContent(false);
+        setInteractionMode("browse");
         setPptViewerOpen(true);
         pushToast("info", "PPT 已导入（简易模式）", "未找到可用的服务端渲染器，已使用前端解析兜底。复杂背景可能不完全一致。");
       } catch (fallbackErr) {
@@ -1901,10 +1903,12 @@ export default function App({
   }, [pushToast]);
 
   const handlePptCollapse = useCallback(() => {
+    setInteractionMode("browse");
     setPptViewerOpen(false);
   }, []);
 
   const handlePptRemove = useCallback(() => {
+    setInteractionMode("browse");
     setPptViewerOpen(false);
     setPptBrushHasContent(false);
     setPptFileName("");
@@ -3783,7 +3787,7 @@ export default function App({
           return remaining;
         })}
       />)}
-      <MapBrushOverlay
+      {!(pptViewerOpen && pptPresentationReady) ? <MapBrushOverlay
         projection={mapInkProjection}
         scope={project?.project_id || ""}
         ref={brushRef}
@@ -3791,12 +3795,12 @@ export default function App({
         settings={brushSettings}
         onWheelZoom={handleBrushWheelZoom}
         onContentChange={setMapBrushHasContent}
-      />
+      /> : null}
       <div className="map-vignette" />
       <div className="map-grid-overlay" />
       <div className="map-scanline" />
 
-      <MapInstructionStrip
+      {!(pptViewerOpen && pptPresentationReady) ? <MapInstructionStrip
         mode={interactionMode}
         measureHint={measureText || undefined}
         measureTotalKm={measureTotalKm}
@@ -3812,7 +3816,7 @@ export default function App({
             ? () => measureDrawRef.current?.finishDrawing?.()
             : undefined
         }
-      />
+      /> : null}
 
       <AnnotationDialog
         open={Boolean(annotationDraft)}
@@ -4418,7 +4422,7 @@ export default function App({
           open={pptViewerOpen}
           slides={pptSlides}
           fileName={pptFileName}
-          onExpand={() => setPptViewerOpen(true)}
+          onExpand={() => { setInteractionMode("browse"); setPptViewerOpen(true); }}
           onCollapse={handlePptCollapse}
           onRemove={handlePptRemove}
           brushActive={interactionMode === "brush"}
