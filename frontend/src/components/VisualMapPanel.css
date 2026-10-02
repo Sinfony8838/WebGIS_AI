@@ -1,0 +1,3 @@
+.visual-map-panel button.visual-map-header { width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; }
+.visual-map-panel button.visual-map-header:focus-visible { outline: 2px solid var(--accent, #2473a5); outline-offset: 4px; border-radius: 3px; }
+.visual-map-panel .visual-map-header > svg { flex-shrink: 0; }

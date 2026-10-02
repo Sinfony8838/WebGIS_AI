@@ -46,4 +46,18 @@ describe("PptBrushFloat", () => {
     fireEvent.click(screen.getByTestId("ppt-brush-exit"));
     await waitFor(() => expect(base.onExit).toHaveBeenCalledTimes(2));
   });
+
+  it("can close settings after a color change without changing the selected tool", () => {
+    render(<PptBrushFloat {...base} hasContent />);
+    fireEvent.click(screen.getByRole("button", { name: "画笔颜色#ffffff" }));
+    fireEvent.click(screen.getByRole("button", { name: "收起画笔设置" }));
+    expect(screen.queryByRole("toolbar", { name: "PPT 画笔设置" })).toBeNull();
+    expect(base.onChangeSettings).toHaveBeenCalledTimes(1);
+    expect(base.onChangeSettings).toHaveBeenCalledWith({ color: "#ffffff" });
+    fireEvent.click(screen.getByRole("button", { name: "展开画笔设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "撤销" }));
+    fireEvent.click(screen.getByRole("button", { name: "清空" }));
+    expect(base.onUndo).toHaveBeenCalledTimes(1);
+    expect(base.onClear).toHaveBeenCalledTimes(1);
+  });
 });
