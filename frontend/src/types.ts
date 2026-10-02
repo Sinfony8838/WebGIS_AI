@@ -910,6 +910,37 @@ export type LessonStage = {
   objective_refs?: number[];
   /** 课堂展示布局（阶段二）：区块有稳定 ID 与归一化位置尺寸。 */
   presentation?: PresentationLayout;
+  /** 课前剖面预设（任务4）：测线 + 窗口布局（坐标为视口占比）。 */
+  profile_preset?: ProfilePreset;
+};
+
+// ------------------------------------------------------------------
+// 剖面窗口与课前预设（任务3/4）
+// ------------------------------------------------------------------
+
+export type ProfileWindowKind = "population" | "terrain";
+
+export type ProfilePresetLine = {
+  id: string;
+  name: string;
+  coordinates: [number, number][];
+  total_km: number;
+  color: string;
+};
+
+export type ProfilePresetWindow = {
+  kind: ProfileWindowKind;
+  record_index: number;
+  source_id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+
+export type ProfilePreset = {
+  lines: ProfilePresetLine[];
+  windows: ProfilePresetWindow[];
 };
 
 // ------------------------------------------------------------------

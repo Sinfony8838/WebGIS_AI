@@ -210,3 +210,24 @@ it("enters the first stage using the new session ID and adopts recorded events",
   expect(onApplyGlobeScene).toHaveBeenCalledWith(item.stages[0].scene.globe);
   expect(screen.getByText("新版：上海公共服务如何布局？")).toBeInTheDocument();
 });
+
+
+it("applies the stage preset again for a new session and clears it on an empty stage", async () => {
+  const item = lesson();
+  item.stages[0].profile_preset = { lines: [{ id: "line1", coordinates: [[121,31],[122,32]], name:"line", total_km: 10, color:"#333" }], windows: [] };
+  item.stages.push({ ...item.stages[0], stage_id: "empty", profile_preset: undefined });
+  apiMocks.fetchLessons.mockResolvedValue({ status: "success", items: [item] });
+  apiMocks.fetchClassSessions.mockResolvedValue({ status: "success", items: [] });
+  const onApplyProfilePreset = vi.fn();
+  const props = { project: { project_id: "project_1" } as never, layerState: null, onRefresh: vi.fn(), onApplyProfilePreset };
+  const { rerender } = render(<LessonWorkflowShell {...props} />);
+  await waitFor(() => expect(apiMocks.fetchLessons).toHaveBeenCalled());
+  const session = (id: string) => ({ session_id: id, project_id:"project_1", lesson_id:item.lesson_id, status:"running", current_stage_id:"s4", started_at:"2026-10-02T00:00:00Z", metadata:{lesson_snapshot:item}, events:[], responses:{}, active_question:{} });
+  const job = (id: string, tool: string, result: object) => ({ job_id:id, project_id:"project_1", status:"completed", result:{actions_executed:[{action:{tool_name:tool,tool_params:{}}, result}]} } as never);
+  rerender(<LessonWorkflowShell {...props} assistantJob={job("start1", "start_class_session", {class_session:session("session1")})} />);
+  await waitFor(() => expect(onApplyProfilePreset).toHaveBeenCalledTimes(1));
+  rerender(<LessonWorkflowShell {...props} assistantJob={job("start2", "start_class_session", {class_session:session("session2")})} />);
+  await waitFor(() => expect(onApplyProfilePreset).toHaveBeenCalledTimes(2));
+  rerender(<LessonWorkflowShell {...props} assistantJob={job("empty-stage", "enter_lesson_stage", {stage:item.stages[1]})} />);
+  await waitFor(() => expect(onApplyProfilePreset).toHaveBeenLastCalledWith(expect.objectContaining({stage_id:"empty", profile_preset:undefined})));
+});

@@ -2420,7 +2420,7 @@
 /* ------------------------------------------------------------------ */
 /* 上课模拟测试（rehearsal panel） */
 /* ------------------------------------------------------------------ */
-.rehearsal-panel { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
+.rehearsal-panel { left: 16px; right: auto; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
 .rehearsal-panel > * { flex-shrink: 0; }
 .rehearsal-panel .lesson-stage-list { flex: none; overflow: visible; }
 .rehearsal-banner {

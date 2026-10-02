@@ -3,7 +3,7 @@ import MultiPolygon from "ol/geom/MultiPolygon";
 import type { UrbanSource, UrbanStatus } from "./components/UrbanStudyPanel";
 import { shanghaiAgeColor, shanghaiDensityColor, densityColor, densityRadius, rankColor } from "./lib/populationVisual";
 import { MapEvidenceLegend } from "./components/MapEvidenceLegend";
-import { ProfileWindow, type MeasureRecord } from "./components/ProfileWindow";
+import { ProfileWindow, type MeasureRecord, type ProfileWindowGeometry } from "./components/ProfileWindow";
 import { JobActivity } from "./lib/jobActivity";
 import { forgetPendingJob, rememberPendingJob, type PendingJob } from "./lib/pendingJobs";
 import { usePendingJobs } from "./hooks/usePendingJobs";
@@ -124,7 +124,7 @@ import { parsePptxFile, releaseSlideObjectUrls } from "./lib/pptxRenderer";
 import { decideLessonGlobeScene } from "./lib/lessonGlobeScene";
 import { MapBrushOverlay } from "./components/MapBrushOverlay";
 import type { MapInkProjection } from "./lib/mapInk";
-import type { PopulationRasterPackageSummary } from "./types";
+import type { PopulationRasterPackageSummary, ProfilePreset, ProfileWindowKind } from "./types";
 import type { ViewMode } from "./lib/viewMode";
 import type {
   AssistantInputMode,
@@ -461,6 +461,44 @@ function layerStyle(record: LayerRecord, showFit = false) {
 
 const MEASURE_COLORS = ["#087cad", "#d97706", "#7c3aed", "#059669", "#dc2626", "#2563eb"];
 
+type ProfileWindowInstance = {
+  windowId: string;
+  recordId: string;
+  kind: ProfileWindowKind;
+  sourceId: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
+// 窗口几何与视口占比互转（课前预设跨屏幕适配）。
+function geometryToPreset(win: ProfileWindowInstance): { x: number; y: number; w: number; h: number } {
+  const vw = Math.max(1, window.innerWidth);
+  const vh = Math.max(1, window.innerHeight);
+  return {
+    x: clamp01(win.left / vw),
+    y: clamp01(win.top / vh),
+    w: clamp01(win.width / vw),
+    h: clamp01(win.height / vh)
+  };
+}
+
+function presetToGeometry(win: { x: number; y: number; w: number; h: number }): { left: number; top: number; width: number; height: number } {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  return {
+    left: clamp01(win.x) * vw,
+    top: clamp01(win.y) * vh,
+    width: Math.max(320, clamp01(win.w) * vw),
+    height: Math.max(220, clamp01(win.h) * vh)
+  };
+}
+
+function clamp01(value: number, min = 0, max = 1): number {
+  return Math.min(max, Math.max(min, value));
+}
+
 export default function App({
   currentUser,
   onLogout,
@@ -567,7 +605,11 @@ export default function App({
   const [measureTotalKm, setMeasureTotalKm] = useState<number | null>(null);
   const [annotationCount, setAnnotationCount] = useState(0);
   const [measureRecords, setMeasureRecords] = useState<MeasureRecord[]>([]);
+  // 剖面窗口独立于测线记录管理（任务3）：一条测线可同时打开人口与地形两个窗口。
+  const [profileWindows, setProfileWindows] = useState<ProfileWindowInstance[]>([]);
+  const [frontWindowId, setFrontWindowId] = useState("");
   const [profilesCollapsed, setProfilesCollapsed] = useState(false);
+
   const [populationPackages, setPopulationPackages] = useState<PopulationRasterPackageSummary[]>([]);
   const [annotationDraft, setAnnotationDraft] = useState<{ lonLat: [number, number] } | null>(null);
   const [selectedFeatureText, setSelectedFeatureText] = useState("");
@@ -754,8 +796,146 @@ export default function App({
         choices.push({ id: layer.layer_id, name: layer.name });
       }
     }
+    // 本地人口包与密度面都不可用时兜底 GPW 在线源，保证人口剖面窗口始终可用。
+    if (!choices.length) choices.push({ id: "gpw_2020", name: "全球 GPW 2020 栅格（在线）" });
     return choices;
   }, [activeBasemapId, layerState?.items, populationPackages]);
+
+  // ---- 剖面窗口操作（任务3）----
+  const openProfileWindow = useCallback((record: MeasureRecord, kind: ProfileWindowKind, sourceId = "") => {
+    setProfileWindows(previous => {
+      const existing = previous.find(win => win.recordId === record.id && win.kind === kind);
+      if (existing) {
+        setFrontWindowId(existing.windowId);
+        return previous;
+      }
+      const windowId = `pw_${Date.now().toString(36)}_${previous.length}_${kind}`;
+      const index = previous.length;
+      const panel = document.querySelector('[data-testid="rehearsal-panel"], [data-testid="class-run-panel"]');
+      const panelEdge = panel?.getBoundingClientRect().right || 80;
+      const initialLeft = Math.max(96, panelEdge + 16);
+      setFrontWindowId(windowId);
+      return [
+        ...previous,
+        {
+          windowId,
+          recordId: record.id,
+          kind,
+          sourceId: sourceId || densityProfileSources[0]?.id || "",
+          left: Math.min(window.innerWidth - 568, initialLeft + (index % 4) * 36),
+          top: 120 + (index % 4) * 32,
+          width: Math.min(560, Math.max(320, window.innerWidth - 240)),
+          height: Math.min(330, Math.max(220, window.innerHeight - 200))
+        }
+      ];
+    });
+    setProfilesCollapsed(false);
+  }, [densityProfileSources]);
+
+  const closeProfileWindow = useCallback((windowId: string) => {
+    setProfileWindows(previous => previous.filter(win => win.windowId !== windowId));
+  }, []);
+
+  const clearMeasureLine = useCallback((recordId: string) => {
+    const source = measureSourceRef.current;
+    source?.getFeatures().filter(feature => feature.get("measure_record_id") === recordId || feature.get("profile_hover")).forEach(feature => source.removeFeature(feature));
+    measureHoverFeatureRef.current = null;
+    setMeasureRecords(previous => previous.filter(item => item.id !== recordId));
+    setProfileWindows(previous => previous.filter(win => win.recordId !== recordId));
+  }, []);
+
+  const clearAllMeasureLines = useCallback(() => {
+    measureSourceRef.current?.clear();
+    measureHoverFeatureRef.current = null;
+    setMeasureRecords([]);
+    setProfileWindows([]);
+  }, []);
+
+  const updateProfileWindowGeometry = useCallback((windowId: string, geometry: ProfileWindowGeometry) => {
+    setProfileWindows(previous => previous.map(win =>
+      win.windowId === windowId
+        ? { ...win, left: geometry.left, top: geometry.top, width: geometry.width, height: geometry.height }
+        : win
+    ));
+  }, []);
+
+  const updateProfileWindowSource = useCallback((windowId: string, sourceId: string) => {
+    setProfileWindows(previous => previous.map(win =>
+      win.windowId === windowId ? { ...win, sourceId } : win
+    ));
+  }, []);
+
+  // ---- 课前剖面预设（任务4）：随课时环节保存 / 课堂加载 ----
+  const getProfilePreset = useCallback((): ProfilePreset | null => {
+    if (!measureRecords.length) return { lines: [], windows: [] };
+    return {
+      lines: measureRecords.map(record => ({
+        id: record.id,
+        name: record.name,
+        coordinates: record.coordinates,
+        total_km: record.totalKm,
+        color: record.color
+      })),
+      windows: profileWindows
+        .filter(win => measureRecords.some(record => record.id === win.recordId))
+        .map(win => {
+          const recordIndex = measureRecords.findIndex(record => record.id === win.recordId);
+          return {
+            kind: win.kind,
+            record_index: Math.max(0, recordIndex),
+            source_id: win.kind === "terrain" ? "mapzen_terrain" : win.sourceId,
+            ...geometryToPreset(win)
+          };
+        })
+    };
+  }, [measureRecords, profileWindows]);
+
+  // 课堂/模拟测试进入环节时替换剖面；无预设环节清空上一环节内容。
+  const applyProfilePreset = useCallback((stage: { stage_id?: string; profile_preset?: ProfilePreset | null }) => {
+    const preset = stage.profile_preset;
+    if (!preset || !preset.lines?.length) { clearAllMeasureLines(); return; }
+    lessonGlobePinnedRef.current = false;
+    lessonGlobeRestoreRef.current = null;
+    const firstPoint = preset.lines[0].coordinates[0];
+    transitionToPlaneRef.current?.({ lon: firstPoint[0], lat: firstPoint[1], zoom: 9, reason: "manual" });
+    measureSourceRef.current?.clear();
+    measureHoverFeatureRef.current = null;
+    const records: MeasureRecord[] = preset.lines.map((line, index) => ({
+      id: line.id || `preset_line_${index}`,
+      name: line.name || `测线 ${index + 1}`,
+      coordinates: line.coordinates,
+      totalKm: line.total_km,
+      color: line.color || MEASURE_COLORS[index % MEASURE_COLORS.length]
+    }));
+    setMeasureRecords(records);
+    setProfileWindows(preset.windows.map((win, index) => {
+      const line = preset.lines[win.record_index] || preset.lines[0];
+      const geometry = presetToGeometry(win);
+      return {
+        windowId: `pw_${stage.stage_id || "pst"}_${index}_${win.kind}`,
+        recordId: line.id || `preset_line_${win.record_index}`,
+        kind: win.kind,
+        sourceId: win.source_id || densityProfileSources[0]?.id || "",
+        left: geometry.left, top: geometry.top, width: geometry.width, height: geometry.height
+      };
+    }));
+    // 把预设测线画回地图量测图层
+    const source = measureSourceRef.current;
+    if (source) {
+      records.forEach(record => {
+        source.addFeature(new Feature({ geometry: new LineString(record.coordinates.map(point => fromLonLat(point))), measure_record_id: record.id }));
+      });
+    }
+    setProfilesCollapsed(false);
+    requestAnimationFrame(() => {
+      const map = mapRef.current;
+      map?.updateSize();
+      const extent = source?.getExtent();
+      if (map && extent?.every(Number.isFinite)) {
+        map.getView().fit(extent, { padding: [90, 110, 100, 100], maxZoom: 12, duration: 0 });
+      }
+    });
+  }, [densityProfileSources, clearAllMeasureLines]);
   const weatherBasemapEnabled = Boolean(health?.online_services.weather_basemap_enabled);
   const weatherBasemapActive = isWeatherBasemapId(activeBasemapId);
   const kbActiveLayerId = layerState?.active_layer_id || "";
@@ -3509,6 +3689,7 @@ export default function App({
       if (geometry instanceof LineString) {
         const coordinates = geometry.getCoordinates().map(point => toLonLat(point) as [number, number]);
         const recordId = `msr_${Date.now().toString(36)}_${(measureSeqRef.current += 1)}`;
+        event.feature.set("measure_record_id", recordId);
         setMeasureRecords(previous => [
           ...previous,
           {
@@ -3758,42 +3939,78 @@ export default function App({
       {viewMode === "plane" && project && measureRecords.length > 0 ? (
         <div className="profile-windows-bar" data-testid="profile-windows-bar">
           <span>已测 {measureRecords.length} 条测线</span>
+          {measureRecords.map(record => (
+            <span key={record.id} className="profile-line-chip" data-testid={`profile-line-chip-${record.id}`}>
+              <span className="profile-line-dot" style={{ background: record.color }} />
+              <strong>{record.name}</strong>
+              <button
+                type="button"
+                className="toolbar-button compact"
+                data-testid={`profile-line-open-population-${record.id}`}
+                aria-label={`打开${record.name}人口密度变化窗口`}
+                onClick={() => openProfileWindow(record, "population")}
+              >
+                人口密度变化
+              </button>
+              <button
+                type="button"
+                className="toolbar-button compact"
+                data-testid={`profile-line-open-terrain-${record.id}`}
+                aria-label={`打开${record.name}地形剖面窗口`}
+                onClick={() => openProfileWindow(record, "terrain")}
+              >
+                地形剖面
+              </button>
+              <button
+                type="button"
+                className="toolbar-button compact"
+                data-testid={`profile-line-clear-${record.id}`}
+                aria-label={`清除${record.name}及其剖面窗口`}
+                onClick={() => clearMeasureLine(record.id)}
+              >
+                清除
+              </button>
+            </span>
+          ))}
           <button type="button" className="toolbar-button compact" onClick={() => setProfilesCollapsed(value => !value)} data-testid="profiles-collapse-all">
             {profilesCollapsed ? "恢复显示全部剖面" : "一键暂收全部剖面"}
           </button>
-          <button type="button" className="toolbar-button compact" onClick={() => {
-            measureSourceRef.current?.clear();
-            measureHoverFeatureRef.current = null;
-            setMeasureRecords([]);
-          }} data-testid="profiles-clear-all">
+          <button type="button" className="toolbar-button compact" onClick={clearAllMeasureLines} data-testid="profiles-clear-all">
             清除全部测线
           </button>
         </div>
       ) : null}
-      {viewMode === "plane" && project && measureRecords.map(record => <ProfileWindow
-        key={record.id}
-        projectId={project.project_id}
-        record={record}
-        densitySources={densityProfileSources}
-        hidden={profilesCollapsed}
-        onHover={sample => {
-          const source = measureSourceRef.current;
-          if (!source) return;
-          if (measureHoverFeatureRef.current) source.removeFeature(measureHoverFeatureRef.current);
-          measureHoverFeatureRef.current = null;
-          if (sample) {
-            const feature = new Feature({ geometry: new Point(fromLonLat([sample.lon, sample.lat])) });
-            feature.set("profile_hover", true);
-            source.addFeature(feature);
-            measureHoverFeatureRef.current = feature;
-          }
-        }}
-        onClose={recordId => setMeasureRecords(previous => {
-          const remaining = previous.filter(item => item.id !== recordId);
-          if (!remaining.length) measureSourceRef.current?.clear();
-          return remaining;
-        })}
-      />)}
+      {viewMode === "plane" && project && profileWindows.map(win => {
+        const record = measureRecords.find(item => item.id === win.recordId);
+        if (!record) return null;
+        return <ProfileWindow
+          key={win.windowId}
+          projectId={project.project_id}
+          windowId={win.windowId}
+          zIndex={win.windowId === frontWindowId ? 46 : 45}
+          record={record}
+          kind={win.kind}
+          densitySources={densityProfileSources}
+          sourceId={win.sourceId}
+          geometry={{ left: win.left, top: win.top, width: win.width, height: win.height }}
+          hidden={profilesCollapsed}
+          onGeometryChange={updateProfileWindowGeometry}
+          onSourceChange={updateProfileWindowSource}
+          onHover={sample => {
+            const source = measureSourceRef.current;
+            if (!source) return;
+            if (measureHoverFeatureRef.current) source.removeFeature(measureHoverFeatureRef.current);
+            measureHoverFeatureRef.current = null;
+            if (sample) {
+              const feature = new Feature({ geometry: new Point(fromLonLat([sample.lon, sample.lat])) });
+              feature.set("profile_hover", true);
+              source.addFeature(feature);
+              measureHoverFeatureRef.current = feature;
+            }
+          }}
+          onClose={closeProfileWindow}
+        />;
+      })}
       <MapBrushOverlay
         projection={mapInkProjection}
         scope={project?.project_id || ""}
@@ -4313,6 +4530,8 @@ export default function App({
           onAssistantPrompt={(prompt, displayMessage) => assistantDispatchRef.current(prompt, undefined, displayMessage)}
           onApplyGlobeScene={handleApplyLessonGlobeScene}
           getGlobeSceneSnapshot={getLessonGlobeSceneSnapshot}
+          getProfilePreset={getProfilePreset}
+          onApplyProfilePreset={applyProfilePreset}
           onFocusEvidenceLayer={(datasetId, stageDatasetIds) => {
             void handleFocusLessonEvidenceLayer(datasetId, stageDatasetIds);
           }}

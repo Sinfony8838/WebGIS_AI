@@ -630,6 +630,7 @@ class LessonRehearsalUpdateRequest(BaseModel):
     scene_capture: Optional[Dict[str, Any]] = None
     test_result: Optional[Dict[str, Any]] = None
     presentation_update: Optional[Dict[str, Any]] = None
+    profile_preset: Optional[Dict[str, Any]] = None
     expected_revision: int = Field(ge=0)
 
 
@@ -2201,6 +2202,7 @@ def update_lesson_rehearsal(rehearsal_id: str, payload: LessonRehearsalUpdateReq
             scene_capture=payload.scene_capture,
             test_result=payload.test_result,
             presentation_update=payload.presentation_update,
+            profile_preset=payload.profile_preset,
             expected_revision=payload.expected_revision,
         )
     except KeyError as exc:

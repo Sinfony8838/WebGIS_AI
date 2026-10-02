@@ -23,6 +23,8 @@ class ImageLibraryRuntimeTest(unittest.TestCase):
         config.outputs_dir = config.data_dir / "outputs"
         config.state_file = config.state_dir / "runtime.json"
         config.assistant_v2_enabled = True
+        config.minimax_api_key = ""
+        config.minimax_token_plan_key = ""
         config.ensure_dirs()
         runtime = WebGISRuntime(config=config, store=RuntimeStore(config.state_file))
         project = runtime.create_project()
