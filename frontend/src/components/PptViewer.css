@@ -8,7 +8,7 @@
   right: calc(var(--right-rail-width, 116px) + 136px);
   bottom: 84px;
   max-width: min(420px, calc(100vw - var(--right-rail-width, 116px) - 160px));
-  z-index: 37;
+  z-index: 51;
 }
 
 @media (max-width: 600px) {

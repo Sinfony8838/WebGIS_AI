@@ -19,6 +19,7 @@ describe("ProfileManagerBar", () => {
     expect(screen.getByRole("button", { name: "恢复显示全部剖面" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: "展开剖面管理" }));
     expect(screen.getByRole("button", { name: "人口密度变化" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "人口密度变化" })).toHaveFocus();
     expect(screen.getByRole("button", { name: "地形剖面" })).toBeVisible();
     fireEvent.keyDown(screen.getByRole("button", { name: "地形剖面" }), { key: "Escape" });
     expect(screen.queryByRole("button", { name: "地形剖面" })).toBeNull();

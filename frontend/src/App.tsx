@@ -624,6 +624,7 @@ export default function App({
   const pptBrushRef = useRef<BrushOverlayHandle | null>(null);
   const [mapBrushHasContent, setMapBrushHasContent] = useState(false);
   const [pptBrushHasContent, setPptBrushHasContent] = useState(false);
+  const [pptBrushCanUndo, setPptBrushCanUndo] = useState(false);
   // ── 3D digital-globe state ───────────────────────────────────────────
   // Boot into the 3D globe view; users land on the digital earth first
   // and can drill in to the 2D map either by zooming, double-clicking, or
@@ -2057,6 +2058,7 @@ export default function App({
       });
       setPptFileName(rendered.file_name || file.name);
       setPptBrushHasContent(false);
+      setPptBrushCanUndo(false);
       setInteractionMode("browse");
       setPptViewerOpen(true);
       pushToast("success", "PPT 已导入", `已使用 ${rendered.renderer} 渲染 ${rendered.slides.length} 张幻灯片`);
@@ -2070,6 +2072,7 @@ export default function App({
         });
         setPptFileName(result.fileName);
         setPptBrushHasContent(false);
+        setPptBrushCanUndo(false);
         setInteractionMode("browse");
         setPptViewerOpen(true);
         pushToast("info", "PPT 已导入（简易模式）", "未找到可用的服务端渲染器，已使用前端解析兜底。复杂背景可能不完全一致。");
@@ -2091,6 +2094,7 @@ export default function App({
     setInteractionMode("browse");
     setPptViewerOpen(false);
     setPptBrushHasContent(false);
+    setPptBrushCanUndo(false);
     setPptFileName("");
     setPptSlides((previousSlides) => {
       releaseSlideObjectUrls(previousSlides);
@@ -4389,6 +4393,7 @@ export default function App({
         <PptBrushFloat
           settings={brushSettings}
           hasContent={brushTargetHasContent}
+          canUndo={pptBrushCanUndo}
           onChangeSettings={(next) => setBrushSettings((prev) => ({ ...prev, ...next }))}
           onUndo={() => brushTargetRef.current?.undo()}
           onClear={() => brushTargetRef.current?.clear()}
@@ -4648,6 +4653,7 @@ export default function App({
           brushSettings={brushSettings}
           brushOverlayRef={pptBrushRef}
           onBrushContentChange={setPptBrushHasContent}
+          onBrushUndoChange={setPptBrushCanUndo}
           onExitBrush={() => setInteractionMode("browse")}
         />
       </div>

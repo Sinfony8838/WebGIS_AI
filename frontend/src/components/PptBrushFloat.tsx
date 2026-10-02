@@ -5,6 +5,7 @@ import type { BrushSettings } from "./BrushOverlay";
 type Props = {
   settings: BrushSettings;
   hasContent: boolean;
+  canUndo?: boolean;
   onChangeSettings: (next: Partial<BrushSettings>) => void;
   onUndo: () => void;
   onClear: () => void;
@@ -23,7 +24,7 @@ const COLORS = ["#ff4444", "#ffcc00", "#44cc44", "#4488ff", "#ffffff", "#cc66ff"
 const WIDTHS = [2, 4, 8];
 
 // 放映界面内的轻量画笔浮层：选完工具收起为小把手，结束画笔退出绘制状态。
-export function PptBrushFloat({ settings, hasContent, onChangeSettings, onUndo, onClear, onExit }: Props) {
+export function PptBrushFloat({ settings, hasContent, canUndo = hasContent, onChangeSettings, onUndo, onClear, onExit }: Props) {
   const [expanded, setExpanded] = useState(true);
   const handleRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -96,7 +97,7 @@ export function PptBrushFloat({ settings, hasContent, onChangeSettings, onUndo, 
           </button>
         ))}
         <span className="ppt-brush-spacer" />
-        <button type="button" className="ppt-brush-action" disabled={!hasContent} onClick={onUndo}>
+        <button type="button" className="ppt-brush-action" disabled={!canUndo} onClick={onUndo}>
           撤销
         </button>
         <button type="button" className="ppt-brush-action" disabled={!hasContent} onClick={onClear}>

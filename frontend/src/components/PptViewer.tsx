@@ -1,7 +1,8 @@
-import { type MutableRefObject, useState, useEffect, useRef, useCallback } from "react";
+import { type MutableRefObject, useState, useEffect, useRef, useCallback, useMemo } from "react";
 import type { SlideContent } from "../types";
 import { BrushOverlay, type BrushOverlayHandle, type BrushSettings } from "./BrushOverlay";
 import { isEditableKeyboardTarget, isInteractiveKeyboardTarget } from "../lib/keyboard";
+import { BrushHistory } from "../lib/brushHistory";
 import "./PptViewer.css";
 
 type Props = {
@@ -15,6 +16,7 @@ type Props = {
   brushSettings?: BrushSettings;
   brushOverlayRef?: MutableRefObject<BrushOverlayHandle | null>;
   onBrushContentChange?: (hasContent: boolean) => void;
+  onBrushUndoChange?: (canUndo: boolean) => void;
   onExitBrush?: () => void;
 };
 
@@ -31,12 +33,13 @@ export function PptViewer({
   brushSettings,
   brushOverlayRef,
   onBrushContentChange,
+  onBrushUndoChange,
   onExitBrush
 }: Props) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [scale, setScale] = useState(1);
   const stageRef = useRef<HTMLDivElement>(null);
-  const annotationImagesRef = useRef<Record<number, string>>({});
+  const annotationHistory = useMemo(() => new BrushHistory(30), [slides]);
 
   const slide = slides[currentIndex];
   const slideW = slide ? slide.width / EMU_PER_PX : 960;
@@ -53,24 +56,9 @@ export function PptViewer({
   }, [slideW, slideH, slide]);
 
   const saveCurrentAnnotation = useCallback(() => {
-    const brush = brushOverlayRef?.current;
-    if (!brush) return;
-    const dataUrl = brush.exportImage();
-    if (dataUrl) {
-      annotationImagesRef.current[currentIndex] = dataUrl;
-    } else {
-      delete annotationImagesRef.current[currentIndex];
-    }
-  }, [brushOverlayRef, currentIndex]);
-
-  const restoreAnnotation = useCallback(
-    (index: number) => {
-      const brush = brushOverlayRef?.current;
-      if (!brush) return;
-      brush.loadImage(annotationImagesRef.current[index] ?? null);
-    },
-    [brushOverlayRef]
-  );
+    // Finish a stroke if a page shortcut was used before pointer-up.
+    brushOverlayRef?.current?.exportImage();
+  }, [brushOverlayRef]);
 
   const goToSlide = useCallback(
     (nextIndex: number) => {
@@ -88,7 +76,6 @@ export function PptViewer({
   }, [onCollapse, saveCurrentAnnotation]);
 
   const handleRemove = useCallback(() => {
-    annotationImagesRef.current = {};
     onRemove();
   }, [onRemove]);
 
@@ -100,15 +87,8 @@ export function PptViewer({
   }, [open, recalcScale]);
 
   useEffect(() => {
-    annotationImagesRef.current = {};
     setCurrentIndex(0);
   }, [slides]);
-
-  useEffect(() => {
-    if (!open) return;
-    const frame = window.requestAnimationFrame(() => restoreAnnotation(currentIndex));
-    return () => window.cancelAnimationFrame(frame);
-  }, [currentIndex, open, restoreAnnotation, slides]);
 
   useEffect(() => {
     if (!open) return;
@@ -219,6 +199,9 @@ export function PptViewer({
               active={brushActive}
               settings={brushSettings}
               onContentChange={onBrushContentChange}
+              onUndoChange={onBrushUndoChange}
+              history={annotationHistory}
+              pageKey={String(currentIndex)}
             />
           ) : null}
         </div>

@@ -60,4 +60,15 @@ describe("PptBrushFloat", () => {
     expect(base.onUndo).toHaveBeenCalledTimes(1);
     expect(base.onClear).toHaveBeenCalledTimes(1);
   });
+
+  it("allows undo after clear and disables undo when an imported image has no history", () => {
+    const { rerender } = render(<PptBrushFloat {...base} hasContent={false} canUndo />);
+    expect(screen.getByRole("button", { name: "撤销" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "清空" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "撤销" }));
+    expect(base.onUndo).toHaveBeenCalledTimes(1);
+    rerender(<PptBrushFloat {...base} hasContent canUndo={false} />);
+    expect(screen.getByRole("button", { name: "撤销" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "清空" })).toBeEnabled();
+  });
 });

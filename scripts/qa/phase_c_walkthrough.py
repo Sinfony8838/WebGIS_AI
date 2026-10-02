@@ -76,6 +76,37 @@ def ink(locator) -> int:
     return locator.evaluate("canvas => { const a = canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data; let n=0; for(let i=3;i<a.length;i+=4) if(a[i]) n++; return n; }")
 
 
+def wait_for_ink(page, locator, expected: int) -> int:
+    for _ in range(60):
+        actual = ink(locator)
+        if actual == expected:
+            return actual
+        page.wait_for_timeout(50)
+    raise AssertionError({"expected_pixels": expected, "actual_pixels": actual})
+
+
+def overlap(first, second) -> bool:
+    a, b = first.bounding_box(), second.bounding_box()
+    assert a and b
+    return min(a["x"]+a["width"], b["x"]+b["width"]) > max(a["x"], b["x"]) and min(a["y"]+a["height"], b["y"]+b["height"]) > max(a["y"], b["y"])
+
+
+def move_profile(page, *, lower_right: bool):
+    window = page.locator("[data-testid^='profile-window-pw_']").first
+    expect(window).to_be_visible()
+    box, head = window.bounding_box(), window.locator(".profile-window-head").bounding_box()
+    assert box and head
+    viewport = page.viewport_size
+    left = viewport["width"]-box["width"]-8 if lower_right else 96
+    top = viewport["height"]-box["height"]-8 if lower_right else 120
+    x, y = head["x"]+80, head["y"]+16
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x+left-box["x"], y+top-box["y"], steps=16)
+    page.mouse.up()
+    return window
+
+
 def verify_clearance(page, foreground, obstacles):
     """Geometric check for chrome controls (teaching canvas may be overlaid intentionally)."""
     box = foreground.bounding_box()
@@ -113,6 +144,7 @@ def main() -> int:
         page = context.new_page()
         page.on("pageerror", lambda error: errors.append({"type": "pageerror", "message": str(error)[:500]}))
         page.on("console", lambda message: errors.append({"type": "console", "message": message.text[:500]}) if message.type == "error" else None)
+        page.on("response", lambda response: errors.append({"type": "http", "status": response.status, "url": response.url}) if response.status >= 400 else None)
         try:
             def login():
                 page.goto(args.front, wait_until="domcontentloaded")
@@ -169,11 +201,19 @@ def main() -> int:
                 expect(page.get_by_test_id("profile-manager-toggle")).to_have_attribute("aria-expanded", "false")
                 page.get_by_test_id("profile-manager-toggle").click()
                 expect(page.locator(".profile-manager-details")).to_be_visible()
-                page.get_by_test_id("profile-manager-toggle").press("Escape")
+                first_control = page.locator(".profile-manager-details button:not(:disabled)").first
+                expect(first_control).to_be_focused()
+                page.locator("[data-testid^='profile-line-open-population-']").first.click()
+                page.keyboard.press("Escape")
                 expect(page.locator(".profile-manager-details")).to_be_hidden()
+                expect(page.get_by_test_id("profile-manager-toggle")).to_be_focused()
+                window = move_profile(page, lower_right=True)
+                assert overlap(window, page.get_by_test_id("profiles-collapse-all"))
+                screenshot(page,"profile-controls-overlapping-window")
                 page.get_by_test_id("profiles-collapse-all").click()
                 expect(page.get_by_test_id("profiles-collapse-all")).to_have_attribute("aria-pressed","true")
                 page.get_by_test_id("profiles-collapse-all").click()
+                move_profile(page, lower_right=False)
                 page.get_by_role("button", name="测距模式 · 快捷键 M").click()
                 page.get_by_role("button", name="取消", exact=True).click()
                 expect(page.locator(".map-operation-controls")).to_have_count(0)
@@ -226,21 +266,27 @@ def main() -> int:
                     draw(page,canvas)
                     first_ink=ink(canvas)
                     assert first_ink>0, first_ink
+                    draw(page,canvas,offset=85)
+                    two_ink=ink(canvas)
+                    assert two_ink>first_ink, (first_ink,two_ink)
                     page.keyboard.press("ArrowRight")
                     expect(page.locator(".ppt-viewer-counter")).to_have_text("2 / 2")
                     page.wait_for_timeout(150)
                     assert ink(canvas)==0
                     page.get_by_role("button",name="上一页",exact=True).click()
                     expect(page.locator(".ppt-viewer-counter")).to_have_text("1 / 2")
-                    page.wait_for_timeout(500)
-                    restored=ink(canvas)
-                    assert restored==first_ink, (first_ink,restored)
+                    restored=wait_for_ink(page,canvas,two_ink)
                     screenshot(page,"ppt-restored-ink")
                     page.get_by_role("button",name="展开画笔设置",exact=True).click()
                     page.get_by_role("button",name="撤销",exact=True).click()
-                    assert ink(canvas)==0
-                    page.get_by_role("button",name="画笔工具自由",exact=True).click()
-                    draw(page,canvas)
+                    after_undo=wait_for_ink(page,canvas,first_ink)
+                    page.get_by_role("button",name="清空",exact=True).click()
+                    wait_for_ink(page,canvas,0)
+                    expect(page.get_by_role("button",name="撤销",exact=True)).to_be_enabled()
+                    expect(page.get_by_role("button",name="清空",exact=True)).to_be_disabled()
+                    page.get_by_role("button",name="撤销",exact=True).click()
+                    after_clear_undo=wait_for_ink(page,canvas,first_ink)
+                    screenshot(page,"ppt-per-stroke-clear-undo")
                     page.keyboard.press("Escape")
                     expect(page.locator(".ppt-brush-float")).to_have_count(0)
                     expect(page.locator(".ppt-viewer-backdrop")).to_be_visible()
@@ -253,7 +299,12 @@ def main() -> int:
                     for width,height in [(1366,768),(1920,1080)]:
                         page.set_viewport_size({"width":width,"height":height})
                         verify_clearance(page,page.locator(".ppt-viewer-dock"),[".profile-manager-bar", ".right-rail"])
+                        window=move_profile(page,lower_right=True)
+                        assert overlap(window,page.locator(".ppt-viewer-dock-main"))
                         screenshot(page,f"ppt-collapsed-dock-{width}")
+                        page.locator(".ppt-viewer-dock-main").click()
+                        expect(page.locator(".ppt-viewer-backdrop")).to_be_visible()
+                        page.locator(".ppt-viewer-controls").get_by_role("button",name="收起",exact=True).click()
                     page.locator(".ppt-viewer-dock-main").click()
                     expect(page.locator(".ppt-viewer-counter")).to_have_text("1 / 2")
                     page.wait_for_timeout(300)
@@ -264,7 +315,7 @@ def main() -> int:
                     expect(page.locator(".map-brush-panel")).to_have_count(0)
                     expect(page.locator(".map-operation-controls")).to_have_count(0)
                     page.locator(".ppt-viewer-dock-main").click()
-                    return {"drawn_pixels":first_ink,"restored_pixels":restored}
+                    return {"first_stroke_pixels":first_ink,"two_stroke_pixels":two_ink,"page_return_pixels":restored,"after_one_undo_pixels":after_undo,"after_clear_pixels":0,"after_clear_undo_pixels":after_clear_undo,"dock_click_over_profile_sizes":[1366,1920]}
                 step(page,"PPT 工具不遮挡、选后收起、绘制/切页/恢复/撤销与两次 Esc",brush_flow)
 
                 def input_guard():

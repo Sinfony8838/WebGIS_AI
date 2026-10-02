@@ -14,8 +14,10 @@ export function ProfileManagerBar({ count, collapsed, onToggleCollapsed, childre
   const detailsId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
+  const detailsRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!expanded) return;
+    detailsRef.current?.querySelector<HTMLElement>("button:not(:disabled), select:not(:disabled), input:not(:disabled), [tabindex='0']")?.focus();
     const closeOutside = (event: PointerEvent) => {
       if (event.target instanceof Node && !rootRef.current?.contains(event.target)) setExpanded(false);
     };
@@ -33,7 +35,7 @@ export function ProfileManagerBar({ count, collapsed, onToggleCollapsed, childre
           toggleRef.current?.focus();
         }
       }}>
-      <div id={detailsId} className="profile-manager-details" hidden={!expanded}>
+      <div ref={detailsRef} id={detailsId} className="profile-manager-details" hidden={!expanded}>
         <strong>剖面管理 · 已测 {count} 条测线</strong>
         {children}
       </div>
