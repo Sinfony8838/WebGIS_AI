@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { ProfileWindow, type MeasureRecord } from "../components/ProfileWindow";
+import { ProfileWindow, type MeasureRecord, type ProfileWindowGeometry } from "../components/ProfileWindow";
 import type { MapProfileResult } from "../types";
 
 // jsdom 没有 PointerEvent：拖拽测试需要真实的指针坐标。
@@ -33,7 +33,7 @@ const densitySources = [
   { id: "layer_x", name: "行政区密度面" }
 ];
 
-const result: MapProfileResult = {
+const populationResult: MapProfileResult = {
   kind: "population",
   source_id: "shanghai_worldpop_2020",
   source_name: "上海 2020 年人口网格（WorldPop ~100m 估计）",
@@ -55,78 +55,158 @@ const result: MapProfileResult = {
   value_note: "原始每像元估计人数已按像元实际面积换算为人/km²。"
 };
 
-describe("ProfileWindow", () => {
+const terrainResult: MapProfileResult = {
+  ...populationResult,
+  kind: "terrain",
+  source_id: "mapzen_terrain",
+  source_name: "Mapzen terrain tiles",
+  source_year: "",
+  unit: "m",
+  samples: [
+    { distance_km: 0, lon: 121.4, lat: 31.2, value: 4 },
+    { distance_km: 21.4, lon: 121.6, lat: 31.25, value: 6 }
+  ]
+};
+
+const baseGeometry: ProfileWindowGeometry = { left: 96, top: 120, width: 560, height: 330 };
+
+type MountProps = Partial<Parameters<typeof ProfileWindow>[0]>;
+
+function mount(overrides: MountProps = {}) {
+  const props: Parameters<typeof ProfileWindow>[0] = {
+    projectId: "p1",
+    windowId: "pw_1_population",
+    record,
+    kind: "population",
+    densitySources,
+    sourceId: "shanghai_worldpop_2020",
+    geometry: baseGeometry,
+    onGeometryChange: vi.fn(),
+    onSourceChange: vi.fn(),
+    onHover: vi.fn(),
+    onClose: vi.fn(),
+    ...overrides
+  };
+  const view = render(<ProfileWindow {...props} />);
+  return { view, props };
+}
+
+describe("ProfileWindow（每线每图一窗，任务3）", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
   afterEach(cleanup);
 
-  it("runs a population profile for its own line and shows the record name", async () => {
-    previewMock.mockResolvedValue(result);
-    const onHover = vi.fn();
-    render(<ProfileWindow projectId="p1" record={record} densitySources={densitySources} onHover={onHover} onClose={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "人口密度变化" }));
+  it("auto-runs the population profile for its line on mount and shows the record name", async () => {
+    previewMock.mockResolvedValue(populationResult);
+    mount();
     await waitFor(() => expect(previewMock).toHaveBeenCalledWith("p1", {
       coordinates: record.coordinates,
       kind: "population",
       source_id: "shanghai_worldpop_2020"
     }));
     expect(await screen.findByText(/本地裁剪栅格最近邻取值/)).toBeVisible();
-    expect(screen.getByTestId("profile-window-msr_1")).toHaveTextContent("测线 1");
+    const win = screen.getByTestId("profile-window-pw_1_population");
+    expect(win).toHaveTextContent("测线 1");
+    expect(win).toHaveTextContent("人口密度变化");
   });
 
-  it("shows conversion note, alpha caveat and attribution in the footnote", async () => {
-    previewMock.mockResolvedValue(result);
-    render(<ProfileWindow projectId="p1" record={record} densitySources={densitySources} onHover={vi.fn()} onClose={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "人口密度变化" }));
-    const footnote = await screen.findByText(/换算为人\/km²，非逐建筑实测/);
-    expect(footnote).toHaveTextContent("alpha 产品（R2025A v1），仍可能更新");
-    expect(footnote).toHaveTextContent("DOI:10.5258/SOTON/WP00839");
-    expect(footnote).toHaveTextContent("无数据 2 点，不作推断");
+  it("runs the terrain profile for the same line as a separate window", async () => {
+    previewMock.mockResolvedValue(terrainResult);
+    mount({ windowId: "pw_1_terrain", kind: "terrain", sourceId: "" });
+    await waitFor(() => expect(previewMock).toHaveBeenCalledWith("p1", {
+      coordinates: record.coordinates,
+      kind: "terrain",
+      source_id: "mapzen_terrain"
+    }));
+    expect(await screen.findByText(/Mapzen terrain tiles/)).toBeVisible();
+    // 地形窗口不显示人口数据源选择
+    expect(screen.queryByLabelText("测线 1人口密度数据源")).toBeNull();
   });
 
-  it("closes its own line via the header button", () => {
-    const onClose = vi.fn();
-    render(<ProfileWindow projectId="p1" record={record} densitySources={densitySources} onHover={vi.fn()} onClose={onClose} />);
-    fireEvent.click(screen.getByTestId("profile-window-close-msr_1"));
-    expect(onClose).toHaveBeenCalledWith("msr_1");
+  it("re-fetches when the population source changes and reports the change", async () => {
+    previewMock.mockResolvedValue(populationResult);
+    const { view } = mount();
+    await screen.findByText(/本地裁剪栅格最近邻取值/);
+    fireEvent.change(screen.getByLabelText("测线 1人口密度数据源"), { target: { value: "layer_x" } });
+    // 父组件（App）收到 onSourceChange 后回写 sourceId 触发重取数
+    view.rerender(<ProfileWindow
+      projectId="p1" windowId="pw_1_population" record={record} kind="population"
+      densitySources={densitySources} sourceId="layer_x"
+      geometry={baseGeometry}
+      onGeometryChange={vi.fn()} onSourceChange={vi.fn()} onHover={vi.fn()} onClose={vi.fn()}
+    />);
+    await waitFor(() => expect(previewMock).toHaveBeenLastCalledWith("p1", {
+      coordinates: record.coordinates,
+      kind: "population",
+      source_id: "layer_x"
+    }));
   });
 
-  it("drags by the header and resizes from the corner handle", () => {
-    render(<ProfileWindow projectId="p1" record={record} densitySources={densitySources} onHover={vi.fn()} onClose={vi.fn()} />);
-    const win = screen.getByTestId("profile-window-msr_1");
-    const before = win.style.left;
+  it("closes only itself via the header button", () => {
+    const { props } = mount();
+    fireEvent.click(screen.getByTestId("profile-window-close-pw_1_population"));
+    expect(props.onClose).toHaveBeenCalledWith("pw_1_population");
+  });
+
+  it("emits geometry changes when dragged by the header and resized from the corner handle", () => {
+    const { props } = mount();
+    const win = screen.getByTestId("profile-window-pw_1_population");
     const header = win.querySelector(".profile-window-head") as HTMLElement;
     fireEvent.pointerDown(header, { pointerId: 1, clientX: 200, clientY: 200, button: 0 });
     fireEvent.pointerMove(header, { pointerId: 1, clientX: 320, clientY: 160 });
     fireEvent.pointerUp(header, { pointerId: 1 });
-    expect(parseInt(win.style.left, 10)).toBe(parseInt(before, 10) + 120);
-    const handle = screen.getByTestId("profile-window-resize-msr_1");
-    const widthBefore = parseInt(win.style.width, 10);
+    expect(props.onGeometryChange).toHaveBeenCalledWith("pw_1_population", {
+      left: baseGeometry.left + 120,
+      top: baseGeometry.top - 40,
+      width: baseGeometry.width,
+      height: baseGeometry.height
+    });
+    const handle = screen.getByTestId("profile-window-resize-pw_1_population");
     fireEvent.pointerDown(handle, { pointerId: 2, clientX: 100, clientY: 100 });
     fireEvent.pointerMove(handle, { pointerId: 2, clientX: 220, clientY: 140 });
     fireEvent.pointerUp(handle, { pointerId: 2 });
-    expect(parseInt(win.style.width, 10)).toBe(widthBefore + 120);
+    expect(props.onGeometryChange).toHaveBeenLastCalledWith("pw_1_population", {
+      left: baseGeometry.left,
+      top: baseGeometry.top,
+      width: baseGeometry.width + 120,
+      height: baseGeometry.height + 40
+    });
   });
 
-  it("stays out of view when hidden and clears hover on close", () => {
-    const onHover = vi.fn();
+  it("stays out of view when hidden and still closes its own window", () => {
     const onClose = vi.fn();
-    const { rerender } = render(<ProfileWindow projectId="p1" record={record} densitySources={densitySources} hidden onHover={onHover} onClose={onClose} />);
-    expect(screen.getByTestId("profile-window-msr_1").className).toContain("is-hidden");
-    rerender(<ProfileWindow projectId="p1" record={record} densitySources={densitySources} hidden={false} onHover={onHover} onClose={onClose} />);
-    fireEvent.click(screen.getByTestId("profile-window-close-msr_1"));
-    expect(onClose).toHaveBeenCalledWith("msr_1");
+    const { view } = mount({ hidden: true, onClose });
+    expect(screen.getByTestId("profile-window-pw_1_population").className).toContain("is-hidden");
+    view.rerender(<ProfileWindow
+      projectId="p1" windowId="pw_1_population" record={record} kind="population"
+      densitySources={densitySources} sourceId="shanghai_worldpop_2020"
+      geometry={baseGeometry} hidden={false}
+      onGeometryChange={vi.fn()} onSourceChange={vi.fn()} onHover={vi.fn()} onClose={onClose}
+    />);
+    fireEvent.click(screen.getByTestId("profile-window-close-pw_1_population"));
+    expect(onClose).toHaveBeenCalledWith("pw_1_population");
   });
 
-  it("keeps its full header and close button inside the viewport after dragging", () => {
-    render(<ProfileWindow projectId="p1" record={record} densitySources={densitySources} onHover={vi.fn()} onClose={vi.fn()} />);
-    const win = screen.getByTestId("profile-window-msr_1");
+  it("keeps its header inside the viewport after a huge drag", () => {
+    const { props } = mount();
+    const win = screen.getByTestId("profile-window-pw_1_population");
     const header = win.querySelector(".profile-window-head") as HTMLElement;
     fireEvent.pointerDown(header, { pointerId: 1, clientX: 200, clientY: 200 });
     fireEvent.pointerMove(header, { pointerId: 1, clientX: 3000, clientY: 3000 });
     fireEvent.pointerUp(header, { pointerId: 1 });
-    expect(parseFloat(win.style.left) + parseFloat(win.style.width)).toBeLessThanOrEqual(window.innerWidth - 8);
-    expect(parseFloat(win.style.top) + parseFloat(win.style.height)).toBeLessThanOrEqual(window.innerHeight - 8);
+    const calls = props.onGeometryChange.mock.calls as Array<[string, ProfileWindowGeometry]>;
+    const last = calls[calls.length - 1][1];
+    expect(last.left + last.width).toBeLessThanOrEqual(window.innerWidth - 8);
+    expect(last.top + last.height).toBeLessThanOrEqual(window.innerHeight - 8);
+  });
+
+  it("shows conversion note, alpha caveat and attribution in the footnote", async () => {
+    previewMock.mockResolvedValue(populationResult);
+    mount();
+    const footnote = await screen.findByText(/换算为人\/km²，非逐建筑实测/);
+    expect(footnote).toHaveTextContent("alpha 产品（R2025A v1），仍可能更新");
+    expect(footnote).toHaveTextContent("DOI:10.5258/SOTON/WP00839");
+    expect(footnote).toHaveTextContent("无数据 2 点，不作推断");
   });
 });

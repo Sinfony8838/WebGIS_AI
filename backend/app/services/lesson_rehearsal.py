@@ -138,6 +138,7 @@ class LessonRehearsalService:
         scene_capture: Optional[Dict[str, Any]] = None,
         test_result: Optional[Dict[str, Any]] = None,
         presentation_update: Optional[Dict[str, Any]] = None,
+        profile_preset: Optional[Dict[str, Any]] = None,
         expected_revision: Optional[int] = None,
     ) -> Dict[str, Any]:
         # Store 返回的是持久对象本身；使用深拷贝保证组合操作中任一步失败时，
@@ -169,6 +170,8 @@ class LessonRehearsalService:
             events.append(self._record_test_result(record, test_result))
         if presentation_update:
             events.append(self._update_presentation(record, presentation_update))
+        if profile_preset:
+            events.append(self._update_profile_preset(record, profile_preset))
 
         if not events:
             raise ValueError("没有可保存的模拟测试修改。")
@@ -429,6 +432,23 @@ class LessonRehearsalService:
         stage = self._find_stage(record, stage_id)
         stage["scene"] = LessonService.merge_scene_snapshot(stage.get("scene") or {}, snapshot)
         return {"action": "scene_capture", "stage_id": stage_id, "at": utc_now()}
+
+    def _update_profile_preset(self, record: LessonRehearsalRecord, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """保存环节课前剖面预设：测线 + 窗口布局（坐标为视口占比，跨屏幕可适配）。"""
+        from .lessons import normalize_profile_preset
+
+        stage_id = str(payload.get("stage_id") or "")
+        stage = self._find_stage(record, stage_id)
+        raw = payload.get("preset")
+        clear = isinstance(raw, dict) and raw.get("lines") == [] and raw.get("windows") == []
+        preset = normalize_profile_preset(raw)
+        if not preset and not clear:
+            raise ValueError("剖面预设没有可保存的测线，请先在地图上绘制测线并打开剖面窗口。")
+        stage["profile_preset"] = preset
+        return {
+            "action": "profile_preset", "stage_id": stage_id,
+            "lines": len(preset.get("lines", [])), "windows": len(preset.get("windows", [])), "at": utc_now(),
+        }
 
     def _record_test_result(self, record: LessonRehearsalRecord, payload: Dict[str, Any]) -> Dict[str, Any]:
         key = str(payload.get("key") or "").strip()

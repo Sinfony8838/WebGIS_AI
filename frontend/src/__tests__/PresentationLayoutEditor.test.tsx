@@ -195,4 +195,14 @@ describe("PresentationLayoutEditor", () => {
     expect(blocks.some((block: { id: string }) => block.id === "blk_ext")).toBe(false);
     expect(blocks.some((block: { type: string }) => block.type === "text")).toBe(true);
   });
+  it("preserves native video pointer events instead of starting a drag", () => {
+    const videoStage = stage({ presentation: { blocks: [{ id: "video-control", type: "video", asset: { url: "https://example.test/clip.webm" }, x: .2, y: .2, w: .5, h: .4, z: 0, order: 0 }] } });
+    render(<PresentationLayoutEditor stage={videoStage} projectId="p1" busy={false} libraryAssets={[]} onSave={vi.fn()} />);
+    const video = screen.getByTestId("ple-canvas").querySelector("video")!;
+    const event = new PointerEvent("pointerdown", { bubbles: true, cancelable: true, clientX: 30, clientY: 30 });
+    fireEvent(video, event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(screen.getByTestId("ple-save")).toBeDisabled();
+  });
+
 });

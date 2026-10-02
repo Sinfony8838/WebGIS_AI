@@ -308,7 +308,10 @@
 }
 
 /* 教学过程表：环节素材入口（任务1） */
-.lpt-material-field { margin-top: 4px; }
+.lpt-material-field {
+  display: block;
+  margin-top: 4px;
+}
 .lpt-material-field summary {
   cursor: pointer; color: #1d4ed8; font-weight: 600; font-size: 12px;
   padding: 5px 8px; border-radius: 7px; background: #eff6ff; border: 1px solid #bfdbfe;

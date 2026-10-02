@@ -41,6 +41,7 @@ import type {
   PopulationLessonPrepResult,
   PopulationSourceCard,
   PopulationSourceVersion,
+  ProfilePreset,
   ProjectRecord,
   SceneSnapshot,
   TeachingContext
@@ -89,6 +90,10 @@ type Props = {
   onRequestPlaneView?: () => void;
   /** 框选真实地图截图并将 Artifact 记入当前课堂事件。 */
   onCaptureEvidence?: (sessionId: string, stageId: string) => void;
+  /** 模拟测试里把当前测线/剖面窗口布局保存为本环节课前预设（任务4）。 */
+  getProfilePreset?: () => ProfilePreset | null;
+  /** 进入课堂/模拟测试环节时加载该环节的课前剖面预设（任务4）。 */
+  onApplyProfilePreset?: (stage: LessonStage) => void;
 };
 
 export function currentLayerSnapshot(
@@ -203,7 +208,9 @@ export function LessonWorkflowShell({
   getGlobeSceneSnapshot,
   onFocusEvidenceLayer,
   onRequestPlaneView,
-  onCaptureEvidence
+  onCaptureEvidence,
+  getProfilePreset,
+  onApplyProfilePreset
 }: Props) {
   const [lessonMode, setLessonMode] = useState<LessonMode>("off");
   const [lessons, setLessons] = useState<LessonRecord[]>([]);
@@ -828,6 +835,23 @@ export function LessonWorkflowShell({
     </nav>
   );
 
+  const classCurrentStage = useMemo(() => {
+    if (!activeLesson || !activeSession?.current_stage_id) return null;
+    return activeLesson.stages.find(stage => stage.stage_id === activeSession.current_stage_id) || null;
+  }, [activeLesson, activeSession?.current_stage_id]);
+  // 课中进入环节：有课前剖面预设时加载（任务4；正在运行的课堂继续使用开课快照里的预设）。
+  const appliedProfileStageRef = useRef("");
+  useEffect(() => {
+    if (!teachPanelVisible || !classCurrentStage) {
+      appliedProfileStageRef.current = "";
+      return;
+    }
+    const key = `${activeSession?.project_id}:${activeSession?.session_id}:${classCurrentStage.stage_id}`;
+    if (appliedProfileStageRef.current === key) return;
+    appliedProfileStageRef.current = key;
+    onApplyProfilePreset?.(classCurrentStage);
+  }, [teachPanelVisible, classCurrentStage, activeSession?.project_id, activeSession?.session_id, onApplyProfilePreset]);
+
   return (
     <>
       {menuTarget ? createPortal(teachingMenu, menuTarget) : <div className="classroom-top-menu-fallback">{teachingMenu}</div>}
@@ -1011,6 +1035,8 @@ export function LessonWorkflowShell({
           projectId={project.project_id}
           lesson={activeLesson}
           getSceneSnapshot={() => currentLayerSnapshot(layerState, getGlobeSceneSnapshot?.())}
+          getProfilePreset={getProfilePreset}
+          onApplyProfilePreset={onApplyProfilePreset}
           onApplyGlobeScene={(globe) => onApplyGlobeScene?.(globe)}
           onRefresh={onRefresh}
           onLessonCommitted={(lesson) => {

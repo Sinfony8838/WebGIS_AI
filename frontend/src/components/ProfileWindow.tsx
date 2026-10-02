@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { previewMapProfile } from "../api";
-import type { MapProfileResult, MapProfileSample } from "../types";
+import type { MapProfileResult, MapProfileSample, ProfileWindowKind } from "../types";
 import "./ProfileWindow.css";
 
 export type MeasureRecord = {
@@ -11,42 +11,48 @@ export type MeasureRecord = {
   color: string;
 };
 
+export type ProfileWindowGeometry = { left: number; top: number; width: number; height: number };
+
 type Source = { id: string; name: string };
 type Props = {
   projectId: string;
+  windowId: string;
   record: MeasureRecord;
+  /** 每个窗口固定一种图：人口密度变化 或 地形剖面（任务3：同线两图并存）。 */
+  kind: ProfileWindowKind;
   densitySources: Source[];
+  sourceId: string;
+  geometry: ProfileWindowGeometry;
   hidden?: boolean;
+  onGeometryChange: (windowId: string, geometry: ProfileWindowGeometry) => void;
+  onSourceChange: (windowId: string, sourceId: string) => void;
   onHover: (sample: MapProfileSample | null) => void;
-  onClose: (recordId: string) => void;
+  onClose: (windowId: string) => void;
+  zIndex?: number;
 };
 
 const MIN_W = 320;
 const MIN_H = 220;
+const KIND_LABELS: Record<ProfileWindowKind, string> = { population: "人口密度变化", terrain: "地形剖面" };
 
-// 每条测线一个独立剖面小窗：可拖动、可放大缩小、可单独关闭，多窗并存对照。
-export function ProfileWindow({ projectId, record, densitySources, hidden, onHover, onClose }: Props) {
-  const [position, setPosition] = useState(() => ({
-    // 按记录序号轻微错位，避免多窗完全重叠。
-    left: 96 + ((record.id.charCodeAt(record.id.length - 1) * 7) % 160),
-    top: 120 + ((record.id.charCodeAt(record.id.length - 1) * 11) % 140)
-  }));
-  const [size, setSize] = useState({ width: 560, height: 330 });
-  useEffect(() => {
-    const fitViewport = () => {
-      const width = Math.min(size.width, Math.max(1, window.innerWidth - 16));
-      const height = Math.min(size.height, Math.max(1, window.innerHeight - 80));
-      setSize(previous => previous.width === width && previous.height === height ? previous : { width, height });
-      setPosition(previous => ({
-        left: Math.max(8, Math.min(window.innerWidth - width - 8, previous.left)),
-        top: Math.max(64, Math.min(window.innerHeight - height - 8, previous.top))
-      }));
-    };
-    fitViewport();
-    window.addEventListener("resize", fitViewport);
-    return () => window.removeEventListener("resize", fitViewport);
-  }, [size.width, size.height]);
-  const [sourceId, setSourceId] = useState(densitySources[0]?.id || "");
+// 每条测线每类图一个独立剖面小窗：可拖动、可缩放、可单独关闭，同线人口/地形并存对照。
+export function ProfileWindow({
+  projectId,
+  windowId,
+  record,
+  kind,
+  densitySources,
+  sourceId,
+  geometry,
+  hidden,
+  onGeometryChange,
+  onSourceChange,
+  onHover,
+  onClose,
+  zIndex
+}: Props) {
+  const position = { left: geometry.left, top: geometry.top };
+  const size = { width: geometry.width, height: geometry.height };
   const [result, setResult] = useState<MapProfileResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -54,14 +60,28 @@ export function ProfileWindow({ projectId, record, densitySources, hidden, onHov
   const requestNumber = useRef(0);
   const svgRef = useRef<SVGSVGElement>(null);
   const windowRef = useRef<HTMLDivElement | null>(null);
-  const dragRef = useRef<{ startX: number; startY: number; origin: { left: number; top: number } } | null>(null);
-  const resizeRef = useRef<{ startX: number; startY: number; origin: { width: number; height: number } } | null>(null);
+  const dragRef = useRef<{ startX: number; startY: number; origin: ProfileWindowGeometry } | null>(null);
+  const resizeRef = useRef<{ startX: number; startY: number; origin: ProfileWindowGeometry } | null>(null);
   const onHoverRef = useRef(onHover);
   onHoverRef.current = onHover;
 
+  // 视口变化时把窗口夹回可操作范围（不同屏幕尺寸可见、可拖动）。
   useEffect(() => {
-    if (!densitySources.some(source => source.id === sourceId)) setSourceId(densitySources[0]?.id || "");
-  }, [densitySources, sourceId]);
+    const clamp = () => {
+      const width = Math.min(geometry.width, Math.max(MIN_W, window.innerWidth - 16));
+      const height = Math.min(geometry.height, Math.max(MIN_H, window.innerHeight - 80));
+      const left = Math.max(8, Math.min(window.innerWidth - geometry.width - 8, geometry.left));
+      const top = Math.max(64, Math.min(window.innerHeight - geometry.height - 8, geometry.top));
+      if (width !== geometry.width || height !== geometry.height || left !== geometry.left || top !== geometry.top) {
+        onGeometryChange(windowId, { left, top, width, height });
+      }
+    };
+    clamp();
+    window.addEventListener("resize", clamp);
+    return () => window.removeEventListener("resize", clamp);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geometry.left, geometry.top, geometry.width, geometry.height, windowId]);
+
   useEffect(() => {
     setResult(null);
     setError("");
@@ -70,6 +90,29 @@ export function ProfileWindow({ projectId, record, densitySources, hidden, onHov
     requestNumber.current++;
   }, [record.coordinates, projectId]);
   useEffect(() => () => onHoverRef.current(null), []);
+
+  // 窗口诞生即读取数据；人口窗口切换数据源后自动重读。
+  useEffect(() => {
+    const id = kind === "terrain" ? "mapzen_terrain" : sourceId;
+    if (!id) return;
+    const current = ++requestNumber.current;
+    setLoading(true);
+    setError("");
+    setResult(null);
+    setHovered(null);
+    onHover(null);
+    previewMapProfile(projectId, { coordinates: record.coordinates, kind, source_id: id })
+      .then((next) => {
+        if (requestNumber.current === current) setResult(next);
+      })
+      .catch((cause) => {
+        if (requestNumber.current === current) setError(cause instanceof Error ? cause.message : "剖面生成失败");
+      })
+      .finally(() => {
+        if (requestNumber.current === current) setLoading(false);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind, sourceId, record.coordinates, projectId]);
 
   const chart = useMemo(() => {
     if (!result) return null;
@@ -91,25 +134,6 @@ export function ProfileWindow({ projectId, record, densitySources, hidden, onHov
     return { path, low, high, x, y };
   }, [result]);
 
-  async function run(kind: "population" | "terrain") {
-    const id = kind === "terrain" ? "mapzen_terrain" : sourceId;
-    if (!id) return;
-    const current = ++requestNumber.current;
-    setLoading(true);
-    setError("");
-    setResult(null);
-    setHovered(null);
-    onHover(null);
-    try {
-      const next = await previewMapProfile(projectId, { coordinates: record.coordinates, kind, source_id: id });
-      if (requestNumber.current === current) setResult(next);
-    } catch (cause) {
-      if (requestNumber.current === current) setError(cause instanceof Error ? cause.message : "剖面生成失败");
-    } finally {
-      if (requestNumber.current === current) setLoading(false);
-    }
-  }
-
   function move(event: React.PointerEvent<SVGSVGElement>) {
     if (!result || !svgRef.current) return;
     const rectangle = svgRef.current.getBoundingClientRect();
@@ -124,7 +148,7 @@ export function ProfileWindow({ projectId, record, densitySources, hidden, onHov
   function onHeaderPointerDown(event: React.PointerEvent<HTMLDivElement>) {
     if ((event.target as HTMLElement).closest("button")) return;
     event.preventDefault();
-    dragRef.current = { startX: event.clientX, startY: event.clientY, origin: position };
+    dragRef.current = { startX: event.clientX, startY: event.clientY, origin: geometry };
     event.currentTarget.setPointerCapture?.(event.pointerId);
   }
   function onHeaderPointerMove(event: React.PointerEvent<HTMLDivElement>) {
@@ -132,9 +156,11 @@ export function ProfileWindow({ projectId, record, densitySources, hidden, onHov
     if (!drag) return;
     const maxLeft = window.innerWidth - size.width - 8;
     const maxTop = window.innerHeight - size.height - 8;
-    setPosition({
+    onGeometryChange(windowId, {
       left: Math.max(8, Math.min(maxLeft, drag.origin.left + event.clientX - drag.startX)),
-      top: Math.max(64, Math.min(maxTop, drag.origin.top + event.clientY - drag.startY))
+      top: Math.max(64, Math.min(maxTop, drag.origin.top + event.clientY - drag.startY)),
+      width: size.width,
+      height: size.height
     });
   }
   function onHeaderPointerUp() {
@@ -143,13 +169,15 @@ export function ProfileWindow({ projectId, record, densitySources, hidden, onHov
   function onResizePointerDown(event: React.PointerEvent<HTMLSpanElement>) {
     event.preventDefault();
     event.stopPropagation();
-    resizeRef.current = { startX: event.clientX, startY: event.clientY, origin: size };
+    resizeRef.current = { startX: event.clientX, startY: event.clientY, origin: geometry };
     event.currentTarget.setPointerCapture?.(event.pointerId);
   }
   function onResizePointerMove(event: React.PointerEvent<HTMLSpanElement>) {
     const resize = resizeRef.current;
     if (!resize) return;
-    setSize({
+    onGeometryChange(windowId, {
+      left: position.left,
+      top: position.top,
       width: Math.min(window.innerWidth - position.left - 8, Math.max(MIN_W, resize.origin.width + event.clientX - resize.startX)),
       height: Math.min(window.innerHeight - position.top - 8, Math.max(MIN_H, resize.origin.height + event.clientY - resize.startY))
     });
@@ -164,9 +192,9 @@ export function ProfileWindow({ projectId, record, densitySources, hidden, onHov
     <div
       ref={windowRef}
       className={`profile-window${hidden ? " is-hidden" : ""}`}
-      style={{ left: position.left, top: position.top, width: size.width, height: size.height }}
-      data-testid={`profile-window-${record.id}`}
-      aria-label={`${record.name}剖面`}
+      style={{ left: position.left, top: position.top, width: size.width, height: size.height, zIndex: zIndex || undefined }}
+      data-testid={`profile-window-${windowId}`}
+      aria-label={`${record.name}${KIND_LABELS[kind]}窗口`}
     >
       <div
         className="profile-window-head"
@@ -176,26 +204,24 @@ export function ProfileWindow({ projectId, record, densitySources, hidden, onHov
         onPointerCancel={onHeaderPointerUp}
       >
         <span className="profile-window-dot" style={{ background: record.color }} />
-        <strong>{record.name} · {record.totalKm.toFixed(2)} 千米</strong>
+        <strong>{record.name} · {KIND_LABELS[kind]} · {record.totalKm.toFixed(2)} 千米</strong>
         <button
           type="button"
           className="profile-window-close"
-          aria-label={`关闭${record.name}及其剖面窗口`}
-          data-testid={`profile-window-close-${record.id}`}
-          onClick={() => onClose(record.id)}
+          aria-label={`关闭${record.name}${KIND_LABELS[kind]}窗口`}
+          data-testid={`profile-window-close-${windowId}`}
+          onClick={() => onClose(windowId)}
         >
           ×
         </button>
       </div>
       <div className="profile-window-body">
         <div className="profile-window-controls">
-          {densitySources.length > 0 && <>
-            <select aria-label={`${record.name}人口密度数据源`} value={sourceId} onChange={event => setSourceId(event.target.value)}>
+          {kind === "population" && densitySources.length > 0 && <>
+            <select aria-label={`${record.name}人口密度数据源`} value={sourceId} onChange={event => onSourceChange(windowId, event.target.value)}>
               {densitySources.map(source => <option key={source.id} value={source.id}>{source.name}</option>)}
             </select>
-            <button type="button" disabled={loading} onClick={() => void run("population")}>人口密度变化</button>
           </>}
-          <button type="button" disabled={loading} onClick={() => void run("terrain")}>地形剖面</button>
         </div>
         {loading && <p role="status">正在读取原始数据…</p>}
         {error && <p role="alert" className="profile-window-error">{error}</p>}
@@ -224,8 +250,8 @@ export function ProfileWindow({ projectId, record, densitySources, hidden, onHov
       </div>
       <span
         className="profile-window-resize"
-        aria-label={`缩放${record.name}剖面窗口`}
-        data-testid={`profile-window-resize-${record.id}`}
+        aria-label={`缩放${record.name}${KIND_LABELS[kind]}窗口`}
+        data-testid={`profile-window-resize-${windowId}`}
         onPointerDown={onResizePointerDown}
         onPointerMove={onResizePointerMove}
         onPointerUp={onResizePointerUp}
