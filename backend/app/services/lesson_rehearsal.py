@@ -439,13 +439,15 @@ class LessonRehearsalService:
 
         stage_id = str(payload.get("stage_id") or "")
         stage = self._find_stage(record, stage_id)
-        preset = normalize_profile_preset(payload.get("preset"))
-        if not preset:
+        raw = payload.get("preset")
+        clear = isinstance(raw, dict) and raw.get("lines") == [] and raw.get("windows") == []
+        preset = normalize_profile_preset(raw)
+        if not preset and not clear:
             raise ValueError("剖面预设没有可保存的测线，请先在地图上绘制测线并打开剖面窗口。")
         stage["profile_preset"] = preset
         return {
             "action": "profile_preset", "stage_id": stage_id,
-            "lines": len(preset["lines"]), "windows": len(preset["windows"]), "at": utc_now(),
+            "lines": len(preset.get("lines", [])), "windows": len(preset.get("windows", [])), "at": utc_now(),
         }
 
     def _record_test_result(self, record: LessonRehearsalRecord, payload: Dict[str, Any]) -> Dict[str, Any]:

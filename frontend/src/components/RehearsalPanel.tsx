@@ -248,7 +248,7 @@ export function RehearsalPanel({
       const stage = (rehearsal.working_copy?.stages || lesson.stages || []).find(
         (item) => item.stage_id === stageId
       );
-      if (stage?.profile_preset?.lines?.length) onApplyProfilePreset?.(stage);
+      if (stage) onApplyProfilePreset?.(stage);
       await onRefresh();
     }
   }

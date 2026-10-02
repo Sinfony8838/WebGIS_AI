@@ -796,6 +796,8 @@ export default function App({
         choices.push({ id: layer.layer_id, name: layer.name });
       }
     }
+    // 本地人口包与密度面都不可用时兜底 GPW 在线源，保证人口剖面窗口始终可用。
+    if (!choices.length) choices.push({ id: "gpw_2020", name: "全球 GPW 2020 栅格（在线）" });
     return choices;
   }, [activeBasemapId, layerState?.items, populationPackages]);
 
@@ -809,6 +811,9 @@ export default function App({
       }
       const windowId = `pw_${Date.now().toString(36)}_${previous.length}_${kind}`;
       const index = previous.length;
+      const panel = document.querySelector('[data-testid="rehearsal-panel"], [data-testid="class-run-panel"]');
+      const panelEdge = panel?.getBoundingClientRect().right || 80;
+      const initialLeft = Math.max(96, panelEdge + 16);
       setFrontWindowId(windowId);
       return [
         ...previous,
@@ -817,7 +822,7 @@ export default function App({
           recordId: record.id,
           kind,
           sourceId: sourceId || densityProfileSources[0]?.id || "",
-          left: 96 + (index % 4) * 36,
+          left: Math.min(window.innerWidth - 568, initialLeft + (index % 4) * 36),
           top: 120 + (index % 4) * 32,
           width: Math.min(560, Math.max(320, window.innerWidth - 240)),
           height: Math.min(330, Math.max(220, window.innerHeight - 200))
@@ -832,6 +837,9 @@ export default function App({
   }, []);
 
   const clearMeasureLine = useCallback((recordId: string) => {
+    const source = measureSourceRef.current;
+    source?.getFeatures().filter(feature => feature.get("measure_record_id") === recordId || feature.get("profile_hover")).forEach(feature => source.removeFeature(feature));
+    measureHoverFeatureRef.current = null;
     setMeasureRecords(previous => previous.filter(item => item.id !== recordId));
     setProfileWindows(previous => previous.filter(win => win.recordId !== recordId));
   }, []);
@@ -859,7 +867,7 @@ export default function App({
 
   // ---- 课前剖面预设（任务4）：随课时环节保存 / 课堂加载 ----
   const getProfilePreset = useCallback((): ProfilePreset | null => {
-    if (!measureRecords.length) return null;
+    if (!measureRecords.length) return { lines: [], windows: [] };
     return {
       lines: measureRecords.map(record => ({
         id: record.id,
@@ -882,14 +890,18 @@ export default function App({
     };
   }, [measureRecords, profileWindows]);
 
-  // 课堂/模拟测试进入某环节时加载该环节的课前剖面预设（无预设则保持现状）。
+  // 课堂/模拟测试进入环节时替换剖面；无预设环节清空上一环节内容。
   const applyProfilePreset = useCallback((stage: { stage_id?: string; profile_preset?: ProfilePreset | null }) => {
     const preset = stage.profile_preset;
-    if (!preset || !preset.lines?.length) return;
+    if (!preset || !preset.lines?.length) { clearAllMeasureLines(); return; }
+    lessonGlobePinnedRef.current = false;
+    lessonGlobeRestoreRef.current = null;
+    const firstPoint = preset.lines[0].coordinates[0];
+    transitionToPlaneRef.current?.({ lon: firstPoint[0], lat: firstPoint[1], zoom: 9, reason: "manual" });
     measureSourceRef.current?.clear();
     measureHoverFeatureRef.current = null;
     const records: MeasureRecord[] = preset.lines.map((line, index) => ({
-      id: `pst_${line.id || index}`,
+      id: line.id || `preset_line_${index}`,
       name: line.name || `测线 ${index + 1}`,
       coordinates: line.coordinates,
       totalKm: line.total_km,
@@ -901,7 +913,7 @@ export default function App({
       const geometry = presetToGeometry(win);
       return {
         windowId: `pw_${stage.stage_id || "pst"}_${index}_${win.kind}`,
-        recordId: `pst_${line.id || win.record_index}`,
+        recordId: line.id || `preset_line_${win.record_index}`,
         kind: win.kind,
         sourceId: win.source_id || densityProfileSources[0]?.id || "",
         left: geometry.left, top: geometry.top, width: geometry.width, height: geometry.height
@@ -911,11 +923,19 @@ export default function App({
     const source = measureSourceRef.current;
     if (source) {
       records.forEach(record => {
-        source.addFeature(new Feature({ geometry: new LineString(record.coordinates.map(point => fromLonLat(point))) }));
+        source.addFeature(new Feature({ geometry: new LineString(record.coordinates.map(point => fromLonLat(point))), measure_record_id: record.id }));
       });
     }
     setProfilesCollapsed(false);
-  }, [densityProfileSources]);
+    requestAnimationFrame(() => {
+      const map = mapRef.current;
+      map?.updateSize();
+      const extent = source?.getExtent();
+      if (map && extent?.every(Number.isFinite)) {
+        map.getView().fit(extent, { padding: [90, 110, 100, 100], maxZoom: 12, duration: 0 });
+      }
+    });
+  }, [densityProfileSources, clearAllMeasureLines]);
   const weatherBasemapEnabled = Boolean(health?.online_services.weather_basemap_enabled);
   const weatherBasemapActive = isWeatherBasemapId(activeBasemapId);
   const kbActiveLayerId = layerState?.active_layer_id || "";
@@ -3669,6 +3689,7 @@ export default function App({
       if (geometry instanceof LineString) {
         const coordinates = geometry.getCoordinates().map(point => toLonLat(point) as [number, number]);
         const recordId = `msr_${Date.now().toString(36)}_${(measureSeqRef.current += 1)}`;
+        event.feature.set("measure_record_id", recordId);
         setMeasureRecords(previous => [
           ...previous,
           {
@@ -3966,7 +3987,7 @@ export default function App({
           key={win.windowId}
           projectId={project.project_id}
           windowId={win.windowId}
-          zIndex={win.windowId === frontWindowId ? 402 : 401}
+          zIndex={win.windowId === frontWindowId ? 46 : 45}
           record={record}
           kind={win.kind}
           densitySources={densityProfileSources}

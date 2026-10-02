@@ -630,6 +630,7 @@ class LessonRehearsalUpdateRequest(BaseModel):
     scene_capture: Optional[Dict[str, Any]] = None
     test_result: Optional[Dict[str, Any]] = None
     presentation_update: Optional[Dict[str, Any]] = None
+    profile_preset: Optional[Dict[str, Any]] = None
     expected_revision: int = Field(ge=0)
 
 

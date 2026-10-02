@@ -213,9 +213,11 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
 
   function onPointerDown(event: ReactPointerEvent, block: PresentationBlock, mode: "move" | "resize") {
     if (busy) return;
+    setSelectedId(block.id);
+    // Native media controls and form controls must keep their pointer events.
+    if (mode === "move" && (event.target as HTMLElement).closest("video, audio, button, a, input, textarea, select, [contenteditable=true]")) return;
     event.preventDefault();
     event.stopPropagation();
-    setSelectedId(block.id);
     dragRef.current = { id: block.id, mode, startX: event.clientX, startY: event.clientY, origin: { ...block } };
     (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
   }

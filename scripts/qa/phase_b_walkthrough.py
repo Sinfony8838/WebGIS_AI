@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import os
 import json
 import sys
 from pathlib import Path
@@ -15,8 +16,8 @@ from playwright.sync_api import sync_playwright, expect
 ROOT = Path(__file__).resolve().parents[2]
 SHOTS = ROOT / "scratch" / "e2e" / "shots"
 SHOTS.mkdir(parents=True, exist_ok=True)
-FRONT = "http://127.0.0.1:5822"
-BACK = "http://127.0.0.1:18643"
+FRONT = os.getenv("WEBGIS_QA_FRONT", "http://127.0.0.1:5822")
+BACK = os.getenv("WEBGIS_QA_BACK", "http://127.0.0.1:18643")
 
 results: list[dict] = []
 
@@ -85,14 +86,32 @@ def main() -> int:
 
         # ---- 1. 展开地图工具并进入测距模式 ----
         try:
-            page.get_by_test_id("map-tools-dock-toggle").click(timeout=10000)
-            page.get_by_test_id("map-tool-measure").click(timeout=10000)
+            page.get_by_role("button", name="展开地图工具与可视化地图").click(timeout=10000)
+            # 默认 3D 地球：先切到 2D 平面地图（测距/剖面仅 2D）
+            mode_toggle = page.get_by_test_id("map-mode-toggle")
+            if mode_toggle.get_attribute("aria-pressed") == "true":
+                mode_toggle.click()
+                page.wait_for_timeout(2500)
+            page.get_by_role("button", name="测距模式 · 快捷键 M").click(timeout=10000)
             page.wait_for_timeout(600)
             record("进入测距模式", True)
         except Exception as exc:  # noqa: BLE001
             record("进入测距模式", False, str(exc)[:200])
             shot(page, "b01-measure-mode-fail.png")
             return 1
+
+        # ---- 1b. 放大到城市级视野，保证测线长度落在 1m–2000km 有效区间 ----
+        try:
+            canvas = page.locator(".ol-viewport").first
+            box = canvas.bounding_box()
+            cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+            for _ in range(5):
+                page.mouse.move(cx, cy)
+                page.mouse.wheel(0, -300)
+                page.wait_for_timeout(220)
+            record("滚轮放大到城市级视野", True)
+        except Exception as exc:  # noqa: BLE001
+            record("滚轮放大", False, str(exc)[:200])
 
         # ---- 2. 真实画两条测线（地图画布坐标） ----
         try:
@@ -102,6 +121,9 @@ def main() -> int:
             cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
             draw_measure_line(page, (cx - 220, cy - 60), (cx + 160, cy + 40))
             page.wait_for_timeout(800)
+            # 画完一条自动回到浏览模式：重新进入测距再画第二条
+            page.get_by_role("button", name="测距模式 · 快捷键 M").click()
+            page.wait_for_timeout(500)
             draw_measure_line(page, (cx - 120, cy + 140), (cx + 240, cy - 120))
             page.wait_for_timeout(1200)
             bar = page.get_by_test_id("profile-windows-bar")
@@ -135,12 +157,14 @@ def main() -> int:
 
         # ---- 4. 剖面数据真实加载（人口源 + 地形） ----
         try:
-            page.wait_for_timeout(2500)
+            # 每个独立窗口异步采样；等待四个完成，不能把首个本地结果当成地形也已完成。
+            expect(page.locator(".profile-window-meta")).to_have_count(4, timeout=60000)
             pop_meta = page.locator(".profile-window-meta", has_text="人口密度").count()
             terrain_meta = page.locator(".profile-window-meta", has_text="高程").count()
             footnotes = page.locator(".profile-window-footnote").count()
+            errs = page.locator(".profile-window-error").all_text_contents()
             record("窗口内数据与来源/分辨率/无数据标注", pop_meta >= 1 and terrain_meta >= 1 and footnotes >= 1,
-                   f"人口 {pop_meta} · 地形 {terrain_meta} · 脚注 {footnotes}")
+                   f"人口 {pop_meta} · 地形 {terrain_meta} · 脚注 {footnotes} · 错误: {errs}")
         except Exception as exc:  # noqa: BLE001
             record("窗口数据加载", False, str(exc)[:200])
 

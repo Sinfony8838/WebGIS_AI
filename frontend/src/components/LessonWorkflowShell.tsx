@@ -786,13 +786,15 @@ export function LessonWorkflowShell({
   // 课中进入环节：有课前剖面预设时加载（任务4；正在运行的课堂继续使用开课快照里的预设）。
   const appliedProfileStageRef = useRef("");
   useEffect(() => {
-    if (!teachPanelVisible || !classCurrentStage) return;
-    if (appliedProfileStageRef.current === classCurrentStage.stage_id) return;
-    appliedProfileStageRef.current = classCurrentStage.stage_id;
-    if (classCurrentStage.profile_preset?.lines?.length) {
-      onApplyProfilePreset?.(classCurrentStage);
+    if (!teachPanelVisible || !classCurrentStage) {
+      appliedProfileStageRef.current = "";
+      return;
     }
-  }, [teachPanelVisible, classCurrentStage, onApplyProfilePreset]);
+    const key = `${activeSession?.project_id}:${activeSession?.session_id}:${classCurrentStage.stage_id}`;
+    if (appliedProfileStageRef.current === key) return;
+    appliedProfileStageRef.current = key;
+    onApplyProfilePreset?.(classCurrentStage);
+  }, [teachPanelVisible, classCurrentStage, activeSession?.project_id, activeSession?.session_id, onApplyProfilePreset]);
 
   return (
     <>

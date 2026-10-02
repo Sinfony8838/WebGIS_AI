@@ -236,7 +236,8 @@ def normalize_profile_preset(raw: Any) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
     lines: List[Dict[str, Any]] = []
-    for item in raw.get("lines") or []:
+    line_indices: Dict[int, int] = {}
+    for original_index, item in enumerate(raw.get("lines") or []):
         if not isinstance(item, dict):
             continue
         raw_points = item.get("coordinates")
@@ -258,6 +259,7 @@ def normalize_profile_preset(raw: Any) -> Dict[str, Any]:
             total_km = float(item.get("total_km") or 0)
         except (TypeError, ValueError):
             total_km = 0
+        line_indices[original_index] = len(lines)
         lines.append({
             "id": str(item.get("id") or "")[:48],
             "name": str(item.get("name") or "")[:48],
@@ -278,8 +280,9 @@ def normalize_profile_preset(raw: Any) -> Dict[str, Any]:
             record_index = int(item.get("record_index") or 0)
         except (TypeError, ValueError):
             record_index = 0
-        if not 0 <= record_index < len(lines):
+        if record_index not in line_indices:
             continue
+        record_index = line_indices[record_index]
         try:
             width_fraction = min(max(_clamp01(item.get("w"), 0.3), 0.14), 0.9)
             height_fraction = min(max(_clamp01(item.get("h"), 0.42), 0.2), 0.9)

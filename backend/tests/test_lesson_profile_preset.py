@@ -37,6 +37,13 @@ class NormalizeProfilePresetTest(unittest.TestCase):
         # 非法 kind 与越界 record_index 的窗口被丢弃
         self.assertEqual(len(preset["windows"]), 2)
 
+    def test_filtered_line_keeps_window_attached_to_original_line(self) -> None:
+        preset = normalize_profile_preset({
+            "lines": [{"coordinates": []}, {"id": "second", "coordinates": [[121, 31], [122, 32]]}, {"id": "third", "coordinates": [[119, 30], [120, 30]]}],
+            "windows": [{"kind": "population", "record_index": 1}, {"kind": "terrain", "record_index": 2}],
+        })
+        self.assertEqual([preset["lines"][w["record_index"]]["id"] for w in preset["windows"]], ["second", "third"])
+
     def test_empty_preset_returns_empty_dict(self) -> None:
         self.assertEqual(normalize_profile_preset(None), {})
         self.assertEqual(normalize_profile_preset({"lines": []}), {})
@@ -101,9 +108,12 @@ class RehearsalProfilePresetTest(unittest.TestCase):
         self.assertEqual(len(stage["profile_preset"]["lines"]), 2)
         self.assertEqual(len(stage["profile_preset"]["windows"]), 4)
 
-        # 没有测线的预设被拒绝（提示先画测线）
+        # 清空当前测线后能够删除旧预设；随后再保存用于发布快照验证。
+        cleared = cw.update_lesson_rehearsal(rehearsal_id, profile_preset={"stage_id": stage_id, "preset": {"lines": [], "windows": []}})
+        self.assertEqual(cleared["rehearsal"]["working_copy"]["stages"][0]["profile_preset"], {})
+        cw.update_lesson_rehearsal(rehearsal_id, profile_preset={"stage_id": stage_id, "preset": self._preset()})
         with self.assertRaises(ValueError):
-            cw.update_lesson_rehearsal(rehearsal_id, profile_preset={"stage_id": stage_id, "preset": {"lines": [], "windows": []}})
+            cw.update_lesson_rehearsal(rehearsal_id, profile_preset={"stage_id": stage_id, "preset": {}})
 
         # 版本冲突检查
         current = self.runtime.classroom.lesson_rehearsal.get(rehearsal_id)
