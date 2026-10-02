@@ -1,6 +1,7 @@
 import { type MutableRefObject, useState, useEffect, useRef, useCallback } from "react";
 import type { SlideContent } from "../types";
 import { BrushOverlay, type BrushOverlayHandle, type BrushSettings } from "./BrushOverlay";
+import { isEditableKeyboardTarget, isInteractiveKeyboardTarget } from "../lib/keyboard";
 
 type Props = {
   open: boolean;
@@ -13,6 +14,7 @@ type Props = {
   brushSettings?: BrushSettings;
   brushOverlayRef?: MutableRefObject<BrushOverlayHandle | null>;
   onBrushContentChange?: (hasContent: boolean) => void;
+  onExitBrush?: () => void;
 };
 
 const EMU_PER_PX = 914400 / 96;
@@ -27,7 +29,8 @@ export function PptViewer({
   brushActive = false,
   brushSettings,
   brushOverlayRef,
-  onBrushContentChange
+  onBrushContentChange,
+  onExitBrush
 }: Props) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [scale, setScale] = useState(1);
@@ -109,6 +112,24 @@ export function PptViewer({
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.isComposing || e.keyCode === 229 || e.metaKey || e.ctrlKey || e.altKey
+        || isEditableKeyboardTarget(e.target)) return;
+      if (e.key === "Escape") {
+        // A held Escape must not exit drawing and then collapse the deck on its next repeat.
+        if (e.repeat) return;
+        if (brushActive) {
+          // Older callers can still leave brush exit to their global owner.
+          if (onExitBrush) {
+            e.preventDefault();
+            onExitBrush();
+          }
+          return;
+        }
+        e.preventDefault();
+        handleCollapse();
+        return;
+      }
+      if (isInteractiveKeyboardTarget(e.target)) return;
       if (e.key === "ArrowRight" || e.key === " ") {
         e.preventDefault();
         goToSlide(currentIndex + 1);
@@ -117,19 +138,18 @@ export function PptViewer({
         e.preventDefault();
         goToSlide(currentIndex - 1);
       }
-      if (e.key === "Escape") {
-        handleCollapse();
-      }
       if (e.key === "Home") {
+        e.preventDefault();
         goToSlide(0);
       }
       if (e.key === "End") {
+        e.preventDefault();
         goToSlide(slides.length - 1);
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [currentIndex, goToSlide, handleCollapse, open, slides.length]);
+  }, [brushActive, currentIndex, goToSlide, handleCollapse, onExitBrush, open, slides.length]);
 
   if (slides.length === 0) return null;
 

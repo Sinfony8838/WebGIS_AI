@@ -4,6 +4,8 @@ import type { UrbanSource, UrbanStatus } from "./components/UrbanStudyPanel";
 import { shanghaiAgeColor, shanghaiDensityColor, densityColor, densityRadius, rankColor } from "./lib/populationVisual";
 import { MapEvidenceLegend } from "./components/MapEvidenceLegend";
 import { ProfileWindow, type MeasureRecord } from "./components/ProfileWindow";
+import { ProfileManagerBar } from "./components/ProfileManagerBar";
+import { isEditableKeyboardTarget } from "./lib/keyboard";
 import { JobActivity } from "./lib/jobActivity";
 import { forgetPendingJob, rememberPendingJob, type PendingJob } from "./lib/pendingJobs";
 import { usePendingJobs } from "./hooks/usePendingJobs";
@@ -3542,19 +3544,10 @@ export default function App({
 
   // Esc cancels any active interaction; B/A/M/D switch modes when no input is focused.
   useEffect(() => {
-    const isTextInputTarget = (target: EventTarget | null): boolean => {
-      if (!(target instanceof HTMLElement)) {
-        return false;
-      }
-      if (target.isContentEditable) {
-        return true;
-      }
-      const tag = target.tagName;
-      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
-    };
-
     const handleKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || isEditableKeyboardTarget(event.target)) return;
       if (event.key === "Escape") {
+        if (event.repeat) return;
         if (annotationDraft) {
           setAnnotationDraft(null);
           setInteractionMode("browse");
@@ -3571,10 +3564,6 @@ export default function App({
       if (event.metaKey || event.ctrlKey || event.altKey) {
         return;
       }
-      if (isTextInputTarget(event.target)) {
-        return;
-      }
-
       const lower = event.key.toLowerCase();
       const shortcuts: Record<string, InteractionMode> = {
         b: "browse",
@@ -3585,6 +3574,9 @@ export default function App({
       };
       const next = shortcuts[lower];
       if (next) {
+        const presentingPpt = pptViewerOpen && pptPresentationReady;
+        if (presentingPpt && next !== "browse" && next !== "brush") return;
+        if (!presentingPpt && viewMode === "globe" && next !== "browse") return;
         event.preventDefault();
         setInteractionMode(next);
       }
@@ -3592,7 +3584,7 @@ export default function App({
 
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [annotationDraft]);
+  }, [annotationDraft, pptPresentationReady, pptViewerOpen, viewMode]);
 
   const handleBrushWheelZoom = useCallback(
     (event: WheelEvent) => {
@@ -3756,11 +3748,8 @@ export default function App({
       ) : null}
       <MapEvidenceLegend basemapId={activeBasemapId} layers={layerState?.items || []} globe={viewMode === "globe"} themeIds={globeThemeIds} showFit={showTeachingFit} onShowFit={setShowTeachingFit} busy={mapBusy} onTogglePrecipitation={value => handleToggleTextbookMap("china_precipitation_400mm", value)} />
       {viewMode === "plane" && project && measureRecords.length > 0 ? (
-        <div className="profile-windows-bar" data-testid="profile-windows-bar">
-          <span>已测 {measureRecords.length} 条测线</span>
-          <button type="button" className="toolbar-button compact" onClick={() => setProfilesCollapsed(value => !value)} data-testid="profiles-collapse-all">
-            {profilesCollapsed ? "恢复显示全部剖面" : "一键暂收全部剖面"}
-          </button>
+        <ProfileManagerBar count={measureRecords.length} collapsed={profilesCollapsed}
+          onToggleCollapsed={() => setProfilesCollapsed(value => !value)}>
           <button type="button" className="toolbar-button compact" onClick={() => {
             measureSourceRef.current?.clear();
             measureHoverFeatureRef.current = null;
@@ -3768,7 +3757,7 @@ export default function App({
           }} data-testid="profiles-clear-all">
             清除全部测线
           </button>
-        </div>
+        </ProfileManagerBar>
       ) : null}
       {viewMode === "plane" && project && measureRecords.map(record => <ProfileWindow
         key={record.id}
@@ -4436,6 +4425,7 @@ export default function App({
           brushSettings={brushSettings}
           brushOverlayRef={pptBrushRef}
           onBrushContentChange={setPptBrushHasContent}
+          onExitBrush={() => setInteractionMode("browse")}
         />
       </div>
   );
