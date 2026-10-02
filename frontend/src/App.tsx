@@ -4,6 +4,8 @@ import type { UrbanSource, UrbanStatus } from "./components/UrbanStudyPanel";
 import { shanghaiAgeColor, shanghaiDensityColor, densityColor, densityRadius, rankColor } from "./lib/populationVisual";
 import { MapEvidenceLegend } from "./components/MapEvidenceLegend";
 import { ProfileWindow, type MeasureRecord, type ProfileWindowGeometry } from "./components/ProfileWindow";
+import { ProfileManagerBar } from "./components/ProfileManagerBar";
+import { isEditableKeyboardTarget } from "./lib/keyboard";
 import { JobActivity } from "./lib/jobActivity";
 import { forgetPendingJob, rememberPendingJob, type PendingJob } from "./lib/pendingJobs";
 import { usePendingJobs } from "./hooks/usePendingJobs";
@@ -622,6 +624,7 @@ export default function App({
   const pptBrushRef = useRef<BrushOverlayHandle | null>(null);
   const [mapBrushHasContent, setMapBrushHasContent] = useState(false);
   const [pptBrushHasContent, setPptBrushHasContent] = useState(false);
+  const [pptBrushCanUndo, setPptBrushCanUndo] = useState(false);
   // ── 3D digital-globe state ───────────────────────────────────────────
   // Boot into the 3D globe view; users land on the digital earth first
   // and can drill in to the 2D map either by zooming, double-clicking, or
@@ -2055,6 +2058,8 @@ export default function App({
       });
       setPptFileName(rendered.file_name || file.name);
       setPptBrushHasContent(false);
+      setPptBrushCanUndo(false);
+      setInteractionMode("browse");
       setPptViewerOpen(true);
       pushToast("success", "PPT 已导入", `已使用 ${rendered.renderer} 渲染 ${rendered.slides.length} 张幻灯片`);
     } catch (err) {
@@ -2067,6 +2072,8 @@ export default function App({
         });
         setPptFileName(result.fileName);
         setPptBrushHasContent(false);
+        setPptBrushCanUndo(false);
+        setInteractionMode("browse");
         setPptViewerOpen(true);
         pushToast("info", "PPT 已导入（简易模式）", "未找到可用的服务端渲染器，已使用前端解析兜底。复杂背景可能不完全一致。");
       } catch (fallbackErr) {
@@ -2079,12 +2086,15 @@ export default function App({
   }, [pushToast]);
 
   const handlePptCollapse = useCallback(() => {
+    setInteractionMode("browse");
     setPptViewerOpen(false);
   }, []);
 
   const handlePptRemove = useCallback(() => {
+    setInteractionMode("browse");
     setPptViewerOpen(false);
     setPptBrushHasContent(false);
+    setPptBrushCanUndo(false);
     setPptFileName("");
     setPptSlides((previousSlides) => {
       releaseSlideObjectUrls(previousSlides);
@@ -3723,19 +3733,10 @@ export default function App({
 
   // Esc cancels any active interaction; B/A/M/D switch modes when no input is focused.
   useEffect(() => {
-    const isTextInputTarget = (target: EventTarget | null): boolean => {
-      if (!(target instanceof HTMLElement)) {
-        return false;
-      }
-      if (target.isContentEditable) {
-        return true;
-      }
-      const tag = target.tagName;
-      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
-    };
-
     const handleKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || isEditableKeyboardTarget(event.target)) return;
       if (event.key === "Escape") {
+        if (event.repeat) return;
         if (annotationDraft) {
           setAnnotationDraft(null);
           setInteractionMode("browse");
@@ -3752,10 +3753,6 @@ export default function App({
       if (event.metaKey || event.ctrlKey || event.altKey) {
         return;
       }
-      if (isTextInputTarget(event.target)) {
-        return;
-      }
-
       const lower = event.key.toLowerCase();
       const shortcuts: Record<string, InteractionMode> = {
         b: "browse",
@@ -3766,6 +3763,9 @@ export default function App({
       };
       const next = shortcuts[lower];
       if (next) {
+        const presentingPpt = pptViewerOpen && pptPresentationReady;
+        if (presentingPpt && next !== "browse" && next !== "brush") return;
+        if (!presentingPpt && viewMode === "globe" && next !== "browse") return;
         event.preventDefault();
         setInteractionMode(next);
       }
@@ -3773,7 +3773,7 @@ export default function App({
 
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [annotationDraft]);
+  }, [annotationDraft, pptPresentationReady, pptViewerOpen, viewMode]);
 
   const handleBrushWheelZoom = useCallback(
     (event: WheelEvent) => {
@@ -3937,8 +3937,8 @@ export default function App({
       ) : null}
       <MapEvidenceLegend basemapId={activeBasemapId} layers={layerState?.items || []} globe={viewMode === "globe"} themeIds={globeThemeIds} showFit={showTeachingFit} onShowFit={setShowTeachingFit} busy={mapBusy} onTogglePrecipitation={value => handleToggleTextbookMap("china_precipitation_400mm", value)} />
       {viewMode === "plane" && project && measureRecords.length > 0 ? (
-        <div className="profile-windows-bar" data-testid="profile-windows-bar">
-          <span>已测 {measureRecords.length} 条测线</span>
+        <ProfileManagerBar count={measureRecords.length} collapsed={profilesCollapsed}
+          onToggleCollapsed={() => setProfilesCollapsed(value => !value)}>
           {measureRecords.map(record => (
             <span key={record.id} className="profile-line-chip" data-testid={`profile-line-chip-${record.id}`}>
               <span className="profile-line-dot" style={{ background: record.color }} />
@@ -3972,13 +3972,10 @@ export default function App({
               </button>
             </span>
           ))}
-          <button type="button" className="toolbar-button compact" onClick={() => setProfilesCollapsed(value => !value)} data-testid="profiles-collapse-all">
-            {profilesCollapsed ? "恢复显示全部剖面" : "一键暂收全部剖面"}
-          </button>
           <button type="button" className="toolbar-button compact" onClick={clearAllMeasureLines} data-testid="profiles-clear-all">
             清除全部测线
           </button>
-        </div>
+        </ProfileManagerBar>
       ) : null}
       {viewMode === "plane" && project && profileWindows.map(win => {
         const record = measureRecords.find(item => item.id === win.recordId);
@@ -4011,7 +4008,7 @@ export default function App({
           onClose={closeProfileWindow}
         />;
       })}
-      <MapBrushOverlay
+      {!(pptViewerOpen && pptPresentationReady) ? <MapBrushOverlay
         projection={mapInkProjection}
         scope={project?.project_id || ""}
         ref={brushRef}
@@ -4019,12 +4016,12 @@ export default function App({
         settings={brushSettings}
         onWheelZoom={handleBrushWheelZoom}
         onContentChange={setMapBrushHasContent}
-      />
+      /> : null}
       <div className="map-vignette" />
       <div className="map-grid-overlay" />
       <div className="map-scanline" />
 
-      <MapInstructionStrip
+      {!(pptViewerOpen && pptPresentationReady) ? <MapInstructionStrip
         mode={interactionMode}
         measureHint={measureText || undefined}
         measureTotalKm={measureTotalKm}
@@ -4040,7 +4037,7 @@ export default function App({
             ? () => measureDrawRef.current?.finishDrawing?.()
             : undefined
         }
-      />
+      /> : null}
 
       <AnnotationDialog
         open={Boolean(annotationDraft)}
@@ -4396,6 +4393,7 @@ export default function App({
         <PptBrushFloat
           settings={brushSettings}
           hasContent={brushTargetHasContent}
+          canUndo={pptBrushCanUndo}
           onChangeSettings={(next) => setBrushSettings((prev) => ({ ...prev, ...next }))}
           onUndo={() => brushTargetRef.current?.undo()}
           onClear={() => brushTargetRef.current?.clear()}
@@ -4648,13 +4646,15 @@ export default function App({
           open={pptViewerOpen}
           slides={pptSlides}
           fileName={pptFileName}
-          onExpand={() => setPptViewerOpen(true)}
+          onExpand={() => { setInteractionMode("browse"); setPptViewerOpen(true); }}
           onCollapse={handlePptCollapse}
           onRemove={handlePptRemove}
           brushActive={interactionMode === "brush"}
           brushSettings={brushSettings}
           brushOverlayRef={pptBrushRef}
           onBrushContentChange={setPptBrushHasContent}
+          onBrushUndoChange={setPptBrushCanUndo}
+          onExitBrush={() => setInteractionMode("browse")}
         />
       </div>
   );

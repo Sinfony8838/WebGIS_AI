@@ -186,8 +186,12 @@ def prepare_windows(page, n_lines=1) -> list[dict]:
     page.wait_for_timeout(900)
     chip_ids = page.evaluate("() => Array.from(document.querySelectorAll('[data-testid^=profile-line-chip-]')).map(el => el.dataset.testid.replace('profile-line-chip-',''))")
     for rid in chip_ids[:n_lines]:
+        if page.get_by_test_id("profile-manager-toggle").get_attribute("aria-expanded") != "true":
+            page.get_by_test_id("profile-manager-toggle").click()
         page.get_by_test_id(f"profile-line-open-population-{rid}").click()
         page.wait_for_timeout(250)
+        if page.get_by_test_id("profile-manager-toggle").get_attribute("aria-expanded") != "true":
+            page.get_by_test_id("profile-manager-toggle").click()
         page.get_by_test_id(f"profile-line-open-terrain-{rid}").click()
         page.wait_for_timeout(250)
     # 拖动人口窗口到左上角区域，形成特定布局

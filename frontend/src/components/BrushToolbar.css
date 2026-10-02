@@ -1,0 +1,38 @@
+.map-brush-panel {
+  position: fixed;
+  top: calc(var(--header-height, 68px) + 64px);
+  right: calc(var(--right-rail-width, 116px) + 32px);
+  z-index: 32;
+  width: 108px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - var(--header-height, 68px) - 160px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #cad6df;
+  border-radius: 10px;
+  background: #f6f9fc;
+  color: #284258;
+  box-shadow: 0 3px 12px #16344c1a;
+  pointer-events: auto;
+}
+.map-brush-panel.is-expanded { width: 150px; }
+.map-brush-toggle { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 38px; border: 0; background: transparent; color: inherit; font: inherit; font-size: 12px; cursor: pointer; }
+.map-brush-settings { display: grid; gap: 10px; padding: 2px 10px 10px; }
+.map-brush-panel .brush-toolbar-section { display: grid; gap: 6px; }
+.map-brush-panel .brush-toolbar-label { color: #566d7e; letter-spacing: 0; font-size: 11px; }
+.map-brush-panel .brush-toolbar-divider { display: none; }
+.map-brush-panel .brush-toolbar-tools,
+.map-brush-panel .brush-toolbar-colors,
+.map-brush-panel .brush-toolbar-widths { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.map-brush-panel .brush-toolbar-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.map-brush-panel :is(.brush-tool-btn, .brush-width-btn, .brush-color-btn) { display: grid; place-items: center; width: 100%; min-height: 34px; height: 34px; padding: 4px; border: 1px solid #cad6df; border-radius: 6px; background: #fff; color: #284258; cursor: pointer; }
+.map-brush-panel :is(.brush-tool-btn, .brush-width-btn, .brush-color-btn).active { border-color: #3980ac; background: #e0edf7; color: #164f76; }
+.map-brush-panel button:hover { background: #e4edf5; }
+.map-brush-panel button:focus-visible { outline: 2px solid #2473a5; outline-offset: -2px; }
+.map-brush-panel button:disabled { opacity: .4; cursor: not-allowed; }
+.map-brush-panel .brush-color-dot { width: 18px; height: 18px; border: 1px solid #9eacb9; border-radius: 50%; background: var(--brush-swatch); }
+.map-brush-panel .brush-width-dot { display: block; border-radius: 50%; background: currentColor; }
+.screen-shell:has(.map-tools-dock:not(.is-collapsed) .visual-map-panel.expanded) .map-brush-panel { right: min(344px, calc(100vw - 174px)); }
+@media (max-width: 600px) {
+  .map-brush-panel { right: 80px; }
+}

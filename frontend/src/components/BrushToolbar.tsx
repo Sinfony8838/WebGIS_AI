@@ -1,4 +1,6 @@
+import { useId, useRef, useState } from "react";
 import type { BrushTool, BrushSettings } from "./BrushOverlay";
+import "./BrushToolbar.css";
 
 type Props = {
   settings: BrushSettings;
@@ -122,8 +124,21 @@ const TOOL_ICONS: Record<BrushTool, () => JSX.Element> = {
 };
 
 export function BrushToolbar({ settings, hasContent, onChangeSettings, onUndo, onClear }: Props) {
+  const [expanded, setExpanded] = useState(false);
+  const settingsId = useId();
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const ActiveIcon = TOOL_ICONS[settings.tool];
   return (
-    <div className="brush-toolbar glass-panel" role="toolbar" aria-label="画笔工具">
+    <section className={`map-brush-panel${expanded ? " is-expanded" : ""}`} aria-label="地图画笔设置">
+      <button ref={toggleRef} type="button" className="map-brush-toggle" aria-expanded={expanded} aria-controls={settingsId}
+        aria-label={expanded ? "收起地图画笔设置" : "展开地图画笔设置"}
+        title={`${TOOLS.find(item => item.tool === settings.tool)?.label} · 点击设置工具、颜色和粗细`}
+        onClick={() => setExpanded(value => !value)}>
+        <ActiveIcon />
+        <span>{TOOLS.find(item => item.tool === settings.tool)?.label}</span>
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d={expanded ? "m4 10 4-4 4 4" : "m4 6 4 4 4-4"} {...STROKE} /></svg>
+      </button>
+      {expanded ? <div id={settingsId} className="map-brush-settings" role="toolbar" aria-label="画笔工具">
       <div className="brush-toolbar-section">
         <span className="brush-toolbar-label">工具</span>
         <div className="brush-toolbar-tools">
@@ -137,7 +152,11 @@ export function BrushToolbar({ settings, hasContent, onChangeSettings, onUndo, o
                 aria-pressed={settings.tool === tool}
                 aria-label={label}
                 title={tip}
-                onClick={() => onChangeSettings({ tool })}
+                onClick={() => {
+                  onChangeSettings({ tool });
+                  setExpanded(false);
+                  toggleRef.current?.focus();
+                }}
               >
                 <Icon />
               </button>
@@ -157,6 +176,7 @@ export function BrushToolbar({ settings, hasContent, onChangeSettings, onUndo, o
               type="button"
               className={`brush-color-btn ${settings.color === value ? "active" : ""}`}
               aria-label={name}
+              aria-pressed={settings.color === value}
               title={name}
               style={{ "--brush-swatch": value } as React.CSSProperties}
               onClick={() => onChangeSettings({ color: value })}
@@ -178,6 +198,7 @@ export function BrushToolbar({ settings, hasContent, onChangeSettings, onUndo, o
               type="button"
               className={`brush-width-btn ${settings.lineWidth === value ? "active" : ""}`}
               aria-label={label}
+              aria-pressed={settings.lineWidth === value}
               title={`${label} (${value}px)`}
               onClick={() => onChangeSettings({ lineWidth: value })}
             >
@@ -198,6 +219,7 @@ export function BrushToolbar({ settings, hasContent, onChangeSettings, onUndo, o
           className="brush-tool-btn"
           aria-label="撤销"
           title="撤销上一步绘制"
+          disabled={!hasContent}
           onClick={onUndo}
         >
           <UndoIcon />
@@ -213,6 +235,7 @@ export function BrushToolbar({ settings, hasContent, onChangeSettings, onUndo, o
           <TrashIcon />
         </button>
       </div>
-    </div>
+      </div> : null}
+    </section>
   );
 }

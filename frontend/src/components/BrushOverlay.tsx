@@ -1,4 +1,5 @@
-import { useRef, useEffect, useCallback, useState, forwardRef, useImperativeHandle } from "react";
+import { useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from "react";
+import { BrushHistory } from "../lib/brushHistory";
 
 export type BrushTool = "freehand" | "line" | "rectangle" | "ellipse" | "arrow" | "eraser";
 
@@ -20,114 +21,110 @@ type Props = {
   settings: BrushSettings;
   onWheelZoom?: (event: WheelEvent) => void;
   onContentChange?: (hasContent: boolean) => void;
+  onUndoChange?: (canUndo: boolean) => void;
+  history?: BrushHistory;
+  pageKey?: string;
 };
 
-const MAX_UNDO_STEPS = 30;
-
 export const BrushOverlay = forwardRef<BrushOverlayHandle, Props>(function BrushOverlay(
-  { active, settings, onWheelZoom, onContentChange },
+  { active, settings, onWheelZoom, onContentChange, onUndoChange, history: sharedHistory, pageKey = "canvas" },
   ref
 ) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawingRef = useRef(false);
   const startPosRef = useRef<{ x: number; y: number } | null>(null);
   const snapshotRef = useRef<ImageData | null>(null);
-  const undoStackRef = useRef<ImageData[]>([]);
-  const [hasContent, setHasContent] = useState(false);
-  const hasContentRef = useRef(false);
+  const localHistory = useRef(new BrushHistory());
+  const history = sharedHistory ?? localHistory.current;
+  const restoreVersion = useRef(0);
+  const restoring = useRef(false);
+  const callbacks = useRef({ onContentChange, onUndoChange });
+  callbacks.current = { onContentChange, onUndoChange };
 
   const setContentState = useCallback(
     (next: boolean) => {
-      hasContentRef.current = next;
-      setHasContent(next);
-      onContentChange?.(next);
+      callbacks.current.onContentChange?.(next);
+      callbacks.current.onUndoChange?.(history.canUndo(pageKey));
     },
-    [onContentChange]
+    [history, pageKey]
   );
 
-  const pushUndoSnapshot = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const stack = undoStackRef.current;
-    if (stack.length >= MAX_UNDO_STEPS) {
-      stack.shift();
-    }
-    stack.push(snapshot);
-  }, []);
-
-  const updateHasContent = useCallback(() => {
+  const commitCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    let hasContent = false;
     for (let i = 3; i < data.length; i += 4) {
-      if (data[i] > 0) {
-        setContentState(true);
-        return;
-      }
+      if (data[i] > 0) { hasContent = true; break; }
     }
-    setContentState(false);
-  }, [setContentState]);
+    history.commit(pageKey, hasContent ? canvas.toDataURL("image/png") : null);
+    setContentState(hasContent);
+  }, [history, pageKey, setContentState]);
 
-  const clearCanvas = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    pushUndoSnapshot();
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    setContentState(false);
-  }, [pushUndoSnapshot, setContentState]);
+  const finishDrawing = useCallback(() => {
+    if (!drawingRef.current) return;
+    drawingRef.current = false;
+    startPosRef.current = null;
+    snapshotRef.current = null;
+    commitCanvas();
+  }, [commitCanvas]);
 
-  const undoCanvas = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const stack = undoStackRef.current;
-    const snapshot = stack.pop();
-    if (snapshot) {
-      ctx.putImageData(snapshot, 0, 0);
-    } else {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-    }
-    updateHasContent();
-  }, [updateHasContent]);
-
-  const exportImage = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !hasContentRef.current) return null;
-    return canvas.toDataURL("image/png");
-  }, []);
-
-  const loadImage = useCallback(
+  const restoreImage = useCallback(
     (dataUrl?: string | null) => {
+      const version = ++restoreVersion.current;
+      restoring.current = Boolean(dataUrl);
+      drawingRef.current = false;
+      startPosRef.current = null;
+      snapshotRef.current = null;
       const canvas = canvasRef.current;
       if (!canvas) return;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
-      undoStackRef.current = [];
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (!dataUrl) {
-        setContentState(false);
-        return;
-      }
+      setContentState(Boolean(dataUrl));
+      if (!dataUrl) return;
 
       const image = new Image();
       image.onload = () => {
+        if (restoreVersion.current !== version || canvasRef.current !== canvas) return;
+        restoring.current = false;
         const dpr = window.devicePixelRatio || 1;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(image, 0, 0, canvas.width / dpr, canvas.height / dpr);
         setContentState(true);
       };
+      image.onerror = () => {
+        if (restoreVersion.current !== version || canvasRef.current !== canvas) return;
+        restoring.current = false;
+      };
       image.src = dataUrl;
     },
     [setContentState]
   );
+
+  const clearCanvas = useCallback(() => {
+    finishDrawing();
+    history.commit(pageKey, null);
+    restoreImage(null); // Invalidates an older asynchronous restore too.
+  }, [finishDrawing, history, pageKey, restoreImage]);
+
+  const undoCanvas = useCallback(() => {
+    finishDrawing();
+    if (history.undo(pageKey)) restoreImage(history.image(pageKey));
+  }, [finishDrawing, history, pageKey, restoreImage]);
+
+  const exportImage = useCallback(() => {
+    finishDrawing();
+    // The canonical image remains available even while its canvas is decoding.
+    return history.image(pageKey);
+  }, [finishDrawing, history, pageKey]);
+
+  const loadImage = useCallback((dataUrl?: string | null) => {
+    history.replace(pageKey, dataUrl ?? null);
+    restoreImage(dataUrl);
+  }, [history, pageKey, restoreImage]);
 
   useImperativeHandle(ref, () => ({
     clear: clearCanvas,
@@ -171,6 +168,13 @@ export const BrushOverlay = forwardRef<BrushOverlayHandle, Props>(function Brush
     }
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    restoreImage(history.image(pageKey));
+    return () => { restoreVersion.current++; restoring.current = false; };
+  }, [history, pageKey, restoreImage]);
+
+  useEffect(() => { if (!active) finishDrawing(); }, [active, finishDrawing]);
 
   const getPos = useCallback((e: MouseEvent | TouchEvent): { x: number; y: number } | null => {
     const canvas = canvasRef.current;
@@ -267,12 +271,11 @@ export const BrushOverlay = forwardRef<BrushOverlayHandle, Props>(function Brush
     if (!canvas) return;
 
     const handleMouseDown = (e: MouseEvent | TouchEvent) => {
-      if (!active) return;
+      if (!active || restoring.current) return;
       e.preventDefault();
       const pos = getPos(e);
       if (!pos) return;
 
-      pushUndoSnapshot();
       drawingRef.current = true;
       startPosRef.current = pos;
 
@@ -329,13 +332,7 @@ export const BrushOverlay = forwardRef<BrushOverlayHandle, Props>(function Brush
       }
     };
 
-    const handleMouseUp = (e: MouseEvent | TouchEvent) => {
-      if (!drawingRef.current) return;
-      drawingRef.current = false;
-      startPosRef.current = null;
-      snapshotRef.current = null;
-      setContentState(true);
-    };
+    const handleMouseUp = () => finishDrawing();
 
     canvas.addEventListener("mousedown", handleMouseDown);
     canvas.addEventListener("mousemove", handleMouseMove);
@@ -354,7 +351,7 @@ export const BrushOverlay = forwardRef<BrushOverlayHandle, Props>(function Brush
       canvas.removeEventListener("touchmove", handleMouseMove);
       canvas.removeEventListener("touchend", handleMouseUp);
     };
-  }, [active, settings, getPos, pushUndoSnapshot, drawShape, setContentState]);
+  }, [active, settings, getPos, drawShape, finishDrawing]);
 
   useEffect(() => {
     const canvas = canvasRef.current;

@@ -143,8 +143,12 @@ def main() -> int:
             )
             assert len(chip_ids) >= 2, chip_ids
             for rid in chip_ids[:2]:
+                if page.get_by_test_id("profile-manager-toggle").get_attribute("aria-expanded") != "true":
+                    page.get_by_test_id("profile-manager-toggle").click()
                 page.get_by_test_id(f"profile-line-open-population-{rid}").click()
                 page.wait_for_timeout(300)
+                if page.get_by_test_id("profile-manager-toggle").get_attribute("aria-expanded") != "true":
+                    page.get_by_test_id("profile-manager-toggle").click()
                 page.get_by_test_id(f"profile-line-open-terrain-{rid}").click()
                 page.wait_for_timeout(300)
             windows = page.locator("[data-testid^=profile-window-pw_]")
@@ -232,6 +236,8 @@ def main() -> int:
                 ".map(el => el.dataset.testid.replace('profile-line-chip-', ''))"
             )
             before_windows = page.locator("[data-testid^=profile-window-pw_]").count()
+            if page.get_by_test_id("profile-manager-toggle").get_attribute("aria-expanded") != "true":
+                page.get_by_test_id("profile-manager-toggle").click()
             page.get_by_test_id(f"profile-line-clear-{chip_ids[0]}").click()
             page.wait_for_timeout(500)
             after_windows = page.locator("[data-testid^=profile-window-pw_]").count()

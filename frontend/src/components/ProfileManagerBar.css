@@ -1,0 +1,14 @@
+.profile-manager-bar { position: fixed; z-index: 50; right: calc(var(--right-rail-width, 116px) + 32px); bottom: 84px; display: flex; gap: 4px; padding: 4px; border: 1px solid #cad6df; border-radius: 10px; background: #f6f9fc; color: #284258; box-shadow: 0 3px 12px #16344c1a; pointer-events: auto; }
+.profile-manager-bar .profile-manager-toggle { position: relative; display: grid; place-items: center; width: 36px; height: 36px; padding: 4px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
+.profile-manager-bar .profile-manager-toggle:hover { background: #e4edf5; }
+.profile-manager-bar button:focus-visible { outline: 2px solid #2473a5; outline-offset: 1px; }
+.profile-manager-count { position: absolute; right: 0; bottom: 0; min-width: 12px; font-size: 10px; line-height: 14px; border-radius: 4px; background: #e4edf5; }
+.profile-manager-details { position: absolute; right: 0; bottom: calc(100% + 8px); display: grid; gap: 8px; width: min(520px, calc(100vw - var(--right-rail-width, 116px) - 48px)); max-height: min(360px, 45dvh); overflow-y: auto; overscroll-behavior: contain; padding: 12px; box-sizing: border-box; border: 1px solid #cad6df; border-radius: 10px; background: #f6f9fc; color: #284258; box-shadow: 0 3px 12px #16344c1a; font-size: 12px; }
+.profile-manager-details[hidden] { display: none; }
+.profile-manager-details .profile-line-chip { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px; border: 1px solid #d7e2ea; border-radius: 6px; }
+.profile-manager-details .profile-line-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.profile-manager-details .toolbar-button { padding: 5px 8px; min-height: 30px; border: 1px solid #bdceda; border-radius: 6px; background: #fff; color: #284258; font-size: 12px; }
+@media (max-width: 600px) {
+  .profile-manager-bar { right: 12px; bottom: 126px; }
+  .profile-manager-details { width: min(520px, calc(100vw - 24px)); }
+}

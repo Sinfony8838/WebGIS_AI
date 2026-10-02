@@ -29,6 +29,17 @@ function renderExpanded(props: Partial<ComponentProps<typeof VisualMapPanel>> = 
 describe("VisualMapPanel", () => {
   afterEach(cleanup);
 
+  it("uses a native button with vector icons to expand and collapse the catalog", () => {
+    renderExpanded();
+    const toggle = screen.getByRole("button", { name: "可视化地图", exact: true });
+    expect(toggle.tagName).toBe("BUTTON");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle.querySelector("svg")).not.toBeNull();
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByTestId("visual-map-scenes")).toBeNull();
+  });
+
   it("renders scene presets and theme toggles under the merged header", () => {
     renderExpanded();
 
