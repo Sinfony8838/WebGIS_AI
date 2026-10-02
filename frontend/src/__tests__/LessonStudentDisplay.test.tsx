@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { LessonWorkflowShell } from "../components/LessonWorkflowShell";
-import type { ClassSessionRecord, LessonQuestion, LessonRecord, ProjectRecord } from "../types";
+import type { ClassSessionRecord, LayersResponse, LessonQuestion, LessonRecord, ProjectRecord } from "../types";
 
 const api = vi.hoisted(() => ({
   fetchLessons: vi.fn(), fetchLesson: vi.fn(), fetchClassSessions: vi.fn(),
@@ -33,12 +33,12 @@ function session(item = lesson(), activeQuestion: Record<string, unknown> = {}):
     current_stage_id: "s1", join_code: "123456", started_at: "2026-10-01T01:00:00Z", ended_at: "", events: [],
     active_question: activeQuestion, responses: {}, metadata: { lesson_snapshot: item } };
 }
-function mount(item = lesson(), current: ClassSessionRecord | null = session(item)) {
+function mount(item = lesson(), current: ClassSessionRecord | null = session(item), layerState: LayersResponse | null = null) {
   api.fetchLessons.mockResolvedValue({ items: [item] });
   api.fetchLesson.mockResolvedValue(item);
   api.fetchClassSessions.mockResolvedValue({ items: current ? [current] : [] });
   const onStudentDisplayChange = vi.fn();
-  const result = render(<LessonWorkflowShell project={project} layerState={null} onRefresh={vi.fn()}
+  const result = render(<LessonWorkflowShell project={project} layerState={layerState} onRefresh={vi.fn()}
     onStudentDisplayChange={onStudentDisplayChange} />);
   return { ...result, onStudentDisplayChange };
 }
@@ -154,5 +154,21 @@ describe("classroom student display integration", () => {
     mount(item, { ...current, session_id: "session_2" });
     await screen.findByTestId("class-run-panel");
     expect(screen.getByTestId("student-display-toggle").getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("keeps a teacher-requested population ranking chart visible to students", async () => {
+    const item = lesson();
+    const layerState = { items: [{ layer_id: "population_top20", name: "人口排名", visible: true,
+      data: { type: "FeatureCollection", features: [] },
+      metadata: { visualization: { type: "bar", title: "2020 年人口总量 TOP20", maximum: 24870895, unit: "人",
+        items: [{ rank: 1, name: "上海市", value: 24870895, unit: "人", share: 1 }] } }
+    }] } as unknown as LayersResponse;
+    mount(item, session(item), layerState);
+    await screen.findByTestId("class-run-panel");
+    fireEvent.click(screen.getByTestId("student-display-toggle"));
+    expect(screen.queryByTestId("class-run-panel")).toBeNull();
+    expect(screen.getByTestId("visual-query-title").textContent).toBe("2020 年人口总量 TOP20");
+    expect(screen.getByTestId("visual-query-popup").classList.contains("shifted")).toBe(false);
+    expect(screen.getByTestId("visual-query-bars").textContent).toContain("上海市");
   });
 });

@@ -16,7 +16,7 @@
   max-width: min(760px, 92vw);
 }
 .classroom-stage-progress { min-width: 120px; max-width: 440px; overflow-wrap: anywhere; text-align: center; font-size: 16px; }
-.classroom-teacher-controls {
+.classroom-teacher-controls.glass-panel {
   position: fixed;
   z-index: 92;
   left: 16px;
@@ -33,7 +33,7 @@
 .classroom-teacher-control-body label { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 5px; font-size: 14px; }
 .classroom-teacher-control-body input[type="range"] { width: 100%; }
 .classroom-question-controls { display: flex; flex-wrap: wrap; gap: 6px; border-top: 1px solid var(--panel-border); padding-top: 9px; }
-.classroom-stage-nav {
+.classroom-stage-nav.glass-panel {
   position: fixed;
   z-index: 91;
   left: 16px;
@@ -55,6 +55,12 @@
 body:has(.classroom-student-display) .qpm-shell.qpm-student:not(.qpm-mini) {
   left: 272px;
   right: 84px;
+}
+@media (min-width: 801px) {
+  .screen-shell.classroom-student-display:has(.map-tools-dock:not(.is-collapsed)) .sps,
+  body:has(.classroom-student-display .map-tools-dock:not(.is-collapsed)) .qpm-shell.qpm-student:not(.qpm-mini) {
+    right: 176px;
+  }
 }
 @media (max-width: 1450px) {
   .app-header:has(#teaching-menu-slot) .header-actions { flex-wrap: wrap; gap: 4px; }

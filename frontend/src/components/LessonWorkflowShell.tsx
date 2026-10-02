@@ -1023,10 +1023,10 @@ export function LessonWorkflowShell({
 
       {project && lessonMode === "review" ? <ReportPanel projectId={project.project_id} onClose={() => setLessonMode("off")} /> : null}
 
-      {studentDisplay || visualQueryDismissed || !visualQueryLayer ? null : (
+      {visualQueryDismissed || !visualQueryLayer ? null : (
         <VisualQueryPopup
           layer={visualQueryLayer}
-          shifted={teachPanelVisible && !panelCollapsed}
+          shifted={teachPanelVisible && !studentDisplay && !panelCollapsed}
           onClose={() => setVisualQueryDismissed(true)}
           onFocusItem={(_item: VisualizationItem) => {
             void onRefresh();
