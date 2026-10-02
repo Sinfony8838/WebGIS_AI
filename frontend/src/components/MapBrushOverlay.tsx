@@ -4,10 +4,10 @@ import type { BrushOverlayHandle, BrushSettings } from "./BrushOverlay";
 import { anchorPaths, eraseInk, shapePaths, type InkPoint, type MapInkProjection, type MapInkStroke } from "../lib/mapInk";
 
 type Props = { active: boolean; settings: BrushSettings; projection: MapInkProjection; scope: string;
-  onWheelZoom?: (event: WheelEvent) => void; onContentChange?: (value: boolean) => void };
+  onWheelZoom?: (event: WheelEvent) => void; onContentChange?: (value: boolean) => void; onUndoAvailabilityChange?: (value: boolean) => void };
 
 export const MapBrushOverlay = forwardRef<BrushOverlayHandle, Props>(function MapBrushOverlay(
-  { active, settings, projection, scope, onWheelZoom, onContentChange }, ref
+  { active, settings, projection, scope, onWheelZoom, onContentChange, onUndoAvailabilityChange }, ref
 ) {
   const canvasRef=useRef<HTMLCanvasElement>(null);
   const loadedScope = useRef("");
@@ -15,10 +15,11 @@ export const MapBrushOverlay = forwardRef<BrushOverlayHandle, Props>(function Ma
   const strokes=useRef<MapInkStroke[]>([]), history=useRef<MapInkStroke[][]>([]);
   const draft=useRef<MapInkStroke|null>(null);
   const gesture=useRef<{ start:InkPoint; last:InkPoint; settings:BrushSettings; pointer:number }|null>(null);
-  const latest=useRef({projection,onContentChange});
-  latest.current={projection,onContentChange};
+  const latest=useRef({projection,onContentChange,onUndoAvailabilityChange});
+  latest.current={projection,onContentChange,onUndoAvailabilityChange};
   const notify=useCallback(() => {
     latest.current.onContentChange?.(strokes.current.length>0);
+    latest.current.onUndoAvailabilityChange?.(history.current.length>0);
     setSaveFailed(!writeMapInk(loadedScope.current, strokes.current));
   },[]);
   const snapshot=useCallback(() => { history.current.push(strokes.current); if(history.current.length>30) history.current.shift(); },[]);

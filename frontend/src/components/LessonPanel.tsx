@@ -30,6 +30,7 @@ type Props = {
   onChangePopulationSourceVersion?: (version: string) => void;
   onResolvePrepChangeSet?: (decision: "apply" | "reject", acceptedStageIds: string[]) => void;
   onStartClass: () => void;
+  hideStartControl?: boolean;
   onDesignFromLesson?: (lesson: LessonRecord) => void;
   /** 进入该课时的模拟测试（试讲 → 通过后发布为新版本）。 */
   onStartRehearsal?: (lesson: LessonRecord) => void;
@@ -83,6 +84,7 @@ export function LessonPanel({
   onChangePopulationSourceVersion,
   onResolvePrepChangeSet,
   onStartClass,
+  hideStartControl = false,
   onDesignFromLesson,
   onStartRehearsal,
   onClose
@@ -216,7 +218,7 @@ export function LessonPanel({
             模拟测试
           </button>
         ) : null}
-        <button
+        {!hideStartControl ? <button
           type="button"
           className="toolbar-button compact primary"
           disabled={!activeLesson || busy || needsRehearsal}
@@ -225,7 +227,7 @@ export function LessonPanel({
           data-testid="start-class"
         >
           开始上课
-        </button>
+        </button> : null}
       </div>
 
       {importOpen ? (

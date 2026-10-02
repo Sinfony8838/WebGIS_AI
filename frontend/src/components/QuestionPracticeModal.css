@@ -1,0 +1,73 @@
+/* 学生题目面使用大字和单一浅色背景，教师控制区在面板外保持可操作。 */
+.qpm-backdrop.qpm-student-backdrop { background: transparent; pointer-events: none; }
+.qpm-backdrop.qpm-student-backdrop .qpm-shell.qpm-student {
+  position: fixed;
+  top: calc(var(--header-height, 56px) + 14px);
+  left: 352px;
+  right: 18px;
+  bottom: 84px;
+  width: auto;
+  height: auto;
+  margin: 0;
+  pointer-events: auto;
+}
+body:has(.class-run-panel-tab) .qpm-backdrop.qpm-student-backdrop .qpm-shell.qpm-student { left: 64px; }
+.qpm-shell.qpm-student {
+  --qpm-student-font-size: 30px;
+  --qpm-student-title-size: 40px;
+  --surface: #f1f5f9;
+  --surface-raised: #fff;
+  --text-main: #172b45;
+  --text-soft: #334155;
+  --text-dim: #475569;
+  --accent: #174778;
+  --success: #174778;
+  --success-soft: #eff6ff;
+  color: #172b45;
+  background: #fff;
+  border-color: #cbd5e1;
+}
+.qpm-shell.qpm-student .qpm-header,
+.qpm-shell.qpm-student .qpm-timer { flex: none; }
+.qpm-shell.qpm-student .qpm-heading strong { font-size: var(--qpm-student-title-size); line-height: 1.2; }
+.qpm-shell.qpm-student .qpm-kicker { font-size: 16px; }
+.qpm-shell.qpm-student .qpm-body {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  overflow-wrap: anywhere;
+  font-size: var(--qpm-student-font-size);
+  line-height: 1.6;
+}
+/* flex 项目不压缩，长材料、题干、末尾选项均在同一滚动区内。 */
+.qpm-shell.qpm-student .qpm-body > * { flex-shrink: 0; }
+.qpm-shell.qpm-student .qpm-body:focus-visible { outline: 3px solid #2563eb; outline-offset: -3px; }
+.qpm-shell.qpm-student .qpm-task,
+.qpm-shell.qpm-student .qpm-material p,
+.qpm-shell.qpm-student .qpm-stem,
+.qpm-shell.qpm-student .qpm-options li,
+.qpm-shell.qpm-student .qpm-sub-stem,
+.qpm-shell.qpm-student .qpm-sub-answer strong,
+.qpm-shell.qpm-student .qpm-sub-answer p,
+.qpm-shell.qpm-student .qpm-answer-main,
+.qpm-shell.qpm-student .qpm-explanation p,
+.qpm-shell.qpm-student .qpm-ai p {
+  font-size: inherit;
+  line-height: inherit;
+  white-space: pre-wrap;
+}
+.qpm-shell.qpm-student .qpm-options li > span:last-child { min-width: 0; }
+.qpm-shell.qpm-student .qpm-options .option-label { width: 1.4em; height: 1.4em; font-size: 0.85em; }
+.qpm-shell.qpm-student .qpm-section-label,
+.qpm-shell.qpm-student .qpm-knowledge-chip { font-size: 20px; }
+.qpm-shell.qpm-student .qpm-timer-sub,
+.qpm-shell.qpm-student .qpm-timer.revealed,
+.qpm-shell.qpm-student .qpm-timer.revealed em { font-size: 18px; }
+.qpm-shell.qpm-student .qpm-images { align-items: center; }
+.qpm-shell.qpm-student .qpm-images img { max-height: 60vh; width: auto; object-fit: contain; }
+.qpm-shell.qpm-student.qpm-mini { width: min(640px, calc(100vw - 24px)); max-height: calc(100vh - 112px); }
+@media (max-width: 800px) {
+  .qpm-backdrop.qpm-student-backdrop .qpm-shell.qpm-student { left: 12px; right: 12px; bottom: 126px; }
+  .qpm-shell.qpm-student .qpm-body { padding: 12px; }
+}

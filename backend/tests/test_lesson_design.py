@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import tempfile
 import json
 import unittest
@@ -960,18 +961,41 @@ class TableLessonPlanFlowTest(unittest.TestCase):
         self.assertFalse(report["ready"])
         self.assertTrue(any("未设置时长" in item for item in report["errors"]))
 
-    def test_validate_plan_core_questions_are_advisory_when_stages_carry_questions(self) -> None:
-        draft = _table_ready_draft()
-        draft["core_questions"] = {"core": "", "sub_questions": []}
-        report = self.service.validate_plan(draft, [])
-        self.assertTrue(report["ready"])
-        self.assertTrue(any("核心问题" in item for item in report["warnings"]))
-        self.assertFalse(any("核心问题" in item for item in report["errors"]))
-        # 环节本身缺题目仍是硬错误
-        draft["stages"][0]["questions"] = []
-        report = self.service.validate_plan(draft, [])
-        self.assertFalse(report["ready"])
-        self.assertTrue(any("至少需要一个明确问题" in item for item in report["errors"]))
+    def test_validate_plan_legacy_core_questions_do_not_change_stage_validation(self) -> None:
+        baseline = self.service.validate_plan(_table_ready_draft(), [])
+        self.assertTrue(baseline["ready"])
+        self.assertFalse(any("独立" in item for item in baseline["warnings"]))
+        for legacy_core in (
+            None,
+            {},
+            {"core": "", "sub_questions": []},
+            {"core": "为什么分布不均？", "sub_questions": ["哪里人口稠密？"]},
+            {"core": "为什么分布不均？", "sub_questions": [f"旧问题{i}" for i in range(5)]},
+            "旧版核心问题文本",
+        ):
+            with self.subTest(core_questions=legacy_core):
+                draft = _table_ready_draft()
+                draft["core_questions"] = legacy_core
+                before = copy.deepcopy(draft)
+                self.assertEqual(self.service.validate_plan(draft, []), baseline)
+                self.assertEqual(draft, before)
+
+    def test_validate_plan_legacy_core_questions_cannot_replace_missing_stage_questions(self) -> None:
+        for with_legacy_core in (False, True):
+            for questions in ([], [{"text": "  "}]):
+                with self.subTest(legacy=with_legacy_core, questions=questions):
+                    draft = _table_ready_draft()
+                    if with_legacy_core:
+                        draft["core_questions"] = {
+                            "core": "为什么分布不均？",
+                            "sub_questions": ["哪里人口稠密？", "为何人口稠密？"],
+                        }
+                    draft["stages"][0]["questions"] = questions
+                    draft["stages"][0]["question_chain"] = []
+                    report = self.service.validate_plan(draft, [])
+                    self.assertFalse(report["ready"])
+                    self.assertIn("环节“情境导入与分布描述”至少需要一个明确问题。", report["errors"])
+                    self.assertIn("环节“情境导入与分布描述”还没有材料或问题链，建议补充其一。", report["warnings"])
 
     def test_resolve_accept_all_confirms_only_non_empty_sections(self) -> None:
         design = self._design_with({"objectives": ["描述人口分布"], "stages": _table_ready_draft()["stages"]})

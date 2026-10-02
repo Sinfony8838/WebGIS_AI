@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   addSessionObservation,
   activatePopulationSourceVersion,
@@ -52,6 +53,7 @@ import { RehearsalPanel } from "./RehearsalPanel";
 import { StagePresentationSurface } from "./StagePresentationSurface";
 import { ReportPanel } from "./ReportPanel";
 import { VisualQueryPopup, type VisualizationItem } from "./VisualQueryPopup";
+import "./ClassroomWorkflow.css";
 
 type LessonMode = "off" | "prep" | "rehearsal" | "teach" | "review";
 
@@ -75,6 +77,7 @@ type Props = {
   rehearsalLessonId?: string;
   /** 课堂工作流状态（lesson/session/stage/phase）变化时上报给 App，随助教请求发往后端。 */
   onTeachingContextChange?: (ctx: TeachingContext | null) => void;
+  onStudentDisplayChange?: (enabled: boolean) => void;
   /** 课中一键把预设追问派发给教学智能体。 */
   onAssistantPrompt?: (prompt: string, displayMessage?: string) => void;
   /** 应用课时场景返回的 3D 意图；空对象表示离开课时固定场景并恢复进入前状态。 */
@@ -198,6 +201,7 @@ export function LessonWorkflowShell({
   rehearsalSignal = 0,
   rehearsalLessonId = "",
   onTeachingContextChange,
+  onStudentDisplayChange,
   onAssistantPrompt,
   assistantBusy = false,
   onApplyGlobeScene,
@@ -227,6 +231,26 @@ export function LessonWorkflowShell({
   const prepAbortRef = useRef<AbortController | null>(null);
   // 投屏题显示面：full=全屏弹窗（默认，刷新恢复不变）；mini=可拖拽悬浮小卡。同一时刻只在一个面显示。
   const [projectionSurface, setProjectionSurface] = useState<"full" | "mini">("full");
+  const studentDisplayKey = activeSession ? `webgis-student-display:${activeSession.project_id}:${activeSession.session_id}` : "";
+  const savedStudentDisplay = useMemo(() => {
+    try { return Boolean(studentDisplayKey) && window.localStorage.getItem(studentDisplayKey) === "true"; }
+    catch { return false; }
+  }, [studentDisplayKey]);
+  const [studentDisplayChoice, setStudentDisplayChoice] = useState<{ key: string; enabled: boolean } | null>(null);
+  const studentDisplayRequested = studentDisplayChoice?.key === studentDisplayKey ? studentDisplayChoice.enabled : savedStudentDisplay;
+  const setStudentDisplayRequested = useCallback((next: boolean | ((previous: boolean) => boolean)) => {
+    const enabled = typeof next === "function" ? next(studentDisplayRequested) : next;
+    setStudentDisplayChoice({ key: studentDisplayKey, enabled });
+    try { if (studentDisplayKey) window.localStorage.setItem(studentDisplayKey, String(enabled)); }
+    catch { /* When browser storage is unavailable the current view still works. */ }
+  }, [studentDisplayKey, studentDisplayRequested]);
+  const [fontSize, setFontSize] = useState(30);
+  const [revealedStageKey, setRevealedStageKey] = useState("");
+  const [menuTarget, setMenuTarget] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    setMenuTarget(document.getElementById("teaching-menu-slot"));
+  }, []);
 
   // 换课堂（或重新加载到另一节课）时投屏题回到全屏显示面。
   useEffect(() => {
@@ -779,6 +803,38 @@ export function LessonWorkflowShell({
   const workflowBusy = busy || localBusy;
   const [presentationVisible, setPresentationVisible] = useState(false);
   const teachPanelVisible = lessonMode === "teach" && activeSession?.status === "running" && Boolean(activeLesson);
+  const studentDisplay = studentDisplayRequested && teachPanelVisible;
+  const currentStageIndex = activeLesson?.stages.findIndex(stage => stage.stage_id === activeSession?.current_stage_id) ?? -1;
+  const currentStage = currentStageIndex >= 0 ? activeLesson?.stages[currentStageIndex] : undefined;
+  const stageKey = `${activeSession?.session_id || ""}:${currentStage?.stage_id || ""}`;
+  const revealConclusions = revealedStageKey === stageKey;
+  const needsRehearsal = activeLesson?.metadata?.created_from === "lesson_design"
+    && String(activeLesson.metadata.ready_for_class) !== "true";
+
+  useEffect(() => {
+    setRevealedStageKey("");
+  }, [stageKey]);
+
+  useLayoutEffect(() => {
+    onStudentDisplayChange?.(studentDisplay);
+  }, [studentDisplay, onStudentDisplayChange]);
+
+  useEffect(() => () => onStudentDisplayChange?.(false), [onStudentDisplayChange]);
+
+  const teachingMenu = (
+    <nav className="classroom-top-menu" aria-label="教学菜单" data-testid="lesson-workflow-launcher">
+      <button type="button" className="toolbar-button compact" onClick={() => { setStudentDisplayRequested(false); openDesign(); }} data-testid="lesson-design-launcher">教案设计</button>
+      <button type="button" className={`toolbar-button compact ${lessonMode === "teach" || lessonMode === "prep" ? "active" : ""}`}
+        onClick={() => { setStudentDisplayRequested(false); setLessonMode(value => value === "teach" ? "off" : activeSession?.status === "running" ? "teach" : "prep"); }}
+        data-testid="class-mode-toggle" title={activeSession?.status === "running" ? "进入课堂面板" : "选择课时并开始上课"}>课堂模式</button>
+      <button type="button" className={`toolbar-button compact ${lessonMode === "review" ? "active" : ""}`}
+        onClick={() => { setStudentDisplayRequested(false); setLessonMode(value => value === "review" ? "off" : "review"); }}>教学复盘</button>
+      {teachPanelVisible ? <button type="button" className={`toolbar-button compact ${studentDisplay ? "active" : ""}`}
+        aria-pressed={studentDisplay} data-testid="student-display-toggle"
+        onClick={() => setStudentDisplayRequested(value => !value)}>{studentDisplay ? "退出学生展示" : "学生展示"}</button> : null}
+    </nav>
+  );
+
   const classCurrentStage = useMemo(() => {
     if (!activeLesson || !activeSession?.current_stage_id) return null;
     return activeLesson.stages.find(stage => stage.stage_id === activeSession.current_stage_id) || null;
@@ -796,9 +852,38 @@ export function LessonWorkflowShell({
     onApplyProfilePreset?.(classCurrentStage);
   }, [teachPanelVisible, classCurrentStage, activeSession?.project_id, activeSession?.session_id, onApplyProfilePreset]);
 
+  const teacherControls = (
+    <details className={`classroom-teacher-controls glass-panel ${studentDisplay ? "student-display-controls" : ""}`} data-testid="classroom-teacher-controls">
+      <summary>展示控制</summary>
+      <div className="classroom-teacher-control-body">
+        <button type="button" className="toolbar-button compact" data-testid="class-toggle-presentation"
+          disabled={workflowBusy || !currentStage} onClick={() => setPresentationVisible(value => !value)}>{presentationVisible ? "回到地图" : "展示板"}</button>
+        <label htmlFor="classroom-presentation-font-size">展示字号 <span aria-hidden="true">{fontSize}px</span>
+          <input id="classroom-presentation-font-size" type="range" min="24" max="44" step="2" value={fontSize} aria-label="展示字号"
+            onChange={event => setFontSize(Number(event.target.value))} />
+        </label>
+        <button type="button" className="toolbar-button compact" aria-pressed={revealConclusions}
+          disabled={!currentStage} data-testid="reveal-stage-conclusions"
+          onClick={() => setRevealedStageKey(revealConclusions ? "" : stageKey)}>{revealConclusions ? "隐藏环节结论" : "揭示环节结论"}</button>
+        {projectionQuestion?.timer ? <div className="classroom-question-controls" aria-label="题目控制">
+          {!projectionQuestion.timer.revealed ? <>
+            <button type="button" className="toolbar-button compact" disabled={workflowBusy} data-testid="teacher-question-timer"
+              onClick={() => void projectionTimerAction(projectionQuestion.timer?.status === "running" ? "pause" : projectionQuestion.timer?.status === "paused" ? "resume" : "start")}>
+              {projectionQuestion.timer.status === "running" ? "暂停计时" : projectionQuestion.timer.status === "paused" ? "继续计时" : "开始计时"}</button>
+            <button type="button" className="toolbar-button compact" disabled={workflowBusy} data-testid="teacher-question-reveal" onClick={() => void projectionReveal()}>揭示答案</button>
+          </> : null}
+          <button type="button" className="toolbar-button compact" disabled={workflowBusy} onClick={() => setProjectionSurface(value => value === "full" ? "mini" : "full")}>{projectionSurface === "full" ? "题目小窗" : "题目大屏"}</button>
+          <button type="button" className="toolbar-button compact" disabled={workflowBusy} data-testid="teacher-question-close" onClick={() => void closeProjection()}>收起题目</button>
+        </div> : null}
+        {studentDisplay ? <button type="button" className="toolbar-button compact" onClick={() => setStudentDisplayRequested(false)}>退出学生展示</button> : null}
+      </div>
+    </details>
+  );
+
   return (
     <>
-      {teachPanelVisible && activeSession && activeLesson ? (
+      {menuTarget ? createPortal(teachingMenu, menuTarget) : <div className="classroom-top-menu-fallback">{teachingMenu}</div>}
+      {teachPanelVisible && !studentDisplay && activeSession && activeLesson ? (
         <ClassRunPanel
           lesson={activeLesson}
           session={activeSession}
@@ -835,8 +920,22 @@ export function LessonWorkflowShell({
           assistantBusy={assistantBusy}
           presentationVisible={presentationVisible}
           onTogglePresentation={() => setPresentationVisible((value) => !value)}
+          showStageControls={false}
+          displayControls={teacherControls}
         />
       ) : null}
+      {studentDisplay && activeLesson ? (
+        <details className="classroom-stage-nav glass-panel" key={`nav:${stageKey}`} data-testid="student-stage-navigation">
+          <summary>环节 {currentStageIndex + 1}/{activeLesson.stages.length}</summary>
+          <nav aria-label="课堂环节">
+            {activeLesson.stages.map((stage, index) => <button key={stage.stage_id} type="button"
+              className={`toolbar-button compact ${stage.stage_id === currentStage?.stage_id ? "active" : ""}`}
+              disabled={workflowBusy || stage.stage_id === currentStage?.stage_id}
+              onClick={() => void applyScene(stage.stage_id, true)}>{index + 1}. {stage.title}</button>)}
+          </nav>
+        </details>
+      ) : null}
+      {teachPanelVisible && (studentDisplay || panelCollapsed) ? teacherControls : null}
       {teachPanelVisible && presentationVisible && activeSession && activeLesson ? (
         (() => {
           const stage = activeLesson.stages.find((item) => item.stage_id === activeSession.current_stage_id);
@@ -845,6 +944,8 @@ export function LessonWorkflowShell({
             <StagePresentationSurface
               key={`${activeSession.session_id}:${stage.stage_id}`}
               stage={stage}
+              revealConclusions={revealConclusions}
+              fontSize={fontSize}
               onProjectQuestion={(questionId, stageId) => void projectQuestion(questionId, stageId)}
               onPresentScene={async (target) => {
                 const response = await presentClassroomScene(activeSession.session_id, activeSession.current_stage_id, target);
@@ -859,6 +960,8 @@ export function LessonWorkflowShell({
       {teachPanelVisible && projectionQuestion && projectionSurface === "full" ? (
         <QuestionPracticeModal
           question={projectionQuestion}
+          studentDisplay={studentDisplay}
+          fontSize={fontSize}
           busy={workflowBusy}
           onTimerAction={(action) => void projectionTimerAction(action)}
           onReveal={() => void projectionReveal()}
@@ -872,6 +975,8 @@ export function LessonWorkflowShell({
         <QuestionPracticeModal
           variant="mini"
           question={projectionQuestion}
+          studentDisplay={studentDisplay}
+          fontSize={fontSize}
           busy={workflowBusy}
           onTimerAction={(action) => void projectionTimerAction(action)}
           onReveal={() => void projectionReveal()}
@@ -883,35 +988,19 @@ export function LessonWorkflowShell({
       ) : null}
       <div className="bottom-stack">
         <div className="bottom-dock">
-          {statusBar}
-          <div className="lesson-workflow-launcher" data-testid="lesson-workflow-launcher">
-            <button
-              type="button"
-              className="toolbar-button compact"
-              onClick={openDesign}
-              data-testid="lesson-design-launcher"
-            >
-              教案设计
-            </button>
-            <button
-              type="button"
-              className={`toolbar-button compact ${lessonMode === "teach" || lessonMode === "prep" ? "active" : ""}`}
-              onClick={() =>
-                setLessonMode((value) => (value === "teach" ? "off" : activeSession?.status === "running" ? "teach" : "prep"))
-              }
-              data-testid="class-mode-toggle"
-              title={activeSession?.status === "running" ? "进入课堂面板" : "先选择课时并开始上课"}
-            >
-              课堂模式
-            </button>
-            <button
-              type="button"
-              className={`toolbar-button compact ${lessonMode === "review" ? "active" : ""}`}
-              onClick={() => setLessonMode((value) => (value === "review" ? "off" : "review"))}
-            >
-              教学复盘
-            </button>
-          </div>
+          {lessonMode === "off" ? statusBar : null}
+          {lessonMode === "prep" || teachPanelVisible ? <nav className="classroom-bottom-navigation glass-panel" aria-label="授课导航" data-testid="classroom-bottom-navigation">
+            {teachPanelVisible && activeLesson ? <>
+              <button type="button" className="toolbar-button compact" disabled={workflowBusy || currentStageIndex <= 0} data-testid="class-prev-stage"
+                onClick={() => void applyScene(activeLesson.stages[currentStageIndex - 1].stage_id, true)}>上一环节</button>
+              <span aria-live="polite" className="classroom-stage-progress">{currentStageIndex + 1}/{activeLesson.stages.length} · {currentStage?.title || "选择环节"}</span>
+              <button type="button" className="toolbar-button compact" disabled={workflowBusy || currentStageIndex < 0 || currentStageIndex >= activeLesson.stages.length - 1} data-testid="class-next-stage"
+                onClick={() => void applyScene(activeLesson.stages[currentStageIndex + 1].stage_id, true)}>下一环节</button>
+            </> : <button type="button" className="toolbar-button compact primary" data-testid="start-class"
+              disabled={!project || !activeLesson || !activeLesson.stages.length || workflowBusy || needsRehearsal}
+              title={needsRehearsal ? "教案设计的课时需先通过模拟测试才能开真实课堂" : undefined}
+              onClick={() => void startClass()}>开始上课</button>}
+          </nav> : null}
         </div>
       </div>
 
@@ -937,6 +1026,7 @@ export function LessonWorkflowShell({
           onResolvePrepChangeSet={(decision, stageIds) => void resolvePrepChangeSet(decision, stageIds)}
           onDesignFromLesson={onOpenDesignWorkspace ? (lesson) => void designFromLesson(lesson) : undefined}
           onStartClass={() => void startClass()}
+          hideStartControl
           onStartRehearsal={startRehearsal}
           onClose={() => setLessonMode("off")}
         />
@@ -965,7 +1055,7 @@ export function LessonWorkflowShell({
       {visualQueryDismissed || !visualQueryLayer ? null : (
         <VisualQueryPopup
           layer={visualQueryLayer}
-          shifted={teachPanelVisible && !panelCollapsed}
+          shifted={teachPanelVisible && !studentDisplay && !panelCollapsed}
           onClose={() => setVisualQueryDismissed(true)}
           onFocusItem={(_item: VisualizationItem) => {
             void onRefresh();

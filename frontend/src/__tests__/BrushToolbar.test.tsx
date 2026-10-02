@@ -28,6 +28,18 @@ describe("BrushToolbar", () => {
     }
   });
 
+  it("allows undo after clear even when the canvas is empty", () => {
+    const props = { settings: initial, onChangeSettings: vi.fn(), onUndo: vi.fn(), onClear: vi.fn() };
+    const { rerender } = render(<BrushToolbar {...props} hasContent={false} canUndo />);
+    fireEvent.click(screen.getByRole("button", { name: "展开地图画笔设置" }));
+    expect(screen.getByRole("button", { name: "撤销" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "清除" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "撤销" }));
+    expect(props.onUndo).toHaveBeenCalledTimes(1);
+    rerender(<BrushToolbar {...props} hasContent={false} canUndo={false} />);
+    expect(screen.getByRole("button", { name: "撤销" })).toBeDisabled();
+  });
+
   it("keeps undo and clear gated by the current drawing and passes actions to the owner", () => {
     const props = { settings: initial, onChangeSettings: vi.fn(), onUndo: vi.fn(), onClear: vi.fn() };
     const { rerender } = render(<BrushToolbar {...props} hasContent={false} />);

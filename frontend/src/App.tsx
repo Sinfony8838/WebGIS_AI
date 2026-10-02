@@ -544,6 +544,12 @@ export default function App({
   const teachingContextRef = useRef<TeachingContext | null>(null);
   // 同步一份 phase 到 state：助教面板头部的阶段徽标与能力芯片排序需要触发渲染。
   const [teachingPhase, setTeachingPhase] = useState<TeachingContext["phase"]>("");
+  const [studentDisplay, setStudentDisplay] = useState(false);
+  const studentDisplayRef = useRef(false);
+  studentDisplayRef.current = studentDisplay;
+  useEffect(() => {
+    if (studentDisplay) cancelSpeech();
+  }, [studentDisplay]);
   const [copilotOpenSignal, setCopilotOpenSignal] = useState(0);
   const jobStreamsRef = useRef(new JobActivity<JobSubscription>());
   const subscribedJobIdsRef = useRef(new Set<string>());
@@ -623,6 +629,7 @@ export default function App({
   const brushRef = useRef<BrushOverlayHandle | null>(null);
   const pptBrushRef = useRef<BrushOverlayHandle | null>(null);
   const [mapBrushHasContent, setMapBrushHasContent] = useState(false);
+  const [mapBrushCanUndo, setMapBrushCanUndo] = useState(false);
   const [pptBrushHasContent, setPptBrushHasContent] = useState(false);
   const [pptBrushCanUndo, setPptBrushCanUndo] = useState(false);
   // ── 3D digital-globe state ───────────────────────────────────────────
@@ -1686,7 +1693,7 @@ export default function App({
             if (submittedTab === "interaction") {
               setInteractionBusy(false);
               // 语音发起的交互回合：播报结果（可关）。新回合开始时会先 cancel。
-              if (payload.status === "completed" && ttsEnabled && submittedInputMode === "voice" && message) {
+              if (payload.status === "completed" && ttsEnabled && submittedInputMode === "voice" && message && !studentDisplayRef.current) {
                 speak(message);
               }
             }
@@ -3868,7 +3875,7 @@ export default function App({
   return (
     <div
       ref={workspaceRef}
-      className={`screen-shell screen-shell-classroom view-mode-${viewMode}`}
+      className={`screen-shell screen-shell-classroom view-mode-${viewMode}${studentDisplay ? " classroom-student-display" : ""}`}
       data-interaction-mode={interactionMode}
       data-testid="workspace-capture-root"
     >
@@ -4016,6 +4023,7 @@ export default function App({
         settings={brushSettings}
         onWheelZoom={handleBrushWheelZoom}
         onContentChange={setMapBrushHasContent}
+        onUndoAvailabilityChange={setMapBrushCanUndo}
       /> : null}
       <div className="map-vignette" />
       <div className="map-grid-overlay" />
@@ -4075,6 +4083,7 @@ export default function App({
         </div>
 
         <div className="header-actions">
+          <div id="teaching-menu-slot" />
           <BasemapMenu
             items={basemapItems}
             activeId={activeBasemapId}
@@ -4102,21 +4111,21 @@ export default function App({
               }
             }}
           />
-          <button
+          {!studentDisplay ? <button
             type="button"
             className={`toolbar-button ${workflowDockOpen ? "active" : ""}`}
             onClick={() => setWorkflowDockOpen((value) => !value)}
             data-testid="toolbar-workflow-toggle"
           >
             GIS 分析工作流
-          </button>
-          <button
+          </button> : null}
+          {!studentDisplay ? <button
             type="button"
             className={`toolbar-button ${databaseViewerOpen ? "active" : ""}`}
             onClick={() => setDatabaseViewerOpen(true)}
           >
             数据库
-          </button>
+          </button> : null}
           <button
             type="button"
             className="toolbar-button"
@@ -4376,7 +4385,7 @@ export default function App({
         </MapToolsDock>
         </main>
 
-        <aside
+        {!studentDisplay ? <aside
           className="account-dock"
           data-testid="account-dock"
           aria-label="当前登录账号"
@@ -4386,7 +4395,7 @@ export default function App({
             onLogout={onLogout}
             onUserChanged={onUserChanged}
           />
-        </aside>
+        </aside> : null}
 
       {interactionMode === "brush" && pptViewerOpen && pptPresentationReady ? (
         // 放映界面：画笔设置收入轻量浮层，选完工具收起，结束画笔退出绘制状态。
@@ -4404,13 +4413,14 @@ export default function App({
         <BrushToolbar
           settings={brushSettings}
           hasContent={brushTargetHasContent}
+          canUndo={mapBrushCanUndo}
           onChangeSettings={(next) => setBrushSettings((prev) => ({ ...prev, ...next }))}
           onUndo={() => brushTargetRef.current?.undo()}
           onClear={() => brushTargetRef.current?.clear()}
         />
       ) : null}
 
-      {project ? (
+      {project && !studentDisplay ? (
         <>
         <AgentControlOverlay
           active={interactionBusy}
@@ -4525,6 +4535,7 @@ export default function App({
             teachingContextRef.current = ctx;
             setTeachingPhase(ctx?.phase || "");
           }}
+          onStudentDisplayChange={setStudentDisplay}
           onAssistantPrompt={(prompt, displayMessage) => assistantDispatchRef.current(prompt, undefined, displayMessage)}
           onApplyGlobeScene={handleApplyLessonGlobeScene}
           getGlobeSceneSnapshot={getLessonGlobeSceneSnapshot}
@@ -4550,7 +4561,7 @@ export default function App({
             />
           }
         />
-        {project && lessonDesignWorkspace.open ? (
+        {project && lessonDesignWorkspace.open && !studentDisplay ? (
           <LessonDesignWorkspace
             projectId={project.project_id}
             initialDesignId={lessonDesignWorkspace.designId}
@@ -4565,19 +4576,19 @@ export default function App({
             }}
           />
         ) : null}
-        <ToastStack items={toasts} onDismiss={dismissToast} />
+        {!studentDisplay ? <ToastStack items={toasts} onDismiss={dismissToast} /> : null}
         <TeachingMaterialViewer
           open={materialViewerOpen}
           title={materialViewerTitle}
           materials={materialViewerItems}
           onClose={() => setMaterialViewerOpen(false)}
         />
-        <UploadDialog open={uploadOpen} busy={mapBusy} onClose={() => setUploadOpen(false)} onSubmit={handleUploadDataset} />
+        <UploadDialog open={uploadOpen && !studentDisplay} busy={mapBusy} onClose={() => setUploadOpen(false)} onSubmit={handleUploadDataset} />
         <WorkflowDock
           projectId={project?.project_id || ""}
           assistantJob={currentJob}
           mapRef={mapRef}
-          open={workflowDockOpen}
+          open={workflowDockOpen && !studentDisplay}
           layerState={layerState}
           initialDatasetSource={workflowInitialDataset}
           onArtifactsChanged={handleWorkflowArtifactsChanged}
@@ -4596,7 +4607,7 @@ export default function App({
           onLoadDataset={(item) => void handleLayerManagerAddDataset(item)}
         />
         <DatabaseViewer
-          open={databaseViewerOpen}
+          open={databaseViewerOpen && !studentDisplay}
           onClose={() => setDatabaseViewerOpen(false)}
           onUpload={() => setUploadOpen(true)}
           knowledgeItems={kbAllItems}

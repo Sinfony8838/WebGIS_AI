@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { QuestionPracticeModal } from "../components/QuestionPracticeModal";
 import type { LessonQuestion, QuestionTimerState } from "../types";
 
@@ -181,4 +181,73 @@ it("keeps the reference answer and close control usable while commentary is pend
   rerender(<QuestionPracticeModal {...callbacks} question={question({},timer({status:"revealed",revealed:true,ai_explanation_status:"interrupted"}))}/>);
   fireEvent.click(screen.getByText("重试讲解"));
   expect(callbacks.onReveal).toHaveBeenCalledTimes(1);
+});
+
+describe("QuestionPracticeModal student display", () => {
+  it("does not mount teacher controls, source labels or unrevealed knowledge hints", () => {
+    const callbacks = props();
+    render(<QuestionPracticeModal studentDisplay question={question({ knowledge_points: ["尚未揭示的知识标签"] })} {...callbacks} />);
+    const modal = screen.getByTestId("question-practice-modal");
+    expect(modal).toHaveTextContent("课堂练习");
+    expect(modal).not.toHaveTextContent("题库题");
+    expect(modal).not.toHaveTextContent("尚未揭示的知识标签");
+    expect(within(modal).queryByRole("button")).toBeNull();
+    expect(within(modal).queryByRole("textbox")).toBeNull();
+    expect(screen.queryByTestId("qpm-answer")).toBeNull();
+    expect(screen.getByTestId("qpm-options").querySelector(".correct")).toBeNull();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(callbacks.onClose).not.toHaveBeenCalled();
+  });
+
+  it("shows only server-revealed answers and hides observations and AI recovery details", () => {
+    const callbacks = props();
+    const { rerender } = render(<QuestionPracticeModal studentDisplay question={question()} {...callbacks} />);
+    rerender(<QuestionPracticeModal studentDisplay question={question({}, timer({
+      revealed: true, status: "revealed", actual_seconds: 30,
+      ai_explanation_status: "interrupted", ai_explanation_note: "内部任务失败提示",
+      ai_explanation: { text: "阅读人口图可以概括分布差异。", generator: "rules" }
+    }))} {...callbacks} />);
+    expect(screen.getByTestId("qpm-answer")).toHaveTextContent("中低纬度沿海平原气候适宜");
+    expect(screen.getByTestId("qpm-ai")).toHaveTextContent("阅读人口图可以概括分布差异");
+    expect(screen.queryByTestId("qpm-notes")).toBeNull();
+    expect(screen.queryByText(/学情速记|内部任务失败提示|重试讲解|讲解任务已中断/)).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    rerender(<QuestionPracticeModal studentDisplay question={question({ question_id: "next", explanation: "新题尚未揭示的解析" })} {...callbacks} />);
+    expect(screen.queryByTestId("qpm-answer")).toBeNull();
+    expect(screen.queryByText("新题尚未揭示的解析")).toBeNull();
+    expect(screen.getByTestId("qpm-options").querySelector(".correct")).toBeNull();
+  });
+
+  it("keeps the last long option and subquestion inside the keyboard-readable content", () => {
+    const longStem = `${"比较两个地区的人口空间分布。".repeat(70)}题干最后一句`;
+    render(<QuestionPracticeModal studentDisplay question={question({
+      text: longStem,
+      options: ["第一项", `${"根据图示信息分析原因。".repeat(60)}末尾选项`],
+      sub_questions: [{ index: "1", text: "最后一道小题", options: ["小题选项末尾"], answer: "秘密小题答案", answer_index: 0, explanation: "秘密小题解析" }]
+    })} {...props()} />);
+    const content = screen.getByRole("region", { name: "题目与讲解" });
+    expect(content).toHaveAttribute("tabindex", "0");
+    content.focus();
+    expect(content).toHaveFocus();
+    expect(content).toHaveTextContent("题干最后一句");
+    expect(content).toHaveTextContent("末尾选项");
+    expect(content).toHaveTextContent("小题选项末尾");
+    expect(content).not.toHaveTextContent("秘密小题答案");
+    expect(content).not.toHaveTextContent("秘密小题解析");
+  });
+
+  it("clears a teacher observation draft when the question changes", () => {
+    const callbacks = props();
+    const revealed = timer({ status: "revealed", revealed: true });
+    const { rerender } = render(<QuestionPracticeModal question={question({}, revealed)} {...callbacks} />);
+    fireEvent.change(screen.getByPlaceholderText("一句话描述学生表现（可留空）"), { target: { value: "上道题观察" } });
+    fireEvent.click(screen.getByTestId("qpm-note-misconception"));
+    fireEvent.change(screen.getByPlaceholderText("输入误区标签"), { target: { value: "上道题误区" } });
+    rerender(<QuestionPracticeModal question={question({ question_id: "next" }, revealed)} {...callbacks} />);
+    expect(screen.getByPlaceholderText("一句话描述学生表现（可留空）")).toHaveValue("");
+    expect(screen.queryByPlaceholderText("输入误区标签")).toBeNull();
+    fireEvent.click(screen.getByTestId("qpm-note-correct"));
+    expect(callbacks.onObservation).toHaveBeenCalledWith("correct", "", "");
+  });
 });

@@ -5,6 +5,7 @@ import "./BrushToolbar.css";
 type Props = {
   settings: BrushSettings;
   hasContent: boolean;
+  canUndo?: boolean;
   onChangeSettings: (next: Partial<BrushSettings>) => void;
   onUndo: () => void;
   onClear: () => void;
@@ -123,7 +124,7 @@ const TOOL_ICONS: Record<BrushTool, () => JSX.Element> = {
   eraser: EraserIcon
 };
 
-export function BrushToolbar({ settings, hasContent, onChangeSettings, onUndo, onClear }: Props) {
+export function BrushToolbar({ settings, hasContent, canUndo = hasContent, onChangeSettings, onUndo, onClear }: Props) {
   const [expanded, setExpanded] = useState(false);
   const settingsId = useId();
   const toggleRef = useRef<HTMLButtonElement>(null);
@@ -219,7 +220,7 @@ export function BrushToolbar({ settings, hasContent, onChangeSettings, onUndo, o
           className="brush-tool-btn"
           aria-label="撤销"
           title="撤销上一步绘制"
-          disabled={!hasContent}
+          disabled={!canUndo}
           onClick={onUndo}
         >
           <UndoIcon />
