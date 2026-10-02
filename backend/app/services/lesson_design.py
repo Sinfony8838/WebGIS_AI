@@ -1798,18 +1798,7 @@ class LessonDesignService:
             errors.append("至少需要一个可观察的教学目标。")
         elif len(objectives) > 4:
             warnings.append(f"教学目标有 {len(objectives)} 个，建议精简到 3-4 个可观察目标。")
-        # 核心问题与递进问题链：已并入各教学环节，仅作提示；
-        # 环节缺少问题时仍按下方环节检查报错。
-        core = draft.get("core_questions") or {}
-        if not isinstance(core, dict):
-            core = {}
-        core_chain = [str(item).strip() for item in (core.get("sub_questions") or []) if str(item).strip()]
-        if not str(core.get("core") or "").strip():
-            warnings.append("独立的核心问题字段已并入教学环节；请确认各环节问题链覆盖核心问题。")
-        if len(core_chain) < 2:
-            warnings.append("独立问题链少于 2 条：递进子问题建议拆入各环节问题链。")
-        elif len(core_chain) > 4:
-            warnings.append(f"独立问题链有 {len(core_chain)} 条，请精简后拆入各环节。")
+        # 问题完整性在下方按教学环节校验；旧 core_questions 字段仅保留兼容。
         # 设计思路 100-150 字
         thinking = str(draft.get("design_thinking") or "").strip()
         if not thinking:
