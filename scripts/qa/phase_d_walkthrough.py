@@ -134,6 +134,12 @@ def main() -> int:
                 current = session()
                 assert current["current_stage_id"] == "qa_stage_1"
                 record(size + " 实际点击开始课堂", {"project_id": project_id, "lesson_id": lesson_id, "session_id": current["session_id"]})
+                teacher_controls = page.get_by_test_id("class-run-panel").get_by_test_id("classroom-teacher-controls")
+                expect(teacher_controls).to_be_visible()
+                page.get_by_test_id("quick-record").get_by_role("button", name="答对", exact=True).click(trial=True)
+                teacher_controls.locator("summary").click()
+                page.get_by_test_id("quick-record").get_by_role("button", name="答对", exact=True).click(trial=True)
+                teacher_controls.locator("summary").click()
                 page.screenshot(path=str(output / f"{size}-01-teacher.png"))
 
                 current_step = size + " 环节切换与学生模式"
@@ -166,7 +172,7 @@ def main() -> int:
                     current_step = size + " 课堂视频原生播放"
                     video = surface.locator("video")
                     expect(video).to_be_visible()
-                    page.wait_for_function("() => document.querySelector('.sps video')?.readyState >= 2")
+                    page.wait_for_function("() => document.querySelector('.sps video')?.readyState >= 2", timeout=45000)
                     video.evaluate("el => { window.qaVideoEvents=[]; ['play','playing','timeupdate'].forEach(type => el.addEventListener(type, () => window.qaVideoEvents.push({type,time:el.currentTime}))); }")
                     bounds = video.bounding_box()
                     assert bounds

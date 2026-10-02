@@ -73,3 +73,12 @@ body:has(.classroom-student-display) .qpm-shell.qpm-student:not(.qpm-mini) {
   body:has(.classroom-student-display) .qpm-shell.qpm-student:not(.qpm-mini) { left: 12px; right: 60px; top: calc(var(--header-height, 72px) + 64px); }
   .classroom-stage-progress { font-size: 14px; max-width: 40vw; }
 }
+
+/* In teacher view the controls belong to the panel flow, leaving observations clickable. */
+.class-run-panel .classroom-teacher-controls.glass-panel {
+  position: static;
+  width: auto;
+  flex: none;
+  max-height: 40dvh;
+  margin: 8px 0;
+}

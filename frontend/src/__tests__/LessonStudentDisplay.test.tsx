@@ -58,6 +58,7 @@ describe("classroom student display integration", () => {
     mount();
     await screen.findByTestId("class-run-panel");
     expect(slot.contains(screen.getByTestId("lesson-design-launcher"))).toBe(true);
+    expect(screen.getByTestId("class-run-panel").contains(screen.getByTestId("classroom-teacher-controls"))).toBe(true);
     const bottom = screen.getByTestId("classroom-bottom-navigation");
     expect(within(bottom).queryByText("教案设计")).toBeNull();
     expect(screen.getAllByTestId("class-prev-stage")).toHaveLength(1);

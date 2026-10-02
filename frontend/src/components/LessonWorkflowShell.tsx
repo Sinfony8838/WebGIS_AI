@@ -852,6 +852,34 @@ export function LessonWorkflowShell({
     onApplyProfilePreset?.(classCurrentStage);
   }, [teachPanelVisible, classCurrentStage, activeSession?.project_id, activeSession?.session_id, onApplyProfilePreset]);
 
+  const teacherControls = (
+    <details className={`classroom-teacher-controls glass-panel ${studentDisplay ? "student-display-controls" : ""}`} data-testid="classroom-teacher-controls">
+      <summary>展示控制</summary>
+      <div className="classroom-teacher-control-body">
+        <button type="button" className="toolbar-button compact" data-testid="class-toggle-presentation"
+          disabled={workflowBusy || !currentStage} onClick={() => setPresentationVisible(value => !value)}>{presentationVisible ? "回到地图" : "展示板"}</button>
+        <label htmlFor="classroom-presentation-font-size">展示字号 <span aria-hidden="true">{fontSize}px</span>
+          <input id="classroom-presentation-font-size" type="range" min="24" max="44" step="2" value={fontSize} aria-label="展示字号"
+            onChange={event => setFontSize(Number(event.target.value))} />
+        </label>
+        <button type="button" className="toolbar-button compact" aria-pressed={revealConclusions}
+          disabled={!currentStage} data-testid="reveal-stage-conclusions"
+          onClick={() => setRevealedStageKey(revealConclusions ? "" : stageKey)}>{revealConclusions ? "隐藏环节结论" : "揭示环节结论"}</button>
+        {projectionQuestion?.timer ? <div className="classroom-question-controls" aria-label="题目控制">
+          {!projectionQuestion.timer.revealed ? <>
+            <button type="button" className="toolbar-button compact" disabled={workflowBusy} data-testid="teacher-question-timer"
+              onClick={() => void projectionTimerAction(projectionQuestion.timer?.status === "running" ? "pause" : projectionQuestion.timer?.status === "paused" ? "resume" : "start")}>
+              {projectionQuestion.timer.status === "running" ? "暂停计时" : projectionQuestion.timer.status === "paused" ? "继续计时" : "开始计时"}</button>
+            <button type="button" className="toolbar-button compact" disabled={workflowBusy} data-testid="teacher-question-reveal" onClick={() => void projectionReveal()}>揭示答案</button>
+          </> : null}
+          <button type="button" className="toolbar-button compact" disabled={workflowBusy} onClick={() => setProjectionSurface(value => value === "full" ? "mini" : "full")}>{projectionSurface === "full" ? "题目小窗" : "题目大屏"}</button>
+          <button type="button" className="toolbar-button compact" disabled={workflowBusy} data-testid="teacher-question-close" onClick={() => void closeProjection()}>收起题目</button>
+        </div> : null}
+        {studentDisplay ? <button type="button" className="toolbar-button compact" onClick={() => setStudentDisplayRequested(false)}>退出学生展示</button> : null}
+      </div>
+    </details>
+  );
+
   return (
     <>
       {menuTarget ? createPortal(teachingMenu, menuTarget) : <div className="classroom-top-menu-fallback">{teachingMenu}</div>}
@@ -893,6 +921,7 @@ export function LessonWorkflowShell({
           presentationVisible={presentationVisible}
           onTogglePresentation={() => setPresentationVisible((value) => !value)}
           showStageControls={false}
+          displayControls={teacherControls}
         />
       ) : null}
       {studentDisplay && activeLesson ? (
@@ -906,33 +935,7 @@ export function LessonWorkflowShell({
           </nav>
         </details>
       ) : null}
-      {teachPanelVisible ? (
-        <details className={`classroom-teacher-controls glass-panel ${studentDisplay ? "student-display-controls" : ""}`} data-testid="classroom-teacher-controls">
-          <summary>展示控制</summary>
-          <div className="classroom-teacher-control-body">
-            <button type="button" className="toolbar-button compact" data-testid="class-toggle-presentation"
-              disabled={workflowBusy || !currentStage} onClick={() => setPresentationVisible(value => !value)}>{presentationVisible ? "回到地图" : "展示板"}</button>
-            <label htmlFor="classroom-presentation-font-size">展示字号 <span aria-hidden="true">{fontSize}px</span>
-              <input id="classroom-presentation-font-size" type="range" min="24" max="44" step="2" value={fontSize} aria-label="展示字号"
-                onChange={event => setFontSize(Number(event.target.value))} />
-            </label>
-            <button type="button" className="toolbar-button compact" aria-pressed={revealConclusions}
-              disabled={!currentStage} data-testid="reveal-stage-conclusions"
-              onClick={() => setRevealedStageKey(revealConclusions ? "" : stageKey)}>{revealConclusions ? "隐藏环节结论" : "揭示环节结论"}</button>
-            {projectionQuestion?.timer ? <div className="classroom-question-controls" aria-label="题目控制">
-              {!projectionQuestion.timer.revealed ? <>
-                <button type="button" className="toolbar-button compact" disabled={workflowBusy} data-testid="teacher-question-timer"
-                  onClick={() => void projectionTimerAction(projectionQuestion.timer?.status === "running" ? "pause" : projectionQuestion.timer?.status === "paused" ? "resume" : "start")}>
-                  {projectionQuestion.timer.status === "running" ? "暂停计时" : projectionQuestion.timer.status === "paused" ? "继续计时" : "开始计时"}</button>
-                <button type="button" className="toolbar-button compact" disabled={workflowBusy} data-testid="teacher-question-reveal" onClick={() => void projectionReveal()}>揭示答案</button>
-              </> : null}
-              <button type="button" className="toolbar-button compact" disabled={workflowBusy} onClick={() => setProjectionSurface(value => value === "full" ? "mini" : "full")}>{projectionSurface === "full" ? "题目小窗" : "题目大屏"}</button>
-              <button type="button" className="toolbar-button compact" disabled={workflowBusy} data-testid="teacher-question-close" onClick={() => void closeProjection()}>收起题目</button>
-            </div> : null}
-            {studentDisplay ? <button type="button" className="toolbar-button compact" onClick={() => setStudentDisplayRequested(false)}>退出学生展示</button> : null}
-          </div>
-        </details>
-      ) : null}
+      {teachPanelVisible && (studentDisplay || panelCollapsed) ? teacherControls : null}
       {teachPanelVisible && presentationVisible && activeSession && activeLesson ? (
         (() => {
           const stage = activeLesson.stages.find((item) => item.stage_id === activeSession.current_stage_id);

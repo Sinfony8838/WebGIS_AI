@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ClassroomPresentationTarget } from "../api";
 import { stageKindInfo } from "../lib/stageKinds";
 import { ShanghaiPopulationInquiry } from "./ShanghaiPopulationInquiry";
@@ -28,6 +28,7 @@ type Props = {
   presentationVisible?: boolean;
   onTogglePresentation?: () => void;
   showStageControls?: boolean;
+  displayControls?: ReactNode;
   visibleCatalogLayerIds?: string[];
   onFocusEvidenceLayer?: (datasetId: string, stageDatasetIds: string[]) => void;
   onRequestPlaneView?: () => void;
@@ -72,6 +73,7 @@ export function ClassRunPanel({
   presentationVisible,
   onTogglePresentation,
   showStageControls = true,
+  displayControls,
   visibleCatalogLayerIds = [],
   onFocusEvidenceLayer,
   onRequestPlaneView,
@@ -321,6 +323,7 @@ export function ClassRunPanel({
         />
       </div>
 
+      {displayControls}
       {showStageControls ? <div className="class-stage-steps">
           <button
             type="button"
