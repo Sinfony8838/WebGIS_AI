@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import "./PresentationLayoutEditor.css";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import "./StagePresentationSurface.css";
 import type { LessonStage, PresentationBlock } from "../types";
 import { buildAuthenticatedUrl } from "../api";
@@ -7,6 +7,10 @@ import { defaultLayoutFromStage, isDirectVideo, isExternalUrl } from "../lib/pre
 
 type Props = {
   stage: LessonStage;
+  /** 教师控制区决定是否揭示；学生画布不提供揭示操作。 */
+  revealConclusions?: boolean;
+  /** 课堂正文字号，由教师控制区调整。 */
+  fontSize?: number;
   onProjectQuestion?: (questionId: string, stageId: string) => void;
   onPresentScene?: (target: "stage") => void;
 };
@@ -100,34 +104,104 @@ function SurfaceBlock({
 }
 
 // 课堂主区域的环节展示面：仅渲染学生可见区块；无布局时按环节内容生成默认展示。
-export function StagePresentationSurface({ stage, onProjectQuestion, onPresentScene }: Props) {
-  const [revealed, setRevealed] = useState(false);
-  useEffect(() => setRevealed(false), [stage.stage_id]);
-  const layout = stage.presentation || defaultLayoutFromStage(stage);
+export function StagePresentationSurface({ stage, revealConclusions = false, fontSize = 30, onProjectQuestion, onPresentScene }: Props) {
+  const [reading, setReading] = useState<{ stageId: string; blockId: string } | null>(null);
+  const readingRef = useRef<HTMLDivElement>(null);
+  const openerRef = useRef<HTMLButtonElement | null>(null);
+  const layout = useMemo(() => stage.presentation || defaultLayoutFromStage(stage), [stage]);
   const blocks = [...layout.blocks].sort((a, b) => a.order - b.order);
   const isConclusion = (block: PresentationBlock) => block.teacher_reveal || (
     block.type === "text" && !!stage.knowledge_conclusion && block.text === `结论：${stage.knowledge_conclusion}`
   );
+  const visibleBlocks = blocks.filter(block => revealConclusions || !isConclusion(block));
+  // 用环节 id 绑定阅读状态，切环节的首帧也不会挂载上个环节的内容。
+  const readingBlock = reading?.stageId === stage.stage_id
+    ? visibleBlocks.find(block => block.id === reading.blockId)
+    : undefined;
+  const readingId = readingBlock?.id;
+  useEffect(() => {
+    if (!readingId) return;
+    readingRef.current?.focus();
+    return () => {
+      if (openerRef.current?.isConnected) openerRef.current.focus();
+    };
+  }, [readingId, stage.stage_id]);
+  useEffect(() => setReading(null), [stage.stage_id]);
+  useEffect(() => {
+    if (reading && !readingBlock) setReading(null);
+  }, [reading, readingBlock]);
+  const textSize = Number.isFinite(fontSize) ? Math.max(24, Math.min(44, fontSize)) : 30;
+  const surfaceStyle = {
+    "--sps-font-size": `${textSize}px`,
+    "--sps-title-size": `${Math.round(textSize * 4 / 3)}px`
+  } as CSSProperties;
+
+  function closeReading() {
+    setReading(null);
+  }
+
+  function readingKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeReading();
+    }
+    if (event.key !== "Tab") return;
+    const focusable = readingRef.current?.querySelectorAll<HTMLElement>("button, a[href], video[controls], [tabindex='0']");
+    if (!focusable?.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && (document.activeElement === first || document.activeElement === readingRef.current)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
   return (
-    <div className="sps" data-testid="stage-presentation-surface">
-      <div className="sps-stage-title">
-        {stage.title}
-        <small> · {stage.minutes} 分钟</small>
-        {blocks.some(isConclusion) ? <button type="button" className="toolbar-button compact" onClick={() => setRevealed(value => !value)}>
-          {revealed ? "收起结论" : "显示本环节结论"}
-        </button> : null}
-      </div>
-      <div className="sps-canvas">
-        {blocks.filter(block => revealed || !isConclusion(block)).map((block) => (
+    <div className="sps" style={surfaceStyle} data-testid="stage-presentation-surface">
+      <h2 className="sps-stage-title">{stage.title}</h2>
+      <div className="sps-canvas" aria-hidden={readingBlock ? true : undefined}>
+        {visibleBlocks.map((block, index) => (
           <div
-            key={block.id}
+            key={`${stage.stage_id}:${block.id}`}
             className="sps-cell"
             style={{ left: `${block.x * 100}%`, top: `${block.y * 100}%`, width: `${block.w * 100}%`, height: `${block.h * 100}%`, zIndex: block.z + 1 }}
           >
-            <SurfaceBlock block={block} stage={stage} onProjectQuestion={onProjectQuestion} onPresentScene={onPresentScene} />
+            <div className="sps-cell-tools">
+              <button
+                type="button"
+                className="sps-read-button"
+                aria-label={`展开${BLOCK_LABELS[block.type]} ${index + 1}`}
+                tabIndex={readingBlock ? -1 : 0}
+                onClick={event => {
+                  openerRef.current = event.currentTarget;
+                  setReading({ stageId: stage.stage_id, blockId: block.id });
+                }}
+              >
+                展开阅读
+              </button>
+            </div>
+            <div className="sps-cell-content" tabIndex={readingBlock ? -1 : 0} role="region" aria-label={`${BLOCK_LABELS[block.type]} ${index + 1}`}>
+              {/* 展开时只保留一份素材，避免视频在两个区域同时播放。 */}
+              {!readingBlock ? <SurfaceBlock block={block} stage={stage} onProjectQuestion={onProjectQuestion} onPresentScene={onPresentScene} /> : null}
+            </div>
           </div>
         ))}
       </div>
+      {readingBlock ? (
+        <div className="sps-reading" role="dialog" aria-modal="true" aria-label={`${BLOCK_LABELS[readingBlock.type]}展开阅读`} tabIndex={-1} ref={readingRef} onKeyDown={readingKeyDown}>
+          <header className="sps-reading-header">
+            <h3>{stage.title} · {BLOCK_LABELS[readingBlock.type]}</h3>
+            <button type="button" className="sps-read-button" onClick={closeReading}>返回展示板</button>
+          </header>
+          <div className="sps-reading-content" role="region" aria-label="完整内容" tabIndex={0}>
+            <SurfaceBlock key={`${stage.stage_id}:${readingBlock.id}`} block={readingBlock} stage={stage} onProjectQuestion={onProjectQuestion} onPresentScene={onPresentScene} />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

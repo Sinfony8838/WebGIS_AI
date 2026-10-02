@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { buildAuthenticatedUrl } from "../api";
 import type { LessonQuestion, ObservationVerdict } from "../types";
+import "./QuestionPracticeModal.css";
 
 type Props = {
   /** 来自班课 active_question 的完整题目快照（含服务端计时状态 timer）。 */
   question: LessonQuestion;
   /** full = 全屏投屏（默认，带遮罩）；mini = 可拖拽悬浮小卡（无遮罩、无 portal，页头长按拖动）。 */
   variant?: "full" | "mini";
+  /** 学生展示仅渲染题目与已揭示知识，教师操作由外部控制区提供。 */
+  studentDisplay?: boolean;
+  fontSize?: number;
   busy: boolean;
   onTimerAction: (action: "start" | "pause" | "resume" | "reset") => void;
   onReveal: () => void;
@@ -58,6 +63,8 @@ function readStoredMiniPosition(): { left: number; top: number } | null {
 export function QuestionPracticeModal({
   question,
   variant = "full",
+  studentDisplay = false,
+  fontSize = 30,
   busy,
   onTimerAction,
   onReveal,
@@ -76,6 +83,17 @@ export function QuestionPracticeModal({
   const [noteTag, setNoteTag] = useState("");
   const [noteVerdict, setNoteVerdict] = useState<ObservationVerdict | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
+  const savedFlashTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    setNote("");
+    setNoteTag("");
+    setNoteVerdict(null);
+    setSavedFlash(false);
+    return () => {
+      if (savedFlashTimeout.current) clearTimeout(savedFlashTimeout.current);
+    };
+  }, [question.question_id]);
 
   useEffect(() => {
     const interval = window.setInterval(() => setNowTick(Date.now()), 500);
@@ -89,7 +107,7 @@ export function QuestionPracticeModal({
   }, [timer]);
 
   useEffect(() => {
-    if (mini) {
+    if (mini || studentDisplay) {
       // 小窗形态由显式按钮关闭，不占用 Escape（避免误触收题）。
       return;
     }
@@ -100,7 +118,7 @@ export function QuestionPracticeModal({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [mini, onClose]);
+  }, [mini, studentDisplay, onClose]);
 
   const running = timer?.status === "running";
   const elapsedSeconds = timer
@@ -137,7 +155,8 @@ export function QuestionPracticeModal({
 
   function flashSaved() {
     setSavedFlash(true);
-    window.setTimeout(() => setSavedFlash(false), 1800);
+    if (savedFlashTimeout.current) clearTimeout(savedFlashTimeout.current);
+    savedFlashTimeout.current = setTimeout(() => setSavedFlash(false), 1800);
   }
 
   const images = question.images || [];
@@ -194,14 +213,20 @@ export function QuestionPracticeModal({
     }
   }
 
+  const textSize = Number.isFinite(fontSize) ? clamp(fontSize, 24, 44) : 30;
+  const shellStyle = {
+    ...(mini && miniPosition ? { left: miniPosition.left, top: miniPosition.top, right: "auto", bottom: "auto" } : {}),
+    ...(studentDisplay ? { "--qpm-student-font-size": `${textSize}px`, "--qpm-student-title-size": `${Math.round(textSize * 4 / 3)}px` } : {})
+  } as CSSProperties;
+
   const shell = (
     <section
       ref={frameRef}
-      className={`qpm-shell${mini ? " qpm-mini" : ""}`}
+      className={`qpm-shell${mini ? " qpm-mini" : ""}${studentDisplay ? " qpm-student" : ""}`}
       role="dialog"
       aria-label="题目投屏"
       data-testid="question-practice-modal"
-      style={mini && miniPosition ? { left: miniPosition.left, top: miniPosition.top, right: "auto", bottom: "auto" } : undefined}
+      style={shellStyle}
     >
       <header
         className="qpm-header"
@@ -212,14 +237,14 @@ export function QuestionPracticeModal({
       >
         <div className="qpm-heading">
           <span className="qpm-kicker">
-            题目投屏 · {SOURCE_LABELS[timer?.question_source || ""] || "题目"}
+            {studentDisplay ? "课堂练习" : `题目投屏 · ${SOURCE_LABELS[timer?.question_source || ""] || "题目"}`}
           </span>
           <strong>{question.type === "choice" ? "选择" : question.type === "composite" ? "复合题" : "问答题"}</strong>
-          {question.knowledge_points?.length ? (
+          {!studentDisplay && question.knowledge_points?.length ? (
             <span className="qpm-meta">{question.knowledge_points.join(" · ")}</span>
           ) : null}
         </div>
-        <div className="qpm-header-actions">
+        {!studentDisplay ? <div className="qpm-header-actions">
           {mini ? (
             onExpand ? (
               <button
@@ -252,7 +277,7 @@ export function QuestionPracticeModal({
           >
             ×
           </button>
-        </div>
+        </div> : null}
       </header>
 
       {revealed ? (
@@ -272,7 +297,7 @@ export function QuestionPracticeModal({
           <div className="qpm-timer-sub">
             建议用时 {formatClock(suggested)} · 已用 {formatClock(elapsedSeconds)}
           </div>
-          <div className="qpm-timer-actions">
+          {!studentDisplay ? <div className="qpm-timer-actions">
             {timer?.status === "idle" ? (
               <button
                 type="button"
@@ -326,11 +351,11 @@ export function QuestionPracticeModal({
             >
               提前查看答案
             </button>
-          </div>
+          </div> : null}
         </div>
       )}
 
-      <div className="qpm-body">
+      <div className="qpm-body" role="region" aria-label="题目与讲解" tabIndex={0}>
         {question.task_text ? (
           <p className="qpm-task" data-testid="qpm-task">
             {question.task_text}
@@ -415,13 +440,13 @@ export function QuestionPracticeModal({
                 ))}
               </div>
             ) : null}
-            {timer?.ai_explanation_status === "pending" ? (
+            {!studentDisplay && timer?.ai_explanation_status === "pending" ? (
               <div className="qpm-ai" role="status" aria-live="polite"><span className="qpm-thinking-dot" />正在整理讲解…参考答案已可使用，可继续收题或记录观察。</div>
             ) : null}
-            {timer?.ai_explanation_status === "interrupted" ? (
+            {!studentDisplay && timer?.ai_explanation_status === "interrupted" ? (
               <div className="qpm-ai" role="status">讲解任务已中断，参考答案不受影响。<button type="button" disabled={busy} onClick={onReveal}>重试讲解</button></div>
             ) : null}
-            {timer?.ai_explanation_note && timer.ai_explanation_status === "ready" ? <p className="qpm-section-label">{timer.ai_explanation_note}</p> : null}
+            {!studentDisplay && timer?.ai_explanation_note && timer.ai_explanation_status === "ready" ? <p className="qpm-section-label">{timer.ai_explanation_note}</p> : null}
             {timer?.ai_explanation ? (
               <div className="qpm-ai" data-testid="qpm-ai">
                 <span className="qpm-section-label">
@@ -430,7 +455,7 @@ export function QuestionPracticeModal({
                 <p>{timer.ai_explanation.text}</p>
               </div>
             ) : null}
-            <div className="qpm-notes" data-testid="qpm-notes">
+            {!studentDisplay ? <div className="qpm-notes" data-testid="qpm-notes">
               <span className="qpm-section-label">
                 学情速记{savedFlash ? <em className="record-saved"> ✓ 已记录</em> : null}
               </span>
@@ -487,12 +512,12 @@ export function QuestionPracticeModal({
                   </button>
                 </div>
               ) : null}
-            </div>
+            </div> : null}
           </div>
         ) : null}
       </div>
 
-      <footer className="qpm-footer">
+      {!studentDisplay ? <footer className="qpm-footer">
         <span className="qpm-footer-hint">
           {mini
             ? "小窗模式：地图保持可见；计时由服务端同步，可随时回到大屏。"
@@ -507,12 +532,12 @@ export function QuestionPracticeModal({
         >
           {revealed ? "收题并关闭" : "收题（未揭示答案）"}
         </button>
-      </footer>
+      </footer> : null}
     </section>
   );
 
   if (mini) {
     return shell;
   }
-  return createPortal(<div className="qpm-backdrop">{shell}</div>, document.body);
+  return createPortal(<div className={`qpm-backdrop${studentDisplay ? " qpm-student-backdrop" : ""}`}>{shell}</div>, document.body);
 }
