@@ -27,6 +27,7 @@ type Props = {
   onEndSession: () => void;
   presentationVisible?: boolean;
   onTogglePresentation?: () => void;
+  showStageControls?: boolean;
   visibleCatalogLayerIds?: string[];
   onFocusEvidenceLayer?: (datasetId: string, stageDatasetIds: string[]) => void;
   onRequestPlaneView?: () => void;
@@ -70,6 +71,7 @@ export function ClassRunPanel({
   onEndSession,
   presentationVisible,
   onTogglePresentation,
+  showStageControls = true,
   visibleCatalogLayerIds = [],
   onFocusEvidenceLayer,
   onRequestPlaneView,
@@ -319,7 +321,7 @@ export function ClassRunPanel({
         />
       </div>
 
-        <div className="class-stage-steps">
+      {showStageControls ? <div className="class-stage-steps">
           <button
             type="button"
             className="toolbar-button compact"
@@ -349,7 +351,7 @@ export function ClassRunPanel({
               {presentationVisible ? "回到地图" : "展示板"}
             </button>
           ) : null}
-        </div>
+        </div> : null}
       <details className="class-stage-navigation" key={currentStageId}>
         <summary>
           {currentStageIndex + 1}/{lesson.stages.length} · {currentStage?.title || "选择环节"} · 切换
