@@ -1,6 +1,8 @@
-import { fireEvent, render } from "@testing-library/react";
+import { createRef } from "react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BrushOverlay } from "../components/BrushOverlay";
+import { BrushOverlay, type BrushOverlayHandle } from "../components/BrushOverlay";
+import { BrushHistory } from "../lib/brushHistory";
 
 type CanvasContextMock = CanvasRenderingContext2D & {
   beginPath: ReturnType<typeof vi.fn>;
@@ -15,6 +17,7 @@ type CanvasContextMock = CanvasRenderingContext2D & {
   setTransform: ReturnType<typeof vi.fn>;
   stroke: ReturnType<typeof vi.fn>;
   strokeRect: ReturnType<typeof vi.fn>;
+  drawImage: ReturnType<typeof vi.fn>;
 };
 
 function makeContext(): CanvasContextMock {
@@ -30,7 +33,8 @@ function makeContext(): CanvasContextMock {
     save: vi.fn(),
     setTransform: vi.fn(),
     stroke: vi.fn(),
-    strokeRect: vi.fn()
+    strokeRect: vi.fn(),
+    drawImage: vi.fn()
   } as unknown as CanvasContextMock;
 }
 
@@ -72,6 +76,7 @@ describe("BrushOverlay", () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -159,5 +164,62 @@ describe("BrushOverlay", () => {
     );
     fireEvent.wheel(canvas!, { clientX: 120, clientY: 130, deltaY: -120 });
     expect(onWheelZoom).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps per-page undo through remount, supports undoing clear and ignores obsolete image loads", () => {
+    const images: Array<{ src: string; onload?: () => void }> = [];
+    vi.stubGlobal("Image", class {
+      src = "";
+      onload?: () => void;
+      constructor() { images.push(this); }
+    });
+    const history = new BrushHistory();
+    history.commit("page", "A"); history.commit("page", "A+B");
+    const ref = createRef<BrushOverlayHandle>();
+    const onUndoChange = vi.fn(), onContentChange = vi.fn();
+    const props = { active: true, history, pageKey: "page", settings: { tool: "freehand" as const, color: "red", lineWidth: 4 }, onUndoChange, onContentChange };
+    const first = render(<BrushOverlay {...props} ref={ref} />);
+    expect(ref.current?.exportImage()).toBe("A+B"); // Decoding has not finished.
+    act(() => ref.current?.undo());
+    expect(history.image("page")).toBe("A");
+    const oldPage = images[0], undonePage = images[1];
+    context.drawImage.mockClear();
+    act(() => oldPage.onload?.());
+    expect(context.drawImage).not.toHaveBeenCalled();
+    act(() => undonePage.onload?.());
+    expect(context.drawImage).toHaveBeenLastCalledWith(undonePage, 0, 0, 400, 300);
+    act(() => ref.current?.clear());
+    expect(history.image("page")).toBeNull();
+    expect(onContentChange).toHaveBeenLastCalledWith(false);
+    expect(onUndoChange).toHaveBeenLastCalledWith(true);
+    act(() => ref.current?.undo());
+    expect(history.image("page")).toBe("A");
+    const pending = images.at(-1)!;
+    first.unmount();
+    context.drawImage.mockClear(); onContentChange.mockClear();
+    act(() => pending.onload?.());
+    expect(context.drawImage).not.toHaveBeenCalled();
+    expect(onContentChange).not.toHaveBeenCalled();
+    render(<BrushOverlay {...props} ref={ref} />);
+    expect(ref.current?.exportImage()).toBe("A");
+    act(() => ref.current?.undo());
+    expect(history.image("page")).toBeNull();
+  });
+
+  it("does not erase an image with no history and clearing cancels pending restoration", () => {
+    const images: Array<{ onload?: () => void }> = [];
+    vi.stubGlobal("Image", class { constructor() { images.push(this); } onload?: () => void; });
+    const ref = createRef<BrushOverlayHandle>();
+    render(<BrushOverlay ref={ref} active settings={{ tool: "freehand", color: "red", lineWidth: 4 }} />);
+    act(() => ref.current?.loadImage("imported"));
+    context.clearRect.mockClear();
+    act(() => ref.current?.undo());
+    expect(context.clearRect).not.toHaveBeenCalled();
+    expect(ref.current?.exportImage()).toBe("imported");
+    act(() => ref.current?.clear());
+    context.drawImage.mockClear();
+    act(() => images[0].onload?.());
+    expect(context.drawImage).not.toHaveBeenCalled();
+    expect(ref.current?.exportImage()).toBeNull();
   });
 });

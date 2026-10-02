@@ -1,6 +1,9 @@
-import { type MutableRefObject, useState, useEffect, useRef, useCallback } from "react";
+import { type MutableRefObject, useState, useEffect, useRef, useCallback, useMemo } from "react";
 import type { SlideContent } from "../types";
 import { BrushOverlay, type BrushOverlayHandle, type BrushSettings } from "./BrushOverlay";
+import { isEditableKeyboardTarget, isInteractiveKeyboardTarget } from "../lib/keyboard";
+import { BrushHistory } from "../lib/brushHistory";
+import "./PptViewer.css";
 
 type Props = {
   open: boolean;
@@ -13,6 +16,8 @@ type Props = {
   brushSettings?: BrushSettings;
   brushOverlayRef?: MutableRefObject<BrushOverlayHandle | null>;
   onBrushContentChange?: (hasContent: boolean) => void;
+  onBrushUndoChange?: (canUndo: boolean) => void;
+  onExitBrush?: () => void;
 };
 
 const EMU_PER_PX = 914400 / 96;
@@ -27,12 +32,14 @@ export function PptViewer({
   brushActive = false,
   brushSettings,
   brushOverlayRef,
-  onBrushContentChange
+  onBrushContentChange,
+  onBrushUndoChange,
+  onExitBrush
 }: Props) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [scale, setScale] = useState(1);
   const stageRef = useRef<HTMLDivElement>(null);
-  const annotationImagesRef = useRef<Record<number, string>>({});
+  const annotationHistory = useMemo(() => new BrushHistory(30), [slides]);
 
   const slide = slides[currentIndex];
   const slideW = slide ? slide.width / EMU_PER_PX : 960;
@@ -49,24 +56,9 @@ export function PptViewer({
   }, [slideW, slideH, slide]);
 
   const saveCurrentAnnotation = useCallback(() => {
-    const brush = brushOverlayRef?.current;
-    if (!brush) return;
-    const dataUrl = brush.exportImage();
-    if (dataUrl) {
-      annotationImagesRef.current[currentIndex] = dataUrl;
-    } else {
-      delete annotationImagesRef.current[currentIndex];
-    }
-  }, [brushOverlayRef, currentIndex]);
-
-  const restoreAnnotation = useCallback(
-    (index: number) => {
-      const brush = brushOverlayRef?.current;
-      if (!brush) return;
-      brush.loadImage(annotationImagesRef.current[index] ?? null);
-    },
-    [brushOverlayRef]
-  );
+    // Finish a stroke if a page shortcut was used before pointer-up.
+    brushOverlayRef?.current?.exportImage();
+  }, [brushOverlayRef]);
 
   const goToSlide = useCallback(
     (nextIndex: number) => {
@@ -84,7 +76,6 @@ export function PptViewer({
   }, [onCollapse, saveCurrentAnnotation]);
 
   const handleRemove = useCallback(() => {
-    annotationImagesRef.current = {};
     onRemove();
   }, [onRemove]);
 
@@ -96,19 +87,30 @@ export function PptViewer({
   }, [open, recalcScale]);
 
   useEffect(() => {
-    annotationImagesRef.current = {};
     setCurrentIndex(0);
   }, [slides]);
 
   useEffect(() => {
     if (!open) return;
-    const frame = window.requestAnimationFrame(() => restoreAnnotation(currentIndex));
-    return () => window.cancelAnimationFrame(frame);
-  }, [currentIndex, open, restoreAnnotation, slides]);
-
-  useEffect(() => {
-    if (!open) return;
     const handler = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.isComposing || e.keyCode === 229 || e.metaKey || e.ctrlKey || e.altKey
+        || isEditableKeyboardTarget(e.target)) return;
+      if (e.key === "Escape") {
+        // A held Escape must not exit drawing and then collapse the deck on its next repeat.
+        if (e.repeat) return;
+        if (brushActive) {
+          // Older callers can still leave brush exit to their global owner.
+          if (onExitBrush) {
+            e.preventDefault();
+            onExitBrush();
+          }
+          return;
+        }
+        e.preventDefault();
+        handleCollapse();
+        return;
+      }
+      if (isInteractiveKeyboardTarget(e.target)) return;
       if (e.key === "ArrowRight" || e.key === " ") {
         e.preventDefault();
         goToSlide(currentIndex + 1);
@@ -117,19 +119,18 @@ export function PptViewer({
         e.preventDefault();
         goToSlide(currentIndex - 1);
       }
-      if (e.key === "Escape") {
-        handleCollapse();
-      }
       if (e.key === "Home") {
+        e.preventDefault();
         goToSlide(0);
       }
       if (e.key === "End") {
+        e.preventDefault();
         goToSlide(slides.length - 1);
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [currentIndex, goToSlide, handleCollapse, open, slides.length]);
+  }, [brushActive, currentIndex, goToSlide, handleCollapse, onExitBrush, open, slides.length]);
 
   if (slides.length === 0) return null;
 
@@ -167,7 +168,11 @@ export function PptViewer({
         </div>
       </div>
 
-      <div className="ppt-viewer-stage" ref={stageRef}>
+      <div className="ppt-viewer-stage" ref={stageRef} tabIndex={-1}
+        onPointerDown={event => {
+          // Return keyboard ownership to the canvas after a drawing-tool button was used.
+          if (!isInteractiveKeyboardTarget(event.target)) stageRef.current?.focus({ preventScroll: true });
+        }}>
         <div
           className="ppt-viewer-slide"
           style={{
@@ -194,6 +199,9 @@ export function PptViewer({
               active={brushActive}
               settings={brushSettings}
               onContentChange={onBrushContentChange}
+              onUndoChange={onBrushUndoChange}
+              history={annotationHistory}
+              pageKey={String(currentIndex)}
             />
           ) : null}
         </div>

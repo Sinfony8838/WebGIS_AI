@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import type { InteractionMode } from "./MapToolRail";
+import "./MapInstructionStrip.css";
 
 type Props = {
   mode: InteractionMode;
@@ -67,6 +68,9 @@ export function MapInstructionStrip({
   onCancel,
   onFinishMeasure
 }: Props) {
+  const [helpOpen, setHelpOpen] = useState(false);
+  const helpId = useId();
+  useEffect(() => setHelpOpen(false), [mode]);
   if (mode === "browse") {
     return null;
   }
@@ -100,30 +104,30 @@ export function MapInstructionStrip({
   const showFinishButton = mode === "measure" && Boolean(onFinishMeasure);
 
   return (
-    <div className="map-instruction-strip" role="status" aria-live="polite">
-      <span className="map-instruction-icon" aria-hidden="true">
-        {info.icon}
-      </span>
-      <div className="map-instruction-text">
-        <strong>
-          {info.title}
-          {mode === "measure" && typeof measureTotalKm === "number" ? (
-            <em className="map-instruction-meta"> · 当前 {measureTotalKm.toFixed(2)} 千米</em>
-          ) : null}
-        </strong>
-        <span>{info.desc}</span>
-      </div>
-      <div className="map-instruction-actions">
+    <section className="map-operation-controls" aria-label={`${info.title}操作`}>
+      <div className="map-operation-row">
+        <span className="map-operation-icon" aria-hidden="true">{info.icon}</span>
+        {mode === "measure" && typeof measureTotalKm === "number" ? (
+          <output className="map-operation-distance" aria-label="当前测距">{measureTotalKm.toFixed(2)} 千米</output>
+        ) : null}
+        <button type="button" className="map-operation-help-toggle" aria-label={`${info.title}操作帮助`}
+          aria-expanded={helpOpen} aria-controls={helpId} title={info.desc}
+          onClick={() => setHelpOpen(value => !value)}>
+          <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
+            <circle cx="10" cy="10" r="7.5" {...STROKE} />
+            <path d="M8 7.2a2.1 2.1 0 1 1 3.3 1.7c-.9.5-1.3 1-1.3 2.1M10 13.8v.1" {...STROKE} />
+          </svg>
+        </button>
         {showFinishButton ? (
-          <button type="button" className="map-instruction-finish" onClick={onFinishMeasure}>
+          <button type="button" className="map-operation-finish" onClick={onFinishMeasure}>
             完成
           </button>
         ) : null}
-        <button type="button" className="map-instruction-cancel" onClick={onCancel}>
-          <kbd>Esc</kbd>
-          <span>取消</span>
+        <button type="button" className="map-operation-cancel" onClick={onCancel} title="取消当前操作（Esc）">
+          取消
         </button>
       </div>
-    </div>
+      {helpOpen ? <p id={helpId} className="map-operation-help"><strong>{info.title}</strong>{info.desc}<span>按 Esc 退出当前工具。</span></p> : null}
+    </section>
   );
 }

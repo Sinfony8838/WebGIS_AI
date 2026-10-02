@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import "./VisualMapPanel.css";
 import {
   GLOBE_SCENE_PRESETS,
   GLOBE_THEMES,
@@ -135,17 +136,19 @@ export function VisualMapPanel({
       className={`tool-group glass-panel visual-map-panel ${collapsed ? "collapsed" : "expanded"}`}
       data-testid="visual-map-panel"
     >
-      <div
+      <button
+        type="button"
         className="tool-group-header visual-map-header"
         onClick={() => setCollapsed((prev) => !prev)}
-        role="button"
-        tabIndex={0}
+        title={collapsed ? "展开可视化地图" : "收起可视化地图"}
         aria-expanded={!collapsed}
       >
-        <span aria-hidden>🗺️</span>
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
+          <path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6Zm6-3v15m6-12v15" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
         <span className="visual-map-title">可视化地图</span>
-        <span className="teaching-map-toggle-icon">{collapsed ? "▸" : "▾"}</span>
-      </div>
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d={collapsed ? "m6 4 4 4-4 4" : "m4 6 4 4 4-4"} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+      </button>
 
       {!collapsed && (
         <div className="visual-map-body">
