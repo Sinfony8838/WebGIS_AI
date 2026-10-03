@@ -3,6 +3,38 @@
   z-index: 80;
 }
 
+.screen-shell .ppt-viewer-split {
+  inset: 58px 0 0 auto;
+  border-left: 1px solid #cad6df;
+  box-shadow: -4px 0 20px #0b162833;
+}
+.ppt-viewer-resizer { position: absolute; top: 0; bottom: 0; left: -5px; width: 10px; cursor: ew-resize; touch-action: none; z-index: 1; }
+.ppt-viewer-resizer:focus-visible { outline: 2px solid #52b4c7; }
+.ppt-viewer-header { flex-wrap: wrap; gap: 8px; }
+.ppt-viewer-stage { min-height: 0; min-width: 0; }
+.ppt-viewer-slide-frame { position: relative; flex: 0 0 auto; }
+.ppt-viewer-slide-frame .ppt-viewer-slide { position: absolute; left: 0; top: 0; transform-origin: top left; }
+.ppt-viewer-source { padding: 6px 14px; font-size: 12px; color: #c7d9e5; background: #173046; }
+.ppt-viewer-source--simple { background: #fff3d4; color: #73520d; }
+.ppt-viewer-image-error { padding: 8px 14px; background: #ffe2e2; color: #922c2c; }
+.ppt-viewer-nav { min-width: 0; }
+.ppt-viewer-nav > button { flex-shrink: 0; }
+.ppt-viewer-thumbs { min-width: 0; overflow-x: auto; }
+.screen-shell.ppt-map-split .map-canvas, .screen-shell.ppt-map-split .map-3d-globe { right: var(--ppt-pane-width); }
+.screen-shell.ppt-map-split .right-rail { right: calc(var(--ppt-pane-width) + 12px); }
+.ppt-import-failure { position: fixed; z-index: 100; right: 16px; top: 72px; width: min(480px, calc(100vw - 32px)); box-sizing: border-box; padding: 18px; border: 1px solid #dcb762; border-radius: 12px; background: #fffbef; color: #3c321a; box-shadow: 0 5px 20px #0002; }
+.ppt-import-failure p { font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.ppt-import-failure > div { display: flex; gap: 8px; flex-wrap: wrap; }
+.ppt-import-failure button { min-height: 34px; padding: 5px 10px; border: 1px solid #bcac82; border-radius: 6px; background: #fff; color: inherit; cursor: pointer; }
+@media (max-width: 760px) {
+  .screen-shell .ppt-viewer-split { inset: 58px 0 0; width: auto !important; }
+  .ppt-viewer-resizer { display: none; }
+  .screen-shell.ppt-map-split .map-canvas, .screen-shell.ppt-map-split .map-3d-globe { right: 0; }
+  .screen-shell.ppt-map-split .right-rail { right: 12px; }
+  .ppt-viewer-nav { gap: 6px; padding: 8px; }
+  .ppt-viewer-nav button { padding: 7px 10px; }
+}
+
 /* Reserve separate space for the profile controls and the right map rail. */
 .screen-shell .ppt-viewer-dock {
   right: calc(var(--right-rail-width, 116px) + 136px);

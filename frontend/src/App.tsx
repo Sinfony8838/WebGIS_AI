@@ -11,7 +11,7 @@ import { forgetPendingJob, rememberPendingJob, type PendingJob } from "./lib/pen
 import { usePendingJobs } from "./hooks/usePendingJobs";
 import { subscribeJob, type JobSubscription } from "./lib/jobSubscription";
 import { MapToolsDock } from "./components/MapToolsDock";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "ol/ol.css";
 import Feature from "ol/Feature";
 import GeoJSON from "ol/format/GeoJSON";
@@ -113,6 +113,7 @@ import { VisualMapPanel } from "./components/VisualMapPanel";
 import { WorkflowDock } from "./components/WorkflowDock";
 import { UserMenu } from "./components/UserMenu";
 import { PptViewer } from "./components/PptViewer";
+import { PptImportFailure } from "./components/PptImportFailure";
 import { type BrushOverlayHandle, type BrushSettings } from "./components/BrushOverlay";
 import { BrushToolbar } from "./components/BrushToolbar";
 import { PptBrushFloat } from "./components/PptBrushFloat";
@@ -732,6 +733,9 @@ export default function App({
   const [pptSlides, setPptSlides] = useState<SlideContent[]>([]);
   const [pptFileName, setPptFileName] = useState("");
   const [pptLoading, setPptLoading] = useState(false);
+  const [pptImportFailure, setPptImportFailure] = useState<{ file: File; message: string } | null>(null);
+  const [pptSplitWidth, setPptSplitWidth] = useState<number | null>(null);
+  const pptFileInputRef = useRef<HTMLInputElement | null>(null);
   const pptPresentationReady = pptSlides.length > 0;
   const brushTargetRef = pptViewerOpen && pptPresentationReady ? pptBrushRef : brushRef;
   const brushTargetHasContent = pptViewerOpen && pptPresentationReady ? pptBrushHasContent : mapBrushHasContent;
@@ -2047,9 +2051,10 @@ export default function App({
 
   const handleRenderedPptImport = useCallback(async (file: File) => {
     setPptLoading(true);
-    let renderError = "";
+    setPptImportFailure(null);
     try {
       const rendered = await renderPptx(file);
+      if (!rendered.slides.length) throw new Error("渲染器未返回幻灯片，请检查课件后重新导入。");
       const slides = rendered.slides.map((slide) => ({
         index: slide.index,
         html: "",
@@ -2070,27 +2075,26 @@ export default function App({
       setPptViewerOpen(true);
       pushToast("success", "PPT 已导入", `已使用 ${rendered.renderer} 渲染 ${rendered.slides.length} 张幻灯片`);
     } catch (err) {
-      renderError = err instanceof Error ? err.message : String(err);
-      try {
-        const result = await parsePptxFile(file);
-        setPptSlides((previousSlides) => {
-          releaseSlideObjectUrls(previousSlides);
-          return result.slides;
-        });
-        setPptFileName(result.fileName);
-        setPptBrushHasContent(false);
-        setPptBrushCanUndo(false);
-        setInteractionMode("browse");
-        setPptViewerOpen(true);
-        pushToast("info", "PPT 已导入（简易模式）", "未找到可用的服务端渲染器，已使用前端解析兜底。复杂背景可能不完全一致。");
-      } catch (fallbackErr) {
-        const fallbackMessage = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
-        pushToast("error", "PPT 导入失败", `${fallbackMessage}${renderError ? `；渲染器错误：${renderError}` : ""}`);
-      }
+      setPptImportFailure({ file, message: err instanceof Error ? err.message : String(err) });
     } finally {
       setPptLoading(false);
     }
   }, [pushToast]);
+
+  const handleSimplePptImport = useCallback(async () => {
+    if (!pptImportFailure) return;
+    setPptLoading(true);
+    try {
+      const result = await parsePptxFile(pptImportFailure.file);
+      if (!result.slides.length) throw new Error("课件中没有可预览的幻灯片。");
+      setPptSlides(previous => { releaseSlideObjectUrls(previous); return result.slides; });
+      setPptFileName(result.fileName);
+      setPptBrushHasContent(false); setPptBrushCanUndo(false);
+      setInteractionMode("browse"); setPptViewerOpen(true); setPptImportFailure(null);
+    } catch (err) {
+      setPptImportFailure(previous => previous ? { ...previous, message: err instanceof Error ? err.message : String(err) } : null);
+    } finally { setPptLoading(false); }
+  }, [pptImportFailure]);
 
   const handlePptCollapse = useCallback(() => {
     setInteractionMode("browse");
@@ -3875,7 +3879,8 @@ export default function App({
   return (
     <div
       ref={workspaceRef}
-      className={`screen-shell screen-shell-classroom view-mode-${viewMode}${studentDisplay ? " classroom-student-display" : ""}`}
+      className={`screen-shell screen-shell-classroom view-mode-${viewMode}${studentDisplay ? " classroom-student-display" : ""}${pptSplitWidth !== null ? " ppt-map-split" : ""}`}
+      style={pptSplitWidth === null ? undefined : { "--ppt-pane-width": `clamp(320px, ${pptSplitWidth}vw, 70vw)` } as CSSProperties}
       data-interaction-mode={interactionMode}
       data-testid="workspace-capture-root"
     >
@@ -4130,19 +4135,16 @@ export default function App({
             type="button"
             className="toolbar-button"
             disabled={pptLoading}
-            onClick={() => {
-              const input = document.createElement("input");
-              input.type = "file";
-              input.accept = ".pptx";
-              input.onchange = () => {
-                const file = input.files?.[0];
-                if (file) void handleRenderedPptImport(file);
-              };
-              input.click();
-            }}
+            onClick={() => pptFileInputRef.current?.click()}
           >
-            {pptLoading ? "解析中…" : "导入 PPT"}
+            {pptLoading ? "渲染中…" : "导入 PPT"}
           </button>
+          <input ref={pptFileInputRef} type="file" accept=".pptx" hidden aria-label="选择 PPT 文件"
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = "";
+              if (file) void handleRenderedPptImport(file);
+            }} />
           <button
             type="button"
             className="toolbar-button"
@@ -4653,10 +4655,14 @@ export default function App({
           onSaveResource={(item) => void handleSaveResourceResult(item)}
           onOpenResource={handleOpenResourceResult}
         />
+        {pptImportFailure ? <PptImportFailure fileName={pptImportFailure.file.name} message={pptImportFailure.message} busy={pptLoading}
+          onRetry={() => void handleRenderedPptImport(pptImportFailure.file)} onSimplePreview={() => void handleSimplePptImport()}
+          onClose={() => setPptImportFailure(null)} /> : null}
         <PptViewer
           open={pptViewerOpen}
           slides={pptSlides}
           fileName={pptFileName}
+          onSplitWidthChange={setPptSplitWidth}
           onExpand={() => { setInteractionMode("browse"); setPptViewerOpen(true); }}
           onCollapse={handlePptCollapse}
           onRemove={handlePptRemove}
@@ -4666,6 +4672,7 @@ export default function App({
           onBrushContentChange={setPptBrushHasContent}
           onBrushUndoChange={setPptBrushCanUndo}
           onExitBrush={() => setInteractionMode("browse")}
+          onToggleBrush={() => setInteractionMode(mode => mode === "brush" ? "browse" : "brush")}
         />
       </div>
   );

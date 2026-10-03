@@ -3,7 +3,7 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import "./PresentationLayoutEditor.css";
 import type { LessonStage, PresentationBlock, PresentationBlockType, PresentationLayout } from "../types";
 import { buildAuthenticatedUrl, uploadImageLibraryAsset, uploadVideoAsset } from "../api";
-import { defaultLayoutFromStage, isDirectVideo, isExternalUrl, makeBlock } from "../lib/presentationLayout";
+import { defaultLayoutFromStage, layoutFromStage, isDirectVideo, isExternalUrl, makeBlock } from "../lib/presentationLayout";
 
 export type LibraryAsset = {
   artifact_id: string;
@@ -90,7 +90,7 @@ function BlockContent({ block, stage }: { block: PresentationBlock; stage: Lesso
 export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets, onSave }: Props) {
   const stageRef = useRef(stage);
   stageRef.current = stage;
-  const [layout, setLayout] = useState<PresentationLayout>(() => stage.presentation || defaultLayoutFromStage(stage));
+  const [layout, setLayout] = useState<PresentationLayout>(() => layoutFromStage(stage));
   const [selectedId, setSelectedId] = useState("");
   const [picker, setPicker] = useState<"image" | "chart" | "video" | "question" | "">("");
   const [replaceId, setReplaceId] = useState("");
@@ -113,7 +113,7 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
     if (incomingSig !== lastIncomingSig.current) {
       lastIncomingSig.current = incomingSig;
       if (!dirtyRef.current) {
-        setLayout(stageRef.current.presentation || defaultLayoutFromStage(stageRef.current));
+        setLayout(layoutFromStage(stageRef.current));
         setSelectedId("");
         setPicker("");
         setReplaceId("");
@@ -146,7 +146,7 @@ export function PresentationLayoutEditor({ stage, projectId, busy, libraryAssets
   }
 
   useEffect(() => {
-    setLayout(stageRef.current.presentation || defaultLayoutFromStage(stageRef.current));
+    setLayout(layoutFromStage(stageRef.current));
     setDirty(false);
     lastIncomingSig.current = JSON.stringify(stageRef.current.presentation ?? null);
     setSelectedId("");

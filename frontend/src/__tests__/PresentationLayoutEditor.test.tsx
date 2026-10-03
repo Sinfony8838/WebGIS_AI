@@ -40,6 +40,17 @@ const stage = (overrides: Partial<LessonStage> = {}): LessonStage =>
   }) as LessonStage;
 
 describe("PresentationLayoutEditor", () => {
+  it.each([{}, { blocks: null }])("opens a legacy layout %j and saves editable default content", presentation => {
+    const onSave = vi.fn();
+    render(<PresentationLayoutEditor stage={stage({ presentation } as unknown as Partial<LessonStage>)}
+      projectId="p1" busy={false} libraryAssets={[]} onSave={onSave} />);
+    expect(screen.getByTestId("ple-canvas").textContent).toContain("情境导入");
+    fireEvent.click(screen.getByRole("button", { name: "插入文字区块", exact: true }));
+    fireEvent.click(screen.getByTestId("ple-save"));
+    expect(onSave.mock.calls[0][0].blocks.some((block: { text?: string }) => block.text === "情境导入")).toBe(true);
+    expect(onSave.mock.calls[0][0].blocks.find((block: { teacher_reveal?: boolean }) => block.teacher_reveal)?.text).toContain("东多西少");
+  });
+
   it("raises the selected block above its neighbour and persists the stacking order", () => {
     const onSave = vi.fn();
     const presentation = { blocks: [
