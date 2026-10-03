@@ -15,9 +15,21 @@ export async function parsePptxFile(file: File): Promise<PptxParsedPresentation>
   const presXml = await readZipEntry(zip, "ppt/presentation.xml");
   const { width, height } = parseSlideSize(presXml);
 
-  const slideFiles = Object.keys(zip.files)
+  let slideFiles = Object.keys(zip.files)
     .filter((k) => /^ppt\/slides\/slide\d+\.xml$/.test(k))
     .sort(naturalSort);
+
+  if (zip.file("ppt/_rels/presentation.xml.rels")) {
+    const rels = new DOMParser().parseFromString(await readZipEntry(zip, "ppt/_rels/presentation.xml.rels"), "application/xml");
+    const byId = new Map(Array.from(rels.getElementsByTagNameNS("*", "Relationship"))
+      .filter(rel => rel.getAttribute("Type")?.endsWith("/slide") && rel.getAttribute("TargetMode") !== "External")
+      .map(rel => [rel.getAttribute("Id"), resolvePartTarget("ppt/presentation.xml", rel.getAttribute("Target") || "")]));
+    const manifest = new DOMParser().parseFromString(presXml, "application/xml");
+    const ordered = Array.from(manifest.getElementsByTagNameNS("*", "sldId"))
+      .map(node => byId.get(node.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id")))
+      .filter((path): path is string => Boolean(path && zip.file(path)));
+    if (ordered.length) slideFiles = ordered;
+  }
 
   const slides: SlideContent[] = [];
   for (const slidePath of slideFiles) {
@@ -28,8 +40,8 @@ export async function parsePptxFile(file: File): Promise<PptxParsedPresentation>
 
     const images: Record<string, string> = {};
     for (const [rId, target] of Object.entries(imageRels)) {
-      const imgPath = "ppt/slides/" + target;
-      const imgFile = zip.file(imgPath) || zip.file("ppt/" + target);
+      const imgPath = resolvePartTarget(slidePath, target);
+      const imgFile = zip.file(imgPath);
       if (imgFile) {
         const blob = await imgFile.async("blob");
         images[rId] = URL.createObjectURL(blob);
@@ -74,12 +86,23 @@ function parseSlideSize(xml: string): { width: number; height: number } {
 function parseImageRelationships(relsXml: string): Record<string, string> {
   const result: Record<string, string> = {};
   if (!relsXml) return result;
-  const re = /Id="([^"]+)"[^>]*Type="[^"]*image[^"]*"[^>]*Target="([^"]+)"/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(relsXml))) {
-    result[m[1]] = m[2];
+  const document = new DOMParser().parseFromString(relsXml, "application/xml");
+  for (const rel of Array.from(document.getElementsByTagNameNS("*", "Relationship"))) {
+    if (rel.getAttribute("Type")?.endsWith("/image") && rel.getAttribute("TargetMode") !== "External") {
+      result[rel.getAttribute("Id") || ""] = rel.getAttribute("Target") || "";
+    }
   }
   return result;
+}
+
+function resolvePartTarget(partPath: string, target: string): string {
+  const path = target.startsWith("/") ? target.slice(1) : partPath.slice(0, partPath.lastIndexOf("/") + 1) + target;
+  const parts: string[] = [];
+  for (const token of path.split("/")) {
+    if (token === "..") parts.pop();
+    else if (token && token !== ".") parts.push(token);
+  }
+  return parts.join("/");
 }
 
 function extractSlideBgColor(xml: string): string | undefined {
@@ -127,6 +150,7 @@ function walkTree(
     const end = findMatchingClose(xml, start, tag);
     if (end < 0) continue;
     const chunk = xml.slice(start, end + tag.length + 3); // +3 for "</>"
+    tagRe.lastIndex = end + tag.length + 3;
 
     if (tag === "p:sp") {
       const html = renderShape(chunk, images);
@@ -190,7 +214,7 @@ function parseXfrm(xml: string): Xfrm | null {
   const extMatch = xfrmXml.match(/<a:ext[^>]*cx="(\d+)"[^>]*cy="(\d+)"/);
   if (!offMatch || !extMatch) return null;
 
-  const rotMatch = xfrmXml.match(/rot="(-?\d+)"/);
+  const rotMatch = xfrmMatch[0].match(/rot="(-?\d+)"/);
 
   return {
     x: parseInt(offMatch[1], 10),
@@ -255,7 +279,7 @@ function extractTextHtml(xml: string): string {
   if (!txBodyMatch) return "";
   const txBody = txBodyMatch[1];
 
-  const paragraphs = txBody.split(/<\/a:p>/);
+  const paragraphs = txBody.match(/<a:p(?:\s[^>]*)?>[\s\S]*?<\/a:p>/g) || [];
   const htmlParts: string[] = [];
 
   for (const para of paragraphs) {
@@ -278,12 +302,12 @@ function extractParagraphHtml(paraXml: string): string {
   let m: RegExpExecArray | null;
   while ((m = runRe.exec(paraXml))) {
     const runXml = m[1];
-    const rPr = runXml.match(/<a:rPr([^>]*)>/);
+    const rPr = runXml.match(/<a:rPr\b[^>]*(?:\/>|>[\s\S]*?<\/a:rPr>)/);
     const textMatch = runXml.match(/<a:t>([\s\S]*?)<\/a:t>/);
     if (!textMatch) continue;
 
-    const text = xmlUnescape(textMatch[1]);
-    const style = rPr ? parseRunStyle(rPr[1] + (rPr[0].endsWith("/>") ? "" : "")) : "";
+    const text = xmlUnescape(textMatch[1]).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const style = rPr ? parseRunStyle(rPr[0]) : "";
     parts.push(`<span style="${style}">${text}</span>`);
   }
 

@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   updateSessionQuestionTimer: vi.fn(), revealSessionQuestion: vi.fn(), closeSessionQuestion: vi.fn()
 }));
 vi.mock("../api", async () => ({ ...await vi.importActual<typeof import("../api")>("../api"), ...api }));
+vi.mock("../components/ReportPanel", () => ({ ReportPanel: () => <div data-testid="report-panel">课堂复盘报告</div> }));
 
 const project = { project_id: "project_projection" } as ProjectRecord;
 const question = (): LessonQuestion => ({
@@ -171,5 +172,19 @@ describe("classroom student display integration", () => {
     expect(screen.getByTestId("visual-query-title").textContent).toBe("2020 年人口总量 TOP20");
     expect(screen.getByTestId("visual-query-popup").classList.contains("shifted")).toBe(false);
     expect(screen.getByTestId("visual-query-bars").textContent).toContain("上海市");
+  });
+
+  it("clears the foreground ranking popup while a teacher reads the review report", async () => {
+    const item = lesson();
+    const layerState = { items: [{ layer_id: "population_top20", visible: true, data: { features: [] },
+      metadata: { visualization: { type: "bar", title: "人口 TOP20", maximum: 100, unit: "人",
+        items: [{ rank: 1, name: "示例市", value: 100, share: 1 }] } }
+    }] } as unknown as LayersResponse;
+    mount(item, session(item), layerState);
+    await screen.findByTestId("class-run-panel");
+    expect(screen.getByTestId("visual-query-popup")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "教学复盘", exact: true }));
+    await screen.findByTestId("report-panel");
+    expect(screen.queryByTestId("visual-query-popup")).toBeNull();
   });
 });

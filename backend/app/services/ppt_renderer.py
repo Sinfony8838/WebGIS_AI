@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import zipfile
+from copy import copy
 from pathlib import Path
 from typing import Any, Dict, List, Sequence
 from uuid import uuid4
@@ -49,22 +50,30 @@ def render_pptx_to_images(config: AppConfig, filename: str, raw_bytes: bytes) ->
     source_path = output_dir / safe_name
     source_path.write_bytes(raw_bytes)
 
-    expected_count = _count_ppt_slides(source_path)
     attempts: List[Dict[str, str]] = []
+    render_source = _prepare_render_source(source_path, attempts)
+    expected_count = _count_ppt_slides(render_source)
     result: Dict[str, Any] | None = None
 
     if sys.platform.startswith("win"):
-        result = _attempt_powerpoint(source_path, output_dir, attempts)
+        result = _attempt_powerpoint(render_source, output_dir, attempts)
 
     if result is None:
-        result = _attempt_libreoffice(source_path, output_dir, expected_count, attempts)
+        result = _attempt_libreoffice(render_source, output_dir, expected_count, attempts)
 
     if result is None:
         raise PptRenderError(
             "PPT_RENDERER_UNAVAILABLE",
-            "No available PPT renderer succeeded. Install Microsoft PowerPoint or LibreOffice for high-fidelity previews.",
+            "课件无法由服务端渲染器正常打开或导出。请确认已安装 PowerPoint 或 LibreOffice，并检查原课件能否在该软件中打开。",
             {"attempts": attempts},
             status_code=503,
+        )
+
+    if expected_count and len(result["image_paths"]) != expected_count:
+        raise PptRenderError(
+            "PPT_RENDER_INCOMPLETE",
+            f"课件共有 {expected_count} 页，渲染器只返回 {len(result['image_paths'])} 页，请重新导入。",
+            {"attempts": attempts},
         )
 
     slides = []
@@ -87,6 +96,37 @@ def render_pptx_to_images(config: AppConfig, filename: str, raw_bytes: bytes) ->
         "slides": slides,
         "attempts": attempts,
     }
+
+
+def _prepare_render_source(source_path: Path, attempts: List[Dict[str, str]]) -> Path:
+    """Repair a generated core-properties QName in a copy, keeping the upload intact.
+
+    ElementTree can rename dcterms elements to ns2 but leave the lexical
+    xsi:type="dcterms:W3CDTF" unchanged. PowerPoint rejects such packages.
+    Canonicalize only that namespace alias; never rewrite slide content.
+    """
+    if source_path.suffix.lower() != ".pptx":
+        return source_path
+    try:
+        with zipfile.ZipFile(source_path) as archive:
+            core = archive.read("docProps/core.xml")
+            if b'xmlns:dcterms=' in core or not re.search(rb'\btype=[\"\']dcterms:W3CDTF[\"\']', core):
+                return source_path
+            alias = re.search(rb'xmlns:([\w.-]+)=[\"\']http://purl.org/dc/terms/[\"\']', core)
+            if not alias:
+                return source_path
+            prefix = re.escape(alias.group(1))
+            repaired_core = re.sub(rb'(<\/?)' + prefix + rb':', rb'\1dcterms:', core)
+            repaired_core = re.sub(rb'xmlns:' + prefix + rb'=', b'xmlns:dcterms=', repaired_core)
+            render_source = source_path.parent / f"render_compatible_{uuid4().hex}.pptx"
+            with zipfile.ZipFile(render_source, "w") as repaired:
+                for info in archive.infolist():
+                    data = repaired_core if info.filename == "docProps/core.xml" else archive.read(info)
+                    repaired.writestr(copy(info), data)
+    except (KeyError, OSError, zipfile.BadZipFile):
+        return source_path
+    attempts.append({"renderer": "pptx-core-properties", "status": "repaired", "detail": "Normalized undeclared dcterms QName in a rendering copy; slide content and original upload preserved."})
+    return render_source
 
 
 def _attempt_powerpoint(source_path: Path, output_dir: Path, attempts: List[Dict[str, str]]) -> Dict[str, Any] | None:

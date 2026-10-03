@@ -1,4 +1,4 @@
-import { type MutableRefObject, useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { type MutableRefObject, useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import type { SlideContent } from "../types";
 import { BrushOverlay, type BrushOverlayHandle, type BrushSettings } from "./BrushOverlay";
 import { isEditableKeyboardTarget, isInteractiveKeyboardTarget } from "../lib/keyboard";
@@ -18,6 +18,8 @@ type Props = {
   onBrushContentChange?: (hasContent: boolean) => void;
   onBrushUndoChange?: (canUndo: boolean) => void;
   onExitBrush?: () => void;
+  onToggleBrush?: () => void;
+  onSplitWidthChange?: (widthPercent: number | null) => void;
 };
 
 const EMU_PER_PX = 914400 / 96;
@@ -34,10 +36,15 @@ export function PptViewer({
   brushOverlayRef,
   onBrushContentChange,
   onBrushUndoChange,
-  onExitBrush
+  onExitBrush,
+  onToggleBrush,
+  onSplitWidthChange
 }: Props) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [scale, setScale] = useState(1);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [widthPercent, setWidthPercent] = useState(46);
+  const [imageError, setImageError] = useState(false);
   const stageRef = useRef<HTMLDivElement>(null);
   const annotationHistory = useMemo(() => new BrushHistory(30), [slides]);
 
@@ -52,7 +59,7 @@ export function PptViewer({
     const padY = 32;
     const scaleX = (clientWidth - padX) / slideW;
     const scaleY = (clientHeight - padY) / slideH;
-    setScale(Math.min(1, scaleX, scaleY));
+    setScale(Math.max(0.01, Math.min(1, scaleX, scaleY)));
   }, [slideW, slideH, slide]);
 
   const saveCurrentAnnotation = useCallback(() => {
@@ -82,12 +89,21 @@ export function PptViewer({
   useEffect(() => {
     if (!open) return;
     recalcScale();
+    const observer = new ResizeObserver(recalcScale);
+    if (stageRef.current) observer.observe(stageRef.current);
     window.addEventListener("resize", recalcScale);
-    return () => window.removeEventListener("resize", recalcScale);
+    return () => { observer.disconnect(); window.removeEventListener("resize", recalcScale); };
   }, [open, recalcScale]);
+
+  useLayoutEffect(() => {
+    onSplitWidthChange?.(open && slides.length && !fullscreen ? widthPercent : null);
+  }, [fullscreen, onSplitWidthChange, open, slides.length, widthPercent]);
+
+  useEffect(() => { setImageError(false); }, [slide?.imageUrl]);
 
   useEffect(() => {
     setCurrentIndex(0);
+    setFullscreen(false);
   }, [slides]);
 
   useEffect(() => {
@@ -152,13 +168,26 @@ export function PptViewer({
   }
 
   return (
-    <div className={`ppt-viewer-backdrop ${brushActive ? "ppt-viewer-backdrop--brush" : ""}`}>
+    <div className={`ppt-viewer-backdrop ${fullscreen ? "ppt-viewer-fullscreen" : "ppt-viewer-split"} ${brushActive ? "ppt-viewer-backdrop--brush" : ""}`}
+      style={fullscreen ? undefined : { width: `clamp(320px, ${widthPercent}vw, 70vw)` }} role="region" aria-label="PPT 放映">
+      {!fullscreen ? <div className="ppt-viewer-resizer" role="separator" aria-label="调整 PPT 分栏宽度"
+        aria-orientation="vertical" aria-valuemin={22} aria-valuemax={70} aria-valuenow={widthPercent} tabIndex={0}
+        onPointerDown={event => { event.currentTarget.setPointerCapture(event.pointerId); event.preventDefault(); }}
+        onPointerMove={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) setWidthPercent(Math.max(22, Math.min(70, (window.innerWidth - event.clientX) / window.innerWidth * 100))); }}
+        onPointerUp={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
+        onKeyDown={event => {
+          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+          event.preventDefault(); event.stopPropagation();
+          setWidthPercent(value => event.key === "Home" ? 22 : event.key === "End" ? 70 : Math.max(22, Math.min(70, value + (event.key === "ArrowLeft" ? 2 : -2))));
+        }} /> : null}
       <div className="ppt-viewer-header">
         <span className="ppt-viewer-filename">{fileName}</span>
         <span className="ppt-viewer-counter">
           {currentIndex + 1} / {slides.length}
         </span>
         <div className="ppt-viewer-controls">
+          {onToggleBrush ? <button type="button" aria-pressed={brushActive} onClick={onToggleBrush}>{brushActive ? "结束画笔" : "画笔"}</button> : null}
+          <button type="button" onClick={() => setFullscreen(value => !value)}>{fullscreen ? "地图同屏" : "全屏"}</button>
           <button type="button" onClick={handleCollapse}>
             收起
           </button>
@@ -168,12 +197,17 @@ export function PptViewer({
         </div>
       </div>
 
+      <div className={`ppt-viewer-source ${slide?.imageUrl ? "" : "ppt-viewer-source--simple"}`} role="status">
+        {slide?.imageUrl ? (slide.renderer?.startsWith("powerpoint") ? "PowerPoint 原版渲染" : "LibreOffice 兼容渲染，请核对字体和版式") : "简易预览：字体、母版和复杂图形可能与原稿不同"}
+      </div>
+      {imageError ? <div className="ppt-viewer-image-error" role="alert">当前页图像加载失败，请重新导入 PPT。</div> : null}
+
       <div className="ppt-viewer-stage" ref={stageRef} tabIndex={-1}
         onPointerDown={event => {
           // Return keyboard ownership to the canvas after a drawing-tool button was used.
           if (!isInteractiveKeyboardTarget(event.target)) stageRef.current?.focus({ preventScroll: true });
         }}>
-        <div
+        <div className="ppt-viewer-slide-frame" style={{ width: slideW * scale, height: slideH * scale }}><div
           className="ppt-viewer-slide"
           style={{
             width: slideW,
@@ -188,6 +222,7 @@ export function PptViewer({
               alt={`幻灯片 ${currentIndex + 1}`}
               className="ppt-viewer-slide-image"
               draggable={false}
+              onError={() => setImageError(true)}
             />
           ) : (
             <div dangerouslySetInnerHTML={{ __html: slide?.html ?? "" }} />
@@ -204,7 +239,7 @@ export function PptViewer({
               pageKey={String(currentIndex)}
             />
           ) : null}
-        </div>
+        </div></div>
       </div>
 
       <div className="ppt-viewer-nav">
