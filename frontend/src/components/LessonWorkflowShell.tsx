@@ -1052,7 +1052,7 @@ export function LessonWorkflowShell({
 
       {project && lessonMode === "review" ? <ReportPanel projectId={project.project_id} onClose={() => setLessonMode("off")} /> : null}
 
-      {visualQueryDismissed || !visualQueryLayer ? null : (
+      {lessonMode === "review" || visualQueryDismissed || !visualQueryLayer ? null : (
         <VisualQueryPopup
           layer={visualQueryLayer}
           shifted={teachPanelVisible && !studentDisplay && !panelCollapsed}

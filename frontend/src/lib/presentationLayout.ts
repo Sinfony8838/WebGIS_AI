@@ -38,6 +38,11 @@ export function isExternalUrl(url?: string): boolean {
   return typeof url === "string" && /^https?:\/\//i.test(url || "");
 }
 
+export function layoutFromStage(stage: LessonStage): PresentationLayout {
+  const presentation = stage.presentation;
+  return presentation && Array.isArray(presentation.blocks) ? presentation : defaultLayoutFromStage(stage);
+}
+
 /**
  * 旧课时没有布局时，用现有环节内容生成可读的默认展示：
  * 标题 + 材料/知识点 + 学生活动 + 问题（题干，不含答案）+ 知识结论。

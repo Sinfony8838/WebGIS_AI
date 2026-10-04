@@ -392,6 +392,20 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // A PPT split pane changes the viewport without a window resize event.
+  useEffect(() => {
+    const container = containerRef.current;
+    const viewer = viewerRef.current;
+    if (!container || !viewer) return;
+    const observer = new ResizeObserver(() => {
+      if (viewer.isDestroyed()) return;
+      viewer.resize();
+      viewer.scene.requestRender();
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
   // Each source owns its primitive and listeners; a stale request cannot replace a newer source.
   useEffect(() => {
     const viewer=viewerRef.current;

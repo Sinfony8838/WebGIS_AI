@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { PptViewer } from "../components/PptViewer";
 import type { SlideContent } from "../types";
@@ -8,7 +8,8 @@ const slides = [1, 2, 3].map(index => ({ width: 9144000, height: 5143500, html: 
 const base = { open: true, fileName: "课堂.pptx", slides, onExpand: vi.fn(), onCollapse: vi.fn(), onRemove: vi.fn() };
 
 describe("PptViewer keyboard ownership", () => {
-  afterEach(() => { cleanup(); vi.clearAllMocks(); });
+  beforeEach(() => vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} }));
+  afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
   it("uses the first Escape only to end drawing, ignores key-repeat and collapses on a second press", () => {
     const onExitBrush = vi.fn();
@@ -92,5 +93,28 @@ describe("PptViewer keyboard ownership", () => {
     input.focus();
     fireEvent.pointerDown(input);
     expect(document.activeElement).toBe(input);
+  });
+
+  it("opens beside the map, resizes without paging, and restores the map on collapse", () => {
+    const onSplitWidthChange = vi.fn();
+    const view = render(<PptViewer {...base} onSplitWidthChange={onSplitWidthChange} />);
+    expect(screen.getByRole("region", { name: "PPT 放映" })).toHaveClass("ppt-viewer-split");
+    expect(onSplitWidthChange).toHaveBeenLastCalledWith(46);
+    fireEvent.keyDown(screen.getByRole("separator"), { key: "ArrowLeft" });
+    expect(onSplitWidthChange).toHaveBeenLastCalledWith(48);
+    expect(screen.getByText("第1页")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "全屏", exact: true }));
+    expect(onSplitWidthChange).toHaveBeenLastCalledWith(null);
+    fireEvent.click(screen.getByRole("button", { name: "地图同屏" }));
+    expect(onSplitWidthChange).toHaveBeenLastCalledWith(48);
+    view.rerender(<PptViewer {...base} open={false} onSplitWidthChange={onSplitWidthChange} />);
+    expect(onSplitWidthChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it("keeps the rendering source visible and reports image failures", () => {
+    render(<PptViewer {...base} slides={[{ ...slides[0], imageUrl: "/slide.png", renderer: "powerpoint-pywin32" }]} />);
+    expect(screen.getByRole("status")).toHaveTextContent("PowerPoint 原版渲染");
+    fireEvent.error(screen.getByRole("img", { name: "幻灯片 1" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("图像加载失败");
   });
 });
