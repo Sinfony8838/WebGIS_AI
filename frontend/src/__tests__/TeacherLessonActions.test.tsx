@@ -2,15 +2,15 @@ import {cleanup,fireEvent,render,screen,waitFor} from "@testing-library/react";
 import {afterEach,beforeEach,expect,it,vi} from "vitest";
 import {TeacherLessonActions} from "../components/TeacherLessonActions";
 import type {ClassSessionRecord,LessonRecord,LessonStage} from "../types";
-const mocks=vi.hoisted(()=>({apply:vi.fn(),start:vi.fn(),job:vi.fn(),log:vi.fn(),workflow:vi.fn(),result:vi.fn(),cancel:vi.fn()}));
+const mocks=vi.hoisted(()=>({apply:vi.fn(),start:vi.fn(),job:vi.fn(),log:vi.fn(),workflow:vi.fn(),result:vi.fn(),cancel:vi.fn(),resources:vi.fn()}));
 vi.mock("../api",()=>({applyTeacherLessonAction:mocks.apply,startPopulationZoneSummary:mocks.start,fetchJob:mocks.job,logSessionEvent:mocks.log,
   fetchWorkflow:mocks.workflow,applyTeacherWorkflowResult:mocks.result,cancelTeacherWorkflow:mocks.cancel,
-  buildPublicFileUrl:(p:string)=>p,fetchTeacherResources:vi.fn().mockResolvedValue({maps:[],figures_available:false,population_available:false})}));
+  buildPublicFileUrl:(p:string)=>p,fetchTeacherResources:mocks.resources}));
 const action={action_id:"stats",label:"圈内外人口统计",type:"statistics" as const};
 const stage={stage_id:"world_intro",title:"世界",actions:[action,{action_id:"summary",label:"小结",type:"summary"}]} as LessonStage;
 const lesson={lesson_id:"teacher"} as LessonRecord;
 const session={session_id:"s",project_id:"p",events:[]} as unknown as ClassSessionRecord;
-beforeEach(()=>{vi.clearAllMocks();mocks.apply.mockResolvedValue({action,materials:[],session});mocks.start.mockResolvedValue({job_id:"j"});mocks.log.mockResolvedValue({});});
+beforeEach(()=>{vi.clearAllMocks();mocks.resources.mockResolvedValue({maps:[],figures_available:false,population_available:false});mocks.apply.mockResolvedValue({action,materials:[],session});mocks.start.mockResolvedValue({job_id:"j"});mocks.log.mockResolvedValue({});});
 afterEach(cleanup);
 it("requests an image only for the teacher's explicit Finland review action",async()=>{
  const review={action_id:"finland_review",label:"手绘分界与协同审阅",type:"summary" as const};
@@ -45,4 +45,24 @@ it("requires teacher confirmation before exporting a revised summary",async()=>{
  fireEvent.click(screen.getByText("教师确认并保存"));await waitFor(()=>expect(exportButton).toBeEnabled());
  fireEvent.click(exportButton);expect(onExport).toHaveBeenCalledWith("世界","人口分布不均，资料为2015年估计。");
  fireEvent.change(screen.getByLabelText("教师审阅的小结"),{target:{value:"修订"}});expect(exportButton).toBeDisabled();
+});
+
+it("can inspect each original map, restore overlays and reset when changing cases",async()=>{
+ const maps=[{id:"population",opacity:.5},{id:"climate",opacity:.5},{id:"terrain",opacity:.5}];
+ const overlay={action_id:"overlay",label:"三图叠置实验",type:"scene" as const,scene:{teaching_maps:maps}};
+ const population={action_id:"population",label:"案例3-1 人口",type:"scene" as const,scene:{teaching_maps:[maps[0]]}};
+ mocks.resources.mockResolvedValue({maps:[{id:"population",name:"芬兰人口分布图"},{id:"climate",name:"芬兰降水气温图"},{id:"terrain",name:"芬兰地形图"}]});
+ render(<TeacherLessonActions {...{lesson,session}} stage={{...stage,actions:[overlay,population]} as LessonStage} busy={false}/>);
+ fireEvent.click(screen.getByText("三图叠置实验"));
+ await screen.findByRole("button",{name:"单独查看芬兰降水气温图"});
+ fireEvent.click(screen.getByRole("button",{name:"单独查看芬兰降水气温图"}));
+ await waitFor(()=>expect(mocks.apply).toHaveBeenLastCalledWith("s","world_intro","overlay",{population:0,climate:1,terrain:0}));
+ await waitFor(()=>expect(screen.getByLabelText("芬兰人口分布图不透明度")).toHaveValue("0"));
+ fireEvent.click(screen.getByText("恢复叠置"));
+ await waitFor(()=>expect(screen.getByLabelText("芬兰人口分布图不透明度")).toHaveValue("0.5"));
+ fireEvent.click(screen.getByRole("button",{name:"单独查看芬兰地形图"}));
+ await waitFor(()=>expect(screen.getByLabelText("芬兰人口分布图不透明度")).toHaveValue("0"));
+ fireEvent.click(screen.getByText("案例3-1 人口"));
+ await waitFor(()=>expect(mocks.apply).toHaveBeenLastCalledWith("s","world_intro","population",{}));
+ await waitFor(()=>expect(screen.getByLabelText("芬兰人口分布图不透明度")).toHaveValue("0.5"));
 });
