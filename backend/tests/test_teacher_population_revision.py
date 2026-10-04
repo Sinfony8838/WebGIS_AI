@@ -118,6 +118,13 @@ class TeacherRevisionTest(unittest.TestCase):
         from backend.app.models import WorkflowRecord, LayerRecord
         from backend.app.services.teacher_lesson_actions import apply_workflow_result
         runtime,store,pid=self.build_runtime()
+        # This unit test verifies workflow ownership and display order, not
+        # private textbook deployment. Supply its image in the temporary data
+        # directory so clean CI cannot accidentally depend on local assets.
+        from PIL import Image
+        map_info=runtime.teaching_map_service.get_map('finland_population')
+        image=runtime.config.uploads_dir/'teaching_maps'/map_info['filename']
+        Image.new('RGBA',(1,1),(0,0,0,0)).save(image)
         sid=runtime.classroom.create_class_session('lesson_builtin_population_teacher_revised',pid)['session']['session_id']
         runtime.classroom.enter_session_stage(sid,'finland_application')
         workflow=WorkflowRecord.create(pid);workflow.status='success';store.create_workflow(workflow)

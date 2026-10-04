@@ -95,5 +95,7 @@ python scripts/repair_teacher_demo_deck.py <旧答辩PPT.pptx> <版式修复副�
 - 前端：`npm test`：**81 files、554 tests passed**；`npm run build` 成功，仅保留既有大包提示。
 - `git diff --check` 通过。
 - 保留 3D 数字地球与 UI 外壳、lesson-session-report、TOP20 查询、启动健康路由；新功能未恢复旧通用课堂包或运行时状态。
+- 首次干净 CI 揭示工作流层级测试依赖本机教材图；已在该测试的临时目录内生成独立透明图片资源。产品代码和资料缺失拦截不变，真实地图证据仍由上文浏览器与 GIS 验收提供，测试图片不冒充课堂教材。
+- 独立资源修复后：`python -m pytest backend/tests/test_teacher_population_revision.py -q`，**11 passed**，1.78 秒。
 
 自动化检查不能替代浏览器、GIS、PPT 原版渲染或真实课堂证据。此文列出的各类证据分别记录。
