@@ -27,6 +27,7 @@ import {
 import { GlobeThemeManager, getEntityTooltip } from "../lib/globeThemes";
 import { GlobeBasemap } from "../lib/globeBasemap";
 import { basemapSourceKey } from "../lib/basemap";
+import type { BasemapLoadPhase } from "../lib/basemapLoadStatus";
 import { normalizeGlobeGeoJson } from "../lib/globeGeojson";
 import type { BasemapLayerDescriptor, LayerRecord } from "../types";
 
@@ -64,6 +65,8 @@ type Props = {
   visible: boolean;
   /** Catalog source shared with 2D, including all tile servers. */
   imageryLayer: BasemapLayerDescriptor;
+  basemapRetryKey?: number;
+  onBasemapStatus?: (phase: BasemapLoadPhase) => void;
   /** Whether to show the lat/lon graticule overlay. */
   showGraticule?: boolean;
   /** Initial camera position (defaults to China at 12000km). */
@@ -100,6 +103,8 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
     urbanSource,
     onUrbanStatus,
     imageryLayer,
+    basemapRetryKey = 0,
+    onBasemapStatus,
     showGraticule,
     initialView = DEFAULT_INITIAL_VIEW,
     onCameraChange,
@@ -122,6 +127,8 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
   const gridLabelsRef = useRef<Cesium.LabelCollection | null>(null);
   const basemapRef = useRef<GlobeBasemap | null>(null);
   const imageryKey = basemapSourceKey(imageryLayer);
+  const basemapStatusRef = useRef(onBasemapStatus);
+  basemapStatusRef.current = onBasemapStatus;
   const themeManagerRef = useRef<GlobeThemeManager | null>(null);
   const themesActiveRef = useRef(false);
   const urbanActiveRef = useRef(false);
@@ -193,7 +200,7 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
     }
 
     viewerRef.current = viewer;
-    basemapRef.current = new GlobeBasemap(viewer);
+    basemapRef.current = new GlobeBasemap(viewer, phase => basemapStatusRef.current?.(phase));
     if (import.meta.env.DEV) {
       // Debug handle for DevTools / automated verification only.
       (window as unknown as Record<string, unknown>).__globeViewer = viewer;
@@ -498,8 +505,8 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
     basemapRef.current?.set(osmBuildings ? {
       ...imageryLayer, urls: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
       attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>'
-    } : imageryLayer);
-  }, [imageryKey, imageryLayer.opacity, urbanSource?.format]);
+    } : imageryLayer, basemapRetryKey);
+  }, [imageryKey, imageryLayer.opacity, urbanSource?.format, basemapRetryKey]);
 
   // Add or remove the lat/lon graticule overlay (lines + numeric labels).
   // The grid is two coordinated pieces: a tile-based GridImageryProvider

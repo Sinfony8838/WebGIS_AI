@@ -52,7 +52,7 @@ export async function loadTileImage(url: string, templates: string[], crossOrigi
         };
         const fail = () => { cleanup(); image.src = ""; reject(new Error("Tile unavailable")); };
         const cancel = () => { cleanup(); image.src = ""; reject(new Error("Tile load cancelled")); };
-        const timer = window.setTimeout(fail, 4000);
+        const timer = window.setTimeout(fail, templates.length > 1 ? 4000 : 8000);
         image.onload = () => { cleanup(); resolve(image); };
         image.onerror = fail;
         signal?.addEventListener("abort", cancel, { once: true });
