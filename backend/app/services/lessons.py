@@ -71,6 +71,40 @@ LESSON_IMPORT_SCHEMA_HINT = {
 }
 
 
+def normalize_teaching_maps(raw: Any) -> List[Dict[str, Any]]:
+    items, seen = [], set()
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", str(item.get("id") or "")) or item["id"] in seen:
+            continue
+        try:
+            opacity = min(1., max(0., float(item.get("opacity", .5))))
+        except (TypeError, ValueError):
+            opacity = .5
+        seen.add(item["id"])
+        items.append({"id": item["id"], "opacity": opacity})
+    return items[:8]
+
+
+def normalize_lesson_actions(raw: Any) -> List[Dict[str, Any]]:
+    from copy import deepcopy
+    items, seen = [], set()
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict) or item.get("type") not in {"scene", "video", "activity", "statistics", "summary", "workflow"}:
+            continue
+        aid = str(item.get("action_id") or "")
+        if aid in seen or not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", aid):
+            continue
+        seen.add(aid)
+        action = {k: deepcopy(item[k]) for k in ("action_id", "label", "type", "note", "prompt", "url", "resource_rows", "source_id") if k in item}
+        if item.get("type") == "video" and not str(item.get("url") or "").startswith("https://www.bilibili.com/video/"):
+            continue
+        if isinstance(item.get("scene"), dict):
+            action["scene"] = {**default_scene(), **deepcopy(item["scene"])}
+            action["scene"]["teaching_maps"] = normalize_teaching_maps(item["scene"].get("teaching_maps"))
+        items.append(action)
+    return items[:30]
+
+
 def default_scene() -> Dict[str, Any]:
     return {
         "basemap_id": "",
@@ -78,6 +112,7 @@ def default_scene() -> Dict[str, Any]:
         "layer_visibility": {},
         "catalog_layers": [],
         "catalog_layer_focus": "",
+        "teaching_maps": [],
         "view": {},
         "annotations": [],
         "visual_query": None,
@@ -325,6 +360,7 @@ class LessonService:
         visual_query_service: VisualQueryService,
         minimax_client: Optional[MiniMaxClient] = None,
         catalog_layer_loader: Optional[Callable[[str, str], Any]] = None,
+        teaching_map_service: Any = None,
     ):
         self.config = config
         self.store = store
@@ -332,6 +368,7 @@ class LessonService:
         self.visual_query_service = visual_query_service
         self.minimax_client = minimax_client
         self.catalog_layer_loader = catalog_layer_loader
+        self.teaching_map_service = teaching_map_service
         self.ensure_builtin_lessons()
 
     # ------------------------------------------------------------------
@@ -379,7 +416,7 @@ class LessonService:
                 for lesson in lessons
                 if lesson.source == "builtin" or lesson.owner_user_id == owner_user_id
             ]
-        lessons.sort(key=lambda lesson: not bool(lesson.metadata.get("recommended")))
+        lessons.sort(key=lambda lesson: (lesson.lesson_id != "lesson_builtin_population_teacher_revised", not bool(lesson.metadata.get("recommended"))))
         return {"status": "success", "items": [lesson.to_dict() for lesson in lessons]}
 
     def get_lesson(self, lesson_id: str) -> LessonRecord:
@@ -450,6 +487,17 @@ class LessonService:
 
         scene = {**default_scene(), **(stage.get("scene") or {})}
         applied: Dict[str, Any] = {"templates": [], "visualization": None}
+        if scene.get("strict_resources"):
+            from .one_map_catalog import OneMapCatalogService
+            catalog = OneMapCatalogService(self.config)
+            for dataset_id in scene.get("catalog_layers") or []:
+                item = catalog.get_item(dataset_id)
+                if not catalog.resolve_item_path(item).is_file():
+                    raise ValueError(f"教学数据 {dataset_id} 尚未准备，请先完成课前资料检查。")
+        for item in scene.get("teaching_maps") or []:
+            info = self.teaching_map_service.get_map(item["id"]) if self.teaching_map_service else None
+            if not info or not info.get("available"):
+                raise ValueError(f"教学图 {item['id']} 尚未准备，请先完成课前资料检查。")
 
         with self.store.batch():
             self._reset_stage_layers(project_id, scene)
@@ -518,6 +566,9 @@ class LessonService:
                     self.store.patch_layer(project_id, layer.layer_id, {"visible": should_show})
 
             self._write_stage_annotations(project_id, scene.get("annotations") or [])
+            for item in scene.get("teaching_maps") or []:
+                result = self.teaching_map_service.toggle_overlay(project_id, item["id"], True)
+                self.store.patch_layer(project_id, result["layer"]["layer_id"], {"opacity": float(item.get("opacity", .5))})
 
             view = dict(scene.get("view") or {})
             if view:
@@ -556,8 +607,18 @@ class LessonService:
             return
         scene_templates = {str(item) for item in scene.get("templates") or []}
         scene_catalog_ids = {str(item) for item in scene.get("catalog_layers") or []}
+        scene_map_ids = {item["id"] for item in scene.get("teaching_maps") or []}
         for layer in list(project.layers):
             layer_id = layer.layer_id
+            if layer.metadata.get("teacher_topic") == "finland_population_2015":
+                if layer.visible:
+                    self.store.patch_layer(project_id, layer_id, {"visible": False})
+                continue
+            if layer.source == "teaching_map":
+                desired = str(layer.metadata.get("teaching_map_id") or "") in scene_map_ids
+                if layer.visible != desired:
+                    self.store.patch_layer(project_id, layer_id, {"visible": desired})
+                continue
             # Assistant annotations and POIs belong to the previous map discussion. Keep
             # their data, but hide them unless this scene explicitly requests them.
             if layer_id in {"assistant_annotations", "poi_search_results"} and layer.visible:
@@ -811,6 +872,7 @@ class LessonService:
             raw_catalog_focus = str(scene.get("catalog_layer_focus") or "")
             scene["catalog_layer_focus"] = raw_catalog_focus if raw_catalog_focus in scene["catalog_layers"] else ""
             scene["globe"] = normalize_scene_globe(scene.get("globe"))
+            scene["teaching_maps"] = normalize_teaching_maps(scene.get("teaching_maps"))
             questions = []
             for q_index, question in enumerate(raw.get("questions") or [], start=1):
                 if not isinstance(question, dict):
@@ -825,7 +887,10 @@ class LessonService:
                 {
                     "stage_id": stage_id,
                     "title": str(raw.get("title") or f"环节 {index}"),
-                    "minutes": max(1, int(raw.get("minutes") or 5)),
+                    "minutes": 0 if raw.get("timing_mode") == "teacher" else max(1, int(raw.get("minutes") or 5)),
+                    "timing_mode": "teacher" if raw.get("timing_mode") == "teacher" else "planned",
+                    "source_row": raw.get("source_row"),
+                    "actions": normalize_lesson_actions(raw.get("actions")),
                     "kind": kind,
                     "scene": scene,
                     "script": [str(item) for item in raw.get("script") or []],

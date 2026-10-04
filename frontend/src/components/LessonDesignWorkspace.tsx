@@ -585,7 +585,8 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
         ...({
           stage_id: `stage_${Date.now()}_${list.length + 1}`,
           title: `环节${list.length + 1}`,
-          minutes: 5,
+          minutes: draft.pacing_mode === "teacher" ? 0 : 5,
+          timing_mode: draft.pacing_mode === "teacher" ? "teacher" : "timed",
           kind: "presentation",
           scene: {},
           questions: []
@@ -643,7 +644,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
               <p className="panel-tag">Lesson Design</p>
               <h2>教案设计</h2>
               <p className="ldw-sub">
-                {draft.title || draft.topic || "未命名课时"} · {draft.grade || "年级待定"} · {draft.duration_minutes || 40}分钟
+                {draft.title || draft.topic || "未命名课时"} · {draft.grade || "年级待定"} · {draft.pacing_mode === "teacher" ? "教师自主推进，不限总时长" : `${draft.duration_minutes || 40}分钟`}
               </p>
             </div>
             <button type="button" className="mini-control" onClick={onClose} aria-label="关闭教案设计" data-testid="ldw-close">
@@ -749,7 +750,7 @@ export function LessonDesignWorkspace({ projectId, initialDesignId = "", onClose
                       <LessonCellEditor value={asText(draft.grade)} label="年级" placeholder="如：高一" disabled={busy || isFinalized} testId="ldw-cell-grade" onSave={(value) => void directEdit("grade", value)} />
                     </label>
                     <label>课时（分钟）
-                      <LessonCellEditor value={String(draft.duration_minutes ?? "")} label="课时" placeholder="40" numeric disabled={busy || isFinalized} testId="ldw-cell-duration" onSave={(value) => void directEdit("duration_minutes", Number(value))} />
+                      {draft.pacing_mode === "teacher" ? <p>教师自主推进，不限总时长</p> : <LessonCellEditor value={String(draft.duration_minutes ?? "")} label="课时" placeholder="40" numeric disabled={busy || isFinalized} testId="ldw-cell-duration" onSave={(value) => void directEdit("duration_minutes", Number(value))} />}
                     </label>
                   </div>
                   <div className="ldw-sheet-field">

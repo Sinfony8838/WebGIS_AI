@@ -874,6 +874,7 @@ export type LessonScene = {
   layer_visibility: Record<string, boolean>;
   catalog_layers?: string[];
   catalog_layer_focus?: string;
+  teaching_maps?: Array<{ id: string; opacity: number }>;
   view: { center?: [number, number]; zoom?: number; extent?: [number, number, number, number] };
   annotations: Array<{ text: string; position: [number, number] }>;
   visual_query: Record<string, unknown> | null;
@@ -882,10 +883,27 @@ export type LessonScene = {
 
 export type LessonStageKind = "presentation" | "practice" | "question" | "summary";
 
+export type TeacherLessonAction = {
+  action_id: string; label: string;
+  type: "scene" | "video" | "activity" | "statistics" | "summary" | "workflow";
+  note?: string; prompt?: string; url?: string; scene?: LessonScene;
+  resource_rows?: number[]; source_id?: string;
+};
+
+export type PopulationZoneSummary = {
+  status: "success" | "no_data"; inside_population: number | null; outside_population: number | null;
+  total_population: number; inside_percent: number | null; outside_percent: number | null;
+  year: number; note: string; method: string; valid_pixels: number; selected_pixels: number;
+  source: { name: string; url: string }; resolution_degrees: number[];
+};
+
 export type LessonStage = {
   stage_id: string;
   title: string;
   minutes: number;
+  timing_mode?: "teacher" | "planned";
+  source_row?: number;
+  actions?: TeacherLessonAction[];
   /** 课堂环节类型：课中面板据此渲染 ✍（练习）/？（提问）徽标；空/缺省由前端推断。 */
   kind?: LessonStageKind | "";
   scene: LessonScene;
@@ -1137,6 +1155,7 @@ export type QuestionBankImportJobResult = {
 };
 
 export type LessonPlanProfile = {
+  pacing_mode?: "teacher" | "timed";
   title?: string;
   subject?: string;
   grade?: string;

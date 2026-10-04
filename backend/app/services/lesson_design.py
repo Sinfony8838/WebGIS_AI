@@ -1202,6 +1202,8 @@ class LessonDesignService:
             if not str(draft.get("title") or draft.get("topic") or "").strip():
                 return "课题名称定为什么？"
             duration = int(draft.get("duration_minutes") or 0)
+            if draft.get("pacing_mode") == "teacher":
+                return f"请确认：{draft['grade']}《{draft.get('title') or draft.get('topic')}》，教师自主推进、不限总时长，教学需求是否准确？"
             if duration <= 0:
                 return "这节课安排多少分钟？"
             return f"请确认：{draft['grade']}《{draft.get('title') or draft.get('topic')}》，{duration} 分钟，教学需求是否准确？"
@@ -1837,7 +1839,7 @@ class LessonDesignService:
             stage_label = stage.get('title') or f'环节{index}'
             if not str(stage.get("title") or "").strip():
                 errors.append(f"第{index}个环节缺少名称。")
-            if minutes <= 0:
+            if minutes <= 0 and not (draft.get("pacing_mode") == "teacher" and stage.get("timing_mode") == "teacher"):
                 errors.append(f"环节“{stage_label}”未设置时长。")
             if not str(stage.get("design_intent") or stage.get("content") or "").strip():
                 warnings.append(f"“{stage_label}”还可以补充设计意图。")
@@ -1939,6 +1941,7 @@ class LessonDesignService:
             "metadata": {
                 "design_id": design.design_id, "project_id": design.project_id,
                 "duration_minutes": draft.get("duration_minutes", 40),
+                "pacing_mode": draft.get("pacing_mode", "timed"),
                 "lesson_version": 1, "ready_for_class": False,
                 "created_from": "lesson_design",
                 "question_citation_count": len(draft.get("question_citations") or []),
@@ -2734,7 +2737,7 @@ class LessonDesignService:
         info.style = "Table Grid"
         rows = [
             ("学科", lesson.subject, "年级", lesson.grade),
-            ("课题", lesson.title, "课时", f"{plan.get('duration_minutes', lesson.metadata.get('duration_minutes', 40))}分钟"),
+            ("课题", lesson.title, "课时", "教师自主推进（不限总时长）" if plan.get("pacing_mode") == "teacher" or lesson.metadata.get("pacing_mode") == "teacher" else f"{plan.get('duration_minutes', lesson.metadata.get('duration_minutes', 40))}分钟"),
             ("课型", plan.get("lesson_type", "专题探究课"), "平台", "WebGIS-AI"),
             ("设计来源", "教师与智能体共创", "版本", status_label),
         ]
@@ -2799,7 +2802,7 @@ class LessonDesignService:
             if stage.get("system_steps"):
                 content += "\n系统操作：" + "；".join(str(x) for x in stage["system_steps"])
             values = [
-                f"{stage.get('title', '')}（{stage.get('minutes', 0)}分钟）", stage.get("knowledge_unit", ""),
+                f"{stage.get('title', '')}（教师自主推进）" if stage.get("timing_mode") == "teacher" else f"{stage.get('title', '')}（{stage.get('minutes', 0)}分钟）", stage.get("knowledge_unit", ""),
                 stage.get("knowledge_point", ""), content, stage.get("design_intent", ""),
             ]
             for cell, value in zip(row.cells, values):

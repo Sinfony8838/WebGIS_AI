@@ -104,6 +104,7 @@ export function LessonPanel({
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
 
   const totalMinutes = activeLesson?.stages.reduce((sum, stage) => sum + (stage.minutes || 0), 0) || 0;
+  const teacherPaced = activeLesson?.metadata?.pacing_mode === "teacher";
   // 课程卡片：版本 / 课中练习 / 最近模拟测试 / 可开课状态（来自教案设计流程的课时须先过模拟测试）。
   const lessonMeta = activeLesson?.metadata || {};
   const lessonVersion = Number(lessonMeta.lesson_version || 1);
@@ -276,14 +277,14 @@ export function LessonPanel({
           </label>
           <div className="population-prep-grid">
             <label>
-              课时长度（分钟）
-              <input
+              {teacherPaced ? "教师自主掌握时长" : "课时长度（分钟）"}
+              {teacherPaced ? <p>不限总时长，由教师手动推进</p> : <input
                 type="number"
                 min={10}
                 max={180}
                 value={prepDuration}
                 onChange={(event) => setPrepDuration(Number(event.target.value) || 40)}
-              />
+              />}
             </label>
             <label>
               目标区域
@@ -346,7 +347,7 @@ export function LessonPanel({
                 onPrepareLesson({
                   objective: prepObjective.trim(),
                   grade: activeLesson.grade,
-                  duration_minutes: prepDuration,
+                  duration_minutes: teacherPaced ? 0 : prepDuration,
                   region: prepRegion.trim() || "中国",
                   years: ["2020"],
                   source_ids: selectedSourceIds,
@@ -439,7 +440,7 @@ export function LessonPanel({
           <div className="lesson-meta">
             <strong>{activeLesson.title}</strong>
             <span>
-              {activeLesson.grade || activeLesson.subject} · {activeLesson.stages.length} 个环节 · 共 {totalMinutes} 分钟
+              {activeLesson.grade || activeLesson.subject} · {activeLesson.stages.length} 个环节 · {teacherPaced ? "教师自主推进" : `共 ${totalMinutes} 分钟`}
             </span>
             <span className="lesson-meta-status" data-testid="lesson-card-meta">
               v{lessonVersion} · 课中练习 {inClassQuestionCount} 题
@@ -478,7 +479,7 @@ export function LessonPanel({
                     ) : (
                       <span className="lesson-stage-title">
                         <strong>{stage.title}</strong>
-                        <em>{stage.minutes} 分钟 · {sceneSummary(stage)}</em>
+                        <em>{stage.timing_mode === "teacher" ? "教师自主推进" : `${stage.minutes} 分钟`} · {sceneSummary(stage)}</em>
                       </span>
                     )}
                   </div>

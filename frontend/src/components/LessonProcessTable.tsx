@@ -239,7 +239,7 @@ export function LessonProcessTable({
             />
             <label className="lpt-minutes">
               时长
-              <LessonCellEditor
+              {stage.timing_mode === "teacher" ? <span>教师自主推进</span> : <><LessonCellEditor
                 value={String(stage.minutes ?? "")}
                 label={`环节${index + 1}时长`}
                 placeholder="分钟"
@@ -249,6 +249,7 @@ export function LessonProcessTable({
                 onSave={(value) => onStageFieldChange(index, "minutes", Number(value))}
               />
               分钟
+              </>}
             </label>
             <LessonCellEditor
               value={stage.knowledge_point || ""}

@@ -22,7 +22,7 @@ from .question_bank import QuestionBankService
 
 # PATCH 允许直接替换的工作副本顶层字段（题目快照、场景等结构由专用操作维护）。
 PATCHABLE_KEYS = (
-    "title", "subject", "grade", "objectives", "duration_minutes", "stages",
+    "title", "subject", "grade", "objectives", "duration_minutes", "pacing_mode", "stages",
     "homework", "design_thinking", "core_questions", "board_design", "reflection",
     "question_citations", "methods", "key_difficulties", "curriculum_interpretation",
     "student_analysis", "textbook_analysis", "knowledge_structure", "capabilities",
@@ -496,7 +496,10 @@ class LessonRehearsalService:
         working.setdefault("grade", lesson.grade)
         working["objectives"] = list(working.get("objectives") or lesson.objectives or [])
         working["stages"] = copy.deepcopy(stages)
-        if not working.get("duration_minutes"):
+        if (lesson.metadata or {}).get("pacing_mode") == "teacher":
+            working["pacing_mode"] = "teacher"
+            working["duration_minutes"] = 0
+        elif not working.get("duration_minutes"):
             working["duration_minutes"] = int(
                 (lesson.metadata or {}).get("duration_minutes") or minutes or 40
             )

@@ -28,7 +28,7 @@ describe("map capture readiness", () => {
   });
   it("takes legend context on the rendered frame and preserves HiDPI map pixels", async () => {
     vi.spyOn(window,"devicePixelRatio","get").mockReturnValue(2);
-    const viewport = document.createElement("div"); viewport.innerHTML='<div class="ol-layer"><canvas width="800" height="600" style="transform:matrix(0.5,0,0,0.5,0,0)"></canvas></div>';
+    const viewport = document.createElement("div"); viewport.innerHTML='<div class="basemap-layer basemap-light"><canvas width="800" height="600" style="transform:matrix(0.5,0,0,0.5,0,0)"></canvas></div><div class="ol-layer"><canvas width="800" height="600" style="transform:matrix(0.5,0,0,0.5,0,0)"></canvas></div>';
     let render!:()=>void;
     const map = {once:vi.fn((_event,listener)=>{render=listener;}),un:vi.fn(),getSize:()=>[400,300],getViewport:()=>viewport,renderSync:()=>render()};
     const context = {setTransform:vi.fn(),drawImage:vi.fn()};
@@ -40,5 +40,7 @@ describe("map capture readiness", () => {
     expect(freeze).toHaveBeenCalledTimes(1); expect(sizes).toEqual([[800,600]]);
     expect(context.setTransform).toHaveBeenCalledWith(1,0,0,1,0,0);
     expect(context.drawImage).toHaveBeenCalledWith(viewport.querySelector("canvas"),0,0,800,600,0,0,800,600);
+    expect(context.drawImage).toHaveBeenCalledTimes(2);
+    expect(context.drawImage.mock.calls.map(call=>call[0])).toEqual(Array.from(viewport.querySelectorAll("canvas")));
   });
 });

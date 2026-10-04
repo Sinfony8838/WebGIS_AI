@@ -48,12 +48,13 @@ class TeachingMapService:
         target_dir.mkdir(parents=True, exist_ok=True)
 
         for item in self._registry:
+            legend_file = item.get("legend_filename")
+            if legend_file and (source_dir / legend_file).is_file():
+                shutil.copy2(source_dir / legend_file, target_dir / legend_file)
             filename = item.get("filename", "")
             if not filename:
                 continue
             target_file = target_dir / filename
-            if target_file.exists():
-                continue
             source_file = source_dir / filename
             if not source_file.exists():
                 # Try the root 人口地图 directory as fallback
@@ -62,7 +63,8 @@ class TeachingMapService:
                     source_file = fallback
                 else:
                     continue
-            shutil.copy2(source_file, target_file)
+            if not target_file.exists() or source_file.stat().st_mtime > target_file.stat().st_mtime:
+                shutil.copy2(source_file, target_file)
 
     def list_maps(self) -> Dict[str, Any]:
         """Return all registered teaching map overlays, grouped by category."""
@@ -133,7 +135,11 @@ class TeachingMapService:
 
         if existing_layer is not None:
             # Layer already exists, just toggle visibility
-            layer = self.store.patch_layer(project_id, layer_id, {"visible": visible})
+            layer = self.store.patch_layer(project_id, layer_id, {"visible": visible, "metadata": {
+                **existing_layer.metadata,
+                **{key: map_info[key] for key in ("bounds", "source", "source_year", "image_crs", "registration", "legend", "note") if key in map_info},
+                "legend_url": f"/files/uploads/teaching_maps/{map_info['legend_filename']}" if map_info.get("legend_filename") else "",
+            }})
             action_text = "显示" if visible else "隐藏"
             self.store.add_recent_action(
                 project_id,
@@ -168,6 +174,13 @@ class TeachingMapService:
                 "bounds": bounds,
                 "teaching_map_id": map_id,
                 "category": map_info.get("category", ""),
+                "source": map_info.get("source", "教材图片"),
+                "source_year": map_info.get("source_year", "教材材料"),
+                "registration": map_info.get("registration", "textbook_image"),
+                "image_crs": map_info.get("image_crs", "EPSG:3857"),
+                "legend": map_info.get("legend", []),
+                "legend_url": f"/files/uploads/teaching_maps/{map_info['legend_filename']}" if map_info.get("legend_filename") else "",
+                "note": map_info.get("note", "教学图片用于定性判读，不用于像元数值统计。"),
             },
             opacity=map_info.get("opacity", 0.82),
             z_index=20,

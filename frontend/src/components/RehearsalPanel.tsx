@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
   applyRehearsalStageScene,
+  previewTeacherLessonAction,
+  buildPublicFileUrl,
   cancelLessonRehearsal,
   completeLessonRehearsal,
   createLessonRehearsal,
@@ -102,6 +104,7 @@ export function RehearsalPanel({
   const [report, setReport] = useState<LessonRehearsalReport | null>(null);
   const [completedLesson, setCompletedLesson] = useState<LessonRecord | null>(null);
   const [completedExportUrl, setCompletedExportUrl] = useState("");
+  const [actionPreview,setActionPreview] = useState<{stageId:string;result:Awaited<ReturnType<typeof previewTeacherLessonAction>>}|null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const uploadTargetRef = useRef<{ stageId: string; questionId: string } | null>(null);
 
@@ -157,6 +160,7 @@ export function RehearsalPanel({
   const workingCopy: LessonPlanProfile | null = rehearsal?.working_copy || null;
   const stages: LessonStage[] = (workingCopy?.stages || []) as LessonStage[];
   const totalMinutes = stages.reduce((sum, stage) => sum + (stage.minutes || 0), 0);
+  const teacherPaced = lesson.metadata?.pacing_mode === "teacher" || workingCopy?.pacing_mode === "teacher";
   const durationMinutes = Number(workingCopy?.duration_minutes || lesson.stages.reduce((sum, stage) => sum + (stage.minutes || 0), 0) || 40);
   const active = rehearsal?.status === "active";
 
@@ -390,8 +394,7 @@ export function RehearsalPanel({
           <div className="lesson-meta">
             <strong>{workingCopy?.title || lesson.title}</strong>
             <span>
-              基于版本 v{rehearsal.base_version} · {stages.length} 个环节 · 共 {totalMinutes} 分钟
-              （课时 {durationMinutes} 分钟{totalMinutes === durationMinutes ? " ✓" : " ✗ 不一致"}）
+              基于版本 v{rehearsal.base_version} · {stages.length} 个环节 · {teacherPaced ? "不限总时长，教师自主推进" : `共 ${totalMinutes} 分钟（课时 ${durationMinutes} 分钟${totalMinutes === durationMinutes ? " ✓" : " ✗ 不一致"}）`}
             </span>
           </div>
 
@@ -429,8 +432,8 @@ export function RehearsalPanel({
                           </span>
                         ) : (
                           <>
-                            {stage.minutes} 分钟 · 提问 {stage.questions?.length || 0} 题 ·{" "}
-                            <button
+                            {teacherPaced ? "教师自主推进" : `${stage.minutes} 分钟`} · 提问 {stage.questions?.length || 0} 题 ·{" "}
+                            {!teacherPaced && <button
                               type="button"
                               className="link-button"
                               onClick={(event) => {
@@ -440,7 +443,7 @@ export function RehearsalPanel({
                               }}
                             >
                               调整时长
-                            </button>
+                            </button>}
                           </>
                         )}
                       </em>
@@ -449,6 +452,17 @@ export function RehearsalPanel({
 
                   {expanded ? (
                     <div className="lesson-stage-detail">
+                      {stage.actions?.length ? <div className="lesson-stage-block"><span className="lesson-block-label">修订稿教学操作预览（不写入真实课堂）</span>
+                        <div className="teacher-action-buttons">{stage.actions.map(a=><button key={a.action_id} disabled={busy || !active} onClick={async()=>{
+                          if(!rehearsal)return;setBusy(true);setError("");
+                          try {const result=await previewTeacherLessonAction(rehearsal.rehearsal_id,stage.stage_id,a.action_id);setActionPreview({stageId:stage.stage_id,result});onApplyGlobeScene(a.scene?.globe || {});await onRefresh();}
+                          catch(e){setError(e instanceof Error?e.message:"预览失败");}finally{setBusy(false);}
+                        }}>{a.label}</button>)}</div>
+                        {actionPreview?.stageId===stage.stage_id && <><p>{actionPreview.result.action.note}</p>{actionPreview.result.action.url && <a href={actionPreview.result.action.url} target="_blank" rel="noreferrer">打开原视频 ↗</a>}
+                          {actionPreview.result.materials?.length>0 && <details><summary>原稿配图</summary>{actionPreview.result.materials.map(m=><img key={m.url} src={buildPublicFileUrl(m.url)} alt="教师修订稿配图" style={{maxWidth:"100%"}}/>)}</details>}
+                          {["statistics","workflow","summary"].includes(actionPreview.result.action.type) && <p>此处预览操作和场景；真实统计、分析任务与确认导出请在课中执行。</p>}
+                        </>}
+                      </div> : null}
                       <div className="lesson-stage-block">
                         <span className="lesson-block-label">展示编排（课堂主区域）</span>
                         <PresentationLayoutEditor
@@ -693,7 +707,7 @@ export function RehearsalPanel({
               <div className={`ldw-report ${report.ready ? "ok" : "bad"}`} data-testid="rehearsal-report">
                 <strong>
                   {report.ready
-                    ? `校验通过（环节合计 ${report.total_minutes} / 课时 ${report.duration_minutes} 分钟）`
+                    ? teacherPaced ? "校验通过（不限总时长，教师自主推进）" : `校验通过（环节合计 ${report.total_minutes} / 课时 ${report.duration_minutes} 分钟）`
                     : "仍有必须处理的问题"}
                 </strong>
                 {report.errors?.length ? <small className="ldw-report-errors">必须处理：{report.errors.join("；")}</small> : null}

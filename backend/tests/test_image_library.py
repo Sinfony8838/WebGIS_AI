@@ -254,6 +254,7 @@ class RetrievalPolicyTest(unittest.TestCase):
                 "vision_summary": "西北部颜色较深，表示地势较高；中南部可见密集湖泊，未确认具体湖名。",
                 "center": [104, 35],
                 "zoom": 6,
+                "session_digest": "此前图片读取失败，参与人数为零",
             },
         )
 
@@ -265,5 +266,7 @@ class RetrievalPolicyTest(unittest.TestCase):
         self.assertIn("中文专名时必须逐字复制", system_prompt)
         self.assertIn("答案中不要出现经纬度", system_prompt)
         self.assertIn("图片事实仅限以下内容", user_prompt)
+        self.assertNotIn("此前图片读取失败", user_prompt)
+        self.assertIn("本次附图已成功读取", system_prompt)
         self.assertEqual(client.calls[0]["temperature"], 0.0)
         self.assertEqual(result["map_grounding"], "")
