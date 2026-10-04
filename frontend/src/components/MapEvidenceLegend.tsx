@@ -12,14 +12,17 @@ export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onSho
   const [expanded, setExpanded] = useState(() => !window.matchMedia?.("(max-width: 960px)").matches);
   const night = basemapId === "nasa_nightlights_2016";
   const populationGrid = basemapId === "nasa_population_2020";
-  const visible = layers.filter(layer => layer.visible && (!globe ||
+  const visible = layers.filter(layer => layer.visible && layer.opacity !== 0 && (!globe ||
     (layer.kind === "vector" && ["upload", "output_artifact"].includes(layer.source))));
   const workflowLegends = visible.filter(layer => layer.metadata?.workflow_style).map(layer => ({
     id: layer.layer_id, name: layer.name,
     style: layer.metadata.workflow_style as { title?: string; legend?: { title?: string; items?: Array<{ label: string; color: string }> } }
   }));
-  const teacherMaps = visible.filter(layer => layer.metadata?.teaching_map_id).map(layer => ({
-    id:layer.layer_id, name:layer.name, source:String(layer.metadata.source || "教材材料"),
+  // Match the actual paint order, including equal-z layers from older sessions.
+  const teacherMaps = visible.map((layer, index) => ({ layer, index }))
+    .filter(({layer}) => layer.metadata?.teaching_map_id)
+    .sort((a, b) => b.layer.z_index - a.layer.z_index || b.index - a.index).map(({layer}) => ({
+    id:layer.layer_id, name:layer.name, opacity:Math.round(layer.opacity * 100), source:String(layer.metadata.source || "教材材料"),
     year:String(layer.metadata.source_year || "年份见原图"), note:String(layer.metadata.note || ""),
     legendUrl:String(layer.metadata.legend_url || ""),
     legend:(layer.metadata.legend || []) as Array<{label:string;color:string}>
@@ -41,7 +44,13 @@ export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onSho
     </button>
     <div id={contentId} className="map-legend-content" hidden={!expanded}>
     {finland && <><strong>芬兰人口密度 · 2015 <small>人/km²</small></strong><p>WorldPop模型人数网格聚合至0.1°，人数除以球面单元面积；海岸按中心点裁剪，只作教学比较，不作为芬兰全国人口总量。分级色标见分析结果。</p></>}
-    {teacherMaps.map(m => <div key={m.id}><strong>{m.name} <small>{m.year}</small></strong>{m.legend.map(item=><span className="map-other-key" key={item.label}><i style={{background:item.color}}/>{item.label}</span>)}{m.legendUrl && <img src={buildPublicFileUrl(m.legendUrl)} alt={`${m.name}原图图例`} style={{maxWidth:"100%",maxHeight:220,objectFit:"contain"}}/>}<p>{m.source} · {m.note}</p></div>)}
+    {teacherMaps.length > 1 && <div className="map-overlay-reading"><strong>多图叠置 · {teacherMaps.length}幅教材图</strong><p>从上到下：{teacherMaps.map(m => m.name).join(" → ")}。画面颜色为混合色，请单独查看各图并使用对应图例。</p></div>}
+    {teacherMaps.map((m, index) => {
+      const legend = <><strong>{m.name} <small>{m.year}</small></strong>{m.legend.map(item=><span className="map-other-key" key={item.label}><i style={{background:item.color}}/>{item.label}</span>)}{m.legendUrl && <img src={buildPublicFileUrl(m.legendUrl)} alt={`${m.name}原图图例`} style={{maxWidth:"100%",maxHeight:220,objectFit:"contain"}}/>}<p>{m.source} · {m.note}</p></>;
+      return teacherMaps.length > 1
+        ? <details key={m.id} className="map-teacher-legend" open={index === 0}><summary>{m.name} · {m.opacity}%{index === 0 ? " · 最上层" : ""}</summary>{legend}</details>
+        : <div key={m.id}>{legend}</div>;
+    })}
     {workflowLegends.map(layer => <div key={layer.id}><strong>{layer.style.legend?.title || layer.style.title || layer.name}</strong>
       {layer.style.legend?.items?.map((item, index) => <span className="map-other-key" key={index}><i style={{ background: item.color }} />{item.label}</span>)}
     </div>)}

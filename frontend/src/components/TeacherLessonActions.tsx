@@ -43,13 +43,18 @@ export function TeacherLessonActions({ lesson, stage, session, busy, geometry, o
     return () => { epoch.current += 1; if(activeWorkflow.current) {void cancelTeacherWorkflow(activeWorkflow.current).catch(()=>undefined);activeWorkflow.current=null;} };
   }, [stage.stage_id, session.session_id]);
   const locked = busy || pending;
-  async function run(action: TeacherLessonAction, opacityPatch = opacities) {
+  async function run(action: TeacherLessonAction, requestedOpacities?: Record<string, number>) {
+    // Each material selection starts from its own preset; slider/view changes
+    // remain local to that selection and cannot hide the next case's population map.
+    const opacityPatch = requestedOpacities ?? (selected?.action_id === action.action_id ? opacities : {});
     const token = epoch.current; setPending(true); setError("");
     try {
       if (action.type === "statistics" && !geometry) throw new Error("请先使用地图右侧绘区工具圈定统计范围；画笔线条不能作为统计区域。");
       const response = await applyTeacherLessonAction(session.session_id, stage.stage_id, action.action_id, opacityPatch);
       if (token !== epoch.current) return;
-      setSelected(action); setMaterials(response.materials); onSessionChange?.(response.session); await onRefresh?.();
+      setSelected(action);
+      setOpacities(Object.fromEntries((action.scene?.teaching_maps || []).map(item => [item.id, opacityPatch[item.id] ?? item.opacity])));
+      setMaterials(response.materials); onSessionChange?.(response.session); await onRefresh?.();
       if (response.prompt) { waitingDraft.current = assistantDraftJobId || ""; onAssistantPrompt?.(response.prompt, action.label + "（教师审阅草稿）", action.action_id === "finland_review"); }
       if(response.workflow?.workflow_id) {
         activeWorkflow.current=response.workflow.workflow_id;setWorkflowStatus("人口密度分析正在运行…");
@@ -100,7 +105,15 @@ export function TeacherLessonActions({ lesson, stage, session, busy, geometry, o
     {workflowStatus && <p role="status">{workflowStatus}</p>}
     {selected?.note && <p>{selected.note}</p>}
     {selected?.type === "video" && <a href={selected.url} target="_blank" rel="noreferrer">打开原视频播放 ↗</a>}
-    {selected?.scene?.teaching_maps?.map(item => <label className="teacher-opacity" key={item.id}>{resources?.maps.find(m => m.id === item.id)?.name || item.id} · {Math.round((opacities[item.id] ?? item.opacity) * 100)}%<input type="range" min="0" max="1" step="0.05" value={opacities[item.id] ?? item.opacity} disabled={locked} onChange={e => setOpacities(p => ({ ...p, [item.id]: Number(e.target.value) }))} onPointerUp={() => void run(selected)} onKeyUp={e => { if (["ArrowLeft","ArrowRight","Home","End"].includes(e.key)) void run(selected); }} /></label>)}
+    {(selected?.scene?.teaching_maps?.length || 0) > 1 && <p className="teacher-overlay-note">多图叠置会混合颜色，不能用人口图例解读降水或地形。可单独查看各图，再恢复叠置进行比较。</p>}
+    {selected?.scene?.teaching_maps?.map(item => {
+      const name = resources?.maps.find(m => m.id === item.id)?.name || item.id;
+      return <div className="teacher-map-control" key={item.id}>
+        <label className="teacher-opacity">{name} · {Math.round((opacities[item.id] ?? item.opacity) * 100)}%<input aria-label={`${name}不透明度`} type="range" min="0" max="1" step="0.05" value={opacities[item.id] ?? item.opacity} disabled={locked} onChange={e => setOpacities(p => ({ ...p, [item.id]: Number(e.target.value) }))} onPointerUp={() => void run(selected)} onKeyUp={e => { if (["ArrowLeft","ArrowRight","Home","End"].includes(e.key)) void run(selected); }} /></label>
+        {(selected.scene?.teaching_maps?.length || 0) > 1 && <button type="button" aria-label={`单独查看${name}`} disabled={locked} onClick={() => void run(selected, Object.fromEntries((selected.scene?.teaching_maps || []).map(map => [map.id, map.id === item.id ? 1 : 0])))}>单独查看</button>}
+      </div>;
+    })}
+    {(selected?.scene?.teaching_maps?.length || 0) > 1 && <button type="button" disabled={locked} onClick={() => selected && void run(selected, {})}>恢复叠置</button>}
     {materials.length > 0 && <details><summary>教师原稿配图 {materials.length} 张</summary><div className="teacher-materials">{materials.map(m => <figure key={m.url}><img src={buildPublicFileUrl(m.url)} alt={`修订稿本环节配图 ${m.order}`} /><figcaption>{m.source}</figcaption></figure>)}</div></details>}
     {summary && <div className="teacher-zone-result"><strong>{summary.year}年人口估计</strong>{summary.status === "success" ? <><div className="teacher-pie" role="img" aria-label={`圈内${summary.inside_percent}%，圈外${summary.outside_percent}%`} style={{ background: `conic-gradient(#218e9b 0 ${summary.inside_percent}%, #d9e5ee ${summary.inside_percent}% 100%)` }} /><p>圈内 {summary.inside_population?.toLocaleString()} 人 · {summary.inside_percent}%<br/>圈外 {summary.outside_population?.toLocaleString()} 人 · {summary.outside_percent}%</p><p>{summary.method}</p></> : null}<p>{summary.note}</p><a href={summary.source.url} target="_blank" rel="noreferrer">数据来源与说明 ↗</a></div>}
     {stage.actions?.some(a => a.type === "summary") && <details className="teacher-summary"><summary>审阅小结与保存成果</summary><p>助教回答为草稿。将需要保留的内容填入下方，修改并确认后用于课堂讲义和成果导出。</p><textarea aria-label="教师审阅的小结" value={draft} onChange={e => { setDraft(e.target.value); setConfirmed(false); }} placeholder="填写或粘贴助教草稿，并核对本课材料和年份" /><button type="button" disabled={locked || !draft.trim() || confirmed} onClick={() => void confirmSummary()}>{confirmed ? "已确认并保存" : "教师确认并保存"}</button>{onExport && <button type="button" disabled={locked || !confirmed} onClick={() => { setError(""); void onExport(stage.title, draft).catch(e => setError(e instanceof Error ? e.message : "导出失败")); }}>导出探究报告 PNG</button>}</details>}

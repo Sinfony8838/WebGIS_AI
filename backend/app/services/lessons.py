@@ -566,9 +566,12 @@ class LessonService:
                     self.store.patch_layer(project_id, layer.layer_id, {"visible": should_show})
 
             self._write_stage_annotations(project_id, scene.get("annotations") or [])
-            for item in scene.get("teaching_maps") or []:
+            # Scene order is bottom to top, independent of previous map clicks.
+            for index, item in enumerate(scene.get("teaching_maps") or []):
                 result = self.teaching_map_service.toggle_overlay(project_id, item["id"], True)
-                self.store.patch_layer(project_id, result["layer"]["layer_id"], {"opacity": float(item.get("opacity", .5))})
+                self.store.patch_layer(project_id, result["layer"]["layer_id"], {
+                    "opacity": float(item.get("opacity", .5)), "z_index": 20 + index,
+                })
 
             view = dict(scene.get("view") or {})
             if view:

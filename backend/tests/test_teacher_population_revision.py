@@ -98,6 +98,33 @@ class TeacherRevisionTest(unittest.TestCase):
         self.assertEqual(result['session']['responses'],{})
         with self.assertRaises(ValueError):apply_action(runtime,sid,'world_intro','migration_video')
 
+    def test_overlay_order_is_stable_and_independent_of_previous_clicks(self):
+        from PIL import Image
+        from backend.app.services.teacher_lesson_actions import apply_action
+        runtime, store, pid = self.build_runtime()
+        ids = ['finland_population', 'finland_climate', 'finland_topography']
+        for map_id in ids:
+            info = runtime.teaching_map_service.get_map(map_id)
+            image = runtime.config.uploads_dir / 'teaching_maps' / info['filename']
+            image.parent.mkdir(parents=True, exist_ok=True)
+            Image.new('RGBA', (1, 1), (0, 0, 0, 0)).save(image)
+        # Construct a prior click order different from the lesson declaration.
+        for map_id in reversed(ids):
+            runtime.teaching_map_service.toggle_overlay(pid, map_id, True)
+        sid = runtime.classroom.create_class_session('lesson_builtin_population_teacher_revised', pid)['session']['session_id']
+        runtime.classroom.enter_session_stage(sid, 'finland_application')
+        apply_action(runtime, sid, 'finland_application', 'finland_overlay')
+        layers = {layer.metadata.get('teaching_map_id'): layer for layer in store.get_project(pid).layers}
+        self.assertEqual([layers[id].z_index for id in ids], [20, 21, 22])
+        apply_action(runtime, sid, 'finland_application', 'finland_overlay', dict(zip(ids, [1, 0, 0])))
+        layers = {layer.metadata.get('teaching_map_id'): layer for layer in store.get_project(pid).layers}
+        self.assertEqual([layers[id].opacity for id in ids], [1, 0, 0])
+        apply_action(runtime, sid, 'finland_application', 'finland_1')
+        layers = {layer.metadata.get('teaching_map_id'): layer for layer in store.get_project(pid).layers}
+        self.assertTrue(layers['finland_population'].visible)
+        self.assertFalse(layers['finland_climate'].visible)
+        self.assertFalse(layers['finland_topography'].visible)
+
     def test_rehearsal_keeps_teacher_pacing_and_validates_complete_plan(self):
         runtime,store,pid=self.build_runtime();source=store.get_lesson('lesson_builtin_population_teacher_revised')
         teacher=runtime.classroom.lesson_service.create_lesson(source.to_dict())

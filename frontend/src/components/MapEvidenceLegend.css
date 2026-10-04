@@ -43,3 +43,5 @@
     left:clamp(656px, var(--copilot-orb-x), calc(100vw - var(--right-rail-width) - 128px)) !important;
   }
 }
+
+.map-overlay-reading{border-bottom:1px solid var(--panel-border);padding-bottom:4px}.map-teacher-legend summary{font-weight:600;padding-bottom:5px}
