@@ -12,9 +12,9 @@
   pointer-events: auto;
 }
 body:has(.class-run-panel-tab) .qpm-backdrop.qpm-student-backdrop .qpm-shell.qpm-student { left: 64px; }
-.qpm-shell.qpm-student {
-  --qpm-student-font-size: 30px;
-  --qpm-student-title-size: 40px;
+.qpm-shell.qpm-projection {
+  --qpm-student-font-size: 40px;
+  --qpm-student-title-size: 28px;
   --surface: #f1f5f9;
   --surface-raised: #fff;
   --text-main: #172b45;
@@ -27,11 +27,11 @@ body:has(.class-run-panel-tab) .qpm-backdrop.qpm-student-backdrop .qpm-shell.qpm
   background: #fff;
   border-color: #cbd5e1;
 }
-.qpm-shell.qpm-student .qpm-header,
-.qpm-shell.qpm-student .qpm-timer { flex: none; }
-.qpm-shell.qpm-student .qpm-heading strong { font-size: var(--qpm-student-title-size); line-height: 1.2; }
-.qpm-shell.qpm-student .qpm-kicker { font-size: 16px; }
-.qpm-shell.qpm-student .qpm-body {
+.qpm-shell.qpm-projection .qpm-header,
+.qpm-shell.qpm-projection .qpm-timer { flex: none; }
+.qpm-shell.qpm-projection .qpm-heading strong { font-size: var(--qpm-student-title-size); line-height: 1.2; }
+.qpm-shell.qpm-projection .qpm-kicker { font-size: 20px; }
+.qpm-shell.qpm-projection .qpm-body {
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
@@ -41,33 +41,46 @@ body:has(.class-run-panel-tab) .qpm-backdrop.qpm-student-backdrop .qpm-shell.qpm
   line-height: 1.6;
 }
 /* flex 项目不压缩，长材料、题干、末尾选项均在同一滚动区内。 */
-.qpm-shell.qpm-student .qpm-body > * { flex-shrink: 0; }
-.qpm-shell.qpm-student .qpm-body:focus-visible { outline: 3px solid #2563eb; outline-offset: -3px; }
-.qpm-shell.qpm-student .qpm-task,
-.qpm-shell.qpm-student .qpm-material p,
-.qpm-shell.qpm-student .qpm-stem,
-.qpm-shell.qpm-student .qpm-options li,
-.qpm-shell.qpm-student .qpm-sub-stem,
-.qpm-shell.qpm-student .qpm-sub-answer strong,
-.qpm-shell.qpm-student .qpm-sub-answer p,
-.qpm-shell.qpm-student .qpm-answer-main,
-.qpm-shell.qpm-student .qpm-explanation p,
-.qpm-shell.qpm-student .qpm-ai p {
+.qpm-shell.qpm-projection .qpm-body > * { flex-shrink: 0; }
+.qpm-shell.qpm-projection .qpm-body:focus-visible { outline: 3px solid #2563eb; outline-offset: -3px; }
+.qpm-shell.qpm-projection .qpm-task,
+.qpm-shell.qpm-projection .qpm-material p,
+.qpm-shell.qpm-projection .qpm-stem,
+.qpm-shell.qpm-projection .qpm-options li,
+.qpm-shell.qpm-projection .qpm-sub-stem,
+.qpm-shell.qpm-projection .qpm-sub-answer strong,
+.qpm-shell.qpm-projection .qpm-sub-answer p,
+.qpm-shell.qpm-projection .qpm-answer-main,
+.qpm-shell.qpm-projection .qpm-explanation p,
+.qpm-shell.qpm-projection .qpm-ai p {
   font-size: inherit;
   line-height: inherit;
   white-space: pre-wrap;
 }
-.qpm-shell.qpm-student .qpm-options li > span:last-child { min-width: 0; }
-.qpm-shell.qpm-student .qpm-options .option-label { width: 1.4em; height: 1.4em; font-size: 0.85em; }
-.qpm-shell.qpm-student .qpm-section-label,
-.qpm-shell.qpm-student .qpm-knowledge-chip { font-size: 20px; }
-.qpm-shell.qpm-student .qpm-timer-sub,
-.qpm-shell.qpm-student .qpm-timer.revealed,
-.qpm-shell.qpm-student .qpm-timer.revealed em { font-size: 18px; }
-.qpm-shell.qpm-student .qpm-images { align-items: center; }
-.qpm-shell.qpm-student .qpm-images img { max-height: 60vh; width: auto; object-fit: contain; }
+.qpm-shell.qpm-projection .qpm-options li > span:last-child { min-width: 0; }
+.qpm-shell.qpm-projection .qpm-options .option-label { width: 1.4em; height: 1.4em; font-size: 0.85em; }
+.qpm-shell.qpm-projection .qpm-section-label,
+.qpm-shell.qpm-projection .qpm-knowledge-chip { font-size: 20px; }
+.qpm-shell.qpm-projection .qpm-timer-sub,
+.qpm-shell.qpm-projection .qpm-timer.revealed,
+.qpm-shell.qpm-projection .qpm-timer.revealed em { font-size: 20px; }
+.qpm-shell.qpm-projection .qpm-images { align-items: center; }
+.qpm-shell.qpm-projection .qpm-images img { max-height: 60vh; width: auto; object-fit: contain; }
 .qpm-shell.qpm-student.qpm-mini { width: min(640px, calc(100vw - 24px)); max-height: calc(100vh - 112px); }
 @media (max-width: 800px) {
   .qpm-backdrop.qpm-student-backdrop .qpm-shell.qpm-student { left: 12px; right: 12px; bottom: 126px; }
-  .qpm-shell.qpm-student .qpm-body { padding: 12px; }
+  .qpm-shell.qpm-projection .qpm-body { padding: 12px; }
 }
+
+.qpm-shell.qpm-projection .qpm-header-actions, .qpm-font-controls { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.qpm-shell.qpm-projection .toolbar-button, .qpm-shell.qpm-projection .record-button { font-size:18px; min-height:38px; }
+.qpm-shell.qpm-projection .qpm-header, .qpm-shell.qpm-projection .qpm-timer, .qpm-shell.qpm-projection .qpm-footer { flex-shrink:0; }
+.qpm-shell.qpm-projection .qpm-footer-hint { font-size:18px; }
+.qpm-shell.qpm-projection.qpm-mini .qpm-kicker, .qpm-shell.qpm-projection.qpm-mini .qpm-timer-sub { font-size:16px; }
+.qpm-shell.qpm-projection .qpm-images img { max-width:100%; }
+
+.qpm-figure { display:flex; flex-direction:column; align-items:center; gap:8px; margin:0; max-width:100%; }
+.qpm-shell.qpm-projection .qpm-footer-hint { display:none; }
+.qpm-shell.qpm-projection .qpm-footer { justify-content:flex-end; }
+
+.qpm-shell.qpm-projection:not(.qpm-mini) { width:min(1840px, calc(100vw - 32px)); }

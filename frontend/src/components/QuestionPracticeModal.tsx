@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { buildAuthenticatedUrl } from "../api";
 import type { LessonQuestion, ObservationVerdict } from "../types";
+import { ClassroomImageDialog } from "./ClassroomImageDialog";
 import "./QuestionPracticeModal.css";
 
 type Props = {
@@ -13,6 +14,7 @@ type Props = {
   /** 学生展示仅渲染题目与已揭示知识，教师操作由外部控制区提供。 */
   studentDisplay?: boolean;
   fontSize?: number;
+  onFontSizeChange?: (size: number) => void;
   busy: boolean;
   onTimerAction: (action: "start" | "pause" | "resume" | "reset") => void;
   onReveal: () => void;
@@ -26,13 +28,6 @@ type Props = {
 };
 
 const OPTION_LABELS = ["A", "B", "C", "D", "E", "F", "G", "H"];
-
-const SOURCE_LABELS: Record<string, string> = {
-  question_bank: "题库题",
-  teacher_manual: "教师手录",
-  adhoc: "临时题",
-  lesson: "课时题目"
-};
 
 const MINI_POSITION_KEY = "qpm-mini-position";
 const VIEWPORT_MARGIN = 8;
@@ -64,7 +59,8 @@ export function QuestionPracticeModal({
   question,
   variant = "full",
   studentDisplay = false,
-  fontSize = 30,
+  fontSize = 40,
+  onFontSizeChange,
   busy,
   onTimerAction,
   onReveal,
@@ -74,6 +70,8 @@ export function QuestionPracticeModal({
   onObservation
 }: Props) {
   const mini = variant === "mini";
+  const [readingImage, setReadingImage] = useState<{ name: string; url: string } | null>(null);
+  useEffect(() => { setReadingImage(null); }, [question.question_id]);
   const timer = question.timer;
   const [nowTick, setNowTick] = useState(() => Date.now());
   // 服务端每次响应带回实时计算好的 elapsed_seconds；以收到时刻为锚点本地递增，
@@ -213,21 +211,23 @@ export function QuestionPracticeModal({
     }
   }
 
-  const textSize = Number.isFinite(fontSize) ? clamp(fontSize, 24, 44) : 30;
+  const textSize = Number.isFinite(fontSize) ? clamp(fontSize, 28, 56) : 40;
   const shellStyle = {
     ...(mini && miniPosition ? { left: miniPosition.left, top: miniPosition.top, right: "auto", bottom: "auto" } : {}),
-    ...(studentDisplay ? { "--qpm-student-font-size": `${textSize}px`, "--qpm-student-title-size": `${Math.round(textSize * 4 / 3)}px` } : {})
+    "--qpm-student-font-size": `${mini ? Math.min(textSize, 28) : textSize}px`,
+    "--qpm-student-title-size": `${mini ? 22 : 28}px`
   } as CSSProperties;
 
   const shell = (
     <section
       ref={frameRef}
-      className={`qpm-shell${mini ? " qpm-mini" : ""}${studentDisplay ? " qpm-student" : ""}`}
+      className={`qpm-shell qpm-projection${mini ? " qpm-mini" : ""}${studentDisplay ? " qpm-student" : ""}`}
       role="dialog"
       aria-label="题目投屏"
       data-testid="question-practice-modal"
       style={shellStyle}
     >
+      <ClassroomImageDialog image={readingImage} kind="题图" onClose={() => setReadingImage(null)}/>
       <header
         className="qpm-header"
         onPointerDown={mini ? startDrag : undefined}
@@ -237,14 +237,18 @@ export function QuestionPracticeModal({
       >
         <div className="qpm-heading">
           <span className="qpm-kicker">
-            {studentDisplay ? "课堂练习" : `题目投屏 · ${SOURCE_LABELS[timer?.question_source || ""] || "题目"}`}
+            课堂练习
           </span>
           <strong>{question.type === "choice" ? "选择" : question.type === "composite" ? "复合题" : "问答题"}</strong>
-          {!studentDisplay && question.knowledge_points?.length ? (
+          {mini && !studentDisplay && question.knowledge_points?.length ? (
             <span className="qpm-meta">{question.knowledge_points.join(" · ")}</span>
           ) : null}
         </div>
         {!studentDisplay ? <div className="qpm-header-actions">
+          {!mini && onFontSizeChange ? <div className="qpm-font-controls" aria-label="题目字号">
+            <button type="button" className="toolbar-button compact" aria-label="缩小题目字号" disabled={textSize <= 28} onClick={() => onFontSizeChange(textSize - 2)}>A−</button>
+            <button type="button" className="toolbar-button compact" aria-label="放大题目字号" disabled={textSize >= 56} onClick={() => onFontSizeChange(textSize + 2)}>A＋</button>
+          </div> : null}
           {mini ? (
             onExpand ? (
               <button
@@ -356,6 +360,9 @@ export function QuestionPracticeModal({
       )}
 
       <div className="qpm-body" role="region" aria-label="题目与讲解" tabIndex={0}>
+        <div className="qpm-stem" data-testid="qpm-stem">
+          {question.text}
+        </div>
         {question.task_text ? (
           <p className="qpm-task" data-testid="qpm-task">
             {question.task_text}
@@ -370,13 +377,13 @@ export function QuestionPracticeModal({
         {images.length ? (
           <div className="qpm-images" data-testid="qpm-images">
             {images.map((image, index) => (
-              <img key={`${image.url}_${index}`} src={buildAuthenticatedUrl(image.url)} alt={`题图 ${index + 1}`} />
+              <figure className="qpm-figure" key={`${image.url}_${index}`}>
+                <img src={buildAuthenticatedUrl(image.url)} alt={`题图 ${index + 1}`} />
+                <button type="button" className="toolbar-button" onClick={() => setReadingImage({ name: `题图 ${index + 1}`, url: buildAuthenticatedUrl(image.url) })}>放大题图 {index + 1}</button>
+              </figure>
             ))}
           </div>
         ) : null}
-        <div className="qpm-stem" data-testid="qpm-stem">
-          {question.text}
-        </div>
         {question.options.length ? (
           <ol className="qpm-options" data-testid="qpm-options">
             {question.options.map((option, index) => (
@@ -539,5 +546,8 @@ export function QuestionPracticeModal({
   if (mini) {
     return shell;
   }
-  return createPortal(<div className={`qpm-backdrop${studentDisplay ? " qpm-student-backdrop" : ""}`}>{shell}</div>, document.body);
+  // Keep student projection in the classroom stacking context so external
+  // teacher controls stay usable above it; teacher full-screen stays modal.
+  if (studentDisplay) return <div className="qpm-backdrop qpm-student-backdrop">{shell}</div>;
+  return createPortal(<div className="qpm-backdrop">{shell}</div>, document.body);
 }

@@ -1,0 +1,6 @@
+.classroom-image-backdrop { position:fixed; inset:0; z-index:900; display:grid; place-items:center; padding:18px; background:#172b4570; }
+.classroom-image-dialog { display:flex; flex-direction:column; gap:18px; box-sizing:border-box; width:min(1400px, 96vw); height:calc(100dvh - 36px); padding:22px; border-radius:14px; background:#fff; color:#172b45; }
+.classroom-image-dialog header { display:flex; flex:none; align-items:center; justify-content:space-between; gap:16px; font-size:28px; }
+.classroom-image-dialog button { flex:none; font:inherit; font-size:20px; padding:8px 16px; border:1px solid #94a3b8; border-radius:8px; background:#f1f5f9; color:#174778; cursor:pointer; }
+.classroom-image-dialog img { flex:1; min-height:0; width:100%; object-fit:contain; }
+@media (max-width:960px) { .classroom-image-dialog { padding:12px; } .classroom-image-dialog header { font-size:22px; } }

@@ -308,7 +308,6 @@ export function ClassRunPanel({
               {currentStage && currentStage.timing_mode !== "teacher" ? ` / ${currentStage.minutes}:00` : " · 教师自主推进"}
             </span>
             <span className="class-session-label">
-              教师端课堂记录 · 仅采集教师观察
               {savedFlash ? <em className="record-saved"> ✓ 已记录</em> : null}
             </span>
           </div>
@@ -535,7 +534,6 @@ export function ClassRunPanel({
                           ))}
                         </ol>
                       ) : null}
-                      <p className="class-oral-prompt-note">学情速记已就绪，下方可记录学生表现。</p>
                     </div>
                   ) : null}
 

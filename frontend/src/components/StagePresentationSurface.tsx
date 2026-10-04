@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import "./StagePresentationSurface.css";
 import type { LessonStage, PresentationBlock } from "../types";
 import { buildAuthenticatedUrl } from "../api";
-import { defaultLayoutFromStage, isDirectVideo, isExternalUrl } from "../lib/presentationLayout";
+import { defaultLayoutFromStage, makeBlock, isDirectVideo, isExternalUrl } from "../lib/presentationLayout";
 
 type Props = {
   stage: LessonStage;
@@ -104,16 +104,30 @@ function SurfaceBlock({
 }
 
 // 课堂主区域的环节展示面：仅渲染学生可见区块；无布局时按环节内容生成默认展示。
-export function StagePresentationSurface({ stage, revealConclusions = false, fontSize = 30, onProjectQuestion, onPresentScene }: Props) {
+export function StagePresentationSurface({ stage, revealConclusions = false, fontSize = 40, onProjectQuestion, onPresentScene }: Props) {
   const [reading, setReading] = useState<{ stageId: string; blockId: string } | null>(null);
   const readingRef = useRef<HTMLDivElement>(null);
   const openerRef = useRef<HTMLButtonElement | null>(null);
-  const layout = useMemo(() => stage.presentation || defaultLayoutFromStage(stage), [stage]);
+  const flow = !Array.isArray(stage.presentation?.blocks);
+  const layout = useMemo(() => {
+    if (Array.isArray(stage.presentation?.blocks)) return stage.presentation;
+    const base = defaultLayoutFromStage({
+      ...stage, questions: [],
+      knowledge_point: stage.knowledge_point?.trim() === stage.title.trim() ? "" : stage.knowledge_point,
+      student_activities: [...new Set(stage.student_activities || [])].filter(activity => activity.trim() !== stage.material?.trim())
+    });
+    const content = base.blocks.filter(block => !block.teacher_reveal);
+    const conclusions = base.blocks.filter(block => block.teacher_reveal);
+    const questions = (stage.questions || []).map(question => makeBlock("question", {
+      text: question.text || question.task_text || "", asset: { question_id: question.question_id }
+    }));
+    return { blocks: [...content, ...questions, ...conclusions].map((block, order) => ({ ...block, order })) };
+  }, [stage]);
   const blocks = [...layout.blocks].sort((a, b) => a.order - b.order);
   const isConclusion = (block: PresentationBlock) => block.teacher_reveal || (
     block.type === "text" && !!stage.knowledge_conclusion && block.text === `结论：${stage.knowledge_conclusion}`
   );
-  const visibleBlocks = blocks.filter(block => revealConclusions || !isConclusion(block));
+  const visibleBlocks = blocks.filter(block => (!flow || block.type !== "text" || block.text !== stage.title) && (revealConclusions || !isConclusion(block)));
   // 用环节 id 绑定阅读状态，切环节的首帧也不会挂载上个环节的内容。
   const readingBlock = reading?.stageId === stage.stage_id
     ? visibleBlocks.find(block => block.id === reading.blockId)
@@ -130,10 +144,10 @@ export function StagePresentationSurface({ stage, revealConclusions = false, fon
   useEffect(() => {
     if (reading && !readingBlock) setReading(null);
   }, [reading, readingBlock]);
-  const textSize = Number.isFinite(fontSize) ? Math.max(24, Math.min(44, fontSize)) : 30;
+  const textSize = Number.isFinite(fontSize) ? Math.max(28, Math.min(56, fontSize)) : 40;
   const surfaceStyle = {
     "--sps-font-size": `${textSize}px`,
-    "--sps-title-size": `${Math.round(textSize * 4 / 3)}px`
+    "--sps-title-size": `${Math.round(textSize * 1.15)}px`
   } as CSSProperties;
 
   function closeReading() {
@@ -161,9 +175,9 @@ export function StagePresentationSurface({ stage, revealConclusions = false, fon
   }
 
   return (
-    <div className="sps" style={surfaceStyle} data-testid="stage-presentation-surface">
+    <div className={`sps${flow ? " sps-flow" : ""}`} style={surfaceStyle} data-testid="stage-presentation-surface">
       <h2 className="sps-stage-title">{stage.title}</h2>
-      <div className="sps-canvas" aria-hidden={readingBlock ? true : undefined}>
+      <div className="sps-canvas" role="region" aria-label="课堂展示内容" tabIndex={readingBlock ? -1 : 0} aria-hidden={readingBlock ? true : undefined}>
         {visibleBlocks.map((block, index) => (
           <div
             key={`${stage.stage_id}:${block.id}`}
