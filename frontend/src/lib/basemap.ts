@@ -70,11 +70,11 @@ export class BasemapLayerCache {
         maxZoom: descriptor.max_zoom ?? 18,
         crossOrigin: descriptor.cross_origin || "anonymous",
         transition: 0,
-        ...(descriptor.urls.length > 1 ? { tileLoadFunction: (tile, src) => {
+        tileLoadFunction: (tile, src) => {
           void loadTileImage(src, descriptor.urls, descriptor.cross_origin || "anonymous", requests.signal)
             .then(image => { if (!requests.signal.aborted) (tile as ImageTile).setImage(image); })
             .catch(() => { if (!requests.signal.aborted) tile.setState(TileState.ERROR); });
-        } } : {})
+        }
       }) });
       this.requests.set(layer, requests);
       const currentLayer = layer;

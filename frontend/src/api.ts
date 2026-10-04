@@ -80,6 +80,8 @@ import type {
   WorkflowTemplatesResponse
 } from "./types";
 
+import { fetchReadRequest } from "./lib/readRequest";
+
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:18999";
 let csrfToken = "";
 let unauthorizedHandler: (() => void) | null = null;
@@ -104,7 +106,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   }
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}${path}`, {
+    response = await fetchReadRequest(`${API_BASE}${path}`, {
       ...init,
       headers,
       credentials: "include"

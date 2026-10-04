@@ -38,6 +38,9 @@ import { captureMapSnapshot } from "./mapScreenshot";
 import { captureWorkspaceSnapshot } from "./workspaceScreenshot";
 import { observePlaneView } from "./lib/planeViewState";
 import { BasemapLayerCache, DEFAULT_IMAGERY_LAYER } from "./lib/basemap";
+import { BasemapLoadWatchdog, type BasemapLoadPhase } from "./lib/basemapLoadStatus";
+import { BasemapLoadStatus } from "./components/BasemapLoadStatus";
+import TileState from "ol/TileState";
 import { globeCompatibility } from "./lib/viewCompatibility";
 import { collectLegendRows, composeSnapshotDocument, mergeSnapshotInk, plainAttribution, type SnapshotDocument } from "./lib/snapshotDocument";
 import {
@@ -517,6 +520,9 @@ export default function App({
     const basemapLayersRef = useRef<RenderableLayer[]>([]);
     const basemapCacheRef = useRef(new BasemapLayerCache());
   const [basemapSwitchPending, setBasemapSwitchPending] = useState(false);
+  const [basemapRetryKey, setBasemapRetryKey] = useState(0);
+  const [planeBasemapStatus, setPlaneBasemapStatus] = useState<BasemapLoadPhase>("loading");
+  const [globeBasemapStatus, setGlobeBasemapStatus] = useState<BasemapLoadPhase>("loading");
     // 按 layer_id 缓存已构建的 OpenLayers 图层：GeoJSON 解析开销大，只有
     // 数据版本（data_rev）变化时才重建，可见性/透明度/层级直接原地更新。
     const businessLayerCacheRef = useRef<
@@ -3382,7 +3388,7 @@ export default function App({
     }
     const map = mapRef.current;
     const basemapId = layerState.base_map.id;
-    let fallbackTimer: number | undefined;
+    const watchdog = viewMode === "plane" ? new BasemapLoadWatchdog(setPlaneBasemapStatus) : undefined;
     const listenerKeys: Array<unknown> = [];
     const loadStats = { started: 0, finished: 0, errored: 0 };
     // 天气叠加层单独计数：基础底图（高德）成功不代表天气瓦片成功，
@@ -3420,12 +3426,12 @@ export default function App({
         listenerKeys.push(
           source.on("tileloadstart", () => {
             countInto.started += 1;
-            scheduleFallback();
           })
         );
         listenerKeys.push(
           source.on("tileloadend", () => {
             countInto.finished += 1;
+            if (!isOverlayDescriptor) watchdog?.ready();
             syncWeatherStatus();
           })
         );
@@ -3433,48 +3439,36 @@ export default function App({
           source.on("tileloaderror", () => {
             countInto.errored += 1;
             syncWeatherStatus();
-            scheduleFallback();
+            if (!isOverlayDescriptor && loadStats.finished === 0 && loadStats.started <= loadStats.errored) watchdog?.failed();
           })
         );
         basemapLayersRef.current.push(layer);
         map.addLayer(layer);
+        // Returning to an already decoded view does not emit tileloadend again.
+        if (viewMode === "plane" && !isOverlayDescriptor) {
+          const center = map.getView().getCenter();
+          const resolution = map.getView().getResolution();
+          const grid = source.getTileGrid();
+          if (center && resolution && grid) {
+            const coordinate = grid.getTileCoordForCoordAndResolution(center, resolution);
+            if (source.getTile(...coordinate as [number, number, number], 1, map.getView().getProjection()).getState() === TileState.LOADED) watchdog?.ready();
+          }
+        }
       });
 
-    // 只有基础底图全部失败才自动回退到兼容底图；天气叠加失败时基础底图仍
-    // 正常显示，交由天气状态面板给出反馈，而不是整图弹走。
+    // A network failure must not silently persist a different provider in the lesson.
     window.requestAnimationFrame(() => {
       map.updateSize();
       map.renderSync();
     });
 
-    function scheduleFallback() {
-      if (fallbackTimer !== undefined) return;
-      fallbackTimer = window.setTimeout(() => {
-        fallbackTimer = undefined;
-        if (!project?.project_id || basemapId === "legacy_xyz") {
-          return;
-        }
-        if (loadStats.finished > 0 || loadStats.errored <= 0 || loadStats.started > loadStats.errored) {
-          return;
-        }
-        void switchBasemap(project.project_id, "legacy_xyz")
-          .then(() => refreshProjectState(project.project_id))
-          .then(() => {
-            pushToast("info", "底图已自动回退", "当前在线底图未成功加载，已切换到兼容底图。");
-          })
-          .catch(() => {
-            pushToast("error", "底图加载失败", "在线底图与兼容底图均未成功切换。");
-          });
-      }, 3500);
-    }
-
     return () => {
-      window.clearTimeout(fallbackTimer);
+      watchdog?.dispose();
       if (listenerKeys.length) {
         unByKey(listenerKeys as never);
       }
     };
-  }, [basemapDescriptorKey, project?.project_id, pushToast, refreshProjectState]);
+  }, [basemapDescriptorKey, project?.project_id, viewMode, basemapRetryKey]);
 
   useEffect(() => {
     if (!mapRef.current || !layerState) {
@@ -3897,6 +3891,8 @@ export default function App({
         ref={globeRef}
         visible={viewMode === "globe"}
         imageryLayer={globeImageryLayer}
+        basemapRetryKey={basemapRetryKey}
+        onBasemapStatus={setGlobeBasemapStatus}
         projectLayers={layerState?.items}
         showGraticule={showGraticule}
         themeIds={globeThemeIds}
@@ -3921,7 +3917,34 @@ export default function App({
           setViewMode("plane");
         }}
       />
-      {viewMode === "globe" && layerState?.base_map.layers.length && (weatherBasemapActive || !layerState.base_map.layers.some(layer => layer.kind === "xyz" && layer.usable_in_3d !== false && layer.urls.length)) ? (
+      <BasemapLoadStatus
+        phase={viewMode === "plane" ? planeBasemapStatus : globeBasemapStatus}
+        title={viewMode === "globe" && (weatherBasemapActive || !layerState?.base_map.layers.some(layer => layer.usable_in_3d !== false)) ? "高德参考底图" : layerState?.base_map.title || "当前底图"}
+        busy={!project || basemapSwitchPending}
+        onRetry={() => {
+          basemapCacheRef.current.clear();
+          setBasemapRetryKey(value => value + 1);
+        }}
+        onRestore={async () => {
+          if (!project || basemapSwitchPending) return;
+          const scope = jobScopeEpochRef.current;
+          setBasemapSwitchPending(true);
+          try {
+            const response = await switchBasemap(project.project_id, "amap_vector");
+            if (scope !== jobScopeEpochRef.current) return;
+            basemapCacheRef.current.clear();
+            setBasemapRetryKey(value => value + 1);
+            setProject(previous => previous ? { ...previous, base_map: response.base_map } : previous);
+            setLayerState(previous => previous ? { ...previous, base_map: response.base_map } : previous);
+            pushToast("info", "已选择高德标准底图", "教学图层与笔迹保留，底图按当前视野加载。");
+          } catch (error) {
+            pushToast("error", "底图切换失败", error instanceof Error ? error.message : "请重试。");
+          } finally {
+            setBasemapSwitchPending(false);
+          }
+        }}
+      />
+      {(viewMode === "globe" ? globeBasemapStatus : planeBasemapStatus) !== "error" && viewMode === "globe" && layerState?.base_map.layers.length && (weatherBasemapActive || !layerState.base_map.layers.some(layer => layer.kind === "xyz" && layer.usable_in_3d !== false && layer.urls.length)) ? (
         <div className="map-basemap-notice" role="status">
           {weatherBasemapActive
             ? "天气叠加仅支持 2D 平面地图，3D 数字地球当前显示高德参考底图。"

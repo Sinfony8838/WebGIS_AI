@@ -63,6 +63,18 @@ describe("configured tile mirrors", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("bounds a stalled single-source tile and never invents a mirror", async () => {
+    const { loadTileImage } = await import("../lib/tileServers");
+    const result = loadTileImage(tileUrl, [urls[0]], "anonymous");
+    const failure = expect(result).rejects.toThrow("Tile unavailable");
+    await vi.advanceTimersByTimeAsync(8000);
+    await failure;
+    expect(images).toHaveLength(1);
+    expect(images[0].src).toBe("");
+    expect(images[0].onload).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("cancels image work without retrying or marking a healthy server unavailable", async () => {
     const { loadTileImage, healthyTileUrl } = await import("../lib/tileServers");
     const controller = new AbortController();

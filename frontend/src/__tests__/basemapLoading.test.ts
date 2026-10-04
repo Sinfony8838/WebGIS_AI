@@ -5,6 +5,8 @@ import { createFromTemplates } from "ol/tileurlfunction";
 import { get as getProjection } from "ol/proj";
 import { BasemapLayerCache, DEFAULT_IMAGERY_LAYER, globeTileTemplate } from "../lib/basemap";
 import { GlobeBasemap } from "../lib/globeBasemap";
+import * as tileLoading from "../lib/tileServers";
+import TileState from "ol/TileState";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -58,6 +60,21 @@ describe("shared basemap tiles", () => {
     expect(dispose).toHaveBeenCalledOnce();
     cache.clear();
   });
+
+  it("runs the bounded loader for single-source OL maps and allows retry after failure", async () => {
+    const loader = vi.spyOn(tileLoading, "loadTileImage").mockRejectedValue(new Error("Tile unavailable"));
+    const cache = new BasemapLayerCache();
+    const descriptor = { ...DEFAULT_IMAGERY_LAYER, urls: ["https://single.test/{z}/{x}/{y}.png"] };
+    const layer = cache.get(descriptor);
+    const tile = layer.getSource()!.getTile(4, 12, 6, 1, getProjection("EPSG:3857")!);
+    tile.load();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(loader).toHaveBeenCalled();
+    expect(tile.getState()).toBe(TileState.ERROR);
+    expect(cache.get(descriptor)).not.toBe(layer);
+    cache.clear();
+  });
 });
 
 function globe() {
@@ -71,6 +88,32 @@ function globe() {
 const other = { ...DEFAULT_IMAGERY_LAYER, urls: ["https://a.test/{z}/{x}/{y}.png"] };
 
 describe("globe basemap replacement", () => {
+  it("waits for a real image before reporting ready and ignores obsolete source completion", async () => {
+    const updates = vi.fn();
+    let complete!: (image: HTMLImageElement) => void;
+    vi.spyOn(Resource.prototype, "fetchImage").mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    const g = globe();
+    g.controller.destroy();
+    const controller = new GlobeBasemap({ imageryLayers: g.imageryLayers, scene: g.scene } as unknown as Viewer, updates);
+    controller.set(DEFAULT_IMAGERY_LAYER);
+    const pending = g.imageryLayers.get(0).imageryProvider.requestImage(11, 5, 4);
+    expect(updates).toHaveBeenLastCalledWith("loading");
+    controller.set(other);
+    complete(document.createElement("img"));
+    await pending;
+    expect(updates).toHaveBeenLastCalledWith("loading");
+    controller.destroy();
+  });
+
+  it("retries the same initial source by constructing a new provider", () => {
+    const g = globe();
+    g.controller.set(DEFAULT_IMAGERY_LAYER);
+    const original = g.imageryLayers.get(0);
+    g.controller.set(DEFAULT_IMAGERY_LAYER, 1);
+    expect(g.imageryLayers.length).toBe(2);
+    expect(g.imageryLayers.get(1)).not.toBe(original);
+    g.controller.destroy();
+  });
   it("retries a failed Cesium resource on one configured mirror with coordinates intact", async () => {
     const fetchImage = vi.spyOn(Resource.prototype, "fetchImage").mockResolvedValue(document.createElement("img"));
     const g = globe();

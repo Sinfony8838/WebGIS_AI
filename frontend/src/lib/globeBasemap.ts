@@ -2,25 +2,30 @@ import { Credit, ImageryLayer, Resource, UrlTemplateImageryProvider, type Viewer
 import type { BasemapLayerDescriptor } from "../types";
 import { basemapSourceKey, globeTileTemplate } from "./basemap";
 import { alternateTileUrl } from "./tileServers";
+import { BasemapLoadWatchdog, type BasemapLoadPhase } from "./basemapLoadStatus";
 
-type Entry = { key: string; layer: ImageryLayer; removeProgress?: () => void };
+type Entry = { key: string; layer: ImageryLayer; removeProgress?: () => void; status: BasemapLoadWatchdog };
 
 /** Keep one loaded fallback while the replacement fills; never stack stale requests. */
 export class GlobeBasemap {
   private active?: Entry;
   private pending?: Entry;
+  private currentStatusKey?: string;
 
-  constructor(private viewer: Pick<Viewer, "imageryLayers" | "scene">) {}
+  constructor(private viewer: Pick<Viewer, "imageryLayers" | "scene">, private updateStatus: (phase: BasemapLoadPhase) => void = () => {}) {}
 
-  set(descriptor: BasemapLayerDescriptor) {
-    const key = basemapSourceKey(descriptor);
+  set(descriptor: BasemapLayerDescriptor, retryKey = 0) {
+    const key = `${basemapSourceKey(descriptor)}:${retryKey}`;
+    this.currentStatusKey = key;
     if (this.pending?.key === key) {
       this.pending.layer.alpha = descriptor.opacity;
+      this.pending.status.report();
       return;
     }
     this.removePending();
     if (this.active?.key === key) {
       this.active.layer.alpha = descriptor.opacity;
+      this.active.status.report();
       this.viewer.scene.requestRender();
       return;
     }
@@ -36,7 +41,23 @@ export class GlobeBasemap {
       ...template, url: resource, maximumLevel: descriptor.max_zoom ?? 18,
       credit: new Credit(descriptor.attribution || "", true)
     });
-    const entry: Entry = { key, layer: new ImageryLayer(provider, { alpha: descriptor.opacity }) };
+    const status = new BasemapLoadWatchdog(phase => {
+      if (this.currentStatusKey === key) this.updateStatus(phase);
+    });
+    // Observe actual image completion, not request-queue emptiness or a rendered frame.
+    const requestImage = provider.requestImage.bind(provider);
+    provider.requestImage = (...args) => {
+      const result = requestImage(...args);
+      if (!result) return result;
+      return Promise.resolve(result).then(image => {
+        if (image) status.ready();
+        return image;
+      }, error => {
+        status.failed();
+        throw error;
+      });
+    };
+    const entry: Entry = { key, layer: new ImageryLayer(provider, { alpha: descriptor.opacity }), status };
     const index = this.active ? this.viewer.imageryLayers.indexOf(this.active.layer) + 1 : 0;
     this.viewer.imageryLayers.add(entry.layer, index);
     if (!this.active) {
@@ -52,6 +73,7 @@ export class GlobeBasemap {
         entry.removeProgress = undefined;
         // A failed replacement cannot blank out the last usable map.
         if (failed) return;
+        this.active!.status.dispose();
         this.viewer.imageryLayers.remove(this.active!.layer, true);
         this.active = entry;
         this.pending = undefined;
@@ -74,13 +96,18 @@ export class GlobeBasemap {
   private removePending() {
     if (!this.pending) return;
     this.pending.removeProgress?.();
+    this.pending.status.dispose();
     this.viewer.imageryLayers.remove(this.pending.layer, true);
     this.pending = undefined;
   }
 
   destroy() {
+    this.currentStatusKey = undefined;
     this.removePending();
-    if (this.active) this.viewer.imageryLayers.remove(this.active.layer, true);
+    if (this.active) {
+      this.active.status.dispose();
+      this.viewer.imageryLayers.remove(this.active.layer, true);
+    }
     this.active = undefined;
   }
 }
