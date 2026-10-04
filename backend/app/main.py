@@ -2746,6 +2746,89 @@ def enter_session_stage(session_id: str, payload: SessionStageRequest, request: 
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+class TeacherActionRequest(BaseModel):
+    stage_id: str
+    action_id: str
+    opacities: Dict[str, float] = Field(default_factory=dict)
+
+
+class TeacherWorkflowResultRequest(BaseModel):
+    stage_id: str
+    workflow_id: str
+
+
+@app.post("/class-sessions/{session_id}/lesson-action-result")
+def teacher_workflow_result(session_id: str, payload: TeacherWorkflowResultRequest, request: Request) -> Dict[str, Any]:
+    _require_session_access(request, session_id)
+    from .services.teacher_lesson_actions import apply_workflow_result
+    try:
+        return apply_workflow_result(runtime, session_id, payload.stage_id, payload.workflow_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/lesson-rehearsals/{rehearsal_id}/teacher-action")
+def preview_teacher_lesson_action(rehearsal_id: str, payload: TeacherActionRequest, request: Request) -> Dict[str, Any]:
+    _require_rehearsal_access(request, rehearsal_id)
+    from .services.teacher_lesson_actions import preview_action
+    try:
+        return preview_action(runtime, rehearsal_id, payload.stage_id, payload.action_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/class-sessions/{session_id}/lesson-actions")
+def teacher_lesson_action(session_id: str, payload: TeacherActionRequest, request: Request) -> Dict[str, Any]:
+    _require_session_access(request, session_id)
+    from .services.teacher_lesson_actions import apply_action
+    try:
+        return apply_action(runtime, session_id, payload.stage_id, payload.action_id, payload.opacities)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/lessons/{lesson_id}/teacher-resources")
+def teacher_lesson_resources(lesson_id: str, request: Request) -> Dict[str, Any]:
+    _require_lesson_access(request, lesson_id)
+    from .services.teacher_lesson_actions import resource_check
+    try:
+        return resource_check(runtime, lesson_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+class PopulationZoneRequest(BaseModel):
+    geometry: Dict[str, Any]
+    source_id: str = "worldpop_global_2015"
+
+
+@app.post("/projects/{project_id}/population/zonal-summary")
+async def population_zonal_summary(project_id: str, payload: PopulationZoneRequest, request: Request) -> Dict[str, Any]:
+    _require_project_access(request, project_id)
+    if payload.source_id != "worldpop_global_2015":
+        raise HTTPException(status_code=400, detail="当前教学统计仅支持已核验的2015年全球人口数据包。")
+    from .services.population_zonal import PopulationCountPackage, PopulationDataError
+    # Validate the geometry and package in the worker. Never sum display colours.
+    job = runtime.store.create_job(project_id, "population_zonal", "圈内外人口统计", request={"source_id": payload.source_id})
+    async def run():
+        runtime.store.set_job_status(job.job_id, "running")
+        try:
+            result = await asyncio.to_thread(PopulationCountPackage(config.data_dir / "population" / payload.source_id).summarize, payload.geometry)
+            runtime.store.set_job_status(job.job_id, "completed", result=result)
+        except (PopulationDataError, ValueError, OSError) as exc:
+            runtime.store.set_job_status(job.job_id, "failed", error=str(exc))
+        except Exception:
+            runtime.store.set_job_status(job.job_id, "failed", error="统计数据不可用，请检查数据包后重试。")
+    asyncio.create_task(run())
+    return {"status": "success", "job_id": job.job_id}
+
+
 @app.post("/class-sessions/{session_id}/presentation")
 def present_session_scene(session_id: str, payload: SessionPresentationRequest, request: Request) -> Dict[str, Any]:
     _require_session_access(request, session_id)

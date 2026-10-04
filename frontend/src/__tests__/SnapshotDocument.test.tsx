@@ -1,12 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import { MapEvidenceLegend } from "../components/MapEvidenceLegend";
-import { collectLegendRows, composeSnapshotDocument, drawSnapshotInk, wrapSnapshotText } from "../lib/snapshotDocument";
+import { collectLegendRows, composeSnapshotDocument, drawSnapshotInk, wrapSnapshotText, loadSnapshotImage } from "../lib/snapshotDocument";
+import { getApiBase } from "../api";
 import type { LayerRecord } from "../types";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("map snapshot source sheet", () => {
+  it("reads protected local legends with credentials and keeps public legends anonymous", async () => {
+    const requests: Array<{src:string;mode:string}> = [];
+    vi.stubGlobal("Image", class { crossOrigin=""; onload:(()=>void)|null=null; onerror:(()=>void)|null=null;
+      set src(value:string) { requests.push({src:value,mode:this.crossOrigin});queueMicrotask(()=>this.onload?.()); }
+    });
+    await loadSnapshotImage(getApiBase()+"/files/uploads/legend.png");
+    await loadSnapshotImage("https://example.org/public-legend.png");
+    expect(requests[0]).toEqual({src:getApiBase()+"/files/uploads/legend.png?canvas=1",mode:"use-credentials"});
+    expect(requests[1]).toEqual({src:"https://example.org/public-legend.png",mode:"anonymous"});
+  });
   it("freezes the actual folded legend, including colors and sources but no controls", () => {
     vi.stubGlobal("matchMedia", () => ({ matches: true }));
     const props = { globe: false, themeIds: [], showFit: false, onShowFit: vi.fn(), basemapId: "amap_light" };
@@ -62,7 +73,7 @@ describe("map snapshot source sheet", () => {
     vi.spyOn(HTMLCanvasElement.prototype,"getContext").mockReturnValue(context as unknown as CanvasRenderingContext2D);
     vi.spyOn(HTMLCanvasElement.prototype,"toDataURL").mockReturnValue("data:image/png;base64,exported");
     vi.stubGlobal("Image", class {naturalWidth=800; naturalHeight=400; crossOrigin=""; onload:(()=>void)|null=null; onerror:(()=>void)|null=null;
-      set src(value:string) {queueMicrotask(()=>value==="bad"?this.onerror?.():this.onload?.());}
+      set src(value:string) {queueMicrotask(()=>new URL(value).pathname.endsWith("/bad")?this.onerror?.():this.onload?.());}
     });
     const metadata = { title:"上海人口密度", capturedAt:"2026/9/9", basemap:"参考底图", attribution:"数据提供方", rows:[{kind:"text" as const,text:"2020年普查及区划面积 https://example.org/source"}] };
     expect(await composeSnapshotDocument("data:image/png;base64,map",metadata,400)).toContain("exported");
@@ -70,5 +81,18 @@ describe("map snapshot source sheet", () => {
     expect(drawnText.every(item=>item[2]>200)).toBe(true);
     expect(drawnText.map(item=>item[0]).join("")).toContain("2020年普查");
     await expect(composeSnapshotDocument("data:image/png;base64,map",{...metadata,rows:[{kind:"image",src:"bad",alt:"官方图例"}]},400)).rejects.toThrow("图例图片无法读取");
+  });
+
+  it("keeps a tall textbook legend from reducing the map to a thumbnail", async () => {
+    const drawImage=vi.fn();
+    const context={measureText:(v:string)=>({width:v.length*8}),scale:vi.fn(),fillRect:vi.fn(),beginPath:vi.fn(),moveTo:vi.fn(),lineTo:vi.fn(),stroke:vi.fn(),fillText:vi.fn(),drawImage};
+    vi.spyOn(HTMLCanvasElement.prototype,"getContext").mockReturnValue(context as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype,"toDataURL").mockReturnValue("data:image/png;base64,exported");
+    vi.stubGlobal("Image",class {naturalWidth=1000;naturalHeight=700;crossOrigin="";onload:(()=>void)|null=null;onerror:(()=>void)|null=null;
+      set src(value:string){if(new URL(value).pathname.endsWith("/legend")){this.naturalWidth=200;this.naturalHeight=1500;}queueMicrotask(()=>this.onload?.());}
+    });
+    await composeSnapshotDocument("data:image/png;base64,map",{title:"芬兰",capturedAt:"现在",basemap:"底图",attribution:"",rows:[{kind:"image",src:"legend",alt:"人口图例"}]},1000);
+    expect(drawImage.mock.calls[0].slice(1)).toEqual([0,0,1000,700]);
+    expect(drawImage.mock.calls[1][4]).toBeLessThanOrEqual(280);
   });
 });

@@ -79,7 +79,7 @@ type Props = {
   onTeachingContextChange?: (ctx: TeachingContext | null) => void;
   onStudentDisplayChange?: (enabled: boolean) => void;
   /** 课中一键把预设追问派发给教学智能体。 */
-  onAssistantPrompt?: (prompt: string, displayMessage?: string) => void;
+  onAssistantPrompt?: (prompt: string, displayMessage?: string, captureMap?: boolean) => void;
   /** 应用课时场景返回的 3D 意图；空对象表示离开课时固定场景并恢复进入前状态。 */
   onApplyGlobeScene?: (globe: LessonGlobeScene) => void;
   /** 捕获当前课堂场景时同时读取 3D 模式、主题和相机。 */
@@ -94,6 +94,8 @@ type Props = {
   getProfilePreset?: () => ProfilePreset | null;
   /** 进入课堂/模拟测试环节时加载该环节的课前剖面预设（任务4）。 */
   onApplyProfilePreset?: (stage: LessonStage) => void;
+  teachingGeometry?: Record<string, unknown> | null;
+  onExportInquiry?: (title: string, summary: string) => Promise<void>;
 };
 
 export function currentLayerSnapshot(
@@ -210,7 +212,8 @@ export function LessonWorkflowShell({
   onRequestPlaneView,
   onCaptureEvidence,
   getProfilePreset,
-  onApplyProfilePreset
+  onApplyProfilePreset,
+  teachingGeometry, onExportInquiry
 }: Props) {
   const [lessonMode, setLessonMode] = useState<LessonMode>("off");
   const [lessons, setLessons] = useState<LessonRecord[]>([]);
@@ -917,6 +920,12 @@ export function LessonWorkflowShell({
           onFocusEvidenceLayer={onFocusEvidenceLayer}
           onRequestPlaneView={onRequestPlaneView}
           onAssistantPrompt={onAssistantPrompt}
+          teachingGeometry={teachingGeometry}
+          onExportInquiry={onExportInquiry}
+          onTeacherRefresh={onRefresh}
+          onTeacherSessionChange={setActiveSession}
+          assistantDraft={assistantJob?.status === "completed" && assistantJob.job_type === "assistant" ? assistantJob.result?.assistant_message || assistantJob.result?.summary || "" : ""}
+          assistantDraftJobId={assistantJob?.status === "completed" && assistantJob.job_type === "assistant" ? assistantJob.job_id : ""}
           assistantBusy={assistantBusy}
           presentationVisible={presentationVisible}
           onTogglePresentation={() => setPresentationVisible((value) => !value)}

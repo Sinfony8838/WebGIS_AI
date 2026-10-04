@@ -310,6 +310,41 @@ export function getApiBase(): string {
   return API_BASE;
 }
 
+export type TeacherActionResponse = {
+  status: string; action: import("./types").TeacherLessonAction; prompt?: string;
+  session: ClassSessionRecord; scene?: { globe?: import("./types").LessonGlobeScene };
+  materials: Array<{ url: string; source: string; row: number; order: number }>;
+  workflow?: { workflow_id: string; status: string };
+};
+
+export async function previewTeacherLessonAction(rehearsalId:string, stageId:string, actionId:string) {
+  return requestJson<Omit<TeacherActionResponse,"session">>(`/lesson-rehearsals/${encodeURIComponent(rehearsalId)}/teacher-action`, {
+    method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({stage_id:stageId,action_id:actionId})
+  });
+}
+
+export function applyTeacherLessonAction(sessionId: string, stageId: string, actionId: string, opacities: Record<string, number> = {}) {
+  return requestJson<TeacherActionResponse>(`/class-sessions/${encodeURIComponent(sessionId)}/lesson-actions`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stage_id: stageId, action_id: actionId, opacities })
+  });
+}
+
+export function applyTeacherWorkflowResult(sessionId:string,stageId:string,workflowId:string) {
+  return requestJson(`/class-sessions/${encodeURIComponent(sessionId)}/lesson-action-result`,{
+    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({stage_id:stageId,workflow_id:workflowId})
+  });
+}
+
+export function fetchTeacherResources(lessonId: string) {
+  return requestJson<{ maps: Array<{ id: string; name: string; available: boolean; registration: string }>; figures_available: boolean; population_available: boolean }>(`/lessons/${encodeURIComponent(lessonId)}/teacher-resources`);
+}
+
+export function startPopulationZoneSummary(projectId: string, geometry: Record<string, unknown>) {
+  return requestJson<{ job_id: string }>(`/projects/${encodeURIComponent(projectId)}/population/zonal-summary`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ geometry, source_id: "worldpop_global_2015" })
+  });
+}
+
 export function buildAuthenticatedUrl(path: string): string {
   if (!path) {
     return "";
@@ -1506,6 +1541,10 @@ export async function previewWorkflow(payload: {
 
 export async function fetchWorkflow(workflowId: string): Promise<WorkflowRecord & { status: string }> {
   return requestJson<WorkflowRecord & { status: string }>(`/workflow/${encodeURIComponent(workflowId)}`);
+}
+
+export function cancelTeacherWorkflow(workflowId:string) {
+  return requestJson(`/workflow/${encodeURIComponent(workflowId)}/cancel`,{method:"POST"});
 }
 
 export async function fetchWorkflowArtifacts(

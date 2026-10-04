@@ -1,0 +1,2236 @@
+{
+  "lesson_id": "lesson_builtin_population_teacher_revised",
+  "title": "人口分布 张玥修订稿教学课时",
+  "source": "builtin",
+  "subject": "地理",
+  "grade": "人教版高中地理必修第二册 第一章第一节",
+  "objectives": [
+    "运用资料描述世界、中国、上海及芬兰的人口分布特点",
+    "掌握宏观与微观描述方法",
+    "结合空间证据分析自然与人文影响因素",
+    "通过绘图、比较、修正和成果导出开展地理探究"
+  ],
+  "metadata": {
+    "builtin_version": "2",
+    "recommended": true,
+    "pacing_mode": "teacher",
+    "duration_minutes": 0,
+    "population_topic": true,
+    "reference": "张玥 人口分布稿本设计 修订稿",
+    "source_document": {
+      "filename": "1-人口分布稿本设计.docx",
+      "sha256": "d26a413034dfdb0fdd1a5d8c1674cb8b35f7f0b4e0796a49b6c29e452727731a",
+      "designer": "张玥",
+      "revision": "用户提供的修订稿"
+    },
+    "curriculum_standard": "本课为普通高中地理课程；原稿列出的义务教育2022课标不能替代高中课标。课标要求与GeoAI教学扩展分别表述。",
+    "data_limitations": [
+      "教材历史比例不作为当前栅格的实时计算结果",
+      "单期数据不能推断变化趋势",
+      "图片必须完成配准才可空间叠置",
+      "WorldPop为模型估计，年份与分辨率随图显示"
+    ],
+    "student_participation": "教师端展示、纸笔活动、代表操作或教师代录；不新增独立学生作业平台"
+  },
+  "plan": {
+    "pacing_mode": "teacher",
+    "duration_minutes": 0,
+    "design_thinking": "从世界人口分布与迁徙材料引入观察任务，通过总体、纬度、海陆、地形、大洲和国家六个角度建立读图方法，再以中国和上海练习宏观与微观描述。结合自然和人文条件分析作用过程，以芬兰三图叠置、手绘分界和修正建议开展综合探究，最后用区域题与课后任务检查学习，教师自主决定推进与揭示时机。",
+    "board_design": "人口分布：宏观与微观描述；自然条件与人文条件；证据—解释—例外；芬兰分界初稿—修正依据。",
+    "reflection": "观察学生是否能准确描述空间差异、解释因素作用过程及引用材料。尚未采集的课堂表现保持未采集，不预写教学效果。",
+    "homework": {
+      "basic": [
+        "描述一个区域的人口分布并说明材料依据"
+      ],
+      "inquiry": [
+        "胡焕庸线能否打破：收集西部发展证据",
+        "芬兰人口分界：保留初稿与修正理由"
+      ]
+    },
+    "topic": "人口分布",
+    "requirements": {
+      "raw": "以张玥修订稿为依据，完整保留教学顺序、案例和活动；教师自主推进，不限总时长。"
+    },
+    "curriculum_interpretation": "原稿要求：运用资料，描述人口分布特点及其影响因素。读图、空间证据与综合分析贯穿教学；WebGIS与GeoAI为本课教学扩展，不直接等同官方课标条文。引用原稿中的义务教育2022年课标前需另行核对高中适用性。",
+    "student_analysis": "高一学生对生活中的人口集聚具有经验，已学习常见气候和地形知识，但统计图和人口图的规范描述、逻辑归纳与证据解释仍需训练。通过具体案例分步建立读图方法。",
+    "textbook_analysis": "高中人文地理开篇内容，承接自然地理知识，为人口迁移、人口容量与产业区位学习打下基础。以世界与中国人口格局引出自然、人文因素，结合案例进行综合分析。",
+    "key_difficulties": {
+      "key": [
+        "运用材料描述人口分布特点",
+        "分析自然与人文因素"
+      ],
+      "difficult": [
+        "说明因素的作用过程",
+        "区分总体格局、局地例外和证据尺度"
+      ]
+    },
+    "methods": [
+      "读图分析",
+      "叠置实验",
+      "问题探究",
+      "讲授归纳"
+    ],
+    "knowledge_structure": [
+      "人口分布特点：宏观与微观描述",
+      "自然因素：气候、地形、水资源、土壤与矿产",
+      "人文因素：生产、经济、历史、政治、军事与文化",
+      "芬兰综合探究与证据修正"
+    ],
+    "references": [
+      {
+        "title": "张玥 人口分布稿本设计 修订稿",
+        "year": "用户提供版本"
+      },
+      {
+        "title": "人教版高中地理必修第二册"
+      },
+      {
+        "title": "中图版高中地理必修第二册"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "world_intro",
+      "title": "世界导入 人类迁徙与人口集聚",
+      "kind": "practice",
+      "minutes": 0,
+      "timing_mode": "teacher",
+      "source_row": 12,
+      "scene": {
+        "basemap_id": "amap_imagery",
+        "templates": [],
+        "strict_resources": true,
+        "catalog_layers": [],
+        "teaching_maps": [
+          {
+            "id": "worldpop_global_teacher",
+            "opacity": 0.5
+          }
+        ],
+        "layer_visibility": {
+          "builtin_population_regions": false,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {
+          "center": [
+            15,
+            20
+          ],
+          "zoom": 2
+        },
+        "annotations": [],
+        "visual_query": null,
+        "globe": {
+          "enabled": false
+        }
+      },
+      "questions": [
+        {
+          "question_id": "world_circle",
+          "type": "open",
+          "text": "按材料示意在亚洲附近圈定区域：圈内与圈外哪一侧人口更多？请先提出判断，再核对统计。",
+          "source": "teacher_manual",
+          "material": "",
+          "options": [],
+          "answer_index": null,
+          "answer": "以本次圈定范围的实际统计为准，不预设圈内必定超过一半。",
+          "expected_points": [
+            "以本次圈定范围的实际统计为准，不预设圈内必定超过一半。"
+          ],
+          "misconceptions": [],
+          "images": [],
+          "explanation": "以本次圈定范围的实际统计为准，不预设圈内必定超过一半。"
+        }
+      ],
+      "actions": [
+        {
+          "action_id": "migration_video",
+          "label": "智人迁徙视频",
+          "type": "video",
+          "url": "https://www.bilibili.com/video/BV1NW4y1w7ry/",
+          "note": "原稿建议约2分钟，教师点击播放。"
+        },
+        {
+          "action_id": "world_map",
+          "label": "世界人口与影像",
+          "type": "scene",
+          "scene": {
+            "basemap_id": "amap_imagery",
+            "templates": [],
+            "strict_resources": true,
+            "catalog_layers": [],
+            "teaching_maps": [
+              {
+                "id": "worldpop_global_teacher",
+                "opacity": 0.5
+              }
+            ],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": false
+            },
+            "view": {
+              "center": [
+                15,
+                20
+              ],
+              "zoom": 2
+            },
+            "annotations": [],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          },
+          "resource_rows": [
+            12
+          ]
+        },
+        {
+          "action_id": "circle_statistics",
+          "label": "圈内外人口统计",
+          "type": "statistics",
+          "source_id": "worldpop_global_2015"
+        }
+      ],
+      "knowledge_unit": "人口分布",
+      "knowledge_point": "世界导入 人类迁徙与人口集聚",
+      "script": [
+        "观看迁徙材料，观察世界人口图。使用绘区工具画出可统计的范围，先判断后比较人口占比。"
+      ],
+      "material": "观看迁徙材料，观察世界人口图。使用绘区工具画出可统计的范围，先判断后比较人口占比。",
+      "student_activities": [
+        "观看迁徙材料，观察世界人口图。使用绘区工具画出可统计的范围，先判断后比较人口占比。"
+      ],
+      "teacher_activities": [
+        "教师决定显示材料、揭示答案及进入下一环节的时机。"
+      ],
+      "knowledge_conclusion": "以本次圈定范围的实际统计为准，不预设圈内必定超过一半。",
+      "assistant_prompts": [],
+      "evidence_refs": [
+        {
+          "type": "source",
+          "label": "张玥修订稿 第13行",
+          "source_id": "teacher_population_revised"
+        }
+      ],
+      "objective_refs": [
+        1,
+        2
+      ]
+    },
+    {
+      "stage_id": "world_features",
+      "title": "方法建构 世界人口分布特征",
+      "kind": "practice",
+      "minutes": 0,
+      "timing_mode": "teacher",
+      "source_row": 13,
+      "scene": {
+        "basemap_id": "amap_imagery",
+        "templates": [],
+        "strict_resources": true,
+        "catalog_layers": [],
+        "teaching_maps": [
+          {
+            "id": "worldpop_global_teacher",
+            "opacity": 0.5
+          }
+        ],
+        "layer_visibility": {
+          "builtin_population_regions": false,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {
+          "center": [
+            15,
+            20
+          ],
+          "zoom": 2
+        },
+        "annotations": [],
+        "visual_query": null,
+        "globe": {
+          "enabled": false
+        }
+      },
+      "questions": [
+        {
+          "question_id": "world_pattern",
+          "type": "open",
+          "text": "从总体、半球与纬度、距海远近、海拔、大洲和国家六个角度描述世界人口分布。",
+          "source": "teacher_manual",
+          "material": "",
+          "options": [],
+          "answer_index": null,
+          "answer": "总体分布不均；可结合图例和材料说明主要人口集聚区、北半球及中低纬度、沿海与低地等总体倾向，同时注意例外。",
+          "expected_points": [
+            "总体分布不均；可结合图例和材料说明主要人口集聚区、北半球及中低纬度、沿海与低地等总体倾向，同时注意例外。"
+          ],
+          "misconceptions": [],
+          "images": [],
+          "explanation": "总体分布不均；可结合图例和材料说明主要人口集聚区、北半球及中低纬度、沿海与低地等总体倾向，同时注意例外。"
+        }
+      ],
+      "actions": [
+        {
+          "action_id": "overall",
+          "label": "总体",
+          "type": "scene",
+          "scene": {
+            "basemap_id": "amap_imagery",
+            "templates": [],
+            "strict_resources": true,
+            "catalog_layers": [],
+            "teaching_maps": [
+              {
+                "id": "worldpop_global_teacher",
+                "opacity": 0.5
+              }
+            ],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": false
+            },
+            "view": {
+              "center": [
+                15,
+                20
+              ],
+              "zoom": 2
+            },
+            "annotations": [],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          },
+          "resource_rows": [
+            13
+          ],
+          "note": "找出稠密区和稀疏区，用具体位置描述。"
+        },
+        {
+          "action_id": "latitude",
+          "label": "半球及纬度",
+          "type": "scene",
+          "scene": {
+            "basemap_id": "amap_imagery",
+            "templates": [],
+            "strict_resources": true,
+            "catalog_layers": [],
+            "teaching_maps": [
+              {
+                "id": "worldpop_global_teacher",
+                "opacity": 0.5
+              }
+            ],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": false
+            },
+            "view": {
+              "center": [
+                15,
+                20
+              ],
+              "zoom": 2
+            },
+            "annotations": [],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          },
+          "note": "原稿约90%及10°—50°N作为教材描述材料，不称为本次实时统计。"
+        },
+        {
+          "action_id": "coast",
+          "label": "距海远近",
+          "type": "scene",
+          "scene": {
+            "basemap_id": "amap_imagery",
+            "templates": [],
+            "strict_resources": true,
+            "catalog_layers": [],
+            "teaching_maps": [
+              {
+                "id": "worldpop_global_teacher",
+                "opacity": 0.5
+              }
+            ],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": false
+            },
+            "view": {
+              "center": [
+                15,
+                20
+              ],
+              "zoom": 2
+            },
+            "annotations": [],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          },
+          "note": "使用测距工具从中亚向东部沿海测量公里数；一条测线用于案例比较，不能证明全球因果规律。原稿约60%在距海200公里内为教材材料。"
+        },
+        {
+          "action_id": "altitude",
+          "label": "海拔高度",
+          "type": "scene",
+          "scene": {
+            "basemap_id": "amap_imagery",
+            "templates": [],
+            "strict_resources": true,
+            "catalog_layers": [],
+            "teaching_maps": [
+              {
+                "id": "worldpop_global_teacher",
+                "opacity": 0.5
+              }
+            ],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": false
+            },
+            "view": {
+              "center": [
+                15,
+                20
+              ],
+              "zoom": 2
+            },
+            "annotations": [],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          },
+          "note": "结合地貌影像和地图剖面工具比较低地与高地；原稿约80%在500米以下为教材材料，不是实时海拔分组统计。"
+        },
+        {
+          "action_id": "continents",
+          "label": "大洲",
+          "type": "scene",
+          "scene": {
+            "basemap_id": "amap_imagery",
+            "templates": [],
+            "strict_resources": true,
+            "catalog_layers": [],
+            "teaching_maps": [
+              {
+                "id": "worldpop_global_teacher",
+                "opacity": 0.5
+              }
+            ],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": false
+            },
+            "view": {
+              "center": [
+                15,
+                20
+              ],
+              "zoom": 2
+            },
+            "annotations": [],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          },
+          "note": "教材描述：亚洲人口最多；亚洲、非洲及拉丁美洲约占85%。保留为教材历史概括，不称为本次实时统计。区分南极常住人口与考察人员。"
+        },
+        {
+          "action_id": "countries",
+          "label": "国家",
+          "type": "scene",
+          "scene": {
+            "basemap_id": "amap_light",
+            "templates": [],
+            "strict_resources": true,
+            "catalog_layers": [
+              "world_population_density"
+            ],
+            "teaching_maps": [],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": false
+            },
+            "view": {
+              "center": [
+                15,
+                20
+              ],
+              "zoom": 2
+            },
+            "annotations": [],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          },
+          "note": "原稿2023年人口过亿国家：印度、中国、美国、印度尼西亚、巴西、巴基斯坦、尼日利亚、孟加拉国、俄罗斯、日本、墨西哥、埃塞俄比亚、菲律宾、越南。此处仅列原稿名单，不代表实时排名；国家平均密度图为2019年资料。"
+        },
+        {
+          "action_id": "world_summary",
+          "label": "世界分布小结",
+          "type": "summary",
+          "prompt": "只使用本环节已展示材料和可视图层及其来源年份，生成简短小结草稿。区分读图判断与数值统计，不补写学生回答，不凭最后一张地图假装看到了全部因素。教师确认后再用于展示。"
+        }
+      ],
+      "knowledge_unit": "人口分布",
+      "knowledge_point": "方法建构 世界人口分布特征",
+      "script": [
+        "逐项读图与比较；描述时说明位置、程度、尺度和资料年份。"
+      ],
+      "material": "逐项读图与比较；描述时说明位置、程度、尺度和资料年份。",
+      "student_activities": [
+        "逐项读图与比较；描述时说明位置、程度、尺度和资料年份。"
+      ],
+      "teacher_activities": [
+        "教师决定显示材料、揭示答案及进入下一环节的时机。"
+      ],
+      "knowledge_conclusion": "总体分布不均；可结合图例和材料说明主要人口集聚区、北半球及中低纬度、沿海与低地等总体倾向，同时注意例外。",
+      "assistant_prompts": [],
+      "evidence_refs": [
+        {
+          "type": "source",
+          "label": "张玥修订稿 第14行",
+          "source_id": "teacher_population_revised"
+        }
+      ],
+      "objective_refs": [
+        1,
+        2
+      ]
+    },
+    {
+      "stage_id": "reading_method",
+      "title": "方法归纳 宏观与微观描述",
+      "kind": "presentation",
+      "minutes": 0,
+      "timing_mode": "teacher",
+      "source_row": 14,
+      "scene": {
+        "basemap_id": "amap_imagery",
+        "templates": [],
+        "strict_resources": true,
+        "catalog_layers": [],
+        "teaching_maps": [
+          {
+            "id": "worldpop_global_teacher",
+            "opacity": 0.5
+          }
+        ],
+        "layer_visibility": {
+          "builtin_population_regions": false,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {
+          "center": [
+            15,
+            20
+          ],
+          "zoom": 2
+        },
+        "annotations": [],
+        "visual_query": null,
+        "globe": {
+          "enabled": false
+        }
+      },
+      "questions": [
+        {
+          "question_id": "reading_method_task",
+          "type": "open",
+          "text": "将读图结果整理为宏观和微观两个层次；单期地图不能说明变化趋势。",
+          "source": "teacher_manual",
+          "material": "",
+          "options": [],
+          "answer_index": null,
+          "answer": "将读图结果整理为宏观和微观两个层次；单期地图不能说明变化趋势。",
+          "expected_points": [
+            "将读图结果整理为宏观和微观两个层次；单期地图不能说明变化趋势。"
+          ],
+          "misconceptions": [],
+          "images": [],
+          "explanation": "将读图结果整理为宏观和微观两个层次；单期地图不能说明变化趋势。"
+        }
+      ],
+      "actions": [
+        {
+          "action_id": "method_board",
+          "label": "描述方法板书",
+          "type": "activity",
+          "note": "宏观：空间范围、总体疏密、均匀程度、分布形态。微观：哪里多与少、尺度差异、极值、特殊区域；变化趋势需要可比的多期资料。"
+        }
+      ],
+      "knowledge_unit": "人口分布",
+      "knowledge_point": "方法归纳 宏观与微观描述",
+      "script": [
+        "将读图结果整理为宏观和微观两个层次；单期地图不能说明变化趋势。"
+      ],
+      "material": "将读图结果整理为宏观和微观两个层次；单期地图不能说明变化趋势。",
+      "student_activities": [
+        "将读图结果整理为宏观和微观两个层次；单期地图不能说明变化趋势。"
+      ],
+      "teacher_activities": [
+        "教师决定显示材料、揭示答案及进入下一环节的时机。"
+      ],
+      "knowledge_conclusion": "将读图结果整理为宏观和微观两个层次；单期地图不能说明变化趋势。",
+      "assistant_prompts": [],
+      "evidence_refs": [
+        {
+          "type": "source",
+          "label": "张玥修订稿 第15行",
+          "source_id": "teacher_population_revised"
+        }
+      ],
+      "objective_refs": [
+        1,
+        2
+      ]
+    },
+    {
+      "stage_id": "china_practice",
+      "title": "方法练习 中国与胡焕庸线",
+      "kind": "practice",
+      "minutes": 0,
+      "timing_mode": "teacher",
+      "source_row": 15,
+      "scene": {
+        "basemap_id": "amap_light",
+        "templates": [
+          "hu_line_comparison"
+        ],
+        "strict_resources": true,
+        "catalog_layers": [
+          "china_province_population_density"
+        ],
+        "teaching_maps": [],
+        "layer_visibility": {
+          "builtin_population_regions": false,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": true
+        },
+        "view": {
+          "center": [
+            104,
+            35
+          ],
+          "zoom": 4
+        },
+        "annotations": [],
+        "visual_query": null,
+        "globe": {
+          "enabled": false
+        }
+      },
+      "questions": [
+        {
+          "question_id": "china_pattern",
+          "type": "open",
+          "text": "描述中国人口分布特点，并说明胡焕庸线两侧的差异。",
+          "source": "teacher_manual",
+          "material": "",
+          "options": [],
+          "answer_index": null,
+          "answer": "总体东南稠密、西北稀疏；东部平原、沿海和河流附近较集中，局地仍有例外。参考线概括总体格局，不是人口硬边界。",
+          "expected_points": [
+            "总体东南稠密、西北稀疏；东部平原、沿海和河流附近较集中，局地仍有例外。参考线概括总体格局，不是人口硬边界。"
+          ],
+          "misconceptions": [],
+          "images": [],
+          "explanation": "总体东南稠密、西北稀疏；东部平原、沿海和河流附近较集中，局地仍有例外。参考线概括总体格局，不是人口硬边界。"
+        },
+        {
+          "question_id": "china_video",
+          "type": "open",
+          "text": "观看材料后说明胡焕庸线的划分依据、两侧差异及地理意义。",
+          "source": "teacher_manual",
+          "material": "",
+          "options": [],
+          "answer_index": null,
+          "answer": "结合人口资料比较两侧的总体疏密差异；作为分析区域人口格局的参考。胡焕庸线不等于400毫米年降水量线。",
+          "expected_points": [
+            "结合人口资料比较两侧的总体疏密差异；作为分析区域人口格局的参考。胡焕庸线不等于400毫米年降水量线。"
+          ],
+          "misconceptions": [],
+          "images": [],
+          "explanation": "结合人口资料比较两侧的总体疏密差异；作为分析区域人口格局的参考。胡焕庸线不等于400毫米年降水量线。"
+        }
+      ],
+      "actions": [
+        {
+          "action_id": "china_map",
+          "label": "案例1 中国",
+          "type": "scene",
+          "scene": {
+            "basemap_id": "amap_light",
+            "templates": [
+              "hu_line_comparison"
+            ],
+            "strict_resources": true,
+            "catalog_layers": [
+              "china_province_population_density"
+            ],
+            "teaching_maps": [],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": true
+            },
+            "view": {
+              "center": [
+                104,
+                35
+              ],
+              "zoom": 4
+            },
+            "annotations": [],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          }
+        },
+        {
+          "action_id": "hu_video",
+          "label": "胡焕庸线视频",
+          "type": "video",
+          "url": "https://www.bilibili.com/video/BV13p4y1X7LU/"
+        },
+        {
+          "action_id": "west_research",
+          "label": "跨越发展空间证据",
+          "type": "activity",
+          "note": "课后研究胡焕庸线能否打破：记录来源、年份、链接和位置，收集西部城镇、能源或电商案例；学生纸笔整理或教师代录，不预设研究结论。"
+        }
+      ],
+      "knowledge_unit": "人口分布",
+      "knowledge_point": "方法练习 中国与胡焕庸线",
+      "script": [
+        "本版按教师稿先展示胡焕庸线，再开展描述与解释。"
+      ],
+      "material": "本版按教师稿先展示胡焕庸线，再开展描述与解释。",
+      "student_activities": [
+        "本版按教师稿先展示胡焕庸线，再开展描述与解释。"
+      ],
+      "teacher_activities": [
+        "教师决定显示材料、揭示答案及进入下一环节的时机。"
+      ],
+      "knowledge_conclusion": "总体东南稠密、西北稀疏；东部平原、沿海和河流附近较集中，局地仍有例外。参考线概括总体格局，不是人口硬边界。；结合人口资料比较两侧的总体疏密差异；作为分析区域人口格局的参考。胡焕庸线不等于400毫米年降水量线。",
+      "assistant_prompts": [],
+      "evidence_refs": [
+        {
+          "type": "source",
+          "label": "张玥修订稿 第16行",
+          "source_id": "teacher_population_revised"
+        }
+      ],
+      "objective_refs": [
+        1,
+        2
+      ]
+    },
+    {
+      "stage_id": "shanghai_practice",
+      "title": "方法练习 上海人口分布",
+      "kind": "practice",
+      "minutes": 0,
+      "timing_mode": "teacher",
+      "source_row": 15,
+      "scene": {
+        "basemap_id": "amap_light",
+        "templates": [],
+        "strict_resources": true,
+        "catalog_layers": [
+          "shanghai_population_density"
+        ],
+        "teaching_maps": [],
+        "layer_visibility": {
+          "builtin_population_regions": false,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {
+          "center": [
+            121.47,
+            31.23
+          ],
+          "zoom": 9
+        },
+        "annotations": [],
+        "visual_query": null,
+        "globe": {
+          "enabled": false
+        }
+      },
+      "questions": [
+        {
+          "question_id": "shanghai_pattern",
+          "type": "open",
+          "text": "描述上海人口分布特点，哪些资料支持中心—外围、圈层与副中心的判断？",
+          "source": "teacher_manual",
+          "material": "",
+          "options": [],
+          "answer_index": null,
+          "answer": "总体较密但分布不均，中心与外围存在差异；圈层和副中心需结合较细人口网格或教师原图，区级均值不能精确证实。",
+          "expected_points": [
+            "总体较密但分布不均，中心与外围存在差异；圈层和副中心需结合较细人口网格或教师原图，区级均值不能精确证实。"
+          ],
+          "misconceptions": [],
+          "images": [],
+          "explanation": "总体较密但分布不均，中心与外围存在差异；圈层和副中心需结合较细人口网格或教师原图，区级均值不能精确证实。"
+        }
+      ],
+      "actions": [
+        {
+          "action_id": "shanghai_map",
+          "label": "案例2 上海",
+          "type": "scene",
+          "scene": {
+            "basemap_id": "amap_light",
+            "templates": [],
+            "strict_resources": true,
+            "catalog_layers": [
+              "shanghai_population_density"
+            ],
+            "teaching_maps": [],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": false
+            },
+            "view": {
+              "center": [
+                121.47,
+                31.23
+              ],
+              "zoom": 9
+            },
+            "annotations": [],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          },
+          "resource_rows": [
+            15
+          ]
+        },
+        {
+          "action_id": "shanghai_grid",
+          "label": "上海人口网格",
+          "type": "scene",
+          "scene": {
+            "basemap_id": "amap_light",
+            "templates": [],
+            "strict_resources": true,
+            "catalog_layers": [],
+            "teaching_maps": [
+              {
+                "id": "shanghai_worldpop_teacher",
+                "opacity": 0.5
+              }
+            ],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": false
+            },
+            "view": {
+              "center": [
+                121.47,
+                31.23
+              ],
+              "zoom": 9
+            },
+            "annotations": [],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          },
+          "resource_rows": [
+            15
+          ],
+          "note": "2015年WorldPop约1公里模型估计，辅助观察中心—外围；教师原稿2020年街镇图保留为独立材料，网格不能精确证明街镇圈层或副中心。"
+        }
+      ],
+      "knowledge_unit": "人口分布",
+      "knowledge_point": "方法练习 上海人口分布",
+      "script": [
+        "沿用宏观与微观描述方法，分别核对教材材料、区级统计和人口网格能支持的判断。"
+      ],
+      "material": "沿用宏观与微观描述方法，分别核对教材材料、区级统计和人口网格能支持的判断。",
+      "student_activities": [
+        "沿用宏观与微观描述方法，分别核对教材材料、区级统计和人口网格能支持的判断。"
+      ],
+      "teacher_activities": [
+        "教师决定显示材料、揭示答案及进入下一环节的时机。"
+      ],
+      "knowledge_conclusion": "总体较密但分布不均，中心与外围存在差异；圈层和副中心需结合较细人口网格或教师原图，区级均值不能精确证实。",
+      "assistant_prompts": [],
+      "evidence_refs": [
+        {
+          "type": "source",
+          "label": "张玥修订稿 第16行",
+          "source_id": "teacher_population_revised"
+        }
+      ],
+      "objective_refs": [
+        1,
+        2
+      ]
+    },
+    {
+      "stage_id": "factor_transition",
+      "title": "影响因素过渡 可选材料",
+      "kind": "presentation",
+      "minutes": 0,
+      "timing_mode": "teacher",
+      "source_row": 16,
+      "scene": {
+        "basemap_id": "nasa_nightlights_2016",
+        "templates": [],
+        "strict_resources": true,
+        "catalog_layers": [],
+        "teaching_maps": [],
+        "layer_visibility": {
+          "builtin_population_regions": false,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {
+          "center": [
+            15,
+            20
+          ],
+          "zoom": 2
+        },
+        "annotations": [],
+        "visual_query": null,
+        "globe": {
+          "enabled": false
+        }
+      },
+      "questions": [
+        {
+          "question_id": "factor_transition_task",
+          "type": "open",
+          "text": "原稿注明过渡素材待教师完善。现阶段只提供候选视频和观察任务，不自动播放。",
+          "source": "teacher_manual",
+          "material": "",
+          "options": [],
+          "answer_index": null,
+          "answer": "原稿注明过渡素材待教师完善。现阶段只提供候选视频和观察任务，不自动播放。",
+          "expected_points": [
+            "原稿注明过渡素材待教师完善。现阶段只提供候选视频和观察任务，不自动播放。"
+          ],
+          "misconceptions": [],
+          "images": [],
+          "explanation": "原稿注明过渡素材待教师完善。现阶段只提供候选视频和观察任务，不自动播放。"
+        }
+      ],
+      "actions": [
+        {
+          "action_id": "lights_video",
+          "label": "夜间灯光视频",
+          "type": "video",
+          "url": "https://www.bilibili.com/video/BV1uj421U7i2/",
+          "note": "原稿建议约2分41秒；过渡文案由教师后续补充，可跳过。"
+        },
+        {
+          "action_id": "lights_question",
+          "label": "灯光观察任务",
+          "type": "activity",
+          "note": "比较尼罗河、朝鲜半岛附近灯光和高纬度地区；灯光可能来自渔船或工业活动，不能等同人口。"
+        }
+      ],
+      "knowledge_unit": "人口分布",
+      "knowledge_point": "影响因素过渡 可选材料",
+      "script": [
+        "原稿注明过渡素材待教师完善。现阶段只提供候选视频和观察任务，不自动播放。"
+      ],
+      "material": "原稿注明过渡素材待教师完善。现阶段只提供候选视频和观察任务，不自动播放。",
+      "student_activities": [
+        "原稿注明过渡素材待教师完善。现阶段只提供候选视频和观察任务，不自动播放。"
+      ],
+      "teacher_activities": [
+        "教师决定显示材料、揭示答案及进入下一环节的时机。"
+      ],
+      "knowledge_conclusion": "原稿注明过渡素材待教师完善。现阶段只提供候选视频和观察任务，不自动播放。",
+      "assistant_prompts": [],
+      "evidence_refs": [
+        {
+          "type": "source",
+          "label": "张玥修订稿 第17行",
+          "source_id": "teacher_population_revised"
+        }
+      ],
+      "objective_refs": [
+        3
+      ]
+    },
+    {
+      "stage_id": "natural_factors",
+      "title": "影响因素 自然条件",
+      "kind": "practice",
+      "minutes": 0,
+      "timing_mode": "teacher",
+      "source_row": 17,
+      "scene": {
+        "basemap_id": "amap_light",
+        "templates": [],
+        "strict_resources": true,
+        "catalog_layers": [
+          "china_province_population_density"
+        ],
+        "teaching_maps": [],
+        "layer_visibility": {
+          "builtin_population_regions": false,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {
+          "center": [
+            104,
+            35
+          ],
+          "zoom": 4
+        },
+        "annotations": [],
+        "visual_query": null,
+        "globe": {
+          "enabled": false
+        }
+      },
+      "questions": [
+        {
+          "question_id": "tarim_water",
+          "type": "open",
+          "text": "塔里木盆地的绿洲和聚落为什么主要分布在盆地边缘及河流附近？",
+          "source": "teacher_manual",
+          "material": "",
+          "options": [],
+          "answer_index": null,
+          "answer": "山地来水为生活与灌溉农业提供条件，在盆地边缘形成局部绿洲与聚落。",
+          "expected_points": [
+            "山地来水为生活与灌溉农业提供条件，在盆地边缘形成局部绿洲与聚落。"
+          ],
+          "misconceptions": [],
+          "images": [],
+          "explanation": "山地来水为生活与灌溉农业提供条件，在盆地边缘形成局部绿洲与聚落。"
+        },
+        {
+          "question_id": "sparse_regions",
+          "type": "open",
+          "text": "解释干旱区、高纬度、高海拔及热带雨林地区部分区域人口稀疏的原因。",
+          "source": "teacher_manual",
+          "material": "",
+          "options": [],
+          "answer_index": null,
+          "answer": "结合具体材料解释水源、热量、地形或湿热环境怎样影响生产生活，不只罗列因素名称。",
+          "expected_points": [
+            "结合具体材料解释水源、热量、地形或湿热环境怎样影响生产生活，不只罗列因素名称。"
+          ],
+          "misconceptions": [],
+          "images": [],
+          "explanation": "结合具体材料解释水源、热量、地形或湿热环境怎样影响生产生活，不只罗列因素名称。"
+        }
+      ],
+      "actions": [
+        {
+          "action_id": "climate",
+          "label": "气候",
+          "type": "scene",
+          "scene": {
+            "basemap_id": "amap_light",
+            "templates": [],
+            "strict_resources": true,
+            "catalog_layers": [
+              "china_province_population_density"
+            ],
+            "teaching_maps": [
+              {
+                "id": "china_precipitation",
+                "opacity": 0.5
+              },
+              {
+                "id": "china_jan_temperature",
+                "opacity": 0.5
+              }
+            ],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": false
+            },
+            "view": {
+              "center": [
+                104,
+                35
+              ],
+              "zoom": 4
+            },
+            "annotations": [],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          },
+          "note": "比较长期平均降水和1月平均气温；实时天气不能替代气候资料。",
+          "resource_rows": [
+            17
+          ]
+        },
+        {
+          "action_id": "terrain",
+          "label": "地形",
+          "type": "scene",
+          "scene": {
+            "basemap_id": "amap_light",
+            "templates": [],
+            "strict_resources": true,
+            "catalog_layers": [
+              "china_province_population_density"
+            ],
+            "teaching_maps": [
+              {
+                "id": "china_topography",
+                "opacity": 0.5
+              }
+            ],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": false
+            },
+            "view": {
+              "center": [
+                104,
+                35
+              ],
+              "zoom": 4
+            },
+            "annotations": [],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          },
+          "resource_rows": [
+            17
+          ]
+        },
+        {
+          "action_id": "water",
+          "label": "水资源",
+          "type": "scene",
+          "scene": {
+            "basemap_id": "amap_imagery",
+            "templates": [],
+            "strict_resources": true,
+            "catalog_layers": [
+              "china_major_rivers"
+            ],
+            "teaching_maps": [],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": false
+            },
+            "view": {
+              "center": [
+                84,
+                39
+              ],
+              "zoom": 6
+            },
+            "annotations": [],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          },
+          "resource_rows": [
+            17
+          ],
+          "note": "塔里木教材图作为原图材料对照；影像和河流用于位置参照，不把未配准的原图当作精确叠置。"
+        },
+        {
+          "action_id": "soil",
+          "label": "土壤",
+          "type": "scene",
+          "scene": {
+            "basemap_id": "amap_light",
+            "templates": [],
+            "strict_resources": true,
+            "catalog_layers": [],
+            "teaching_maps": [
+              {
+                "id": "northeast_population",
+                "opacity": 0.5
+              }
+            ],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": false
+            },
+            "view": {
+              "center": [
+                126,
+                45
+              ],
+              "zoom": 6
+            },
+            "annotations": [],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          },
+          "resource_rows": [
+            17
+          ],
+          "note": "对照教师原稿2019年东北人口图与土壤配图、2015年人口网格。土壤配图为读图材料，未经配准不作为精确叠置。土壤通过农业条件影响人口，还需结合气候、经济及历史。"
+        },
+        {
+          "action_id": "minerals",
+          "label": "矿产与城市",
+          "type": "activity",
+          "note": "在地图上定位克拉玛依、大庆、大同，结合教师材料说明资源开发与城市发展。",
+          "scene": {
+            "basemap_id": "amap_imagery",
+            "templates": [],
+            "strict_resources": true,
+            "catalog_layers": [
+              "world_major_cities"
+            ],
+            "teaching_maps": [],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": false
+            },
+            "view": {
+              "center": [
+                104,
+                35
+              ],
+              "zoom": 4
+            },
+            "annotations": [
+              {
+                "text": "克拉玛依（位置参照）",
+                "position": [
+                  84.89,
+                  45.6
+                ]
+              },
+              {
+                "text": "大庆（位置参照）",
+                "position": [
+                  125.03,
+                  46.58
+                ]
+              },
+              {
+                "text": "大同（位置参照）",
+                "position": [
+                  113.3,
+                  40.08
+                ]
+              }
+            ],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          },
+          "resource_rows": [
+            17
+          ]
+        }
+      ],
+      "knowledge_unit": "影响人口分布的因素",
+      "knowledge_point": "影响因素 自然条件",
+      "script": [
+        "每次聚焦一种因素，比较人口与环境证据，并说明其作用过程。"
+      ],
+      "material": "每次聚焦一种因素，比较人口与环境证据，并说明其作用过程。",
+      "student_activities": [
+        "每次聚焦一种因素，比较人口与环境证据，并说明其作用过程。"
+      ],
+      "teacher_activities": [
+        "教师决定显示材料、揭示答案及进入下一环节的时机。"
+      ],
+      "knowledge_conclusion": "山地来水为生活与灌溉农业提供条件，在盆地边缘形成局部绿洲与聚落。；结合具体材料解释水源、热量、地形或湿热环境怎样影响生产生活，不只罗列因素名称。",
+      "assistant_prompts": [],
+      "evidence_refs": [
+        {
+          "type": "source",
+          "label": "张玥修订稿 第18行",
+          "source_id": "teacher_population_revised"
+        }
+      ],
+      "objective_refs": [
+        3
+      ]
+    },
+    {
+      "stage_id": "human_factors",
+      "title": "影响因素 人文条件",
+      "kind": "presentation",
+      "minutes": 0,
+      "timing_mode": "teacher",
+      "source_row": 18,
+      "scene": {
+        "basemap_id": "nasa_nightlights_2016",
+        "templates": [],
+        "strict_resources": true,
+        "catalog_layers": [],
+        "teaching_maps": [],
+        "layer_visibility": {
+          "builtin_population_regions": false,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {
+          "center": [
+            15,
+            20
+          ],
+          "zoom": 2
+        },
+        "annotations": [],
+        "visual_query": null,
+        "globe": {
+          "enabled": false
+        }
+      },
+      "questions": [
+        {
+          "question_id": "human_factors_task",
+          "type": "open",
+          "text": "结合各案例解释生产、就业、历史、政策和文化怎样共同影响人口分布。",
+          "source": "teacher_manual",
+          "material": "",
+          "options": [],
+          "answer_index": null,
+          "answer": "结合各案例解释生产、就业、历史、政策和文化怎样共同影响人口分布。",
+          "expected_points": [
+            "结合各案例解释生产、就业、历史、政策和文化怎样共同影响人口分布。"
+          ],
+          "misconceptions": [],
+          "images": [],
+          "explanation": "结合各案例解释生产、就业、历史、政策和文化怎样共同影响人口分布。"
+        }
+      ],
+      "actions": [
+        {
+          "action_id": "production",
+          "label": "社会生产方式",
+          "type": "activity",
+          "note": "农业社会案例：尼罗河平原、两河流域；工业社会案例：长三角、珠三角、欧洲西部、北美东部。",
+          "resource_rows": [
+            18
+          ]
+        },
+        {
+          "action_id": "economy",
+          "label": "经济发展",
+          "type": "scene",
+          "scene": {
+            "basemap_id": "nasa_nightlights_2016",
+            "templates": [],
+            "strict_resources": true,
+            "catalog_layers": [],
+            "teaching_maps": [],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": false
+            },
+            "view": {
+              "center": [
+                15,
+                20
+              ],
+              "zoom": 2
+            },
+            "annotations": [],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          },
+          "note": "灯光和城市夜景用于观察经济活动，亮度不等于人口密度；经济发达也不能无条件推出人口稠密。",
+          "resource_rows": [
+            18
+          ]
+        },
+        {
+          "action_id": "history",
+          "label": "历史因素",
+          "type": "activity",
+          "note": "东亚、南亚开发历史与人口集聚的教材案例。",
+          "resource_rows": [
+            18
+          ]
+        },
+        {
+          "action_id": "politics",
+          "label": "政治因素",
+          "type": "activity",
+          "note": "深圳政策与人口迁入、巴西利亚迁都案例；原稿深圳1300万人为历史材料，不能表述为现时人口。",
+          "resource_rows": [
+            18
+          ],
+          "scene": {
+            "basemap_id": "amap_imagery",
+            "templates": [],
+            "strict_resources": true,
+            "catalog_layers": [],
+            "teaching_maps": [],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": false
+            },
+            "view": {
+              "center": [
+                15,
+                20
+              ],
+              "zoom": 2
+            },
+            "annotations": [
+              {
+                "text": "深圳 政策案例",
+                "position": [
+                  114.05,
+                  22.55
+                ]
+              },
+              {
+                "text": "巴西利亚 迁都案例",
+                "position": [
+                  -47.88,
+                  -15.8
+                ]
+              }
+            ],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          }
+        },
+        {
+          "action_id": "military",
+          "label": "军事因素",
+          "type": "activity",
+          "note": "使用原稿战争与人口流失案例；不补写未经核实的现时人口或伤亡数字。",
+          "resource_rows": [
+            18
+          ]
+        },
+        {
+          "action_id": "culture",
+          "label": "文化因素",
+          "type": "activity",
+          "note": "伦敦唐人街等案例，分析文化联系与聚居；避免把民族背景当成唯一成因。",
+          "resource_rows": [
+            18
+          ]
+        },
+        {
+          "action_id": "human_summary",
+          "label": "影响因素小结",
+          "type": "summary",
+          "prompt": "只使用本环节已展示材料和可视图层及其来源年份，生成简短小结草稿。区分读图判断与数值统计，不补写学生回答，不凭最后一张地图假装看到了全部因素。教师确认后再用于展示。",
+          "resource_rows": [
+            18
+          ]
+        }
+      ],
+      "knowledge_unit": "影响人口分布的因素",
+      "knowledge_point": "影响因素 人文条件",
+      "script": [
+        "结合各案例解释生产、就业、历史、政策和文化怎样共同影响人口分布。"
+      ],
+      "material": "结合各案例解释生产、就业、历史、政策和文化怎样共同影响人口分布。",
+      "student_activities": [
+        "结合各案例解释生产、就业、历史、政策和文化怎样共同影响人口分布。"
+      ],
+      "teacher_activities": [
+        "教师决定显示材料、揭示答案及进入下一环节的时机。"
+      ],
+      "knowledge_conclusion": "结合各案例解释生产、就业、历史、政策和文化怎样共同影响人口分布。",
+      "assistant_prompts": [],
+      "evidence_refs": [
+        {
+          "type": "source",
+          "label": "张玥修订稿 第19行",
+          "source_id": "teacher_population_revised"
+        }
+      ],
+      "objective_refs": [
+        3
+      ]
+    },
+    {
+      "stage_id": "factor_summary",
+      "title": "归纳总结 建立知识框架",
+      "kind": "presentation",
+      "minutes": 0,
+      "timing_mode": "teacher",
+      "source_row": 19,
+      "scene": {
+        "basemap_id": "amap_light",
+        "templates": [],
+        "strict_resources": true,
+        "catalog_layers": [
+          "china_province_population_density"
+        ],
+        "teaching_maps": [],
+        "layer_visibility": {
+          "builtin_population_regions": false,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {
+          "center": [
+            104,
+            35
+          ],
+          "zoom": 4
+        },
+        "annotations": [],
+        "visual_query": null,
+        "globe": {
+          "enabled": false
+        }
+      },
+      "questions": [
+        {
+          "question_id": "factor_summary_task",
+          "type": "open",
+          "text": "归纳本课已覆盖的因素，区分总体规律、局地例外和资料能够证明的内容。",
+          "source": "teacher_manual",
+          "material": "",
+          "options": [],
+          "answer_index": null,
+          "answer": "归纳本课已覆盖的因素，区分总体规律、局地例外和资料能够证明的内容。",
+          "expected_points": [
+            "归纳本课已覆盖的因素，区分总体规律、局地例外和资料能够证明的内容。"
+          ],
+          "misconceptions": [],
+          "images": [],
+          "explanation": "归纳本课已覆盖的因素，区分总体规律、局地例外和资料能够证明的内容。"
+        }
+      ],
+      "actions": [
+        {
+          "action_id": "factor_board",
+          "label": "因素框架板书",
+          "type": "activity",
+          "note": "自然因素：气候、地形、水资源、土壤及资源条件。人文因素：生产方式、经济、历史、政策、军事、文化。用材料说明条件—生产生活—人口集聚的作用过程。"
+        },
+        {
+          "action_id": "factor_handout",
+          "label": "生成小结草稿",
+          "type": "summary",
+          "prompt": "只使用本环节已展示材料和可视图层及其来源年份，生成简短小结草稿。区分读图判断与数值统计，不补写学生回答，不凭最后一张地图假装看到了全部因素。教师确认后再用于展示。"
+        }
+      ],
+      "knowledge_unit": "影响人口分布的因素",
+      "knowledge_point": "归纳总结 建立知识框架",
+      "script": [
+        "归纳本课已覆盖的因素，区分总体规律、局地例外和资料能够证明的内容。"
+      ],
+      "material": "归纳本课已覆盖的因素，区分总体规律、局地例外和资料能够证明的内容。",
+      "student_activities": [
+        "归纳本课已覆盖的因素，区分总体规律、局地例外和资料能够证明的内容。"
+      ],
+      "teacher_activities": [
+        "教师决定显示材料、揭示答案及进入下一环节的时机。"
+      ],
+      "knowledge_conclusion": "归纳本课已覆盖的因素，区分总体规律、局地例外和资料能够证明的内容。",
+      "assistant_prompts": [],
+      "evidence_refs": [
+        {
+          "type": "source",
+          "label": "张玥修订稿 第20行",
+          "source_id": "teacher_population_revised"
+        }
+      ],
+      "objective_refs": [
+        3
+      ]
+    },
+    {
+      "stage_id": "finland_application",
+      "title": "小试牛刀 芬兰综合探究",
+      "kind": "practice",
+      "minutes": 0,
+      "timing_mode": "teacher",
+      "source_row": 20,
+      "scene": {
+        "basemap_id": "amap_light",
+        "templates": [],
+        "strict_resources": true,
+        "catalog_layers": [],
+        "teaching_maps": [
+          {
+            "id": "finland_population",
+            "opacity": 0.5
+          }
+        ],
+        "layer_visibility": {
+          "builtin_population_regions": false,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {
+          "center": [
+            26,
+            64
+          ],
+          "zoom": 5
+        },
+        "annotations": [],
+        "visual_query": null,
+        "globe": {
+          "enabled": false
+        }
+      },
+      "questions": [
+        {
+          "question_id": "finland_pattern",
+          "type": "open",
+          "text": "读图描述芬兰人口分布特点。",
+          "source": "teacher_manual",
+          "material": "教师稿2015年案例：约550万人，赫尔辛基及周边约140万人；保留原年份。",
+          "options": [],
+          "answer_index": null,
+          "answer": "分布不均，人口密度较低，南多北少；赫尔辛基及周边集聚。",
+          "expected_points": [
+            "分布不均，人口密度较低，南多北少；赫尔辛基及周边集聚。"
+          ],
+          "misconceptions": [],
+          "images": [
+            {
+              "url": "/files/uploads/teacher_population_revised/source_row_20_1.png",
+              "order": 0
+            }
+          ],
+          "explanation": "分布不均，人口密度较低，南多北少；赫尔辛基及周边集聚。"
+        },
+        {
+          "question_id": "finland_climate",
+          "type": "open",
+          "text": "对照人口与气候图，解释气温和降水的影响。",
+          "source": "teacher_manual",
+          "material": "",
+          "options": [],
+          "answer_index": null,
+          "answer": "南部与沿海相对较温暖、降水较多，生产生活条件有利；北部条件不同。",
+          "expected_points": [
+            "南部与沿海相对较温暖、降水较多，生产生活条件有利；北部条件不同。"
+          ],
+          "misconceptions": [],
+          "images": [
+            {
+              "url": "/files/uploads/teacher_population_revised/source_row_20_2.png",
+              "order": 0
+            }
+          ],
+          "explanation": "南部与沿海相对较温暖、降水较多，生产生活条件有利；北部条件不同。"
+        },
+        {
+          "question_id": "finland_terrain",
+          "type": "open",
+          "text": "对照人口与地形图，解释地形的影响。",
+          "source": "teacher_manual",
+          "material": "",
+          "options": [],
+          "answer_index": null,
+          "answer": "南部低地较多，交通与生产生活条件较有利；分析时还需结合其他因素。",
+          "expected_points": [
+            "南部低地较多，交通与生产生活条件较有利；分析时还需结合其他因素。"
+          ],
+          "misconceptions": [],
+          "images": [
+            {
+              "url": "/files/uploads/teacher_population_revised/source_row_20_3.png",
+              "order": 0
+            }
+          ],
+          "explanation": "南部低地较多，交通与生产生活条件较有利；分析时还需结合其他因素。"
+        },
+        {
+          "question_id": "finland_human",
+          "type": "open",
+          "text": "为何较多人口集中于赫尔辛基及周边城镇？",
+          "source": "teacher_manual",
+          "material": "",
+          "options": [],
+          "answer_index": null,
+          "answer": "首都及经济、文化、交通中心的综合作用，结合历史和就业条件说明。",
+          "expected_points": [
+            "首都及经济、文化、交通中心的综合作用，结合历史和就业条件说明。"
+          ],
+          "misconceptions": [],
+          "images": [],
+          "explanation": "首都及经济、文化、交通中心的综合作用，结合历史和就业条件说明。"
+        }
+      ],
+      "actions": [
+        {
+          "action_id": "finland_1",
+          "label": "案例3-1 人口",
+          "type": "scene",
+          "scene": {
+            "basemap_id": "amap_light",
+            "templates": [],
+            "strict_resources": true,
+            "catalog_layers": [],
+            "teaching_maps": [
+              {
+                "id": "finland_population",
+                "opacity": 0.5
+              }
+            ],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": false
+            },
+            "view": {
+              "center": [
+                26,
+                64
+              ],
+              "zoom": 5
+            },
+            "annotations": [],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          }
+        },
+        {
+          "action_id": "finland_2",
+          "label": "案例3-2 气候",
+          "type": "scene",
+          "scene": {
+            "basemap_id": "amap_light",
+            "templates": [],
+            "strict_resources": true,
+            "catalog_layers": [],
+            "teaching_maps": [
+              {
+                "id": "finland_population",
+                "opacity": 0.5
+              },
+              {
+                "id": "finland_climate",
+                "opacity": 0.5
+              }
+            ],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": false
+            },
+            "view": {
+              "center": [
+                26,
+                64
+              ],
+              "zoom": 5
+            },
+            "annotations": [],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          }
+        },
+        {
+          "action_id": "finland_3",
+          "label": "案例3-3 地形",
+          "type": "scene",
+          "scene": {
+            "basemap_id": "amap_light",
+            "templates": [],
+            "strict_resources": true,
+            "catalog_layers": [],
+            "teaching_maps": [
+              {
+                "id": "finland_population",
+                "opacity": 0.5
+              },
+              {
+                "id": "finland_topography",
+                "opacity": 0.5
+              }
+            ],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": false
+            },
+            "view": {
+              "center": [
+                26,
+                64
+              ],
+              "zoom": 5
+            },
+            "annotations": [],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          }
+        },
+        {
+          "action_id": "finland_overlay",
+          "label": "三图叠置实验",
+          "type": "scene",
+          "scene": {
+            "basemap_id": "amap_light",
+            "templates": [],
+            "strict_resources": true,
+            "catalog_layers": [],
+            "teaching_maps": [
+              {
+                "id": "finland_population",
+                "opacity": 0.5
+              },
+              {
+                "id": "finland_climate",
+                "opacity": 0.5
+              },
+              {
+                "id": "finland_topography",
+                "opacity": 0.5
+              }
+            ],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": false
+            },
+            "view": {
+              "center": [
+                26,
+                64
+              ],
+              "zoom": 5
+            },
+            "annotations": [],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          },
+          "note": "分别调整透明度，提出候选分界，不把0℃或某条等高线当作唯一正确答案。"
+        },
+        {
+          "action_id": "finland_reproduce",
+          "label": "数据复现 PyQGIS",
+          "type": "workflow",
+          "scene": {
+            "basemap_id": "amap_light",
+            "templates": [],
+            "strict_resources": true,
+            "catalog_layers": [
+              "finland_population_density_2015"
+            ],
+            "teaching_maps": [],
+            "layer_visibility": {
+              "builtin_population_regions": false,
+              "builtin_population_density": false,
+              "builtin_population_migration": false,
+              "generated_hu_line": false
+            },
+            "view": {
+              "center": [
+                26,
+                64
+              ],
+              "zoom": 5
+            },
+            "annotations": [],
+            "visual_query": null,
+            "globe": {
+              "enabled": false
+            }
+          },
+          "note": "2015年WorldPop网格聚合为0.1°教学网格，再按人数与实际面积计算密度；与教材图分别标注。"
+        },
+        {
+          "action_id": "finland_review",
+          "label": "手绘分界与协同审阅",
+          "type": "summary",
+          "prompt": "根据当前地图截图、教师实际绘制的检索区或标注及已展示的芬兰材料，分析分界两侧差异并提出修正建议。没有划线或数值图层时明确资料不足，不编造两侧统计。"
+        },
+        {
+          "action_id": "finland_export",
+          "label": "探究报告导出",
+          "type": "activity",
+          "note": "保留自己的初始分界和修正理由；确认分析摘要后导出含地图、图例、标注与来源的PNG。"
+        }
+      ],
+      "knowledge_unit": "影响人口分布的因素",
+      "knowledge_point": "小试牛刀 芬兰综合探究",
+      "script": [
+        "先读三张图并回答四个问题，再由代表或教师绘制候选分界；AI仅提供可修改的参考草稿。"
+      ],
+      "material": "先读三张图并回答四个问题，再由代表或教师绘制候选分界；AI仅提供可修改的参考草稿。",
+      "student_activities": [
+        "先读三张图并回答四个问题，再由代表或教师绘制候选分界；AI仅提供可修改的参考草稿。"
+      ],
+      "teacher_activities": [
+        "教师决定显示材料、揭示答案及进入下一环节的时机。"
+      ],
+      "knowledge_conclusion": "分布不均，人口密度较低，南多北少；赫尔辛基及周边集聚。；南部与沿海相对较温暖、降水较多，生产生活条件有利；北部条件不同。；南部低地较多，交通与生产生活条件较有利；分析时还需结合其他因素。；首都及经济、文化、交通中心的综合作用，结合历史和就业条件说明。",
+      "assistant_prompts": [],
+      "evidence_refs": [
+        {
+          "type": "source",
+          "label": "张玥修订稿 第21行",
+          "source_id": "teacher_population_revised"
+        }
+      ],
+      "objective_refs": [
+        1,
+        3,
+        4
+      ]
+    },
+    {
+      "stage_id": "reinforcement",
+      "title": "强化训练 四组区域案例",
+      "kind": "practice",
+      "minutes": 0,
+      "timing_mode": "teacher",
+      "source_row": 21,
+      "scene": {
+        "basemap_id": "amap_light",
+        "templates": [],
+        "strict_resources": true,
+        "catalog_layers": [],
+        "teaching_maps": [],
+        "layer_visibility": {
+          "builtin_population_regions": false,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {
+          "center": [
+            15,
+            20
+          ],
+          "zoom": 2
+        },
+        "annotations": [],
+        "visual_query": null,
+        "globe": {
+          "enabled": false
+        }
+      },
+      "questions": [
+        {
+          "question_id": "central_asia_1",
+          "type": "choice",
+          "text": "中亚五国材料：下列国家中人口密度最小的是？",
+          "source": "teacher_manual",
+          "material": "",
+          "options": [
+            "土库曼斯坦",
+            "哈萨克斯坦",
+            "吉尔吉斯斯坦",
+            "塔吉克斯坦"
+          ],
+          "answer_index": 1,
+          "answer": "哈萨克斯坦",
+          "expected_points": [
+            "哈萨克斯坦"
+          ],
+          "misconceptions": [],
+          "images": [
+            {
+              "url": "/files/uploads/teacher_population_revised/source_row_21_1.png",
+              "order": 0
+            }
+          ],
+          "explanation": "哈萨克斯坦"
+        },
+        {
+          "question_id": "central_asia_2",
+          "type": "choice",
+          "text": "影响中亚东南部地区人口较密集的主要自然因素是？",
+          "source": "teacher_manual",
+          "material": "",
+          "options": [
+            "热量",
+            "矿产",
+            "水源",
+            "土壤"
+          ],
+          "answer_index": 2,
+          "answer": "水源",
+          "expected_points": [
+            "水源"
+          ],
+          "misconceptions": [],
+          "images": [
+            {
+              "url": "/files/uploads/teacher_population_revised/source_row_21_1.png",
+              "order": 0
+            }
+          ],
+          "explanation": "水源"
+        },
+        {
+          "question_id": "germany_aging",
+          "type": "open",
+          "text": "据2018年德国各州65岁及以上人口密度图，描述德国老龄人口密度分布特征。",
+          "source": "teacher_manual",
+          "material": "",
+          "options": [],
+          "answer_index": null,
+          "answer": "分布不均，西部密度大，东部密度小，东北部差异显著。",
+          "expected_points": [
+            "分布不均，西部密度大，东部密度小，东北部差异显著。"
+          ],
+          "misconceptions": [],
+          "images": [
+            {
+              "url": "/files/uploads/teacher_population_revised/source_row_21_2.png",
+              "order": 0
+            }
+          ],
+          "explanation": "分布不均，西部密度大，东部密度小，东北部差异显著。"
+        },
+        {
+          "question_id": "russia_line",
+          "type": "open",
+          "text": "推测俄罗斯圣彼得堡—图瓦线西南侧人口分布状况的主要原因。",
+          "source": "teacher_manual",
+          "material": "",
+          "options": [],
+          "answer_index": null,
+          "answer": "东欧平原、气候相对温和；开发历史悠久，工农业、经济和交通条件较好，城市较多。",
+          "expected_points": [
+            "东欧平原、气候相对温和；开发历史悠久，工农业、经济和交通条件较好，城市较多。"
+          ],
+          "misconceptions": [],
+          "images": [
+            {
+              "url": "/files/uploads/teacher_population_revised/source_row_21_3.png",
+              "order": 0
+            }
+          ],
+          "explanation": "东欧平原、气候相对温和；开发历史悠久，工农业、经济和交通条件较好，城市较多。"
+        },
+        {
+          "question_id": "yarlung",
+          "type": "open",
+          "text": "结合雅鲁藏布江流域河谷、冲洪积扇材料，分析当地居民定居的原因。",
+          "source": "teacher_manual",
+          "material": "",
+          "options": [],
+          "answer_index": null,
+          "answer": "结合具体地形说明防灾、水源、热量、土壤、耕作、放牧和建房条件，避免把整个高原概括为条件优越。",
+          "expected_points": [
+            "结合具体地形说明防灾、水源、热量、土壤、耕作、放牧和建房条件，避免把整个高原概括为条件优越。"
+          ],
+          "misconceptions": [],
+          "images": [
+            {
+              "url": "/files/uploads/teacher_population_revised/source_row_21_4.png",
+              "order": 0
+            }
+          ],
+          "explanation": "结合具体地形说明防灾、水源、热量、土壤、耕作、放牧和建房条件，避免把整个高原概括为条件优越。"
+        }
+      ],
+      "actions": [],
+      "knowledge_unit": "影响人口分布的因素",
+      "knowledge_point": "强化训练 四组区域案例",
+      "script": [
+        "原稿四组案例保留题图、年份和来源；先作答，再由教师揭示参考答案。"
+      ],
+      "material": "原稿四组案例保留题图、年份和来源；先作答，再由教师揭示参考答案。",
+      "student_activities": [
+        "原稿四组案例保留题图、年份和来源；先作答，再由教师揭示参考答案。"
+      ],
+      "teacher_activities": [
+        "教师决定显示材料、揭示答案及进入下一环节的时机。"
+      ],
+      "knowledge_conclusion": "哈萨克斯坦；水源；分布不均，西部密度大，东部密度小，东北部差异显著。；东欧平原、气候相对温和；开发历史悠久，工农业、经济和交通条件较好，城市较多。；结合具体地形说明防灾、水源、热量、土壤、耕作、放牧和建房条件，避免把整个高原概括为条件优越。",
+      "assistant_prompts": [],
+      "evidence_refs": [
+        {
+          "type": "source",
+          "label": "张玥修订稿 第22行",
+          "source_id": "teacher_population_revised"
+        }
+      ],
+      "objective_refs": [
+        1,
+        3,
+        4
+      ]
+    },
+    {
+      "stage_id": "homework_reflection",
+      "title": "课后探究与课堂复盘",
+      "kind": "presentation",
+      "minutes": 0,
+      "timing_mode": "teacher",
+      "source_row": 23,
+      "scene": {
+        "basemap_id": "amap_light",
+        "templates": [],
+        "strict_resources": true,
+        "catalog_layers": [],
+        "teaching_maps": [],
+        "layer_visibility": {
+          "builtin_population_regions": false,
+          "builtin_population_density": false,
+          "builtin_population_migration": false,
+          "generated_hu_line": false
+        },
+        "view": {
+          "center": [
+            15,
+            20
+          ],
+          "zoom": 2
+        },
+        "annotations": [],
+        "visual_query": null,
+        "globe": {
+          "enabled": false
+        }
+      },
+      "questions": [
+        {
+          "question_id": "homework_reflection_task",
+          "type": "open",
+          "text": "课堂记录区分真实回答、教师代录与预设示例。未采集回答时保持未采集；教学反思作为设计与复盘框架，不能自动宣称教学效果已证实。",
+          "source": "teacher_manual",
+          "material": "",
+          "options": [],
+          "answer_index": null,
+          "answer": "课堂记录区分真实回答、教师代录与预设示例。未采集回答时保持未采集；教学反思作为设计与复盘框架，不能自动宣称教学效果已证实。",
+          "expected_points": [
+            "课堂记录区分真实回答、教师代录与预设示例。未采集回答时保持未采集；教学反思作为设计与复盘框架，不能自动宣称教学效果已证实。"
+          ],
+          "misconceptions": [],
+          "images": [],
+          "explanation": "课堂记录区分真实回答、教师代录与预设示例。未采集回答时保持未采集；教学反思作为设计与复盘框架，不能自动宣称教学效果已证实。"
+        }
+      ],
+      "actions": [
+        {
+          "action_id": "homework_card",
+          "label": "课后任务卡",
+          "type": "activity",
+          "note": "任务一：胡焕庸线能否打破，收集有来源和位置的西部发展证据。任务二：提出芬兰人口分界并说明证据和修正。下次课展示纸笔或教师端导出的成果。"
+        },
+        {
+          "action_id": "class_review",
+          "label": "课堂回顾草稿",
+          "type": "summary",
+          "prompt": "只使用本环节已展示材料和可视图层及其来源年份，生成简短小结草稿。区分读图判断与数值统计，不补写学生回答，不凭最后一张地图假装看到了全部因素。教师确认后再用于展示。"
+        }
+      ],
+      "knowledge_unit": "人口分布",
+      "knowledge_point": "课后探究与课堂复盘",
+      "script": [
+        "课堂记录区分真实回答、教师代录与预设示例。未采集回答时保持未采集；教学反思作为设计与复盘框架，不能自动宣称教学效果已证实。"
+      ],
+      "material": "课堂记录区分真实回答、教师代录与预设示例。未采集回答时保持未采集；教学反思作为设计与复盘框架，不能自动宣称教学效果已证实。",
+      "student_activities": [
+        "课堂记录区分真实回答、教师代录与预设示例。未采集回答时保持未采集；教学反思作为设计与复盘框架，不能自动宣称教学效果已证实。"
+      ],
+      "teacher_activities": [
+        "教师决定显示材料、揭示答案及进入下一环节的时机。"
+      ],
+      "knowledge_conclusion": "课堂记录区分真实回答、教师代录与预设示例。未采集回答时保持未采集；教学反思作为设计与复盘框架，不能自动宣称教学效果已证实。",
+      "assistant_prompts": [],
+      "evidence_refs": [
+        {
+          "type": "source",
+          "label": "张玥修订稿 第24行",
+          "source_id": "teacher_population_revised"
+        }
+      ],
+      "objective_refs": [
+        1,
+        3,
+        4
+      ]
+    }
+  ]
+}

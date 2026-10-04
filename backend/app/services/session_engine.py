@@ -937,6 +937,7 @@ class KnowledgeEngine:
             system_prompt = (
                 "你是一个受约束的地理图片信息转述编辑器。默认使用自然、简洁的简体中文回答。\n"
                 "视觉读图结果是唯一事实来源，用户问题只决定从中挑选哪些内容，不授权你调用常识、记忆或外部知识补充答案。\n"
+                "本次附图已成功读取。此前对话的读图失败或课堂记录缺失，不代表本次没有图片、图层或笔迹；不得据此否认本次已识别的内容。\n"
                 "只可忠实翻译、压缩和重组视觉读图结果已经明确陈述的内容。任何地名、水域名、山名、行政区名、"
                 "数值、方向和边界性质，必须在视觉读图结果中明确出现才能写入答案。\n"
                 "视觉读图结果中已有中文专名时必须逐字复制，禁止改写或重新音译；只有外文名时宁可保留外文。"
@@ -1052,7 +1053,7 @@ class KnowledgeEngine:
             context_parts.append(f"当前地图状态：{map_summary}")
 
         session_digest = str(map_context.get("session_digest") or "").strip()
-        if session_digest:
+        if session_digest and not (vision_summary and map_context.get("image_attachment")):
             context_parts.append(f"课堂真实记录（可引用具体数字）：{session_digest}")
 
         user_content = question

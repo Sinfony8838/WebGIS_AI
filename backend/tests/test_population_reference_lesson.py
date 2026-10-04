@@ -28,7 +28,7 @@ class PopulationReferenceLessonTest(unittest.TestCase):
     def test_reference_sequence_and_actual_scene_transitions(self):
         runtime, store, project_id = self.build_runtime()
         lesson = store.get_lesson("lesson_builtin_population_shanghai_world")
-        self.assertEqual(runtime.classroom.list_lessons()["items"][0]["lesson_id"], lesson.lesson_id)
+        self.assertEqual(runtime.classroom.list_lessons()["items"][0]["lesson_id"], "lesson_builtin_population_teacher_revised")
         self.assertEqual([stage["stage_id"] for stage in lesson.stages], ["shanghai_intro", "concept", "shanghai_inquiry", "shanghai_verify", "china_inquiry", "china_explain", "world_inquiry", "summary"])
         self.assertEqual(sum(stage["minutes"] for stage in lesson.stages), 40)
         for stage in lesson.stages:

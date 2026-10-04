@@ -3,6 +3,7 @@ import type { ClassroomPresentationTarget } from "../api";
 import { stageKindInfo } from "../lib/stageKinds";
 import { ShanghaiPopulationInquiry } from "./ShanghaiPopulationInquiry";
 import { ChinaInquiryGuide, type ChinaInquiryContent } from "./ChinaInquiryGuide";
+import { TeacherLessonActions } from "./TeacherLessonActions";
 import type { ClassSessionRecord, LessonQuestion, LessonRecord, LessonStage, ObservationVerdict } from "../types";
 
 type Props = {
@@ -33,7 +34,13 @@ type Props = {
   onFocusEvidenceLayer?: (datasetId: string, stageDatasetIds: string[]) => void;
   onRequestPlaneView?: () => void;
   /** 以隐藏的内部提示驱动 GeoBot，课堂对话显示完整的探究问题。 */
-  onAssistantPrompt?: (prompt: string, displayMessage?: string) => void;
+  onAssistantPrompt?: (prompt: string, displayMessage?: string, captureMap?: boolean) => void;
+  teachingGeometry?: Record<string, unknown> | null;
+  onTeacherRefresh?: () => void | Promise<void>;
+  onTeacherSessionChange?: (session: ClassSessionRecord) => void;
+  onExportInquiry?: (title: string, summary: string) => Promise<void>;
+  assistantDraft?: string;
+  assistantDraftJobId?: string;
 };
 
 function formatElapsed(seconds: number): string {
@@ -77,7 +84,8 @@ export function ClassRunPanel({
   visibleCatalogLayerIds = [],
   onFocusEvidenceLayer,
   onRequestPlaneView,
-  onAssistantPrompt
+  onAssistantPrompt,
+  teachingGeometry, onTeacherRefresh, onTeacherSessionChange, onExportInquiry, assistantDraft, assistantDraftJobId
 }: Props) {
   const [nowTick, setNowTick] = useState(Date.now());
   const [recordVerdict, setRecordVerdict] = useState<ObservationVerdict | null>(null);
@@ -297,7 +305,7 @@ export function ClassRunPanel({
           <div className="class-panel-status">
             <span className={`class-timer ${overtime ? "overtime" : ""}`} data-testid="stage-timer">
               ⏱ {formatElapsed(elapsedSeconds)}
-              {currentStage ? ` / ${currentStage.minutes}:00` : ""}
+              {currentStage && currentStage.timing_mode !== "teacher" ? ` / ${currentStage.minutes}:00` : " · 教师自主推进"}
             </span>
             <span className="class-session-label">
               教师端课堂记录 · 仅采集教师观察
@@ -372,7 +380,7 @@ export function ClassRunPanel({
               disabled={busy}
               onClick={() => onEnterStage(stage.stage_id)}
               data-testid={`stage-chip-${stage.stage_id}`}
-              title={`${stage.title}（计划 ${stage.minutes} 分钟）`}
+              title={`${stage.title}（${stage.timing_mode === "teacher" ? "教师自主推进" : `计划 ${stage.minutes} 分钟`}）`}
             >
               <span className="stage-item-track">
                 <span className="stage-item-dot">{done ? "✓" : index + 1}</span>
@@ -384,7 +392,7 @@ export function ClassRunPanel({
                   {stage.title}
                 </span>
                 <span className="stage-item-meta">
-                  {stage.minutes}′
+                  {stage.timing_mode === "teacher" ? "自主" : `${stage.minutes}′`}
                   {stage.questions.length ? ` · ${stage.questions.length} 问` : ""}
                 </span>
               </span>
@@ -413,6 +421,7 @@ export function ClassRunPanel({
         </details>
       ) : null}
       <div className="class-panel-current">
+        {currentStage?.actions?.length ? <TeacherLessonActions lesson={lesson} stage={currentStage} session={session} busy={busy || assistantBusy} geometry={teachingGeometry} onRefresh={onTeacherRefresh} onSessionChange={onTeacherSessionChange} onAssistantPrompt={onAssistantPrompt} onExport={onExportInquiry} assistantDraft={assistantDraft} assistantDraftJobId={assistantDraftJobId} /> : null}
         {inquiryContent && currentStageId === "summary" && onAssistantPrompt ? <details>
           <summary>选用拓展 · 人口总量比较</summary>
           <p>比较人口总量最多的城市，不能把这一排名当作人口密度排名。请核对返回的数据年份和范围。</p>

@@ -43,6 +43,7 @@ class ClassroomWorkflowRuntime:
             self.visual_query_service,
             minimax_client=runtime.minimax_client if self.config.minimax_enabled() else None,
             catalog_layer_loader=runtime.materialize_catalog_layer,
+            teaching_map_service=runtime.teaching_map_service,
         )
         self.report_service = ReportService(
             self.config,

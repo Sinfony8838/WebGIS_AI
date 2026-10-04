@@ -57,6 +57,13 @@ class MiniMaxMcpClientTest(unittest.TestCase):
 
         self.assertTrue(captured["image_source"].startswith("data:image/gif;base64,"))
 
+    def test_upstream_plain_text_api_failure_is_not_visual_evidence(self) -> None:
+        client = self.build_client()
+        client._call_tool = lambda *args, **kwargs: {"result": {"content": [{"type": "text", "text": "Failed to perform VLM analysis: ProxyError private-response"}]}}
+        with self.assertRaisesRegex(MiniMaxMcpError, "image analysis request failed") as raised:
+            client.understand_image("分析", "C:/map.png")
+        self.assertNotIn("private-response", str(raised.exception))
+
     def test_stdio_decoder_accepts_utf8_and_gb18030(self) -> None:
         self.assertEqual(MiniMaxMcpClient._decode_stdio_line("地形".encode("utf-8")), "地形")
         self.assertEqual(MiniMaxMcpClient._decode_stdio_line("地形".encode("gb18030")), "地形")

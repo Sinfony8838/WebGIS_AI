@@ -10,6 +10,7 @@ API checks and worker-side loads follow the same boundary.
 from __future__ import annotations
 
 import re
+import json
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -20,6 +21,7 @@ _WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
 #: teaching assets (builtin teaching maps copied in by the teaching-map
 #: service). Membership is decided on the *resolved* path, not the URL text.
 SHARED_PUBLIC_UPLOAD_DIRNAME = "teaching_maps"
+TEACHER_REVISION_SHA = "d26a413034dfdb0fdd1a5d8c1674cb8b35f7f0b4e0796a49b6c29e452727731a"
 
 
 def normalize_file_reference(reference: str) -> Optional[Path]:
@@ -73,7 +75,20 @@ def is_shared_public_asset(config, resolved: Path) -> bool:
     try:
         Path(resolved).resolve().relative_to(shared_root)
     except ValueError:
-        return False
+        # Only the exact registered illustrations of the approved builtin
+        # teacher revision are shared. The manifest and neighboring files
+        # remain private; normalized root containment is checked upstream.
+        teacher_root = (Path(config.uploads_dir) / "teacher_population_revised").resolve()
+        candidate = Path(resolved).resolve()
+        if candidate.parent != teacher_root or not re.fullmatch(r"source_row_\d+_\d+\.png", candidate.name):
+            return False
+        try:
+            manifest = json.loads((teacher_root / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        return candidate.is_file() and manifest.get("source_sha256") == TEACHER_REVISION_SHA and any(
+            item.get("filename") == candidate.name for item in manifest.get("items", []) if isinstance(item, dict)
+        )
     return Path(resolved).is_file()
 
 

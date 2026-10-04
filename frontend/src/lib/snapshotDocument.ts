@@ -1,3 +1,5 @@
+import { getApiBase } from "../api";
+
 export type LegendRow =
   | { kind: "text"; text: string; heading?: boolean; color?: string; dashed?: boolean }
   | { kind: "swatches"; items: { label: string; color: string }[] }
@@ -53,10 +55,15 @@ export function loadSnapshotImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
     const timer = window.setTimeout(() => { image.onload = null; image.onerror = null; reject(new Error("图例图片加载超时")); }, 5000);
-    image.crossOrigin = "anonymous";
+    const url = new URL(src, window.location.href);
+    const apiOrigin = new URL(getApiBase() || "/", window.location.href).origin;
+    const protectedFile = url.origin === apiOrigin && url.pathname.includes("/files/");
+    image.crossOrigin = protectedFile ? "use-credentials" : "anonymous";
+    // Do not reuse an earlier no-CORS <img> response when exporting to canvas.
+    if (protectedFile) url.searchParams.set("canvas", "1");
     image.onload = () => { clearTimeout(timer); resolve(image); };
     image.onerror = () => { clearTimeout(timer); reject(new Error("图例图片无法读取")); };
-    image.src = src;
+    image.src = url.href;
   });
 }
 
@@ -115,7 +122,9 @@ export async function composeSnapshotDocument(source: string, document: Snapshot
     if (row.kind === "text") addText(row.text, row.heading, row.color, row.dashed);
     else if (row.kind === "image") {
       const image = images.get(row.src)!;
-      const imageWidth = Math.min(innerWidth, 620);
+      // Tall textbook legends must not dwarf the actual map in the report
+      // or shrink it to a thumbnail when the image service reads the sheet.
+      const imageWidth = Math.min(innerWidth, 320, 280 * image.naturalWidth / Math.max(image.naturalHeight, 1));
       const imageHeight = imageWidth * image.naturalHeight / Math.max(image.naturalWidth, 1);
       const top = y;
       draws.push(() => context.drawImage(image, padding, top, imageWidth, imageHeight));

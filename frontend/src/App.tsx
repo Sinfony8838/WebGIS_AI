@@ -1745,7 +1745,8 @@ export default function App({
       target: AssistantTarget = "webgis",
       inputMode: AssistantInputMode = "text",
       imageAttachment?: ImageAttachment | null,
-      displayMessage?: string
+      displayMessage?: string,
+      submittedTabOverride?: AssistantTab
     ): Promise<boolean> => {
       if (!project) {
         return false;
@@ -1755,7 +1756,7 @@ export default function App({
       assistantSubmittingRef.current = true;
       // 智能交互 Tab 走 interaction 模式（独立会话、直达工具规划）；
       // 教学助手 Tab 保持 teaching 模式与既有行为完全一致。
-      const submittedTab: AssistantTab = assistantTabRef.current === "interaction" ? "interaction" : "teaching";
+      const submittedTab: AssistantTab = submittedTabOverride || (assistantTabRef.current === "interaction" ? "interaction" : "teaching");
       const requestMode: AssistantMode = submittedTab === "interaction" ? "interaction" : assistantMode;
       lastInputModeRef.current = inputMode;
       lastSubmittedTabRef.current = submittedTab;
@@ -3191,6 +3192,7 @@ export default function App({
     measureSourceRef.current = measureSource;
     annotationSourceRef.current = annotationSource;
     mapRef.current = map;
+    lastAppliedViewRef.current = "";
     const stopTrackingView = observePlaneView(map.getView(), setPlaneViewState);
     map.on("singleclick", handleClick);
 
@@ -3517,8 +3519,10 @@ export default function App({
         if (isRaster) {
           olLayer = new ImageLayer({
             source: new ImageStatic({
-              url: `${getApiBase()}${assetUrl}`,
-              imageExtent: transformExtent(bounds as [number, number, number, number], "EPSG:4326", "EPSG:3857")
+              url: `${getApiBase()}${assetUrl}${assetUrl.includes("?") ? "&" : "?"}canvas=1`,
+              crossOrigin: "use-credentials",
+              projection: record.metadata?.image_crs === "EPSG:4326" ? "EPSG:4326" : "EPSG:3857",
+              imageExtent: record.metadata?.image_crs === "EPSG:4326" ? bounds as [number, number, number, number] : transformExtent(bounds as [number, number, number, number], "EPSG:4326", "EPSG:3857")
             }),
             opacity: record.opacity,
             visible: record.visible,
@@ -4538,7 +4542,42 @@ export default function App({
             setTeachingPhase(ctx?.phase || "");
           }}
           onStudentDisplayChange={setStudentDisplay}
-          onAssistantPrompt={(prompt, displayMessage) => assistantDispatchRef.current(prompt, undefined, displayMessage)}
+          onAssistantPrompt={(prompt, displayMessage, captureMap) => {
+            if (!captureMap) { assistantDispatchRef.current(prompt, undefined, displayMessage); return; }
+            void (async () => {
+              const context = teachingContextRef.current;
+              if (!project || !mapRef.current || viewMode !== "plane" || context?.stage_id !== "finland_application" || !context.session_id) {
+                pushToast("error", "尚未发送截图", "请在芬兰探究环节打开二维地图后主动审阅。"); return;
+              }
+              const scope = jobScopeEpochRef.current;
+              const sessionId = context.session_id;
+              setMapBusy(true);
+              try {
+                const captured = await captureMapSnapshot(mapRef.current);
+                if (!captured) throw new Error("地图截图尚未完成，请检查图层加载后重试。");
+                const composed = await composeSnapshotDocument(captured, {
+                  title: "芬兰探究 教师主动截图审阅", capturedAt: new Date().toLocaleString("zh-CN"),
+                  basemap: layerState?.base_map?.title || "当前底图",
+                  attribution: plainAttribution((layerState?.base_map?.layers || []).map(layer => layer.attribution || "").join(" · ")),
+                  rows: collectLegendRows(window.document.querySelector(".map-evidence-legend"))
+                }, mapRef.current.getSize()?.[0] || 1200);
+                const current = () => scope === jobScopeEpochRef.current && teachingContextRef.current?.session_id === sessionId && teachingContextRef.current?.stage_id === "finland_application";
+                if (!current()) throw new Error("课堂环节已变化，截图未发送给助教。");
+                const blob = await (await fetch(composed)).blob();
+                const uploaded = await uploadImageLibraryAsset(project.project_id, new File([blob], "finland-teacher-review.png", { type: "image/png" }), "芬兰探究教师审阅截图");
+                if (!current()) throw new Error("课堂环节已变化，截图仅保存在本项目图片库。");
+                setCopilotOpenSignal(value => value + 1);
+                const sent = await submitAssistantText(prompt + "\n仅分析所附课堂截图并给出参考建议，不执行地图修改。不能从教材图片颜色推算人口数值；截图未包含的数据必须说明缺失。", undefined, "webgis", "text", {
+                  artifact_id: uploaded.artifact.artifact_id, title: uploaded.artifact.title,
+                  public_url: buildPublicFileUrl(String(uploaded.artifact.metadata?.public_url || "")), mime_type: "image/png"
+                }, displayMessage, "teaching");
+                if (!sent) throw new Error("截图已保存，但助教任务未提交，请待当前任务结束后重试。");
+                await logSessionEvent(sessionId, { event_type: "note", stage_id: "finland_application", payload: { kind: "teacher_requested_image_review", artifact_id: uploaded.artifact.artifact_id } });
+              } catch (error) {
+                pushToast("error", "截图审阅未完成", error instanceof Error ? error.message : "请重试。");
+              } finally { if (scope === jobScopeEpochRef.current) setMapBusy(false); }
+            })();
+          }}
           onApplyGlobeScene={handleApplyLessonGlobeScene}
           getGlobeSceneSnapshot={getLessonGlobeSceneSnapshot}
           getProfilePreset={getProfilePreset}
@@ -4547,6 +4586,31 @@ export default function App({
             void handleFocusLessonEvidenceLayer(datasetId, stageDatasetIds);
           }}
           onRequestPlaneView={() => handleViewModeToggle("plane")}
+          teachingGeometry={searchAreaGeometry}
+          onExportInquiry={async (title, summary) => {
+            if (!project || !mapRef.current || viewMode !== "plane") throw new Error("请在二维地图完成探究后导出。");
+            const context = teachingContextRef.current;
+            const scope = jobScopeEpochRef.current;
+            const document = {
+              title, capturedAt: new Date().toLocaleString("zh-CN"),
+              basemap: layerState?.base_map?.title || "当前底图",
+              attribution: plainAttribution((layerState?.base_map?.layers || []).map(layer => layer.attribution || "").join(" · ")),
+              rows: [
+                ...collectLegendRows(window.document.querySelector(".map-evidence-legend")),
+                { kind: "text" as const, text: "教师确认的分析摘要", heading: true },
+                { kind: "text" as const, text: summary },
+                { kind: "text" as const, text: "教学依据 张玥人口分布稿本设计修订稿；手绘边界为探究观点，不代表唯一标准分界。" }
+              ]
+            };
+            const captured = await captureMapSnapshot(mapRef.current);
+            if (!captured) throw new Error("地图截图未完成，可能存在未加载图层或跨域影像，请重试。");
+            const composed = await composeSnapshotDocument(captured, document, mapRef.current.getSize()?.[0] || 1200);
+            if (scope !== jobScopeEpochRef.current || context?.session_id !== teachingContextRef.current?.session_id || context?.stage_id !== teachingContextRef.current?.stage_id) throw new Error("项目或课堂环节已变化，请返回原探究环节重新导出。");
+            const saved = await exportSnapshot(project.project_id, title, composed, "教师确认的地理探究报告，含地图、手绘边界、图例、来源和分析摘要");
+            if (context?.session_id) await logSessionEvent(context.session_id, { event_type: "snapshot", stage_id: context.stage_id || "", payload: { artifact_id: saved.artifact.artifact_id, title, summary, geometry: searchAreaGeometry, source: "teacher_entered" } });
+            downloadSnapshot(composed);
+            await refreshProjectState(project.project_id);
+          }}
           onCaptureEvidence={(sessionId, stageId) => {
             pendingEvidenceSnapshotRef.current = { sessionId, stageId };
             void handleStartScreenshot().then((started) => {

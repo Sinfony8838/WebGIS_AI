@@ -2,6 +2,7 @@ import { useId, useState } from "react";
 import { DENSITY_SCALE, SHANGHAI_DENSITY_SCALE, SHANGHAI_AGE_SCALE } from "../lib/populationVisual";
 import { GLOBE_THEMES } from "../lib/globeThemes";
 import type { LayerRecord } from "../types";
+import {buildPublicFileUrl} from "../api";
 import "./MapEvidenceLegend.css";
 
 type Props = { basemapId?:string; layers:LayerRecord[]; globe:boolean; themeIds:string[]; showFit:boolean; onShowFit:(value:boolean)=>void; busy?:boolean; onTogglePrecipitation?:(value:boolean)=>Promise<void> };
@@ -17,21 +18,30 @@ export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onSho
     id: layer.layer_id, name: layer.name,
     style: layer.metadata.workflow_style as { title?: string; legend?: { title?: string; items?: Array<{ label: string; color: string }> } }
   }));
+  const teacherMaps = visible.filter(layer => layer.metadata?.teaching_map_id).map(layer => ({
+    id:layer.layer_id, name:layer.name, source:String(layer.metadata.source || "教材材料"),
+    year:String(layer.metadata.source_year || "年份见原图"), note:String(layer.metadata.note || ""),
+    legendUrl:String(layer.metadata.legend_url || ""),
+    legend:(layer.metadata.legend || []) as Array<{label:string;color:string}>
+  }));
   const hasDensity = globe ? themeIds.some(id => ["density_fill","density_3d","population_columns"].includes(id)) : visible.some(layer => ["builtin_population_regions","builtin_population_density"].includes(layer.layer_id));
   const shanghai = !globe && visible.find(layer => layer.metadata?.catalog_id === "shanghai_population_density");
+  const finland = !globe && visible.some(layer => layer.metadata?.catalog_id === "finland_population_density_2015" || layer.metadata?.teacher_topic === "finland_population_2015");
   const shanghaiAge = !globe && visible.some(layer => layer.metadata?.catalog_id === "shanghai_age_60_plus_2020");
   const precipitation = !globe && visible.some(layer => layer.metadata?.catalog_id === "china_precipitation_400mm");
   const line = visible.find(layer => layer.layer_id === "generated_hu_line");
   const hasLine = globe ? themeIds.includes("hu_line") : Boolean(line);
   const otherThemes = globe ? GLOBE_THEMES.filter(theme => themeIds.includes(theme.id) && !["density_fill","density_3d","population_columns","hu_line"].includes(theme.id)) : [];
   const ranked = !globe && visible.some(layer => Boolean(layer.metadata?.visualization));
-  if (!shanghaiAge && !precipitation && !night && !populationGrid && !shanghai && !hasDensity && !hasLine && !otherThemes.length && !ranked && !workflowLegends.length) return null;
+  if (!finland && !teacherMaps.length && !shanghaiAge && !precipitation && !night && !populationGrid && !shanghai && !hasDensity && !hasLine && !otherThemes.length && !ranked && !workflowLegends.length) return null;
   const share = line?.metadata?.classic_share;
   return <section className={`map-evidence-legend${expanded ? "" : " is-collapsed"}`} aria-label="地图图例与依据">
     <button className="map-legend-toggle" aria-expanded={expanded} aria-controls={contentId} onClick={() => setExpanded(value => !value)}>
       图例与数据 <span aria-hidden="true">{expanded ? "−" : "+"}</span>
     </button>
     <div id={contentId} className="map-legend-content" hidden={!expanded}>
+    {finland && <><strong>芬兰人口密度 · 2015 <small>人/km²</small></strong><p>WorldPop模型人数网格聚合至0.1°，人数除以球面单元面积；海岸按中心点裁剪，只作教学比较，不作为芬兰全国人口总量。分级色标见分析结果。</p></>}
+    {teacherMaps.map(m => <div key={m.id}><strong>{m.name} <small>{m.year}</small></strong>{m.legend.map(item=><span className="map-other-key" key={item.label}><i style={{background:item.color}}/>{item.label}</span>)}{m.legendUrl && <img src={buildPublicFileUrl(m.legendUrl)} alt={`${m.name}原图图例`} style={{maxWidth:"100%",maxHeight:220,objectFit:"contain"}}/>}<p>{m.source} · {m.note}</p></div>)}
     {workflowLegends.map(layer => <div key={layer.id}><strong>{layer.style.legend?.title || layer.style.title || layer.name}</strong>
       {layer.style.legend?.items?.map((item, index) => <span className="map-other-key" key={index}><i style={{ background: item.color }} />{item.label}</span>)}
     </div>)}

@@ -328,7 +328,7 @@ class PopulationLessonPrepService:
             "lesson_id": lesson.lesson_id,
             "objective": objective[:1000],
             "grade": str(payload.get("grade") or lesson.grade),
-            "duration_minutes": max(10, min(int(duration), 180)),
+            "duration_minutes": 0 if lesson.metadata.get("pacing_mode") == "teacher" else max(10, min(int(duration), 180)),
             "region": str(payload.get("region") or "中国"),
             "years": years or ["2020"],
             "source_ids": source_ids,
@@ -379,6 +379,12 @@ class PopulationLessonPrepService:
         selected_cards: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
         selected_by_id = {card["id"]: card for card in selected_cards}
+        if lesson.metadata.get("pacing_mode") == "teacher":
+            # The revised teacher source has multiple years and scales. A
+            # generic population source pack must not relabel every stage.
+            return {**lesson.to_dict(), "metadata": {**lesson.metadata,
+                "population_prep_objective": request["objective"],
+                "population_prep_generated_at": utc_now()}}
         fallback_cards = selected_cards[:2]
         stages: List[Dict[str, Any]] = []
         for raw_stage in lesson.stages:
@@ -417,7 +423,8 @@ class PopulationLessonPrepService:
                 ).strip()
             stages.append(stage)
 
-        self._rebalance_minutes(stages, int(request["duration_minutes"]))
+        if int(request["duration_minutes"]) > 0:
+            self._rebalance_minutes(stages, int(request["duration_minutes"]))
         metadata = {
             **lesson.metadata,
             "population_topic": True,

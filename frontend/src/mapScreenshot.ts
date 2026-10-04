@@ -42,7 +42,9 @@ export function captureMapSnapshot(map: Map, freezeDetails?: () => void): Promis
         canvas.width = Math.round(size[0] * ratio); canvas.height = Math.round(size[1] * ratio);
         const context = canvas.getContext("2d");
         if (!context) { finish(""); return; }
-        const canvases = Array.from(map.getViewport().querySelectorAll<HTMLCanvasElement>(".ol-layer canvas, canvas.ol-layer"));
+        // Basemaps use a custom class, so an .ol-layer-only selector drops
+        // their pixels and leaves the exported thematic map on a blank sheet.
+        const canvases = Array.from(map.getViewport().querySelectorAll<HTMLCanvasElement>("canvas"));
         for (const sourceCanvas of canvases) {
           if (!sourceCanvas.width || !sourceCanvas.height) continue;
           const opacity = Number(sourceCanvas.parentElement?.style.opacity || "1");
@@ -57,7 +59,7 @@ export function captureMapSnapshot(map: Map, freezeDetails?: () => void): Promis
         context.setTransform(ratio, 0, 0, ratio, 0, 0); context.globalAlpha = 1;
         drawSnapshotInk(context, document.querySelector<HTMLCanvasElement>('[data-testid="map-brush-overlay"]'), map.getViewport().getBoundingClientRect());
         finish(canvas.toDataURL("image/png"));
-      } catch { finish(""); }
+      } catch (error) { console.warn("Map snapshot failed", error instanceof Error ? error.message : "canvas export error"); finish(""); }
     };
     map.once("rendercomplete", render);
     timer = window.setTimeout(() => finish(""), 8000);

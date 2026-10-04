@@ -49,6 +49,10 @@ class MiniMaxMcpClient:
         text = self._extract_text(response.get("result", {}))
         if not text:
             raise MiniMaxMcpError("MiniMax MCP returned an empty image understanding result")
+        # The official tool returns API failures as ordinary TextContent,
+        # without setting isError. Never treat that message as visual evidence.
+        if text.lstrip().startswith("Failed to perform VLM analysis:"):
+            raise MiniMaxMcpError("MiniMax image analysis request failed")
         return {"used_vision": True, "text": text, "raw": response.get("result", {})}
 
     @staticmethod
