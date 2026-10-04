@@ -9,11 +9,13 @@ describe("MapEvidenceLegend", () => {
   it("lets a narrow classroom open and close readable source details", () => {
     vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
     render(<MapEvidenceLegend {...props} />);
-    const toggle = screen.getByRole("button", { name: "图例与数据" });
+    const toggle = screen.getByRole("button", { name: "图例" });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("link", { name: /NASA Black Marble/ })).not.toBeInTheDocument();
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(/NASA Black Marble/)).not.toBeVisible();
+    fireEvent.click(screen.getByText("资料说明"));
     expect(screen.getByRole("link", { name: /NASA Black Marble/ })).toBeVisible();
     fireEvent.click(toggle);
     expect(screen.queryByRole("link", { name: /NASA Black Marble/ })).not.toBeInTheDocument();
@@ -21,9 +23,9 @@ describe("MapEvidenceLegend", () => {
   it("keeps the desktop legend expanded and hides it when no thematic layer is visible", () => {
     vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false })));
     const { rerender } = render(<MapEvidenceLegend {...props} />);
-    expect(screen.getByRole("button", { name: "图例与数据" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "图例" })).toHaveAttribute("aria-expanded", "true");
     rerender(<MapEvidenceLegend {...props} basemapId="amap_light" />);
-    expect(screen.queryByRole("button", { name: "图例与数据" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "图例" })).not.toBeInTheDocument();
   });
 });
 
@@ -93,11 +95,30 @@ describe("textbook overlay reading", () => {
       textbook("terrain","芬兰地形图",.5,22)
     ]}/>);
     expect(screen.getByText("多图叠置 · 3幅教材图")).toBeVisible();
-    expect(screen.getByText(/画面颜色为混合色/)).toHaveTextContent("芬兰地形图 → 芬兰降水气温图 → 芬兰人口分布图");
+    expect(screen.getByText("叠置为混合色，请单独查看各图。")).toBeVisible();
+    expect([...document.querySelectorAll(".map-teacher-legend > summary")].map(item => item.textContent)).toEqual(["芬兰地形图 · 50% · 最上层", "芬兰降水气温图 · 50%", "芬兰人口分布图 · 50%"]);
     expect(screen.getByText("芬兰地形图 · 50% · 最上层")).toBeVisible();
     expect(screen.getByRole("img",{name:"芬兰地形图原图图例"})).toBeVisible();
     expect(screen.getByAltText("芬兰人口分布图原图图例")).not.toBeVisible();
     fireEvent.click(screen.getByText("芬兰人口分布图 · 50%"));
     expect(screen.getByRole("img",{name:"芬兰人口分布图原图图例"})).toBeVisible();
   });
+});
+
+it("keeps source methods off the projection and supports enlarged textbook legends with keyboard return", () => {
+  const layer = { layer_id: "population", name: "芬兰人口分布图", visible: true, opacity: 1, z_index: 20, kind: "raster", source: "teaching_map", metadata: { teaching_map_id: "population", source_year: "2015", source: "教材原图", note: "按原图经纬网配准；仅作定性叠置", legend_url: "/files/population-legend.png" } } as LayerRecord;
+  const { rerender } = render(<MapEvidenceLegend {...props} basemapId="amap_light" layers={[layer]}/>);
+  expect(screen.getByText("2015")).toBeVisible();
+  expect(screen.getByText(/按原图经纬网配准/)).not.toBeVisible();
+  const enlarge = screen.getByRole("button", { name: "放大芬兰人口分布图图例" });
+  enlarge.focus(); fireEvent.click(enlarge);
+  expect(screen.getByRole("dialog", { name: "芬兰人口分布图放大图例" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "关闭图例" })).toHaveFocus();
+  rerender(<MapEvidenceLegend {...props} basemapId="amap_light" layers={[{...layer}]}/>);
+  expect(screen.getByRole("dialog")).toBeVisible();
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(enlarge).toHaveFocus();
+  fireEvent.click(screen.getByText("资料说明"));
+  expect(screen.getByText(/按原图经纬网配准/)).toBeVisible();
 });

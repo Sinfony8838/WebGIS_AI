@@ -191,7 +191,7 @@ describe("QuestionPracticeModal student display", () => {
     expect(modal).toHaveTextContent("课堂练习");
     expect(modal).not.toHaveTextContent("题库题");
     expect(modal).not.toHaveTextContent("尚未揭示的知识标签");
-    expect(within(modal).queryByRole("button")).toBeNull();
+    expect(within(modal).getAllByRole("button")).toEqual([within(modal).getByRole("button", { name: "放大题图 1" })]);
     expect(within(modal).queryByRole("textbox")).toBeNull();
     expect(screen.queryByTestId("qpm-answer")).toBeNull();
     expect(screen.getByTestId("qpm-options").querySelector(".correct")).toBeNull();
@@ -212,7 +212,7 @@ describe("QuestionPracticeModal student display", () => {
     expect(screen.queryByTestId("qpm-notes")).toBeNull();
     expect(screen.queryByText(/学情速记|内部任务失败提示|重试讲解|讲解任务已中断/)).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.getAllByRole("button")).toEqual([screen.getByRole("button", { name: "放大题图 1" })]);
     rerender(<QuestionPracticeModal studentDisplay question={question({ question_id: "next", explanation: "新题尚未揭示的解析" })} {...callbacks} />);
     expect(screen.queryByTestId("qpm-answer")).toBeNull();
     expect(screen.queryByText("新题尚未揭示的解析")).toBeNull();
@@ -250,4 +250,38 @@ describe("QuestionPracticeModal student display", () => {
     fireEvent.click(screen.getByTestId("qpm-note-correct"));
     expect(callbacks.onObservation).toHaveBeenCalledWith("correct", "", "");
   });
+});
+
+it("lets the teacher adjust projection text without revealing answers or changing the timer", () => {
+  const callbacks = props(); const onFontSizeChange = vi.fn();
+  const { rerender } = render(<QuestionPracticeModal question={question()} {...callbacks} fontSize={40} onFontSizeChange={onFontSizeChange}/>);
+  fireEvent.click(screen.getByRole("button", { name: "放大题目字号" }));
+  expect(onFontSizeChange).toHaveBeenCalledWith(42);
+  fireEvent.click(screen.getByRole("button", { name: "缩小题目字号" }));
+  expect(onFontSizeChange).toHaveBeenLastCalledWith(38);
+  expect(callbacks.onTimerAction).not.toHaveBeenCalled();
+  expect(callbacks.onReveal).not.toHaveBeenCalled();
+  expect(screen.queryByTestId("qpm-answer")).not.toBeInTheDocument();
+  rerender(<QuestionPracticeModal question={question()} {...callbacks} fontSize={56} onFontSizeChange={onFontSizeChange}/>);
+  expect(screen.getByRole("button", { name: "放大题目字号" })).toBeDisabled();
+  rerender(<QuestionPracticeModal question={question()} {...callbacks} fontSize={28} onFontSizeChange={onFontSizeChange}/>);
+  expect(screen.getByRole("button", { name: "缩小题目字号" })).toBeDisabled();
+});
+
+it("presents the question before its material and enlarges images without closing the active question", () => {
+  const callbacks = props();
+  render(<QuestionPracticeModal question={question()} {...callbacks}/>);
+  const body = screen.getByRole("region", { name: "题目与讲解" });
+  expect(body.firstElementChild).toBe(screen.getByTestId("qpm-stem"));
+  const enlarge = screen.getByRole("button", { name: "放大题图 1" });
+  enlarge.focus(); fireEvent.click(enlarge);
+  expect(screen.getByRole("dialog", { name: "题图 1放大题图" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "关闭题图" })).toHaveFocus();
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(screen.queryByRole("dialog", { name: "题图 1放大题图" })).not.toBeInTheDocument();
+  expect(screen.getByTestId("question-practice-modal")).toBeVisible();
+  expect(enlarge).toHaveFocus();
+  expect(callbacks.onClose).not.toHaveBeenCalled();
+  expect(callbacks.onTimerAction).not.toHaveBeenCalled();
+  expect(screen.queryByTestId("qpm-answer")).not.toBeInTheDocument();
 });

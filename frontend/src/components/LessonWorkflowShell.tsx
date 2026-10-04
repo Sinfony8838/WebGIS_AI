@@ -247,7 +247,7 @@ export function LessonWorkflowShell({
     try { if (studentDisplayKey) window.localStorage.setItem(studentDisplayKey, String(enabled)); }
     catch { /* When browser storage is unavailable the current view still works. */ }
   }, [studentDisplayKey, studentDisplayRequested]);
-  const [fontSize, setFontSize] = useState(30);
+  const [fontSize, setFontSize] = useState(40);
   const [revealedStageKey, setRevealedStageKey] = useState("");
   const [menuTarget, setMenuTarget] = useState<HTMLElement | null>(null);
 
@@ -862,7 +862,7 @@ export function LessonWorkflowShell({
         <button type="button" className="toolbar-button compact" data-testid="class-toggle-presentation"
           disabled={workflowBusy || !currentStage} onClick={() => setPresentationVisible(value => !value)}>{presentationVisible ? "回到地图" : "展示板"}</button>
         <label htmlFor="classroom-presentation-font-size">展示字号 <span aria-hidden="true">{fontSize}px</span>
-          <input id="classroom-presentation-font-size" type="range" min="24" max="44" step="2" value={fontSize} aria-label="展示字号"
+          <input id="classroom-presentation-font-size" type="range" min="28" max="56" step="2" value={fontSize} aria-label="展示字号"
             onChange={event => setFontSize(Number(event.target.value))} />
         </label>
         <button type="button" className="toolbar-button compact" aria-pressed={revealConclusions}
@@ -971,6 +971,7 @@ export function LessonWorkflowShell({
           question={projectionQuestion}
           studentDisplay={studentDisplay}
           fontSize={fontSize}
+          onFontSizeChange={setFontSize}
           busy={workflowBusy}
           onTimerAction={(action) => void projectionTimerAction(action)}
           onReveal={() => void projectionReveal()}
@@ -986,6 +987,7 @@ export function LessonWorkflowShell({
           question={projectionQuestion}
           studentDisplay={studentDisplay}
           fontSize={fontSize}
+          onFontSizeChange={setFontSize}
           busy={workflowBusy}
           onTimerAction={(action) => void projectionTimerAction(action)}
           onReveal={() => void projectionReveal()}

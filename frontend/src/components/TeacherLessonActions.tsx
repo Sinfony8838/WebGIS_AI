@@ -99,13 +99,12 @@ export function TeacherLessonActions({ lesson, stage, session, busy, geometry, o
     finally { if (token === epoch.current) setPending(false); }
   }
   return <section className="teacher-lesson-actions" aria-label="修订稿教学操作">
-    <p className="teacher-source">张玥修订稿 · 教师自主掌握节奏</p>
     <div className="teacher-action-buttons">{stage.actions?.map(action => <button type="button" key={action.action_id} aria-pressed={selected?.action_id === action.action_id} disabled={locked} onClick={() => void run(action)}>{action.label}</button>)}</div>
     {pending && <p role="status">正在处理，请稍候…</p>}{error && <p role="alert">{error}</p>}
     {workflowStatus && <p role="status">{workflowStatus}</p>}
-    {selected?.note && <p>{selected.note}</p>}
+    {selected?.note && <details><summary>教学提示</summary><p>{selected.note}</p></details>}
     {selected?.type === "video" && <a href={selected.url} target="_blank" rel="noreferrer">打开原视频播放 ↗</a>}
-    {(selected?.scene?.teaching_maps?.length || 0) > 1 && <p className="teacher-overlay-note">多图叠置会混合颜色，不能用人口图例解读降水或地形。可单独查看各图，再恢复叠置进行比较。</p>}
+    {(selected?.scene?.teaching_maps?.length || 0) > 1 && <p className="teacher-overlay-note">叠置为混合色，请单独查看各图。</p>}
     {selected?.scene?.teaching_maps?.map(item => {
       const name = resources?.maps.find(m => m.id === item.id)?.name || item.id;
       return <div className="teacher-map-control" key={item.id}>
@@ -115,7 +114,7 @@ export function TeacherLessonActions({ lesson, stage, session, busy, geometry, o
     })}
     {(selected?.scene?.teaching_maps?.length || 0) > 1 && <button type="button" disabled={locked} onClick={() => selected && void run(selected, {})}>恢复叠置</button>}
     {materials.length > 0 && <details><summary>教师原稿配图 {materials.length} 张</summary><div className="teacher-materials">{materials.map(m => <figure key={m.url}><img src={buildPublicFileUrl(m.url)} alt={`修订稿本环节配图 ${m.order}`} /><figcaption>{m.source}</figcaption></figure>)}</div></details>}
-    {summary && <div className="teacher-zone-result"><strong>{summary.year}年人口估计</strong>{summary.status === "success" ? <><div className="teacher-pie" role="img" aria-label={`圈内${summary.inside_percent}%，圈外${summary.outside_percent}%`} style={{ background: `conic-gradient(#218e9b 0 ${summary.inside_percent}%, #d9e5ee ${summary.inside_percent}% 100%)` }} /><p>圈内 {summary.inside_population?.toLocaleString()} 人 · {summary.inside_percent}%<br/>圈外 {summary.outside_population?.toLocaleString()} 人 · {summary.outside_percent}%</p><p>{summary.method}</p></> : null}<p>{summary.note}</p><a href={summary.source.url} target="_blank" rel="noreferrer">数据来源与说明 ↗</a></div>}
+    {summary && <div className="teacher-zone-result"><strong>{summary.year}年人口估计</strong>{summary.status === "success" ? <><div className="teacher-pie" role="img" aria-label={`圈内${summary.inside_percent}%，圈外${summary.outside_percent}%`} style={{ background: `conic-gradient(#218e9b 0 ${summary.inside_percent}%, #d9e5ee ${summary.inside_percent}% 100%)` }} /><p>圈内 {summary.inside_population?.toLocaleString()} 人 · {summary.inside_percent}%<br/>圈外 {summary.outside_population?.toLocaleString()} 人 · {summary.outside_percent}%</p><details><summary>统计说明</summary><p>{summary.method}</p></details></> : null}<p>{summary.note}</p><a href={summary.source.url} target="_blank" rel="noreferrer">数据来源与说明 ↗</a></div>}
     {stage.actions?.some(a => a.type === "summary") && <details className="teacher-summary"><summary>审阅小结与保存成果</summary><p>助教回答为草稿。将需要保留的内容填入下方，修改并确认后用于课堂讲义和成果导出。</p><textarea aria-label="教师审阅的小结" value={draft} onChange={e => { setDraft(e.target.value); setConfirmed(false); }} placeholder="填写或粘贴助教草稿，并核对本课材料和年份" /><button type="button" disabled={locked || !draft.trim() || confirmed} onClick={() => void confirmSummary()}>{confirmed ? "已确认并保存" : "教师确认并保存"}</button>{onExport && <button type="button" disabled={locked || !confirmed} onClick={() => { setError(""); void onExport(stage.title, draft).catch(e => setError(e instanceof Error ? e.message : "导出失败")); }}>导出探究报告 PNG</button>}</details>}
     <details className="teacher-resource-check"><summary>课前资料检查</summary>{resources ? <><p>原稿配图：{resources.figures_available ? "已准备" : "未准备"}；人口统计包：{resources.population_available ? "已准备" : "未准备"}</p>{resources.maps.map(m => <p key={m.id}>{m.available ? "✓" : "待准备"} {m.name}</p>)}</> : <p>资料状态尚未取得，请检查连接。</p>}</details>
   </section>;

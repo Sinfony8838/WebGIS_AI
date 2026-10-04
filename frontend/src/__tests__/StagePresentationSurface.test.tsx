@@ -33,14 +33,17 @@ const stage = (overrides: Partial<LessonStage> = {}): LessonStage =>
     ...overrides
   }) as LessonStage;
 
+afterEach(cleanup);
+
 describe("StagePresentationSurface", () => {
-  afterEach(cleanup);
 
   it("renders a readable default presentation for stages without a layout", () => {
     const sample = stage();
     const { rerender } = render(<StagePresentationSurface stage={sample} />);
     const surface = screen.getByTestId("stage-presentation-surface");
     expect(surface).toHaveTextContent("情境导入");
+    expect(screen.getAllByText("情境导入")).toHaveLength(1);
+    expect(screen.getByRole("region", { name: "课堂展示内容" })).toHaveAttribute("tabindex", "0");
     expect(surface).toHaveTextContent("材料：人口密度图");
     expect(surface).not.toHaveTextContent("东多西少");
     expect(screen.queryByRole("button", { name: /结论/ })).toBeNull();
@@ -154,4 +157,23 @@ describe("StagePresentationSurface", () => {
     fireEvent.click(screen.getByRole("button", { name: "投屏答题" }));
     expect(onProjectQuestion).toHaveBeenCalledWith("q1", "s2");
   });
+});
+
+it("supports legacy empty layout objects and includes every classroom question without revealing answers", () => {
+  const sample = stage();
+  sample.presentation = {} as LessonStage["presentation"];
+  sample.questions = [1, 2, 3, 4].map(index => ({ ...sample.questions[0], question_id: `q${index}`, text: `课堂问题${index}` }));
+  render(<StagePresentationSurface stage={sample}/>);
+  expect(screen.getAllByText("情境导入")).toHaveLength(1);
+  for (const index of [1, 2, 3, 4]) expect(screen.getByTestId(`sps-question-q${index}`)).toHaveTextContent(`课堂问题${index}`);
+  expect(screen.queryByText(/自然环境优越|东多西少/)).not.toBeInTheDocument();
+});
+
+it("removes repeated labels and activities only from the generated classroom display", () => {
+  const sample = stage({ knowledge_point: "情境导入", material: "读图圈画", student_activities: ["读图圈画", "讨论比较", "讨论比较"] });
+  render(<StagePresentationSurface stage={sample}/>);
+  expect(screen.getByRole("region", { name: "课堂展示内容" })).toHaveTextContent("材料：读图圈画");
+  expect(screen.getByRole("region", { name: "课堂展示内容" })).toHaveTextContent("活动：讨论比较");
+  expect(screen.queryByText(/知识点：情境导入|活动：读图圈画|讨论比较；讨论比较/)).toBeNull();
+  expect(sample.student_activities).toEqual(["读图圈画", "讨论比较", "讨论比较"]);
 });
