@@ -34,3 +34,9 @@ describe("raster source projection", () => {
     expect(rasterSourceOptions("/worldpop.png", worldPopBounds, "EPSG:4326").url).toBe("/worldpop.png?canvas=1");
   });
 });
+
+it("keeps display restyling isolated to opted-in population sources and invalidates old source identity", () => {
+  expect(rasterSourceOptions("/worldpop.png", worldPopBounds, "EPSG:4326", true).imageLoadFunction).toBeTypeOf("function");
+  expect(rasterSourceOptions("/terrain.png", worldPopBounds, "EPSG:4326").imageLoadFunction).toBeUndefined();
+  expect(rasterSourceKey("/worldpop.png", worldPopBounds, "EPSG:4326", true)).not.toBe(rasterSourceKey("/worldpop.png", worldPopBounds, "EPSG:4326"));
+});

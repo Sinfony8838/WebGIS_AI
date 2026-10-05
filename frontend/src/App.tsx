@@ -26,6 +26,7 @@ import { unByKey } from "ol/Observable";
 import View from "ol/View";
 import ImageStatic from "ol/source/ImageStatic";
 import { rasterSourceKey, rasterSourceOptions } from "./lib/rasterSource";
+import { hasPopulationOverlayStyle } from "./lib/populationRaster";
 import VectorSource from "ol/source/Vector";
 import XYZ from "ol/source/XYZ";
 import LineString from "ol/geom/LineString";
@@ -3497,7 +3498,7 @@ export default function App({
       }
       seen.add(record.layer_id);
       const signature = isRaster
-        ? rasterSourceKey(assetUrl, bounds as [number, number, number, number], record.metadata.image_crs)
+        ? rasterSourceKey(assetUrl, bounds as [number, number, number, number], record.metadata.image_crs, hasPopulationOverlayStyle(record))
         : `vector|${record.data_rev ?? 0}|${record.layer_id === "builtin_population_density" ? regions?.data_rev ?? "none" : ""}`;
       const styleKey = JSON.stringify([record.style || {}, showTeachingFit]);
 
@@ -3514,7 +3515,7 @@ export default function App({
         if (isRaster) {
           olLayer = new ImageLayer({
             source: new ImageStatic(rasterSourceOptions(
-              `${getApiBase()}${assetUrl}`, bounds as [number, number, number, number], record.metadata.image_crs
+              `${getApiBase()}${assetUrl}`, bounds as [number, number, number, number], record.metadata.image_crs, hasPopulationOverlayStyle(record)
             )),
             opacity: record.opacity,
             visible: record.visible,
