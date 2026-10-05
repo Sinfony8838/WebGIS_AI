@@ -1,23 +1,26 @@
 import { useEffect, useId, useState } from "react";
 import { DENSITY_SCALE, SHANGHAI_DENSITY_SCALE, SHANGHAI_AGE_SCALE } from "../lib/populationVisual";
 import { GLOBE_THEMES } from "../lib/globeThemes";
+import { hasPopulationOverlayStyle, populationOverlayLegend } from "../lib/populationRaster";
 import type { LayerRecord } from "../types";
 import {buildPublicFileUrl} from "../api";
 import { ClassroomImageDialog } from "./ClassroomImageDialog";
 import "./MapEvidenceLegend.css";
 
-type Props = { basemapId?:string; layers:LayerRecord[]; globe:boolean; themeIds:string[]; showFit:boolean; onShowFit:(value:boolean)=>void; busy?:boolean; onTogglePrecipitation?:(value:boolean)=>Promise<void> };
-export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onShowFit,busy=false,onTogglePrecipitation}:Props) {
+type Props = { basemapId?:string; layers:LayerRecord[]; globe:boolean; themeIds:string[]; showFit:boolean; onShowFit:(value:boolean)=>void; busy?:boolean; onToggleLayer?:(layerId:string,visible:boolean)=>Promise<void>; onTogglePrecipitation?:(value:boolean)=>Promise<void> };
+export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onShowFit,busy=false,onToggleLayer,onTogglePrecipitation}:Props) {
   const contentId = useId();
   const [readingLegend, setReadingLegend] = useState<{ name: string; url: string } | null>(null);
   const mapContext = layers.filter(layer => layer.visible && layer.opacity !== 0 && layer.metadata?.teaching_map_id).map(layer => `${layer.layer_id}:${layer.opacity}`).join("|");
   useEffect(() => { setReadingLegend(null); }, [basemapId, mapContext, globe]);
+  const [changingRaster, setChangingRaster] = useState<string | null>(null);
   const [changingPrecipitation, setChangingPrecipitation] = useState(false);
   const [expanded, setExpanded] = useState(() => !window.matchMedia?.("(max-width: 960px)").matches);
   const night = basemapId === "nasa_nightlights_2016";
   const populationGrid = basemapId === "nasa_population_2020";
   const visible = layers.filter(layer => layer.visible && layer.opacity !== 0 && (!globe ||
     (layer.kind === "vector" && ["upload", "output_artifact"].includes(layer.source))));
+  const geographicRasters = visible.filter(layer => layer.kind === "raster" && layer.metadata?.registration === "georeferenced_raster");
   const workflowLegends = visible.filter(layer => layer.metadata?.workflow_style).map(layer => ({
     id: layer.layer_id, name: layer.name,
     style: layer.metadata.workflow_style as { title?: string; legend?: { title?: string; items?: Array<{ label: string; color: string }> } }
@@ -29,7 +32,7 @@ export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onSho
     id:layer.layer_id, name:layer.name, opacity:Math.round(layer.opacity * 100), source:String(layer.metadata.source || "教材材料"),
     year:String(layer.metadata.source_year || "年份见原图"), note:String(layer.metadata.note || ""),
     legendUrl:String(layer.metadata.legend_url || ""),
-    legend:(layer.metadata.legend || []) as Array<{label:string;color:string}>
+    legend:populationOverlayLegend(layer), balancedPopulation:hasPopulationOverlayStyle(layer)
   }));
   const hasDensity = globe ? themeIds.some(id => ["density_fill","density_3d","population_columns"].includes(id)) : visible.some(layer => ["builtin_population_regions","builtin_population_density"].includes(layer.layer_id));
   const shanghai = !globe && visible.find(layer => layer.metadata?.catalog_id === "shanghai_population_density");
@@ -40,17 +43,26 @@ export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onSho
   const hasLine = globe ? themeIds.includes("hu_line") : Boolean(line);
   const otherThemes = globe ? GLOBE_THEMES.filter(theme => themeIds.includes(theme.id) && !["density_fill","density_3d","population_columns","hu_line"].includes(theme.id)) : [];
   const ranked = !globe && visible.some(layer => Boolean(layer.metadata?.visualization));
-  if (!finland && !teacherMaps.length && !shanghaiAge && !precipitation && !night && !populationGrid && !shanghai && !hasDensity && !hasLine && !otherThemes.length && !ranked && !workflowLegends.length) return null;
+  if (!geographicRasters.length && !finland && !teacherMaps.length && !shanghaiAge && !precipitation && !night && !populationGrid && !shanghai && !hasDensity && !hasLine && !otherThemes.length && !ranked && !workflowLegends.length) return null;
   const share = line?.metadata?.classic_share;
   return <section className={`map-evidence-legend${expanded ? "" : " is-collapsed"}`} aria-label="地图图例与依据">
     <button className="map-legend-toggle" aria-expanded={expanded} aria-controls={contentId} onClick={() => setExpanded(value => !value)}>
       图例 <span aria-hidden="true">{expanded ? "−" : "+"}</span>
     </button>
     <div id={contentId} className="map-legend-content" hidden={!expanded}>
+    {geographicRasters.map(layer => <div className="map-overlay-reading" key={layer.layer_id}>
+      <strong>当前叠加栅格 · {Math.round(layer.opacity * 100)}%</strong>
+      <p>{layer.name}</p>
+      {onToggleLayer && <button type="button" className="map-legend-enlarge" disabled={busy || changingRaster !== null}
+        aria-label={`隐藏${layer.name}，查看底图`} onClick={async () => {
+          setChangingRaster(layer.layer_id);
+          try { await onToggleLayer(layer.layer_id, false); } finally { setChangingRaster(null); }
+        }}>{changingRaster === layer.layer_id ? "正在隐藏…" : "隐藏此图，查看底图"}</button>}
+    </div>)}
     {finland && <><strong>芬兰人口密度 · 2015 <small>人/km²</small></strong><details><summary>资料说明</summary><p>WorldPop模型人数网格聚合至0.1°，人数除以球面单元面积；海岸按中心点裁剪，只作教学比较，不作为芬兰全国人口总量。分级色标见分析结果。</p></details></>}
     {teacherMaps.length > 1 && <div className="map-overlay-reading"><strong>多图叠置 · {teacherMaps.length}幅教材图</strong><p>叠置为混合色，请单独查看各图。</p></div>}
     {teacherMaps.map((m, index) => {
-      const legend = <><strong>{m.name} <small>{m.year}</small></strong>{m.legend.map(item=><span className="map-other-key" key={item.label}><i style={{background:item.color}}/>{item.label}</span>)}{m.legendUrl && <><img className="map-textbook-key" src={buildPublicFileUrl(m.legendUrl)} alt={`${m.name}原图图例`}/><button type="button" className="map-legend-enlarge" onClick={() => setReadingLegend({ name: m.name, url: buildPublicFileUrl(m.legendUrl) })} aria-label={`放大${m.name}图例`}>放大图例</button></>}<details className="map-source-details"><summary>资料说明</summary><p>{m.source} · {m.note}</p></details></>;
+      const legend = <><strong>{m.name} <small>{m.year}</small></strong>{m.balancedPopulation && <p>紫红越深，人口越密；稀疏区淡显，保留地形。</p>}{m.legend.map(item=><span className="map-other-key" key={item.label}><i style={{background:item.color}}/>{item.label}</span>)}{m.legendUrl && <><img className="map-textbook-key" src={buildPublicFileUrl(m.legendUrl)} alt={`${m.name}原图图例`}/><button type="button" className="map-legend-enlarge" onClick={() => setReadingLegend({ name: m.name, url: buildPublicFileUrl(m.legendUrl) })} aria-label={`放大${m.name}图例`}>放大图例</button></>}<details className="map-source-details"><summary>资料说明</summary><p>{m.source} · {m.note}</p></details></>;
       return teacherMaps.length > 1
         ? <details key={m.id} className="map-teacher-legend" open={index === 0}><summary>{m.name} · {m.opacity}%{index === 0 ? " · 最上层" : ""}</summary>{legend}</details>
         : <div key={m.id}>{legend}</div>;
