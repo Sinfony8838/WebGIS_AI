@@ -35,6 +35,8 @@ GitHub main（唯一代码来源）
 |---|---|---|
 | 代码 | Git 仓库 | `main` 为唯一集成源；功能改动使用独立分支和工作树 |
 | 生产数据 | `backend/data/` | 不提交 Git；更新前停机备份 |
+| 可写知识索引 | `backend/app/data/builtin/knowledge/` | 当前仍在源码目录；备份必须从实际发布工作树补充复制，不随代码回滚覆盖 |
+| 课堂外置资源 | `backend/app/data/builtin/teaching_maps/` 及芬兰人口 GeoJSON | 部分文件被 Git 忽略；新工作树和换机恢复须核对资源清单 |
 | 生产前端 | `frontend/dist/` | 由固定提交重新构建；不得手工修改 |
 | 运行日志与 PID | `backend/data/public-runtime/` | 可删除后重建；故障时先保留日志 |
 | API Key | Windows 用户/服务环境变量 | 不写入 Git、文档、截图或聊天 |
@@ -125,6 +127,31 @@ git diff --check
 
 备份脚本默认拒绝在后端运行时复制，以避免 SQLite 与 JSON 快照不一致。不要把 `-AllowLiveBackup` 当作日常选项。
 
+新版备份保留原有数据根布局，并增加 `_recovery/repo/` 补充目录：完整知识目录、教学地图目录以及
+`backend/app/data/builtin/one_map/population/finland_density_2015.geojson`。源文件不搬迁、不覆盖。
+缺失的补充资源会在清单中明确记录，不能把不存在的资源视为已恢复。
+
+先使用 `-InventoryOnly` 核对选定发布工作树：它只枚举文件名/大小及白名单构建元数据，不读取或哈希
+认证库、状态库内容，不导入应用，不访问 HTTP，不创建备份。可选 `-PreviousCommit` 记录负责人已确认的回滚 SHA。
+
+```powershell
+.\deploy\public-windows\Backup-PublicWebGISData.ps1 -RepoRoot $releaseRepo -InventoryOnly
+# 停止所有共享数据写入者后，明确指定已核实的发布代码目录和备份目录：
+.\deploy\public-windows\Backup-PublicWebGISData.ps1 -RepoRoot $releaseRepo -DestinationRoot $backupRoot -PreviousCommit $knownGoodSha
+```
+
+`$releaseRepo`、`$backupRoot`、`$knownGoodSha` 应由本次发布记录明确赋值。不要因为主目录含生产数据，
+就从过时的主目录复制知识索引或教材资源。清单记录 Git SHA、前端资源名、历史 release 元数据和数据的真实路径；
+这些记录不证明当前进程或公网正在提供该版本。Git 状态、依赖目录或人工环境核查仍应独立记录。
+
+版本 2 清单在全部文件复制/哈希核对完成后才写入，包含完整文件清单及 `complete=true`，同时保留
+`critical_sha256` 摘要和空目录。失败现场可能留下不完整目录；没有完整清单的目录不可用于自动恢复。
+端口查询权限不足会拒绝备份；停写检查只覆盖指定后端端口，操作人仍须确认没有其他进程共享写入。
+`-AllowLiveBackup` 会明确标记 `live_or_unverified`，不能宣称一致性快照。
+
+允许源数据根是已核实的 Junction；备份目标如经任意父目录 Junction 指向源码或源数据内部则拒绝。
+数据及资源内部的其他 Junction/符号链接会明确报错，不再静默漏备份；外部语音模型等目录须另行登记和备份。
+
 启动脚本会：
 
 - 读取 Windows 用户/机器级运行环境变量；
@@ -188,6 +215,22 @@ git diff --check
 6. 完成账号、项目、上传文件、工作流和产物的逐项核验。
 
 不要把“恢复代码”和“恢复数据”捆绑成同一个默认动作。
+
+版本 2 备份可先进行只恢复文件的隔离演练：
+
+```powershell
+.\deploy\public-windows\Restore-PublicWebGISBackup.ps1 -BackupPath $selectedBackup -DestinationRoot $newIsolatedRoot -WhatIf
+.\deploy\public-windows\Restore-PublicWebGISBackup.ps1 -BackupPath $selectedBackup -DestinationRoot $newIsolatedRoot
+```
+
+目标必须不存在，且真实路径不能位于备份、源代码、源数据或运行恢复工具的工作树内。工具在写入前验证
+所有文件数量、大小和 SHA-256，拒绝路径穿越、未列出的文件与内部链接，再重建 `backend/data` 和白名单补充资源。
+生成的 `restore-receipt.json` 证明复制字节已核对，不证明账号登录、模型加载、GIS 或课堂流程可用。
+该目录不是完整代码检出，工具不会启动服务或覆盖任何现有实例。完整恢复验证仍需专用代码工作树、匹配依赖
+和真正隔离的 data/auth/model 路径；不可用生产 Junction 作测试环境，也不可导入活动应用入口作只读检查。
+
+旧版本 1 备份保持原有布局和人工恢复流程；新工具不会将其冒充完整版本 2 备份。
+知识索引属于用户数据：代码回滚不能以 Git 中的旧 `kb_manifest.json` 覆盖它。课堂资源应按对应清单补齐。
 
 ## 7. 备份策略
 

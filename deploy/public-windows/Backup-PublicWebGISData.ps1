@@ -1,109 +1,119 @@
 ﻿[CmdletBinding(SupportsShouldProcess)]
 param(
-    [string]$RepoRoot = "",
-    [string]$DestinationRoot = "",
+    [string]$RepoRoot = '',
+    [string]$DestinationRoot = '',
     [int]$BackendPort = 18999,
-    [switch]$AllowLiveBackup
+    [switch]$AllowLiveBackup,
+    [switch]$InventoryOnly,
+    [string]$PreviousCommit = ''
 )
-
-$ErrorActionPreference = "Stop"
-$repoRoot = if ($RepoRoot) {
-    (Resolve-Path -LiteralPath $RepoRoot).Path
+$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'Recovery.Common.ps1')
+$repoRoot = if ($RepoRoot) { (Resolve-Path -LiteralPath $RepoRoot).Path }
+    else { (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path }
+$dataDir = Join-Path $repoRoot 'backend/data'
+if (-not (Test-Path -LiteralPath $dataDir -PathType Container)) { throw "Data directory not found: $dataDir" }
+$destinationRoot = if ($DestinationRoot) { [IO.Path]::GetFullPath($DestinationRoot) }
+    else { Join-Path (Split-Path $repoRoot -Parent) 'WebGIS-AI-backups' }
+$destinationResolved = Assert-RecoveryDestinationOutside $destinationRoot @($repoRoot, $dataDir)
+$baseline = Get-RecoveryBaseline $repoRoot $PreviousCommit
+# Preserve the historical data layout; extras live under a reserved directory.
+foreach ($name in @('_recovery', 'backup-manifest.json')) {
+    if (Test-Path -LiteralPath (Join-Path $dataDir $name)) { throw "Reserved backup name exists in source data: $name" }
 }
-else {
-    (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
+$dataResolved = Resolve-RecoveryPhysicalPath $dataDir
+$emptyDirectories = @()
+$payload = @(foreach ($file in Get-RecoveryTreeFiles $dataDir @('public-runtime', '_backup') -IncludeEmptyDirectories) {
+    $relative = $file.FullName.Substring($dataResolved.TrimEnd('\', '/').Length + 1).Replace('\', '/')
+    if ($file.PSIsContainer) { $emptyDirectories += $relative; continue }
+    [pscustomobject]@{ source = $file.FullName; path = $relative; length = $file.Length; category = 'data' }
+})
+$resources = @()
+foreach ($relativeRoot in @('backend/app/data/builtin/knowledge', 'backend/app/data/builtin/teaching_maps',
+        'backend/app/data/builtin/one_map/population/finland_density_2015.geojson')) {
+    $source = Join-Path $repoRoot $relativeRoot
+    $present = Test-Path -LiteralPath $source
+    $resources += @{ repo_path = $relativeRoot; present = [bool]$present }
+    if (-not $present) { continue }
+    $item = Get-Item -LiteralPath $source -Force
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Repository resource is a filesystem link: $source" }
+    $sourceResolved = Resolve-RecoveryPhysicalPath $source
+    $files = if ($item.PSIsContainer) { @(Get-RecoveryTreeFiles $source -IncludeEmptyDirectories) } else { @($item) }
+    if ($item.PSIsContainer -and $files.Count -eq 0) { $emptyDirectories += '_recovery/repo/' + $relativeRoot }
+    foreach ($file in $files) {
+        $relative = if ($item.PSIsContainer) {
+            $relativeRoot + '/' + $file.FullName.Substring($sourceResolved.TrimEnd('\', '/').Length + 1).Replace('\', '/')
+        } else { $relativeRoot }
+        if ($file.PSIsContainer) { $emptyDirectories += '_recovery/repo/' + $relative; continue }
+        $payload += [pscustomobject]@{ source = $file.FullName; path = '_recovery/repo/' + $relative; length = $file.Length; category = 'repository_resource' }
+    }
 }
-$dataDir = (Resolve-Path -LiteralPath (Join-Path $repoRoot "backend\data")).Path
-$repoParent = Split-Path -Parent $repoRoot
-$destinationRoot = if ($DestinationRoot) {
-    [IO.Path]::GetFullPath($DestinationRoot)
+$warnings = @()
+if ($baseline.git_commit -and $baseline.recorded_release.ContainsKey('git_commit') -and
+    $baseline.git_commit -ne $baseline.recorded_release.git_commit) {
+    $warnings += 'Source Git commit differs from recorded release; not proof of the running build.'
 }
-else {
-    Join-Path $repoParent "WebGIS-AI-backups"
+foreach ($resource in $resources) {
+    if (-not $resource.present) { $warnings += "Resource absent in selected source: $($resource.repo_path)" }
 }
-
-$dataFull = [IO.Path]::GetFullPath($dataDir).TrimEnd('\')
-$repoFull = [IO.Path]::GetFullPath($repoRoot).TrimEnd('\')
-$destinationFull = [IO.Path]::GetFullPath($destinationRoot).TrimEnd('\')
-if ($destinationFull -eq $dataFull -or $destinationFull.StartsWith("$dataFull\", [StringComparison]::OrdinalIgnoreCase)) {
-    throw "备份目录不能位于 backend/data 内部：$destinationFull"
-}
-if ($destinationFull -eq $repoFull -or $destinationFull.StartsWith("$repoFull\", [StringComparison]::OrdinalIgnoreCase)) {
-    throw "备份目录不能位于 Git 仓库内部：$destinationFull"
-}
-
-$listener = Get-NetTCPConnection -State Listen -LocalPort $BackendPort -ErrorAction SilentlyContinue
-if ($listener -and -not $AllowLiveBackup) {
-    throw "后端仍在监听 $BackendPort。为保证 SQLite/JSON 快照一致，请先运行 Stop-PublicWebGIS.ps1；仅在明确接受非一致性风险时使用 -AllowLiveBackup。"
-}
-
-$timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$gitCommit = ""
-$gitCommand = Get-Command git -ErrorAction SilentlyContinue
-if ($gitCommand) {
-    $gitCommit = (& $gitCommand.Source -C $repoRoot rev-parse --short=12 HEAD 2>$null | Select-Object -First 1)
-}
-if (-not $gitCommit) {
-    $gitCommit = "unknown"
-}
-$backupDir = Join-Path $destinationFull "$timestamp-$gitCommit"
-if (Test-Path -LiteralPath $backupDir) {
-    throw "目标备份已存在，未覆盖：$backupDir"
-}
-
-if (-not $PSCmdlet.ShouldProcess($backupDir, "复制 WebGIS-AI 持久数据并生成清单")) {
+if ($InventoryOnly) {
+    @{
+        schema_version = 2; inventory_only = $true; baseline = $baseline
+        destination_root_resolved = $destinationResolved; supplemental_resources = $resources
+        excluded = @('public-runtime', '_backup'); warnings = $warnings
+        empty_directories = $emptyDirectories
+        file_count = $payload.Count; total_bytes = [long](($payload | Measure-Object length -Sum).Sum)
+        # Names/sizes only; never hash or read database/state bytes in inventory.
+        files = @($payload | Select-Object path, length, category)
+    } | ConvertTo-Json -Depth 8
     return
 }
-
-New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
-$robocopyArgs = @(
-    $dataDir,
-    $backupDir,
-    "/E",
-    "/COPY:DAT",
-    "/DCOPY:DAT",
-    "/R:2",
-    "/W:1",
-    "/XJ",
-    "/XD",
-    (Join-Path $dataDir "public-runtime"),
-    (Join-Path $dataDir "_backup"),
-    "/NFL",
-    "/NDL",
-    "/NP"
-)
-& robocopy.exe @robocopyArgs | Out-Host
-if ($LASTEXITCODE -ge 8) {
-    throw "robocopy 备份失败，退出码：$LASTEXITCODE"
+$timestamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+$commitLabel = if ($baseline.git_commit) { $baseline.git_commit.Substring(0, 12) } else { 'unknown' }
+$backupDir = Join-Path $destinationResolved "$timestamp-$commitLabel"
+if (Test-Path -LiteralPath $backupDir) { throw "Backup target exists; no files overwritten: $backupDir" }
+if (-not $PSCmdlet.ShouldProcess($backupDir, 'Copy data plus knowledge/teaching resources and verify hashes')) { return }
+if (-not $AllowLiveBackup) { Assert-RecoveryBackendStopped $BackendPort }
+New-Item -ItemType Directory -Path $backupDir -ErrorAction Stop | Out-Null
+foreach ($relative in $emptyDirectories) {
+    Assert-RecoveryRelativePath $relative
+    New-Item -ItemType Directory -Path (Join-Path $backupDir $relative) -Force | Out-Null
 }
-
-$files = @(Get-ChildItem -LiteralPath $backupDir -Recurse -File -ErrorAction Stop)
-$criticalPatterns = @("*.db", "*.sqlite", "*.sqlite3", "runtime.json")
-$criticalFiles = @($files | Where-Object {
-    $name = $_.Name
-    $criticalPatterns | Where-Object { $name -like $_ }
-})
-$criticalHashes = @($criticalFiles | ForEach-Object {
-    [pscustomobject]@{
-        path = $_.FullName.Substring($backupDir.Length).TrimStart('\').Replace('\', '/')
-        length = $_.Length
-        sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+$manifestFiles = @()
+foreach ($file in $payload) {
+    Assert-RecoveryRelativePath $file.path
+    $target = Join-Path $backupDir $file.path
+    $sourceHash = (Get-FileHash -LiteralPath $file.source -Algorithm SHA256 -ErrorAction Stop).Hash
+    New-Item -ItemType Directory -Path (Split-Path $target -Parent) -Force | Out-Null
+    if (Test-Path -LiteralPath $target) { throw "Duplicate backup path: $($file.path)" }
+    Copy-Item -LiteralPath $file.source -Destination $target -ErrorAction Stop
+    $targetHash = (Get-FileHash -LiteralPath $target -Algorithm SHA256 -ErrorAction Stop).Hash
+    $finalSourceHash = (Get-FileHash -LiteralPath $file.source -Algorithm SHA256 -ErrorAction Stop).Hash
+    if ($sourceHash -ne $targetHash -or $sourceHash -ne $finalSourceHash) {
+        throw "Source changed or copy failed; incomplete backup retained: $($file.path)"
     }
-})
-$manifest = @{
-    schema_version = 1
-    created_at = (Get-Date).ToString("o")
-    source_repo = $repoRoot
-    source_data = $dataDir
-    git_commit = [string]$gitCommit
-    file_count = $files.Count
-    total_bytes = ($files | Measure-Object Length -Sum).Sum
-    live_backup = [bool]$AllowLiveBackup
-    excluded = @("public-runtime", "_backup")
-    critical_sha256 = $criticalHashes
+    $manifestFiles += [pscustomobject]@{
+        path = $file.path; length = (Get-Item -LiteralPath $target).Length
+        sha256 = $targetHash; category = $file.category
+    }
 }
-$manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $backupDir "backup-manifest.json") -Encoding utf8
-
-Write-Host "备份完成：$backupDir" -ForegroundColor Green
-Write-Host "文件数：$($files.Count)；总字节数：$($manifest.total_bytes)"
-Write-Host "恢复前必须停止服务，并按 MAINTENANCE.md 的回滚流程执行。"
+if (-not $AllowLiveBackup) { Assert-RecoveryBackendStopped $BackendPort }
+$manifest = @{
+    schema_version = 2; complete = $true; created_at = (Get-Date).ToString('o')
+    source_repo = $repoRoot; source_data = $dataDir; git_commit = $baseline.git_commit
+    baseline = $baseline; backup_path = $backupDir
+    file_count = $manifestFiles.Count; total_bytes = [long](($manifestFiles | Measure-Object length -Sum).Sum)
+    live_backup = [bool]$AllowLiveBackup
+    consistency = if ($AllowLiveBackup) { 'live_or_unverified' } else { 'selected_backend_port_stopped' }
+    excluded = @('public-runtime', '_backup'); supplemental_resources = $resources
+    empty_directories = $emptyDirectories
+    warnings = $warnings; files = $manifestFiles
+    # Preserve the legacy critical-file summary.
+    critical_sha256 = @($manifestFiles | Where-Object {
+        $_.category -eq 'repository_resource' -or $_.path -match '(?i)(\.db|\.sqlite|\.sqlite3|/runtime\.json)$'
+    } | Select-Object path, length, sha256)
+}
+$manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $backupDir 'backup-manifest.json') -Encoding UTF8
+Write-Host "Backup complete: $backupDir"
+Write-Host "Files: $($manifest.file_count); bytes: $($manifest.total_bytes)"
+Write-Host 'Restore only into a new isolated directory first. See MAINTENANCE.md.'
