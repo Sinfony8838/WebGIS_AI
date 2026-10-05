@@ -45,38 +45,15 @@ export async function loadTileImage(url: string, templates: string[], crossOrigi
         if (signal?.aborted) { reject(new Error("Tile load cancelled")); return; }
         const image = new Image();
         image.crossOrigin = crossOrigin;
-        let settled = false;
         const cleanup = () => {
           window.clearTimeout(timer);
           image.onload = image.onerror = null;
           signal?.removeEventListener("abort", cancel);
         };
-        const fail = () => {
-          if (settled) return;
-          settled = true;
-          cleanup(); image.src = ""; reject(new Error("Tile unavailable"));
-        };
-        const cancel = () => {
-          if (settled) return;
-          settled = true;
-          cleanup(); image.src = ""; reject(new Error("Tile load cancelled"));
-        };
-        const ready = () => {
-          if (settled) return;
-          settled = true;
-          cleanup(); resolve(image);
-        };
+        const fail = () => { cleanup(); image.src = ""; reject(new Error("Tile unavailable")); };
+        const cancel = () => { cleanup(); image.src = ""; reject(new Error("Tile load cancelled")); };
         const timer = window.setTimeout(fail, templates.length > 1 ? 4000 : 8000);
-        image.onload = () => {
-          // ImageTile.setImage() marks the tile LOADED immediately, bypassing
-          // OpenLayers' normal decode gate. Keep the timeout and abort listener
-          // until decoded pixels are ready for the canvas renderer.
-          if (typeof image.decode === "function") {
-            void image.decode().then(ready, fail);
-          } else {
-            ready();
-          }
-        };
+        image.onload = () => { cleanup(); resolve(image); };
         image.onerror = fail;
         signal?.addEventListener("abort", cancel, { once: true });
         image.src = next;

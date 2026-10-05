@@ -122,3 +122,40 @@ it("keeps source methods off the projection and supports enlarged textbook legen
   fireEvent.click(screen.getByText("资料说明"));
   expect(screen.getByText(/按原图经纬网配准/)).toBeVisible();
 });
+
+
+describe("geographic raster overlay", () => {
+  const raster = {
+    layer_id: "worldpop", name: "世界人口密度网格（2015估计）", visible: true,
+    kind: "raster", source: "teaching_map", opacity: 0.5, z_index: 20,
+    metadata: { registration: "georeferenced_raster", image_crs: "EPSG:4326" }
+  } as LayerRecord;
+
+  it("identifies the visible overlay and hides it only through the authoritative layer action", async () => {
+    let finish!: () => void;
+    const onToggleLayer = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+    const { rerender } = render(<MapEvidenceLegend {...props} basemapId="amap_imagery" layers={[raster]} onToggleLayer={onToggleLayer}/>);
+    expect(screen.getByText("当前叠加栅格 · 50%")).toBeVisible();
+    const hide = screen.getByRole("button", { name: `隐藏${raster.name}，查看底图` });
+    fireEvent.click(hide);
+    expect(onToggleLayer).toHaveBeenCalledWith("worldpop", false);
+    expect(hide).toBeDisabled();
+    expect(screen.getByText(raster.name)).toBeVisible();
+    await act(async () => { finish(); });
+    expect(hide).not.toBeDisabled();
+    rerender(<MapEvidenceLegend {...props} basemapId="amap_imagery" layers={[{ ...raster, visible: false }]} onToggleLayer={onToggleLayer}/>);
+    expect(screen.queryByText(/当前叠加栅格/)).not.toBeInTheDocument();
+  });
+
+  it("omits invisible rasters and rasters not rendered by the 3D globe", () => {
+    const { rerender } = render(<MapEvidenceLegend {...props} basemapId="amap_imagery" layers={[raster]} globe/>);
+    expect(screen.queryByText(/当前叠加栅格/)).not.toBeInTheDocument();
+    rerender(<MapEvidenceLegend {...props} basemapId="amap_imagery" layers={[{ ...raster, opacity: 0 }]}/>);
+    expect(screen.queryByText(/当前叠加栅格/)).not.toBeInTheDocument();
+  });
+
+  it("honors the map write lock", () => {
+    render(<MapEvidenceLegend {...props} basemapId="amap_imagery" layers={[raster]} busy onToggleLayer={vi.fn()}/>);
+    expect(screen.getByRole("button", { name: `隐藏${raster.name}，查看底图` })).toBeDisabled();
+  });
+});

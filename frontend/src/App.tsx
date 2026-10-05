@@ -25,6 +25,7 @@ import type MapBrowserEvent from "ol/MapBrowserEvent";
 import { unByKey } from "ol/Observable";
 import View from "ol/View";
 import ImageStatic from "ol/source/ImageStatic";
+import { rasterSourceKey, rasterSourceOptions } from "./lib/rasterSource";
 import VectorSource from "ol/source/Vector";
 import XYZ from "ol/source/XYZ";
 import LineString from "ol/geom/LineString";
@@ -3496,7 +3497,7 @@ export default function App({
       }
       seen.add(record.layer_id);
       const signature = isRaster
-        ? `raster|${assetUrl}|${JSON.stringify(bounds)}`
+        ? rasterSourceKey(assetUrl, bounds as [number, number, number, number], record.metadata.image_crs)
         : `vector|${record.data_rev ?? 0}|${record.layer_id === "builtin_population_density" ? regions?.data_rev ?? "none" : ""}`;
       const styleKey = JSON.stringify([record.style || {}, showTeachingFit]);
 
@@ -3512,12 +3513,9 @@ export default function App({
         let olLayer: RenderableLayer;
         if (isRaster) {
           olLayer = new ImageLayer({
-            source: new ImageStatic({
-              url: `${getApiBase()}${assetUrl}${assetUrl.includes("?") ? "&" : "?"}canvas=1`,
-              crossOrigin: "use-credentials",
-              projection: record.metadata?.image_crs === "EPSG:4326" ? "EPSG:4326" : "EPSG:3857",
-              imageExtent: record.metadata?.image_crs === "EPSG:4326" ? bounds as [number, number, number, number] : transformExtent(bounds as [number, number, number, number], "EPSG:4326", "EPSG:3857")
-            }),
+            source: new ImageStatic(rasterSourceOptions(
+              `${getApiBase()}${assetUrl}`, bounds as [number, number, number, number], record.metadata.image_crs
+            )),
             opacity: record.opacity,
             visible: record.visible,
             zIndex: record.z_index
@@ -3974,7 +3972,7 @@ export default function App({
           }}
         />
       ) : null}
-      <MapEvidenceLegend basemapId={activeBasemapId} layers={layerState?.items || []} globe={viewMode === "globe"} themeIds={globeThemeIds} showFit={showTeachingFit} onShowFit={setShowTeachingFit} busy={mapBusy} onTogglePrecipitation={value => handleToggleTextbookMap("china_precipitation_400mm", value)} />
+      <MapEvidenceLegend basemapId={activeBasemapId} layers={layerState?.items || []} globe={viewMode === "globe"} themeIds={globeThemeIds} showFit={showTeachingFit} onShowFit={setShowTeachingFit} busy={mapBusy} onToggleLayer={handleLayerManagerToggle} onTogglePrecipitation={value => handleToggleTextbookMap("china_precipitation_400mm", value)} />
       {viewMode === "plane" && project && measureRecords.length > 0 ? (
         <ProfileManagerBar count={measureRecords.length} collapsed={profilesCollapsed}
           onToggleCollapsed={() => setProfilesCollapsed(value => !value)}>
