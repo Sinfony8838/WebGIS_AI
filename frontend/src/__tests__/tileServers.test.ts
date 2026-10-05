@@ -51,6 +51,74 @@ describe("configured tile mirrors", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("waits for decoded pixels while keeping the load timeout active", async () => {
+    const { loadTileImage } = await import("../lib/tileServers");
+    const result = loadTileImage(tileUrl, urls, "anonymous");
+    let finishDecode!: () => void;
+    const decode = vi.fn(() => new Promise<void>(resolve => { finishDecode = resolve; }));
+    Object.assign(images[0], { decode });
+    let returned = false;
+    void result.then(() => { returned = true; });
+    images[0].onload!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(decode).toHaveBeenCalledOnce();
+    expect(returned).toBe(false);
+    expect(vi.getTimerCount()).toBe(1);
+    finishDecode();
+    expect(await result).toBe(images[0]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("retries an image that loaded but could not be decoded", async () => {
+    const { loadTileImage } = await import("../lib/tileServers");
+    const result = loadTileImage(tileUrl, urls, "anonymous");
+    Object.assign(images[0], { decode: () => Promise.reject(new Error("Invalid pixels")) });
+    images[0].onload!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(images).toHaveLength(2);
+    expect(images[0].src).toBe("");
+    expect(images[1].src).toBe("https://b.test/tiles/4/11/5?style=6");
+    images[1].onload!();
+    expect(await result).toBe(images[1]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("bounds stalled decoding and ignores a late decoded image", async () => {
+    const { loadTileImage } = await import("../lib/tileServers");
+    const result = loadTileImage(tileUrl, urls, "anonymous");
+    let finishDecode!: () => void;
+    Object.assign(images[0], { decode: () => new Promise<void>(resolve => { finishDecode = resolve; }) });
+    images[0].onload!();
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(images).toHaveLength(2);
+    let returned = false;
+    void result.then(() => { returned = true; });
+    finishDecode();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(returned).toBe(false);
+    images[1].onload!();
+    expect(await result).toBe(images[1]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("cancels during decoding without reviving the tile or retrying", async () => {
+    const { loadTileImage, healthyTileUrl } = await import("../lib/tileServers");
+    const controller = new AbortController();
+    const result = loadTileImage(tileUrl, urls, "anonymous", controller.signal);
+    const failure = expect(result).rejects.toThrow("Tile load cancelled");
+    let finishDecode!: () => void;
+    Object.assign(images[0], { decode: () => new Promise<void>(resolve => { finishDecode = resolve; }) });
+    images[0].onload!();
+    controller.abort();
+    await failure;
+    finishDecode();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(images).toHaveLength(1);
+    expect(images[0].src).toBe("");
+    expect(healthyTileUrl(tileUrl, urls)).toBe(tileUrl);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("stops after two failed attempts instead of retrying all mirrors indefinitely", async () => {
     const { loadTileImage } = await import("../lib/tileServers");
     const result = loadTileImage(tileUrl, urls, "anonymous");
