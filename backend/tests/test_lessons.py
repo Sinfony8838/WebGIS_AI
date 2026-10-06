@@ -49,7 +49,7 @@ class LessonServiceTest(unittest.TestCase):
         self.assertIn("未保存", history["practice"]["result"]["notes"][0])
         self.assertNotIn("notes", store.get_job(legacy.job_id).result)
         self.assertEqual(len(store.jobs), count)
-        restored = RuntimeStore(store.state_file)
+        restored = RuntimeStore(store.state_file, read_only=True)
         self.assertEqual(restored.session_review_jobs(project_id, session_id)["report"]["job_id"], latest.job_id)
         self.assertEqual(restored.session_review_jobs(other_project, "unrelated"), {"report": None, "practice": None})
 

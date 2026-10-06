@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
 import threading
 import time
+import weakref
 from contextlib import contextmanager
 from dataclasses import MISSING, fields, is_dataclass
+from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 from uuid import uuid4
+
+from .state_writer import StateWriterLease
 
 from .models import (
     ArtifactRecord,
@@ -36,9 +41,24 @@ class InvalidRuntimeState(ValueError):
     """A decoded snapshot cannot be read by this version; preserve its bytes."""
 
 
+def _requires_writer(method):
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        # Reject an inherited store before touching a possibly inherited lock.
+        self._require_writer()
+        with self._lock:
+            self._require_writer()
+            return method(self, *args, **kwargs)
+    return guarded
+
+
 class RuntimeStore:
-    def __init__(self, state_file: Path):
-        self.state_file = state_file
+    def __init__(self, state_file: Path, *, read_only: bool = False):
+        self.state_file = Path(state_file).resolve()
+        self._read_only = read_only
+        self._closed = False
+        self._writer_lease = None if read_only else StateWriterLease(self.state_file)
+        self._writer_finalizer = None if read_only else weakref.finalize(self, self._writer_lease.close)
         self._lock = threading.RLock()
         self._job_changed = threading.Condition(self._lock)
         self.projects: Dict[str, ProjectRecord] = {}
@@ -58,14 +78,37 @@ class RuntimeStore:
         # state save does not rewrite megabytes of coordinates (see
         # _offload_large_layer_data).
         self._layer_data_files: Dict[Tuple[str, str, int], str] = {}
-        self._load()
+        try:
+            self._load()
+        except BaseException:
+            self.close()
+            raise
+
+    def _require_writer(self) -> None:
+        if self._read_only or self._closed:
+            raise RuntimeError("Runtime store is read-only or closed")
+        self._writer_lease.assert_owned()
+
+    def close(self) -> None:
+        if self._writer_lease is not None and self._writer_lease.pid != os.getpid():
+            # A fork child must not wait on a lock inherited from another
+            # thread. Its lease descriptors were already closed at fork.
+            self._closed = True
+            self._writer_finalizer()
+            return
+        with self._lock:
+            self._closed = True
+            if self._writer_finalizer is not None:
+                self._writer_finalizer()
 
     @contextmanager
     def batch(self) -> Iterator[None]:
         """Coalesce every mutation inside the block into a single state-file
         write.  ``_save()`` rewrites the whole file, so multi-mutation flows
         (e.g. applying a lesson stage scene) should wrap their store calls."""
+        self._require_writer()
         with self._lock:
+            self._require_writer()
             self._batch_depth += 1
             try:
                 yield
@@ -84,9 +127,11 @@ class RuntimeStore:
             return
         try:
             payload = json.loads(serialized)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
             # Preserve the established bad-JSON recovery behavior, but only
             # after a successful read and a successful quarantine rename.
+            if self._read_only:
+                raise InvalidRuntimeState("Read-only runtime snapshot contains invalid JSON") from exc
             self._quarantine_corrupt_state("invalid_json")
             return
 
@@ -104,7 +149,7 @@ class RuntimeStore:
             # Saving migration is deliberately outside the parse error
             # boundary. A write failure leaves loaded records intact and
             # propagates; the atomic writer retains the previous disk bytes.
-            if migrated:
+            if migrated and not self._read_only:
                 self._save()
 
     @staticmethod
@@ -241,6 +286,7 @@ class RuntimeStore:
             for y_value in y_values
         }
 
+    @_requires_writer
     def _offload_large_layer_data(self, payload: Dict[str, Any]) -> None:
         """Replace huge inline ``data.features`` arrays with file references.
 
@@ -296,12 +342,14 @@ class RuntimeStore:
                 data["features_file"] = cached
                 del data["features"]
 
+    @_requires_writer
     def _save(self) -> None:
         if self._batch_depth > 0:
             self._batch_dirty = True
             return
         self._write_state_file()
 
+    @_requires_writer
     def _write_state_file(self) -> None:
         """Persist the complete runtime state once.
 
@@ -358,6 +406,7 @@ class RuntimeStore:
             return {item.name: getattr(value, item.name) for item in fields(value)}
         raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
+    @_requires_writer
     def _quarantine_corrupt_state(self, reason: str) -> None:
         backup_path = self.state_file.with_name(
             f"{self.state_file.stem}.corrupt_{reason}_{uuid4().hex}{self.state_file.suffix}"
@@ -376,6 +425,7 @@ class RuntimeStore:
         normalized.setdefault("updated_at", normalized.get("created_at") or utc_now())
         return normalized
 
+    @_requires_writer
     def create_project(
         self,
         name: Optional[str] = None,
@@ -394,6 +444,7 @@ class RuntimeStore:
             self._save()
             return project
 
+    @_requires_writer
     def assign_unowned_records(self, owner_user_id: str) -> Dict[str, int]:
         """Idempotently attach legacy teacher-created records to bootstrap admin."""
         projects = 0
@@ -417,6 +468,7 @@ class RuntimeStore:
         with self._lock:
             return self.projects.get(project_id)
 
+    @_requires_writer
     def create_conversation(self, project_id: str, assistant_mode: str) -> ConversationRecord:
         with self._lock:
             if project_id not in self.projects:
@@ -430,6 +482,7 @@ class RuntimeStore:
         with self._lock:
             return self.conversations.get(conversation_id)
 
+    @_requires_writer
     def save_conversation(self, conversation: ConversationRecord) -> ConversationRecord:
         with self._lock:
             conversation.updated_at = utc_now()
@@ -437,6 +490,7 @@ class RuntimeStore:
             self._save()
             return conversation
 
+    @_requires_writer
     def append_conversation_message(
         self,
         conversation_id: str,
@@ -468,6 +522,7 @@ class RuntimeStore:
                 return []
             return [self.messages[message_id] for message_id in conversation.message_ids if message_id in self.messages]
 
+    @_requires_writer
     def create_confirmation(
         self,
         project_id: str,
@@ -500,6 +555,7 @@ class RuntimeStore:
         with self._lock:
             return self.confirmations.get(confirmation_id)
 
+    @_requires_writer
     def resolve_confirmation(self, confirmation_id: str, status: str) -> ConfirmationRecord:
         with self._lock:
             confirmation = self.confirmations[confirmation_id]
@@ -509,6 +565,7 @@ class RuntimeStore:
             self._save()
             return confirmation
 
+    @_requires_writer
     def save_project(self, project: ProjectRecord) -> ProjectRecord:
         with self._lock:
             project.updated_at = utc_now()
@@ -516,6 +573,7 @@ class RuntimeStore:
             self._save()
             return project
 
+    @_requires_writer
     def upsert_layer(self, project_id: str, layer: LayerRecord) -> LayerRecord:
         with self._lock:
             project = self.projects[project_id]
@@ -534,6 +592,7 @@ class RuntimeStore:
             self._save()
             return layer
 
+    @_requires_writer
     def patch_layer(self, project_id: str, layer_id: str, patch: Dict[str, Any]) -> LayerRecord:
         with self._lock:
             project = self.projects[project_id]
@@ -563,6 +622,7 @@ class RuntimeStore:
                 return layer
             raise KeyError(f"Unknown layer: {layer_id}")
 
+    @_requires_writer
     def delete_layer(self, project_id: str, layer_id: str) -> LayerRecord:
         with self._lock:
             project = self.projects[project_id]
@@ -580,6 +640,7 @@ class RuntimeStore:
                     return removed
             raise KeyError(f"Unknown layer: {layer_id}")
 
+    @_requires_writer
     def remove_layer(self, project_id: str, layer_id: str) -> bool:
         with self._lock:
             project = self.projects[project_id]
@@ -593,6 +654,7 @@ class RuntimeStore:
             self._save()
             return True
 
+    @_requires_writer
     def add_recent_action(
         self,
         project_id: str,
@@ -616,6 +678,7 @@ class RuntimeStore:
             project.updated_at = utc_now()
             self._save()
 
+    @_requires_writer
     def set_view(self, project_id: str, view_patch: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
             project = self.projects[project_id]
@@ -630,6 +693,7 @@ class RuntimeStore:
             self._save()
             return project.view
 
+    @_requires_writer
     def set_basemap(self, project_id: str, base_map: Dict[str, Any]) -> Dict[str, Any]:
         with self._lock:
             project = self.projects[project_id]
@@ -638,6 +702,7 @@ class RuntimeStore:
             self._save()
             return project.base_map
 
+    @_requires_writer
     def set_active_layer(self, project_id: str, layer_id: str) -> None:
         with self._lock:
             project = self.projects[project_id]
@@ -645,6 +710,7 @@ class RuntimeStore:
             project.updated_at = utc_now()
             self._save()
 
+    @_requires_writer
     def enable_template(self, project_id: str, template_id: str) -> None:
         with self._lock:
             project = self.projects[project_id]
@@ -653,6 +719,7 @@ class RuntimeStore:
             project.updated_at = utc_now()
             self._save()
 
+    @_requires_writer
     def create_job(
         self,
         project_id: str,
@@ -680,6 +747,7 @@ class RuntimeStore:
             self._save()
             return job
 
+    @_requires_writer
     def fail_interrupted_practice_exports(self, worker_run_id: str) -> List[str]:
         """A new server run cannot retain the previous process's export threads."""
         with self._lock:
@@ -728,6 +796,7 @@ class RuntimeStore:
                 timeout=timeout,
             )
 
+    @_requires_writer
     def set_job_status(
         self,
         job_id: str,
@@ -747,6 +816,7 @@ class RuntimeStore:
             self._job_changed.notify_all()
             return job
 
+    @_requires_writer
     def append_job_step(self, job_id: str, title: str, detail: str, status: str = "info") -> JobRecord:
         with self._lock:
             job = self.jobs[job_id]
@@ -763,6 +833,7 @@ class RuntimeStore:
             self._job_changed.notify_all()
             return job
 
+    @_requires_writer
     def update_job_stage(
         self,
         job_id: str,
@@ -784,6 +855,7 @@ class RuntimeStore:
             self._job_changed.notify_all()
             return job
 
+    @_requires_writer
     def register_artifact(
         self,
         project_id: str,
@@ -828,6 +900,7 @@ class RuntimeStore:
         with self._lock:
             return self.artifacts.get(artifact_id)
 
+    @_requires_writer
     def delete_artifact(self, artifact_id: str) -> Optional[ArtifactRecord]:
         """Remove an artifact record; the backing file is left untouched."""
         with self._lock:
@@ -857,6 +930,7 @@ class RuntimeStore:
     # Lessons
     # ------------------------------------------------------------------
 
+    @_requires_writer
     def upsert_lesson(self, lesson: LessonRecord) -> LessonRecord:
         with self._lock:
             lesson.touch()
@@ -874,6 +948,7 @@ class RuntimeStore:
             lessons.sort(key=lambda lesson: lesson.created_at)
             return lessons
 
+    @_requires_writer
     def delete_lesson(self, lesson_id: str) -> None:
         with self._lock:
             if lesson_id not in self.lessons:
@@ -885,6 +960,7 @@ class RuntimeStore:
     # Lesson design sessions
     # ------------------------------------------------------------------
 
+    @_requires_writer
     def upsert_lesson_design(self, design: LessonDesignRecord) -> LessonDesignRecord:
         with self._lock:
             design.touch()
@@ -918,6 +994,7 @@ class RuntimeStore:
     # Lesson rehearsals
     # ------------------------------------------------------------------
 
+    @_requires_writer
     def upsert_lesson_rehearsal(self, rehearsal: LessonRehearsalRecord) -> LessonRehearsalRecord:
         with self._lock:
             rehearsal.touch()
@@ -953,6 +1030,7 @@ class RuntimeStore:
     # Class sessions
     # ------------------------------------------------------------------
 
+    @_requires_writer
     def create_class_session(
         self,
         lesson_id: str,
@@ -1002,6 +1080,7 @@ class RuntimeStore:
                     return session
             return None
 
+    @_requires_writer
     def append_session_event(
         self,
         session_id: str,
@@ -1023,6 +1102,7 @@ class RuntimeStore:
             self._save()
             return event
 
+    @_requires_writer
     def set_session_stage(self, session_id: str, stage_id: str) -> ClassSessionRecord:
         with self._lock:
             session = self.class_sessions[session_id]
@@ -1031,6 +1111,7 @@ class RuntimeStore:
             self._save()
             return session
 
+    @_requires_writer
     def set_active_question(self, session_id: str, question: Dict[str, Any]) -> ClassSessionRecord:
         with self._lock:
             session = self.class_sessions[session_id]
@@ -1039,6 +1120,7 @@ class RuntimeStore:
             self._save()
             return session
 
+    @_requires_writer
     def add_student_response(
         self,
         session_id: str,
@@ -1057,6 +1139,7 @@ class RuntimeStore:
             self._save()
             return entry
 
+    @_requires_writer
     def end_class_session(self, session_id: str) -> ClassSessionRecord:
         with self._lock:
             session = self.class_sessions[session_id]
@@ -1071,6 +1154,7 @@ class RuntimeStore:
     # Workflow records (backend GIS workflow main line)
     # ------------------------------------------------------------------
 
+    @_requires_writer
     def create_workflow(self, workflow: WorkflowRecord) -> WorkflowRecord:
         with self._lock:
             self.workflows[workflow.workflow_id] = workflow
@@ -1081,6 +1165,7 @@ class RuntimeStore:
         with self._lock:
             return self.workflows.get(workflow_id)
 
+    @_requires_writer
     def save_workflow(self, workflow: WorkflowRecord) -> WorkflowRecord:
         with self._lock:
             workflow.touch()

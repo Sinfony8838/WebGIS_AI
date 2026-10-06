@@ -27,6 +27,7 @@ class LayerPersistenceTest(unittest.TestCase):
             self.assertIn("features", layer.data)
             self.assertNotIn("features_file", layer.data)
             self.assertLess(path.stat().st_size, 10000)
+            store.close()
             restored = RuntimeStore(path)
             self.assertEqual(restored.get_project(project.project_id).layers[0].data["features"], layer.data["features"])
             # Metadata-only changes reuse the existing external file after restart.
@@ -34,10 +35,10 @@ class LayerPersistenceTest(unittest.TestCase):
             restored.patch_layer(project.project_id, layer.layer_id, {"opacity": 0.5})
             self.assertEqual(before, sorted((Path(root) / "layer_data").glob("*.json")))
             restored.patch_layer(project.project_id, layer.layer_id, {"data": make_layer(2).data})
-            self.assertEqual(RuntimeStore(path).get_project(project.project_id).layers[0].data["features"][0]["properties"]["value"], 2)
+            self.assertEqual(RuntimeStore(path, read_only=True).get_project(project.project_id).layers[0].data["features"][0]["properties"]["value"], 2)
             restored.delete_layer(project.project_id, layer.layer_id)
             restored.upsert_layer(project.project_id, make_layer(3))
-            self.assertEqual(RuntimeStore(path).get_project(project.project_id).layers[0].data["features"][0]["properties"]["value"], 3)
+            self.assertEqual(RuntimeStore(path, read_only=True).get_project(project.project_id).layers[0].data["features"][0]["properties"]["value"], 3)
 
     def test_project_summary_never_copies_omitted_features(self):
         class Uncopyable(list):
@@ -65,5 +66,5 @@ class LayerPersistenceTest(unittest.TestCase):
             store.upsert_layer(project.project_id, layer)
             outside = Path(root) / "outside.json"
             outside.write_text(json.dumps({"features": [{"private": True}]}), encoding="utf-8")
-            restored = RuntimeStore(path)
+            restored = RuntimeStore(path, read_only=True)
             self.assertNotIn("features", restored.get_project(project.project_id).layers[0].data)
