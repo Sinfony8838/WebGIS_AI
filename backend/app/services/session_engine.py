@@ -21,6 +21,7 @@ from .agent_harness import (
 from .assistant import ASSISTANT_TOOL_INPUT_SCHEMAS, ASSISTANT_TOOL_SCHEMA, AssistantService
 from .classroom_binding import require_classroom_context, require_confirmation_classroom
 from .classroom_binding import assistant_actor_scope, require_context_lesson, require_project_lesson, require_confirmation_lessons
+from .image_references import resolve_image_context, resolve_project_image, require_confirmation_images
 from .knowledge_base import KnowledgeBaseService
 from .knowledge_retrieval import RetrievalDoc, RetrievalEngine
 from .llm_planner import LLMPlanner
@@ -2033,9 +2034,11 @@ class ToolExecutor:
         self,
         store: RuntimeStore,
         execute_webgis: Callable[[str, Dict[str, Any], Dict[str, Any]], Dict[str, Any]],
+        *, image_config: Optional[AppConfig] = None,
     ):
         self.store = store
         self.execute_webgis = execute_webgis
+        self.image_config = image_config
         self.tool_registry = self._build_registry()
 
     def assess(
@@ -2115,6 +2118,10 @@ class ToolExecutor:
         run_context: Optional[AgentRun] = None,
         allow_image_generation: bool = False,
     ) -> List[Dict[str, Any]]:
+        if self.image_config is not None:
+            map_context = resolve_image_context(self.image_config, self.store, project_id, map_context)
+        elif map_context.get("image_attachment") or map_context.get("image_attachments"):
+            raise ValueError("图片引用缺少项目授权信息。")
         require_classroom_context(self.store, project_id, map_context)
         require_context_lesson(self.store, project_id, map_context)
         require_confirmation_lessons(self.store, project_id, {"actions": actions})
@@ -2377,7 +2384,7 @@ class AssistantSessionEngine:
             resource_search=None,  # wired later via set_resource_search()
         )
         self.tool_planner = ToolPlanner(llm_planner, assistant_service)
-        self.tool_executor = ToolExecutor(store, execute_webgis)
+        self.tool_executor = ToolExecutor(store, execute_webgis, image_config=config)
         self.memory = ConversationMemory(store)
         self.vision_service = vision_service
         self.session_stats_provider: Optional[Callable[[str, str], Dict[str, Any]]] = None
@@ -2460,6 +2467,20 @@ class AssistantSessionEngine:
             )
             raise HarnessExecutionError(exc, report) from exc
 
+    def prepare_image_context(
+        self, project_id: str, message: str, conversation_id: str,
+        map_context: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        context = resolve_image_context(self.config, self.store, project_id, map_context)
+        if not context.get("image_attachment") and conversation_id and _contains_any(message, IMAGE_FOLLOW_UP_HINTS):
+            conversation = self.memory.require_project_conversation(project_id, conversation_id)
+            remembered = conversation.pinned_state.get("last_image_attachment") if conversation else None
+            if remembered:
+                context = resolve_image_context(
+                    self.config, self.store, project_id, {**context, "image_attachment": remembered},
+                )
+        return context
+
     def _handle_once(
         self,
         job_id: str,
@@ -2483,6 +2504,7 @@ class AssistantSessionEngine:
         map_context = map_context or {}
         require_classroom_context(self.store, project.project_id, map_context)
         require_context_lesson(self.store, project.project_id, map_context, actor_role=actor_role)
+        map_context = self.prepare_image_context(project.project_id, message, conversation_id, map_context)
 
         conversation = self.memory.get_or_create(
             project.project_id,
@@ -2491,14 +2513,7 @@ class AssistantSessionEngine:
             history=history,
             map_context=map_context,
         )
-        attachments = list(map_context.get("image_attachments") or [])
-        image_attachment = attachments[0] if attachments and isinstance(attachments[0], dict) else None
-        if image_attachment is None and _contains_any(message, IMAGE_FOLLOW_UP_HINTS):
-            remembered = conversation.pinned_state.get("last_image_attachment")
-            if isinstance(remembered, dict) and remembered.get("path"):
-                image_attachment = dict(remembered)
-        if image_attachment is not None:
-            map_context = {**map_context, "image_attachment": image_attachment}
+        image_attachment = map_context.get("image_attachment")
         self.memory.append(
             conversation.conversation_id,
             "user",
@@ -2898,6 +2913,7 @@ class AssistantSessionEngine:
         )
         require_confirmation_classroom(self.store, confirmation.project_id, payload)
         require_confirmation_lessons(self.store, confirmation.project_id, payload)
+        require_confirmation_images(self.config, self.store, confirmation.project_id, payload)
         if confirmation.expires_at:
             expires_at = _parse_timestamp(confirmation.expires_at)
             if expires_at and expires_at <= datetime.now(timezone.utc):
@@ -2925,6 +2941,7 @@ class AssistantSessionEngine:
         actions = list((frozen_plan or payload).get("actions") or payload.get("actions") or [])
         target = str((frozen_plan or payload).get("target") or payload.get("target") or "webgis")
         map_context = dict((frozen_plan or payload).get("map_context") or payload.get("map_context") or {})
+        map_context = resolve_image_context(self.config, self.store, confirmation.project_id, map_context)
         confirmed_plan_intent = str((frozen_plan or payload).get("intent") or payload.get("intent") or "tool")
         revalidation = self.tool_executor.assess(
             target,
@@ -3086,6 +3103,7 @@ class AssistantSessionEngine:
         actions = list((frozen_plan or payload).get("actions") or payload.get("actions") or [])
         require_confirmation_classroom(self.store, confirmation.project_id, payload)
         require_confirmation_lessons(self.store, confirmation.project_id, payload)
+        require_confirmation_images(self.config, self.store, confirmation.project_id, payload)
         target = str((frozen_plan or payload).get("target") or payload.get("target") or "webgis")
         self.store.resolve_confirmation(confirmation_id, "rejected")
         permission_context = ToolPermissionContext.from_pinned_state(conversation.pinned_state if conversation else {})
@@ -3136,6 +3154,7 @@ class AssistantSessionEngine:
 
     def _enrich_image_attachment_with_vision(
         self,
+        project_id: str,
         message: str,
         map_context: Dict[str, Any],
         stage_callback: Callable[[str, str, str, str], None],
@@ -3143,6 +3162,7 @@ class AssistantSessionEngine:
         attachment = map_context.get("image_attachment")
         if not isinstance(attachment, dict) or not attachment.get("path"):
             return map_context
+        attachment = resolve_project_image(self.config, self.store, project_id, attachment)
         if self.vision_service is None:
             return {**map_context, "vision_reason": "图片识别服务暂时不可用，请稍后重试。"}
 
@@ -3151,6 +3171,8 @@ class AssistantSessionEngine:
             result = self.vision_service.understand_image(
                 image_path=str(attachment.get("path") or ""),
                 question=message,
+                project_id=project_id,
+                artifact_id=attachment["artifact_id"],
             )
         except Exception as exc:  # pragma: no cover - defensive runtime branch
             result = {"used_vision": False, "reason": f"图片识别失败：{exc}"}
@@ -3319,13 +3341,16 @@ class AssistantSessionEngine:
         stage_callback: Callable[[str, str, str, str], None],
         teaching_task: str = "",
     ) -> Dict[str, Any]:
+        require_classroom_context(self.store, project.project_id, map_context)
+        require_context_lesson(self.store, project.project_id, map_context)
+        map_context = resolve_image_context(self.config, self.store, project.project_id, map_context)
         layer_evidence = build_layer_evidence(project, map_context)
         if not map_context.get("image_attachment"):
             map_context = {**map_context, "visible_layers": [
                 {"layer_id": layer.layer_id, "name": layer.name}
                 for layer in visible_project_layers(project, map_context)
             ]}
-        map_context = self._enrich_image_attachment_with_vision(message, map_context, stage_callback)
+        map_context = self._enrich_image_attachment_with_vision(project.project_id, message, map_context, stage_callback)
         if not map_context.get("image_attachment"):
             map_context = self._enrich_map_reading_with_vision(project, message, map_context, stage_callback)
         map_context = self._inject_session_digest(project.project_id, map_context, teaching_task)
