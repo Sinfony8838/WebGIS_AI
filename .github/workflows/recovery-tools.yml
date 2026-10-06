@@ -1,0 +1,27 @@
+name: Windows recovery tools
+
+on:
+  pull_request:
+    paths:
+      - 'deploy/public-windows/**'
+      - '.github/workflows/recovery-tools.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/public-windows/**'
+      - '.github/workflows/recovery-tools.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-recovery:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Windows PowerShell 5.1 synthetic recovery
+        shell: powershell
+        run: ./deploy/public-windows/Test-RecoveryTools.ps1
+      - name: PowerShell 7 synthetic recovery
+        shell: pwsh
+        run: ./deploy/public-windows/Test-RecoveryTools.ps1
