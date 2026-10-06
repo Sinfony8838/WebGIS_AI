@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import base64
 import unittest
 from pathlib import Path
 
@@ -116,11 +117,15 @@ class MapVisionServiceTest(unittest.TestCase):
         config.vision_provider = "minimax_mcp"
         config.minimax_token_plan_key = "token-plan-key"
         fake_client = FakeMcpClient()
-        service = MapVisionService(config, mcp_client=fake_client)
-        image_path = config.uploads_dir / "terrain.png"
-        image_path.write_bytes(b"image")
+        store = RuntimeStore(config.state_file)
+        project = store.create_project("fixture")
+        service = MapVisionService(config, mcp_client=fake_client, store=store)
+        image_path = config.project_upload_dir(project.project_id) / "terrain.png"
+        image_path.write_bytes(base64.b64decode(SAMPLE_SNAPSHOT["image_data_url"].split(",", 1)[1]))
+        artifact = store.register_artifact(project.project_id, "", "uploaded_image", "fixture", str(image_path))
 
-        result = service.understand_image(str(image_path), "这张图是什么地貌？")
+        result = service.understand_image(str(image_path), "这张图是什么地貌？",
+                                          project_id=project.project_id, artifact_id=artifact.artifact_id)
 
         self.assertTrue(result["used_vision"])
         self.assertEqual(len(fake_client.calls), 1)
@@ -135,11 +140,15 @@ class MapVisionServiceTest(unittest.TestCase):
         config.vision_provider = "minimax_mcp"
         config.minimax_token_plan_key = "token-plan-key"
         fake_client = FakeMcpClient()
-        service = MapVisionService(config, mcp_client=fake_client)
-        image_path = config.uploads_dir / "population.png"
-        image_path.write_bytes(b"image")
+        store = RuntimeStore(config.state_file)
+        project = store.create_project("fixture")
+        service = MapVisionService(config, mcp_client=fake_client, store=store)
+        image_path = config.project_upload_dir(project.project_id) / "population.png"
+        image_path.write_bytes(base64.b64decode(SAMPLE_SNAPSHOT["image_data_url"].split(",", 1)[1]))
+        artifact = store.register_artifact(project.project_id, "", "uploaded_image", "fixture", str(image_path))
 
-        service.understand_image(str(image_path), "请根据图例分析人口密度分布，并说明数据年份。")
+        service.understand_image(str(image_path), "请根据图例分析人口密度分布，并说明数据年份。",
+                                 project_id=project.project_id, artifact_id=artifact.artifact_id)
 
         prompt = fake_client.calls[0]["prompt"]
         self.assertIn("population total, population density, migration flow", prompt)

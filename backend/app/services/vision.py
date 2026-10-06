@@ -16,6 +16,8 @@ from typing import Any, Dict, Optional
 
 from ..config import AppConfig
 from ..models import ProjectRecord
+from ..store import RuntimeStore
+from .image_references import resolve_project_image
 from .minimax_mcp_client import MiniMaxMcpClient, MiniMaxMcpError
 
 
@@ -29,9 +31,11 @@ class MapVisionService:
         self,
         config: AppConfig,
         mcp_client: Optional[MiniMaxMcpClient] = None,
+        *, store: Optional[RuntimeStore] = None,
     ):
         self.config = config
         self.mcp_client = mcp_client or MiniMaxMcpClient(config)
+        self.store = store
 
     def status(self) -> Dict[str, Any]:
         return self.config.vision_status()
@@ -89,6 +93,7 @@ class MapVisionService:
         image_path: str,
         question: str,
         supplemental_context: str = "",
+        *, project_id: str = "", artifact_id: str = "",
     ) -> Dict[str, Any]:
         """Ask the configured vision backend about a persisted project image.
 
@@ -96,13 +101,18 @@ class MapVisionService:
         state is intentionally excluded: it must never masquerade as visual
         evidence when image understanding is unavailable.
         """
-        path = Path(image_path).resolve()
-        if not path.is_file():
+        del image_path  # Compatibility argument; the registry owns the path.
+        if self.store is None or not project_id or not artifact_id:
             return {
                 "used_vision": False,
-                "snapshot_path": str(path),
-                "reason": "图片文件不存在，暂时无法识别。",
+                "snapshot_path": "",
+                "reason": "图片引用缺少项目授权信息，暂时无法识别。",
             }
+        try:
+            attachment = resolve_project_image(self.config, self.store, project_id, {"artifact_id": artifact_id})
+        except (KeyError, ValueError, OSError):
+            return {"used_vision": False, "snapshot_path": "", "reason": "图片引用无效或文件不可用，暂时无法识别。"}
+        path = Path(attachment["path"])
         status = self.status()
         provider = self.config.vision_provider
         if not status.get("configured"):

@@ -21,6 +21,10 @@ from .services.agent_harness import HARNESS_ID, HARNESS_VERSION, HarnessExecutio
 from .services.classroom_workflow import ClassroomWorkflowRuntime
 from .services.classroom_binding import require_classroom_context, require_confirmation_classroom, require_project_session
 from .services.classroom_binding import require_context_lesson, require_project_lesson, require_confirmation_lessons
+from .services.image_references import (
+    SUPPORTED_IMAGE_MIME_BY_SUFFIX, detect_image_mime as _detect_image_mime,
+    resolve_image_list, resolve_image_context, require_confirmation_images,
+)
 from .services.datasets import DatasetService
 from .services.knowledge import KnowledgeService
 from .services.knowledge_base import KnowledgeBaseService
@@ -52,27 +56,6 @@ APP_VERSION = "1.1.0"
 TRANSPARENT_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR42mP8z8BQDwAFgwJ/lU9nWQAAAABJRU5ErkJggg=="
 )
-
-SUPPORTED_IMAGE_MIME_BY_SUFFIX = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".webp": "image/webp",
-    ".gif": "image/gif",
-}
-
-
-def _detect_image_mime(raw_bytes: bytes) -> str:
-    if raw_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if raw_bytes.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if raw_bytes.startswith((b"GIF87a", b"GIF89a")):
-        return "image/gif"
-    if len(raw_bytes) >= 12 and raw_bytes[:4] == b"RIFF" and raw_bytes[8:12] == b"WEBP":
-        return "image/webp"
-    return ""
-
 
 SUPPORTED_VIDEO_MIME_BY_SUFFIX = {
     ".mp4": "video/mp4",
@@ -355,7 +338,7 @@ class WebGISRuntime:
         )
         self.resource_search_service = ResourceSearchService(self.config, self.knowledge_base_service)
         self.poi_service = PoiService(self.config, self.store)
-        self.vision_service = MapVisionService(self.config)
+        self.vision_service = MapVisionService(self.config, store=self.store)
         self.minimax_client = build_llm_client(self.config)
         self.image_generation_service = MiniMaxImageClient(self.config)
         self.teaching_map_service = TeachingMapService(self.config, self.store)
@@ -1033,6 +1016,10 @@ class WebGISRuntime:
         normalized_input_mode = input_mode if input_mode in {"text", "voice"} else "text"
         normalized_mode = assistant_mode if assistant_mode in {"teaching", "knowledge", "tool", "interaction"} else "teaching"
         resolved_attachments = self.resolve_image_attachments(project_id, image_attachments or [])
+        map_context = resolve_image_context(self.config, self.store, project_id, map_context)
+        if resolved_attachments:
+            map_context = {**map_context, "image_attachments": resolved_attachments, "image_attachment": resolved_attachments[0]}
+        map_context = self.session_engine.prepare_image_context(project_id, message, conversation_id, map_context)
         # One assistant entry point, one safety boundary.  The v2 feature flag
         # remains readable for deployment compatibility, but no request may
         # bypass the session harness through the former legacy worker.
@@ -1096,6 +1083,7 @@ class WebGISRuntime:
         normalized_decision = "reject" if str(decision).strip().lower() == "reject" else "approve"
         require_confirmation_classroom(self.store, confirmation.project_id, confirmation.payload or {})
         require_confirmation_lessons(self.store, confirmation.project_id, confirmation.payload or {}, actor_role=actor_role)
+        require_confirmation_images(self.config, self.store, confirmation.project_id, confirmation.payload or {})
         job = self.store.create_job(
             project_id=confirmation.project_id,
             job_type="assistant_confirmation",
@@ -1365,43 +1353,7 @@ class WebGISRuntime:
         project_id: str,
         attachments: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        if len(attachments) > 1:
-            raise ValueError("每条消息暂时只能附加一张图片。")
-        resolved: List[Dict[str, Any]] = []
-        for item in attachments:
-            artifact_id = str(item.get("artifact_id") or "").strip()
-            if not artifact_id:
-                raise ValueError("图片附件缺少 artifact_id。")
-            artifact = self.store.get_artifact(artifact_id)
-            if artifact is None:
-                raise KeyError(f"Unknown artifact: {artifact_id}")
-            if artifact.project_id != project_id:
-                raise ValueError("不能使用其他项目的图片。")
-            if artifact.artifact_type not in {"map_snapshot", "uploaded_image", "generated_image"}:
-                raise ValueError("该产物不是可识别的图片。")
-            path = Path(artifact.path).resolve()
-            allowed_roots = (self.config.uploads_dir.resolve(), self.config.outputs_dir.resolve())
-            if not any(_is_relative_to(path, root) for root in allowed_roots):
-                raise ValueError("图片路径不在允许的项目目录中。")
-            if not path.is_file() or path.suffix.lower() not in SUPPORTED_IMAGE_MIME_BY_SUFFIX:
-                raise ValueError("图片文件不存在或格式不受支持。")
-            detected_mime = _detect_image_mime(path.read_bytes()[:32])
-            expected_mime = SUPPORTED_IMAGE_MIME_BY_SUFFIX[path.suffix.lower()]
-            if not detected_mime or detected_mime != expected_mime:
-                raise ValueError("图片文件内容与格式不一致。")
-            resolved.append(
-                {
-                    "artifact_id": artifact.artifact_id,
-                    "title": artifact.title,
-                    "path": str(path),
-                    "public_url": str(artifact.metadata.get("public_url") or self.config.public_url_for_path(path)),
-                    "mime_type": str(
-                        artifact.metadata.get("mime_type")
-                        or SUPPORTED_IMAGE_MIME_BY_SUFFIX.get(path.suffix.lower(), "")
-                    ),
-                }
-            )
-        return resolved
+        return resolve_image_list(self.config, self.store, project_id, attachments)
 
     def export_snapshot(
         self,
@@ -2423,6 +2375,7 @@ class WebGISRuntime:
             self._fail_job(job_id, "assistant_confirmation", str(exc))
 
     def _execute_assistant_action(self, project_id: str, action: Dict[str, Any], map_context: Dict[str, Any]) -> Dict[str, Any]:
+        map_context = resolve_image_context(self.config, self.store, project_id, map_context)
         require_classroom_context(self.store, project_id, map_context)
         require_context_lesson(self.store, project_id, map_context)
         tool_name = action["tool_name"]
