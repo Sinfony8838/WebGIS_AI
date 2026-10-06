@@ -5,7 +5,7 @@ import hashlib
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import fields, is_dataclass
+from dataclasses import MISSING, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 from uuid import uuid4
@@ -30,6 +30,10 @@ from .models import (
 
 LEGACY_REGION_LAYER_ID = "builtin_population_regions"
 LEGACY_REGION_TEMPLATE_ID = "population_distribution"
+
+
+class InvalidRuntimeState(ValueError):
+    """A decoded snapshot cannot be read by this version; preserve its bytes."""
 
 
 class RuntimeStore:
@@ -72,111 +76,109 @@ class RuntimeStore:
                     self._write_state_file()
 
     def _load(self) -> None:
-        if not self.state_file.exists():
+        # A new installation may have no snapshot. Other read errors must
+        # abort startup, never masquerade as an empty, writable database.
+        try:
+            serialized = self.state_file.read_text(encoding="utf-8")
+        except FileNotFoundError:
             return
         try:
-            payload = json.loads(self.state_file.read_text(encoding="utf-8"))
-            if not isinstance(payload, dict):
-                raise ValueError("Runtime state payload must be an object")
-
-            self.projects = {}
-            migrated_legacy_projects = False
-            layer_data_dir = self.state_file.parent / "layer_data"
-            for project_id, data in payload.get("projects", {}).items():
-                layers = [LayerRecord(**layer) for layer in data.pop("layers", [])]
-                # Hydrate large feature payloads that were offloaded to files.
-                for layer in layers:
-                    layer_data = layer.data if isinstance(layer.data, dict) else None
-                    features_file = layer_data.get("features_file") if layer_data else None
-                    if not features_file:
-                        continue
-                    # References are filenames written by this store, never
-                    # arbitrary paths from a restored state file.
-                    filename = str(features_file)
-                    if "/" in filename or "\\" in filename or ":" in filename or filename in {".", ".."}:
-                        continue
-                    features_path = layer_data_dir / filename
-                    if features_path.resolve().parent != layer_data_dir.resolve():
-                        continue
-                    if features_path.exists():
-                        try:
-                            hydrated = json.loads(features_path.read_text(encoding="utf-8"))
-                            if not isinstance(hydrated, dict) or not isinstance(hydrated.get("features"), list):
-                                continue
-                            layer_data.pop("features_file", None)
-                            layer_data["type"] = hydrated.get("type", layer_data.get("type"))
-                            layer_data["features"] = hydrated.get("features", [])
-                            self._layer_data_files[(project_id, layer.layer_id, layer.data_rev)] = filename
-                        except (OSError, json.JSONDecodeError):
-                            continue
-                project = ProjectRecord(**data)
-                project.layers = layers
-                if self._remove_legacy_region_demo_layers(project):
-                    migrated_legacy_projects = True
-                self.projects[project_id] = project
-            self.jobs = {job_id: JobRecord(**data) for job_id, data in payload.get("jobs", {}).items()}
-            self.artifacts = {
-                artifact_id: ArtifactRecord(**data) for artifact_id, data in payload.get("artifacts", {}).items()
-            }
-            self.lessons = {
-                lesson_id: LessonRecord(**{**data, "plan": data.get("plan") or {}})
-                for lesson_id, data in payload.get("lessons", {}).items()
-            }
-            self.lesson_designs = {
-                design_id: LessonDesignRecord(**data)
-                for design_id, data in payload.get("lesson_designs", {}).items()
-            }
-            self.lesson_rehearsals = {
-                rehearsal_id: LessonRehearsalRecord(**data)
-                for rehearsal_id, data in payload.get("lesson_rehearsals", {}).items()
-            }
-            self.class_sessions = {
-                session_id: ClassSessionRecord(**data)
-                for session_id, data in payload.get("class_sessions", {}).items()
-            }
-            self.conversations = {
-                conversation_id: ConversationRecord(**self._normalize_conversation_payload(data))
-                for conversation_id, data in payload.get("conversations", {}).items()
-            }
-            self.messages = {
-                message_id: MessageRecord(**data) for message_id, data in payload.get("messages", {}).items()
-            }
-            self.confirmations = {
-                confirmation_id: ConfirmationRecord(**data)
-                for confirmation_id, data in payload.get("confirmations", {}).items()
-            }
-            self.workflows = {
-                workflow_id: WorkflowRecord(**data)
-                for workflow_id, data in payload.get("workflows", {}).items()
-            }
-            if migrated_legacy_projects:
-                self._save()
+            payload = json.loads(serialized)
         except json.JSONDecodeError:
+            # Preserve the established bad-JSON recovery behavior, but only
+            # after a successful read and a successful quarantine rename.
             self._quarantine_corrupt_state("invalid_json")
-            self.projects = {}
-            self.jobs = {}
-            self.artifacts = {}
-            self.lessons = {}
-            self.lesson_designs = {}
-            self.lesson_rehearsals = {}
-            self.class_sessions = {}
-            self.conversations = {}
-            self.messages = {}
-            self.confirmations = {}
-            self.workflows = {}
-        except Exception:
-            self._quarantine_corrupt_state("invalid_schema")
-            self.projects = {}
-            self.jobs = {}
-            self.artifacts = {}
-            self.lessons = {}
-            self.lesson_designs = {}
-            self.lesson_rehearsals = {}
-            self.class_sessions = {}
-            self.conversations = {}
-            self.messages = {}
-            self.confirmations = {}
-            self.workflows = {}
+            return
+
+        # Decode/hydrate into temporary collections. Unsupported schema and
+        # programming errors retain both the old file and the active snapshot.
+        records, layer_files = self._decode_state(payload)
+        migrated = False
+        for project in records["projects"].values():
+            if self._remove_legacy_region_demo_layers(project):
+                migrated = True
+        with self._lock:
+            for name, collection in records.items():
+                setattr(self, name, collection)
+            self._layer_data_files = layer_files
+            # Saving migration is deliberately outside the parse error
+            # boundary. A write failure leaves loaded records intact and
+            # propagates; the atomic writer retains the previous disk bytes.
+            if migrated:
+                self._save()
+
+    @staticmethod
+    def _decode_record(record_type: Any, data: Any) -> Any:
+        if not isinstance(data, dict):
+            raise InvalidRuntimeState(f"{record_type.__name__} must be an object")
+        record_fields = fields(record_type)
+        names = {item.name for item in record_fields}
+        required = {item.name for item in record_fields if item.default is MISSING and item.default_factory is MISSING}
+        if set(data) - names or required - set(data):
+            raise InvalidRuntimeState(f"Unsupported fields in {record_type.__name__}")
+        return record_type(**data)
+
+    def _decode_state(self, payload: Any) -> Tuple[Dict[str, Dict[str, Any]], Dict[Tuple[str, str, int], str]]:
+        if not isinstance(payload, dict):
+            raise InvalidRuntimeState("Runtime state payload must be an object")
+        record_types = {
+            "projects": ProjectRecord, "jobs": JobRecord, "artifacts": ArtifactRecord,
+            "lessons": LessonRecord, "lesson_designs": LessonDesignRecord,
+            "lesson_rehearsals": LessonRehearsalRecord, "class_sessions": ClassSessionRecord,
+            "conversations": ConversationRecord, "messages": MessageRecord,
+            "confirmations": ConfirmationRecord, "workflows": WorkflowRecord,
+        }
+        records: Dict[str, Dict[str, Any]] = {}
+        for name, record_type in record_types.items():
+            collection = payload.get(name, {})
+            if not isinstance(collection, dict):
+                raise InvalidRuntimeState(f"Runtime state {name} must be an object")
+            decoded = {}
+            for key, source in collection.items():
+                if not isinstance(source, dict):
+                    raise InvalidRuntimeState(f"Runtime state {name} record must be an object")
+                data = dict(source)
+                if name == "projects":
+                    layers = data.get("layers", [])
+                    if not isinstance(layers, list):
+                        raise InvalidRuntimeState("Project layers must be a list")
+                    data["layers"] = [self._decode_record(LayerRecord, layer) for layer in layers]
+                elif name == "lessons":
+                    data["plan"] = data.get("plan") or {}
+                elif name == "conversations":
+                    data = self._normalize_conversation_payload(data)
+                decoded[key] = self._decode_record(record_type, data)
+            records[name] = decoded
+
+        layer_files: Dict[Tuple[str, str, int], str] = {}
+        layer_data_dir = self.state_file.parent / "layer_data"
+        for project_id, project in records["projects"].items():
+            for layer in project.layers:
+                layer_data = layer.data if isinstance(layer.data, dict) else None
+                features_file = layer_data.get("features_file") if layer_data else None
+                if not features_file:
+                    continue
+                filename = str(features_file)
+                if "/" in filename or "\\" in filename or ":" in filename or filename in {".", ".."}:
+                    continue
+                features_path = layer_data_dir / filename
+                if features_path.resolve().parent != layer_data_dir.resolve():
+                    continue
+                try:
+                    serialized_features = features_path.read_text(encoding="utf-8")
+                except FileNotFoundError:
+                    continue  # Retain the historical missing-file placeholder.
+                try:
+                    hydrated = json.loads(serialized_features)
+                except json.JSONDecodeError:
+                    continue  # Keep the reference rather than substituting data.
+                if not isinstance(hydrated, dict) or not isinstance(hydrated.get("features"), list):
+                    continue
+                layer_data.pop("features_file", None)
+                layer_data["type"] = hydrated.get("type", layer_data.get("type"))
+                layer_data["features"] = hydrated["features"]
+                layer_files[(project_id, layer.layer_id, layer.data_rev)] = filename
+        return records, layer_files
 
     @staticmethod
     def _remove_legacy_region_demo_layers(project: ProjectRecord) -> bool:
@@ -357,15 +359,10 @@ class RuntimeStore:
         raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
     def _quarantine_corrupt_state(self, reason: str) -> None:
-        if not self.state_file.exists():
-            return
         backup_path = self.state_file.with_name(
             f"{self.state_file.stem}.corrupt_{reason}_{uuid4().hex}{self.state_file.suffix}"
         )
-        try:
-            self.state_file.replace(backup_path)
-        except OSError:
-            return
+        self.state_file.replace(backup_path)
 
     def _normalize_conversation_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         normalized = dict(payload or {})
