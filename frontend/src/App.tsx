@@ -10,6 +10,7 @@ import { JobActivity } from "./lib/jobActivity";
 import { forgetPendingJob, rememberPendingJob, type PendingJob } from "./lib/pendingJobs";
 import { usePendingJobs } from "./hooks/usePendingJobs";
 import { subscribeJob, type JobSubscription } from "./lib/jobSubscription";
+import { restoreClassroomProject } from "./lib/projectRecovery";
 import { MapToolsDock } from "./components/MapToolsDock";
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "ol/ol.css";
@@ -755,6 +756,7 @@ export default function App({
   const [rehearsalTarget, setRehearsalTarget] = useState<{ lessonId: string; signal: number }>({ lessonId: "", signal: 0 });
   const [initAttempt, setInitAttempt] = useState(0);
   const [initError, setInitError] = useState("");
+  const explicitProjectCreationRef = useRef<string | null>(null);
   const connectionReady = Boolean(project && health && !initError);
 
   // 全屏教案设计工作台：URL 同步（?workspace=lesson-design&design_id=...），刷新/回退可恢复。
@@ -3296,6 +3298,8 @@ export default function App({
 
   useEffect(() => {
     let cancelled = false;
+    const createNewProject = explicitProjectCreationRef.current === currentUser.user_id;
+    explicitProjectCreationRef.current = null;
     (async () => {
       setInitError("");
       const healthPayload = await fetchUiCapabilities();
@@ -3305,29 +3309,15 @@ export default function App({
       setHealth(healthPayload);
       // 优先复用上次的课堂项目：每次刷新都新建项目会让后端状态文件无限膨胀
       //（历史上曾涨到 228MB，导致整个课堂演示卡顿）。
-      const storedProjectId = readStoredProjectId(currentUser.user_id);
-      let active: (ProjectRecord & { status: string }) | null = null;
-      if (storedProjectId) {
-        try {
-          active = await fetchProject(storedProjectId);
-        } catch (error) {
-          if ((error as Error).message === "AUTH_REQUIRED") {
-            throw error;
-          }
-          active = null;
-        }
-      }
-      if (cancelled) {
-        return;
-      }
-      const restored = Boolean(active);
-      if (!active) {
-        active = await createProject();
-        storeProjectId(currentUser.user_id, active.project_id);
-      }
-      if (cancelled) {
-        return;
-      }
+      const storedProjectId = createNewProject ? "" : readStoredProjectId(currentUser.user_id);
+      const initial = await restoreClassroomProject(storedProjectId, {
+        read: fetchProject,
+        create: createProject,
+        remember: (projectId) => storeProjectId(currentUser.user_id, projectId),
+        isCurrent: () => !cancelled
+      });
+      if (!initial) return;
+      const { project: active, restored } = initial;
       setProject(active);
       await refreshProjectState(active.project_id);
       await loadKnowledgeBase();
@@ -3374,6 +3364,7 @@ export default function App({
         pushToast("success", "课堂项目已创建", "已初始化课堂地图环境。");
       }
     })().catch((error: Error) => {
+      if (cancelled) return;
       setInitError(error.message);
       pushToast("error", "初始化失败", error.message);
     });
@@ -4181,6 +4172,7 @@ export default function App({
             {screenshotCapturing ? "截取中…" : screenshotSaving ? "处理中…" : "截图"}
           </button>
           {initError ? (
+            <>
             <button
               type="button"
               className="toolbar-button active"
@@ -4200,6 +4192,19 @@ export default function App({
             >
               重试连接
             </button>
+            <button
+              type="button"
+              className="toolbar-button"
+              title="保留原项目数据，创建新的课堂项目"
+              onClick={() => {
+                explicitProjectCreationRef.current = currentUser.user_id;
+                setInitError("");
+                setInitAttempt((value) => value + 1);
+              }}
+            >
+              新建课堂项目
+            </button>
+            </>
           ) : null}
         </div>
         <div className="header-search">
