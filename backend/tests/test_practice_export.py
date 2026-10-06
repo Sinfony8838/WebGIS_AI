@@ -118,7 +118,7 @@ class PracticeExportLessonGoalsTest(PracticeExportTestBase):
         self.assertEqual(store.get_job(current.job_id).status, "queued")
         self.assertEqual(store.get_job(other.job_id).status, "queued")
         self.assertEqual(store.get_job(complete.job_id).result, {"note": "keep"})
-        restored = RuntimeStore(store.state_file)
+        restored = RuntimeStore(store.state_file, read_only=True)
         self.assertEqual(restored.get_job(interrupted.job_id).status, "failed")
         self.assertIn("重启中断", restored.get_job(interrupted.job_id).error)
 
@@ -159,7 +159,7 @@ class PracticeExportLessonGoalsTest(PracticeExportTestBase):
         recovered = runtime.classroom.session_review_history(session.session_id)["practice"]["result"]
         self.assertEqual(recovered, result)
         self.assertEqual(recovered["selection_token"], manifest["token"])
-        self.assertEqual(RuntimeStore(store.state_file).get_job(result["job_id"]).result, result)
+        self.assertEqual(RuntimeStore(store.state_file, read_only=True).get_job(result["job_id"]).result, result)
         self.assertEqual(sum(v["count"] for v in result["selection_summary"]), 1)
         student = docx_text(result["student_artifact"]["path"])
         teacher = docx_text(result["teacher_artifact"]["path"])

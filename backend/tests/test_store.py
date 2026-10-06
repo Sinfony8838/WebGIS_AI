@@ -19,7 +19,7 @@ class RuntimeStoreTest(unittest.TestCase):
             store.set_view(project_id, shanghai)
             store.set_view(project_id, {"center": [15, 20], "zoom": 2})
             self.assertNotIn("extent", store.get_project(project_id).view)
-            self.assertNotIn("extent", RuntimeStore(path).get_project(project_id).view)
+            self.assertNotIn("extent", RuntimeStore(path, read_only=True).get_project(project_id).view)
             # An explicitly supplied current extent remains authoritative.
             world = [-165, -60, 180, 85]
             store.set_view(project_id, {"center": [15, 20], "extent": world})
@@ -165,7 +165,7 @@ class RuntimeStoreTest(unittest.TestCase):
             marker = archive_dir / "existing-archive.json"
             marker.write_text('{"archived": true}', encoding="utf-8")
 
-            reloaded = RuntimeStore(state_file)
+            reloaded = RuntimeStore(state_file, read_only=True)
 
             self.assertEqual(set(reloaded.projects), created_ids)
             self.assertEqual(marker.read_text(encoding="utf-8"), '{"archived": true}')

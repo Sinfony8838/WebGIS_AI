@@ -27,6 +27,8 @@ def assert_preserved(path, before):
 def test_read_failure_does_not_quarantine_or_clear(snapshot, failure, reload):
     path, store, project = snapshot
     before = path.read_bytes()
+    if not reload:
+        store.close()
     with patch.object(Path, "read_text", side_effect=failure("synthetic read failure")):
         with pytest.raises(failure):
             store._load() if reload else RuntimeStore(path)
@@ -87,6 +89,7 @@ def test_bad_json_quarantine_failure_aborts_without_overwrite(snapshot):
     path, store, project = snapshot
     path.write_text("{invalid synthetic json", encoding="utf-8")
     before = path.read_bytes()
+    store.close()
     with patch.object(Path, "replace", side_effect=PermissionError("synthetic quarantine denial")):
         with pytest.raises(PermissionError):
             RuntimeStore(path)
@@ -129,6 +132,7 @@ def test_migration_failure_keeps_valid_snapshot_and_loaded_records(tmp_path, fai
     assert_preserved(path, before)
     assert not list(tmp_path.glob("*.tmp"))
     # A later clean restart completes the same migration using the old bytes.
+    store.close()
     restored = RuntimeStore(path)
     assert restored.get_project(project.project_id).layers == []
     assert not list(tmp_path.glob("runtime.corrupt_*"))

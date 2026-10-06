@@ -421,7 +421,7 @@ class LessonRehearsalServiceTest(unittest.TestCase):
         rid = cw.create_lesson_rehearsal(self.project, lesson.lesson_id, "local_admin")["rehearsal"]["rehearsal_id"]
         cw.update_lesson_rehearsal(rid, patch={"title": "持久化标题"}, expected_revision=0)
 
-        reloaded = RuntimeStore(self.store.state_file)
+        reloaded = RuntimeStore(self.store.state_file, read_only=True)
         restored = reloaded.get_lesson_rehearsal(rid)
         self.assertIsNotNone(restored)
         self.assertEqual(restored.working_copy["title"], "持久化标题")

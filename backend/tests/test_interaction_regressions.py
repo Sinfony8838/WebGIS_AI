@@ -143,7 +143,7 @@ class InteractionRegressionTest(unittest.TestCase):
         expected = json.loads(json.dumps(expected, ensure_ascii=False))
         actual = json.loads(store.state_file.read_text(encoding='utf8'))
         self.assertEqual(actual, expected)
-        restored = RuntimeStore(store.state_file)
+        restored = RuntimeStore(store.state_file, read_only=True)
         self.assertEqual(restored.get_project(pid).layers[0].data, store.get_project(pid).layers[0].data)
 
     def test_confirmed_end_class_reports_original_valid_assessment(self):

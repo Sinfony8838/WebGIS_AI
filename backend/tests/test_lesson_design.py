@@ -380,7 +380,7 @@ class LessonDesignServiceTest(unittest.TestCase):
         design = self.runtime.classroom.create_lesson_design(self.project, "local_admin")
         result = self.runtime.classroom.turn_lesson_design(design["design_id"], "高一、40分钟、胡焕庸线", 0)
         self.assertEqual(result["revision"], 1)
-        reloaded = RuntimeStore(self.store.state_file)
+        reloaded = RuntimeStore(self.store.state_file, read_only=True)
         restored = reloaded.get_lesson_design(design["design_id"])
         self.assertIsNotNone(restored)
         self.assertEqual(restored.draft["topic"], "胡焕庸线")

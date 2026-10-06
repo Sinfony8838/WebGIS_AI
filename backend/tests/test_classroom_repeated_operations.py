@@ -43,7 +43,7 @@ def test_next_stage_commands_persist_the_shanghai_sequence(classroom):
         plan = runtime.assistant_service.plan_interaction_actions("下一环节", store.get_project(project_id), context)
         assert [action["tool_name"] for action in plan["actions"]] == ["enter_lesson_stage"]
         runtime._execute_assistant_action(project_id, plan["actions"][0], context)
-        restored = RuntimeStore(store.state_file).get_class_session(session_id)
+        restored = RuntimeStore(store.state_file, read_only=True).get_class_session(session_id)
         assert restored.current_stage_id == expected
         assert any(event["type"] == "stage_enter" and event["stage_id"] == expected for event in restored.events)
 
@@ -61,7 +61,7 @@ def test_hiding_top_thematic_layer_preserves_lower_layer_and_order(classroom):
         f"隐藏{upper.name}", store.get_project(project_id), {})
     assert [action["tool_name"] for action in plan["actions"]] == ["toggle_layer"]
     runtime._execute_assistant_action(project_id, plan["actions"][0], {})
-    restored = RuntimeStore(store.state_file).get_project(project_id)
+    restored = RuntimeStore(store.state_file, read_only=True).get_project(project_id)
     layers = {layer.layer_id: layer for layer in restored.layers}
     assert layers[lower.layer_id].visible is True
     assert layers[upper.layer_id].visible is False
@@ -90,7 +90,7 @@ def test_regenerated_reports_preserve_statistics_and_classroom_evidence(classroo
     assert reports[0]["response_data_collected"] is False
     assert reports[0]["participant_count"] == 0
     assert all(question.get("correct_rate") is None for question in reports[0]["questions"])
-    assert RuntimeStore(store.state_file).get_class_session(session_id).to_dict() == before
+    assert RuntimeStore(store.state_file, read_only=True).get_class_session(session_id).to_dict() == before
 
 
 def test_repeated_practice_exports_create_real_consistent_papers(classroom):
@@ -110,7 +110,7 @@ def test_repeated_practice_exports_create_real_consistent_papers(classroom):
             texts.append("\n".join(paragraph.text for paragraph in Document(path).paragraphs))
         assert "比较黄浦与崇明" in texts[0]
         assert texts[0] == texts[1]
-    assert RuntimeStore(store.state_file).get_class_session(session_id).to_dict() == before
+    assert RuntimeStore(store.state_file, read_only=True).get_class_session(session_id).to_dict() == before
 
 
 def test_empty_practice_rejection_is_not_a_successful_export(classroom):
