@@ -19,6 +19,7 @@ from .models import LayerRecord, ProjectRecord, WorkflowRecord, build_assistant_
 from .services.assistant import AssistantService
 from .services.agent_harness import HARNESS_ID, HARNESS_VERSION, HarnessExecutionError
 from .services.classroom_workflow import ClassroomWorkflowRuntime
+from .services.classroom_binding import require_classroom_context, require_confirmation_classroom, require_project_session
 from .services.datasets import DatasetService
 from .services.knowledge import KnowledgeService
 from .services.knowledge_base import KnowledgeBaseService
@@ -1023,6 +1024,8 @@ class WebGISRuntime:
         # Heavy GIS work moved to /workflow/*; assistant actions are WebGIS-only.
         self._require_project(project_id)
         self.session_engine.memory.require_project_conversation(project_id, conversation_id)
+        require_classroom_context(self.store, project_id, map_context)
+        require_classroom_context(self.store, project_id, {"teaching_context": teaching_context})
         normalized_target = "webgis"
         normalized_input_mode = input_mode if input_mode in {"text", "voice"} else "text"
         normalized_mode = assistant_mode if assistant_mode in {"teaching", "knowledge", "tool", "interaction"} else "teaching"
@@ -1088,6 +1091,7 @@ class WebGISRuntime:
             confirmation.project_id, confirmation.conversation_id
         )
         normalized_decision = "reject" if str(decision).strip().lower() == "reject" else "approve"
+        require_confirmation_classroom(self.store, confirmation.project_id, confirmation.payload or {})
         job = self.store.create_job(
             project_id=confirmation.project_id,
             job_type="assistant_confirmation",
@@ -2131,11 +2135,9 @@ class WebGISRuntime:
         except Exception as exc:  # pragma: no cover - defensive runtime branch
             self._fail_job(job_id, "template_run", str(exc))
 
-    def _session_statistics_for_assistant(self, session_id: str) -> Dict[str, Any]:
+    def _session_statistics_for_assistant(self, project_id: str, session_id: str) -> Dict[str, Any]:
         """Read-only session statistics used to ground assistant answers."""
-        session = self.store.get_class_session(session_id)
-        if session is None:
-            raise KeyError(f"Unknown class session: {session_id}")
+        session = require_project_session(self.store, project_id, session_id)
         try:
             lesson = self.classroom._lesson_for_session(session)
         except Exception:
@@ -2156,7 +2158,10 @@ class WebGISRuntime:
             session_id = str((teaching_context or {}).get("session_id") or "").strip()
             if not session_id:
                 return
-            session = self.store.get_class_session(session_id)
+            job = self.store.get_job(job_id)
+            if job is None:
+                return
+            session = require_classroom_context(self.store, job.project_id, map_context)
             if session is None or session.status != "running":
                 return
             tools = []
@@ -2413,6 +2418,7 @@ class WebGISRuntime:
             self._fail_job(job_id, "assistant_confirmation", str(exc))
 
     def _execute_assistant_action(self, project_id: str, action: Dict[str, Any], map_context: Dict[str, Any]) -> Dict[str, Any]:
+        require_classroom_context(self.store, project_id, map_context)
         tool_name = action["tool_name"]
         params = action.get("tool_params", {})
         if tool_name == "set_view":

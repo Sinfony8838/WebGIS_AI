@@ -19,6 +19,7 @@ from .agent_harness import (
     validate_json_contract,
 )
 from .assistant import ASSISTANT_TOOL_INPUT_SCHEMAS, ASSISTANT_TOOL_SCHEMA, AssistantService
+from .classroom_binding import require_classroom_context, require_confirmation_classroom
 from .knowledge_base import KnowledgeBaseService
 from .knowledge_retrieval import RetrievalDoc, RetrievalEngine
 from .llm_planner import LLMPlanner
@@ -2113,6 +2114,7 @@ class ToolExecutor:
         run_context: Optional[AgentRun] = None,
         allow_image_generation: bool = False,
     ) -> List[Dict[str, Any]]:
+        require_classroom_context(self.store, project_id, map_context)
         permission_context = ToolPermissionContext.from_pinned_state(pinned_state)
         executed = []
         for action in actions:
@@ -2263,7 +2265,10 @@ class ToolExecutor:
         session_id = str((teaching_context or {}).get("session_id") or "").strip()
         if not session_id:
             return "该操作需要正在进行的班课，请先在课中面板开始上课"
-        session = self.store.get_class_session(session_id)
+        try:
+            session = require_classroom_context(self.store, str(project_state.get("project_id") or ""), map_context)
+        except (KeyError, ValueError) as exc:
+            return str(exc)
         if session is None or session.status != "running":
             return "当前班课已结束，课堂工具（发布提问/记录学情）只在进行中的班课可用"
         return ""
@@ -2364,14 +2369,14 @@ class AssistantSessionEngine:
         self.tool_executor = ToolExecutor(store, execute_webgis)
         self.memory = ConversationMemory(store)
         self.vision_service = vision_service
-        self.session_stats_provider: Optional[Callable[[str], Dict[str, Any]]] = None
+        self.session_stats_provider: Optional[Callable[[str, str], Dict[str, Any]]] = None
 
     def set_resource_search(self, resource_search: Any) -> None:
         """Wire the resource search service into the knowledge engine for online search."""
         self.knowledge.resource_search = resource_search
 
-    def set_session_stats_provider(self, provider: Callable[[str], Dict[str, Any]]) -> None:
-        """Wire a callable(session_id) -> statistics dict so reflection and
+    def set_session_stats_provider(self, provider: Callable[[str, str], Dict[str, Any]]) -> None:
+        """Wire a callable(project_id, session_id) -> statistics dict so reflection and
         in-class commentary can quote real classroom records."""
         self.session_stats_provider = provider
 
@@ -2464,6 +2469,7 @@ class AssistantSessionEngine:
         effective_target = "webgis"
         del target  # ignored (kept for API back-compat)
         map_context = map_context or {}
+        require_classroom_context(self.store, project.project_id, map_context)
 
         conversation = self.memory.get_or_create(
             project.project_id,
@@ -2760,7 +2766,7 @@ class AssistantSessionEngine:
         if not image_only and (intent == "hybrid" or normalized_mode == "teaching"):
             stage_callback("grounding", "running", "Explaining executed result", "")
             if normalized_mode == "teaching":
-                map_context = self._inject_session_digest(map_context, "teaching_action")
+                map_context = self._inject_session_digest(project.project_id, map_context, "teaching_action")
                 knowledge = self.knowledge.answer(message, map_context=map_context, teaching_task="teaching_action")
                 citations = knowledge["citations"]
                 grounding_text = self.knowledge.render_public_answer(knowledge, include_teaching_points=True)
@@ -2875,6 +2881,7 @@ class AssistantSessionEngine:
         conversation = self.memory.require_project_conversation(
             confirmation.project_id, confirmation.conversation_id
         )
+        require_confirmation_classroom(self.store, confirmation.project_id, payload)
         if confirmation.expires_at:
             expires_at = _parse_timestamp(confirmation.expires_at)
             if expires_at and expires_at <= datetime.now(timezone.utc):
@@ -2952,7 +2959,7 @@ class AssistantSessionEngine:
             stage_callback("grounding", "running", "Explaining confirmed result", "")
             confirmed_message = str((frozen_plan or payload).get("message") or "")
             if confirmed_intent.startswith("teaching"):
-                map_context = self._inject_session_digest(map_context, "teaching_action")
+                map_context = self._inject_session_digest(confirmation.project_id, map_context, "teaching_action")
                 knowledge = self.knowledge.answer(confirmed_message, map_context=map_context, teaching_task="teaching_action")
                 citations = list(knowledge.get("citations") or [])
                 grounding_text = self.knowledge.render_public_answer(knowledge, include_teaching_points=True)
@@ -3059,6 +3066,7 @@ class AssistantSessionEngine:
         payload = confirmation.payload or {}
         frozen_plan = payload.get("frozen_plan") or {}
         actions = list((frozen_plan or payload).get("actions") or payload.get("actions") or [])
+        require_confirmation_classroom(self.store, confirmation.project_id, payload)
         target = str((frozen_plan or payload).get("target") or payload.get("target") or "webgis")
         self.store.resolve_confirmation(confirmation_id, "rejected")
         permission_context = ToolPermissionContext.from_pinned_state(conversation.pinned_state if conversation else {})
@@ -3207,7 +3215,7 @@ class AssistantSessionEngine:
         )
         return enriched
 
-    def _inject_session_digest(self, map_context: Dict[str, Any], teaching_task: str) -> Dict[str, Any]:
+    def _inject_session_digest(self, project_id: str, map_context: Dict[str, Any], teaching_task: str) -> Dict[str, Any]:
         """Attach a compact digest of the live class session so answers can
         quote real tallies, misconceptions and stage timings.
 
@@ -3216,6 +3224,7 @@ class AssistantSessionEngine:
         observation counts). Without a session handle the context is returned
         unchanged, preserving the existing "no records, say so" behaviour.
         """
+        require_classroom_context(self.store, project_id, map_context)
         if self.session_stats_provider is None:
             return map_context
         teaching_context = map_context.get("teaching_context") if isinstance(map_context.get("teaching_context"), dict) else {}
@@ -3227,7 +3236,7 @@ class AssistantSessionEngine:
         if not wants_full and phase != "in_class":
             return map_context
         try:
-            statistics = self.session_stats_provider(session_id)
+            statistics = self.session_stats_provider(project_id, session_id)
         except Exception:
             return map_context
         if not isinstance(statistics, dict):
@@ -3300,7 +3309,7 @@ class AssistantSessionEngine:
         map_context = self._enrich_image_attachment_with_vision(message, map_context, stage_callback)
         if not map_context.get("image_attachment"):
             map_context = self._enrich_map_reading_with_vision(project, message, map_context, stage_callback)
-        map_context = self._inject_session_digest(map_context, teaching_task)
+        map_context = self._inject_session_digest(project.project_id, map_context, teaching_task)
         llm_available = self.knowledge.minimax_client is not None and self.config.minimax_enabled()
         if (map_context.get("image_attachment") or map_context.get("screen_snapshot")) and not map_context.get("vision_summary"):
             reason = str(map_context.get("vision_reason") or "图片识别服务暂时不可用，请稍后重试。")

@@ -146,6 +146,7 @@ class InteractionToolsTest(unittest.TestCase):
             [{"tool_name": "end_class_session", "tool_params": {}}],
             assistant_mode="interaction",
             map_context={"teaching_context": self.teaching_context(session_id=session_id, phase="in_class")},
+            project_state={"project_id": _project_id},
         )
         self.assertEqual(assessment["risk_level"], "high")
         self.assertTrue(assessment["requires_confirmation"])

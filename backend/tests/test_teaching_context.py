@@ -307,6 +307,7 @@ class TeachingContextIntegrationTest(unittest.TestCase):
             [{"tool_name": "record_observation", "tool_params": {"verdict": "misconception", "tag": "x"}}],
             assistant_mode="teaching_action",
             map_context={"teaching_context": self.teaching_context(session_id=session_id, phase="post_class")},
+            project_state={"project_id": project_id},
         )
         descriptor = assessment["actions_planned"][0]
         self.assertEqual(descriptor["risk_level"], "blocked")
