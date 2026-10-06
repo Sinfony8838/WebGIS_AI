@@ -1021,6 +1021,8 @@ class WebGISRuntime:
         *, actor_role: str = "",
     ) -> Dict[str, Any]:
         # Heavy GIS work moved to /workflow/*; assistant actions are WebGIS-only.
+        self._require_project(project_id)
+        self.session_engine.memory.require_project_conversation(project_id, conversation_id)
         normalized_target = "webgis"
         normalized_input_mode = input_mode if input_mode in {"text", "voice"} else "text"
         normalized_mode = assistant_mode if assistant_mode in {"teaching", "knowledge", "tool", "interaction"} else "teaching"
@@ -1081,6 +1083,10 @@ class WebGISRuntime:
         confirmation = self.store.get_confirmation(confirmation_id)
         if confirmation is None:
             raise KeyError(f"Unknown confirmation: {confirmation_id}")
+        self._require_project(confirmation.project_id)
+        self.session_engine.memory.require_project_conversation(
+            confirmation.project_id, confirmation.conversation_id
+        )
         normalized_decision = "reject" if str(decision).strip().lower() == "reject" else "approve"
         job = self.store.create_job(
             project_id=confirmation.project_id,

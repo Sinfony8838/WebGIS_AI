@@ -344,6 +344,19 @@ class ConversationMemory:
     def __init__(self, store: RuntimeStore):
         self.store = store
 
+    def require_project_conversation(
+        self, project_id: str, conversation_id: str = ""
+    ) -> Optional[ConversationRecord]:
+        """Validate a supplied reference without creating or updating memory."""
+        if not conversation_id:
+            return None
+        conversation = self.store.get_conversation(conversation_id)
+        if conversation is None:
+            raise KeyError("Unknown conversation")
+        if conversation.project_id != project_id:
+            raise ValueError("Conversation does not belong to the requested project")
+        return conversation
+
     def get_or_create(
         self,
         project_id: str,
@@ -352,7 +365,7 @@ class ConversationMemory:
         history: Optional[List[Dict[str, Any]]] = None,
         map_context: Optional[Dict[str, Any]] = None,
     ) -> ConversationRecord:
-        conversation = self.store.get_conversation(conversation_id) if conversation_id else None
+        conversation = self.require_project_conversation(project_id, conversation_id)
         if conversation is None:
             conversation = self.store.create_conversation(project_id, assistant_mode)
             for item in history or []:
@@ -2859,7 +2872,9 @@ class AssistantSessionEngine:
         if confirmation.status != "pending":
             raise ValueError(f"Confirmation is already {confirmation.status}")
         payload = confirmation.payload or {}
-        conversation = self.store.get_conversation(confirmation.conversation_id)
+        conversation = self.memory.require_project_conversation(
+            confirmation.project_id, confirmation.conversation_id
+        )
         if confirmation.expires_at:
             expires_at = _parse_timestamp(confirmation.expires_at)
             if expires_at and expires_at <= datetime.now(timezone.utc):
@@ -3038,12 +3053,14 @@ class AssistantSessionEngine:
             raise KeyError(f"Unknown confirmation: {confirmation_id}")
         if confirmation.status != "pending":
             raise ValueError(f"Confirmation is already {confirmation.status}")
+        conversation = self.memory.require_project_conversation(
+            confirmation.project_id, confirmation.conversation_id
+        )
         payload = confirmation.payload or {}
         frozen_plan = payload.get("frozen_plan") or {}
         actions = list((frozen_plan or payload).get("actions") or payload.get("actions") or [])
         target = str((frozen_plan or payload).get("target") or payload.get("target") or "webgis")
         self.store.resolve_confirmation(confirmation_id, "rejected")
-        conversation = self.store.get_conversation(confirmation.conversation_id)
         permission_context = ToolPermissionContext.from_pinned_state(conversation.pinned_state if conversation else {})
         for action in actions:
             permission_context.remember_denial(str(action.get("tool_name") or ""), "user_rejected_confirmation")
