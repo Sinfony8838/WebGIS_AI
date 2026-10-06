@@ -1523,6 +1523,13 @@ def submit_assistant_message(
 ) -> Dict[str, Any]:
     _require_project_access(request, payload.project_id)
     try:
+        assistant_message = str(payload.message or "")
+        wants_lesson_design = any(hint in assistant_message for hint in LESSON_DESIGN_REQUEST_HINTS) or (
+            "教案" in assistant_message and any(token in assistant_message for token in ("共创", "设计", "生成", "备课", "规划"))
+        )
+        base_lesson_id = str((payload.teaching_context or {}).get("lesson_id") or "")
+        if wants_lesson_design and not assistant_message.lstrip().startswith("GeoBot 头脑风暴：") and base_lesson_id:
+            _require_lesson_access(request, base_lesson_id)
         response = runtime.submit_assistant_message(
             payload.project_id,
             payload.message,
@@ -1537,15 +1544,8 @@ def submit_assistant_message(
             payload.image_attachments,
             actor_role=str(_current_auth(request).user.get("role") or ""),
         )
-        assistant_message = str(payload.message or "")
-        wants_lesson_design = any(hint in assistant_message for hint in LESSON_DESIGN_REQUEST_HINTS) or (
-            "教案" in assistant_message and any(token in assistant_message for token in ("共创", "设计", "生成", "备课", "规划"))
-        )
         if wants_lesson_design and not assistant_message.lstrip().startswith("GeoBot 头脑风暴："):
             context = _current_auth(request)
-            base_lesson_id = str((payload.teaching_context or {}).get("lesson_id") or "")
-            if base_lesson_id:
-                _require_lesson_access(request, base_lesson_id)
             response["lesson_design"] = runtime.classroom.create_lesson_design(
                 payload.project_id,
                 str(context.user["user_id"]),
@@ -1671,7 +1671,10 @@ def confirm_assistant_action(
 ) -> Dict[str, Any]:
     _require_confirmation_access(request, payload.confirmation_id)
     try:
-        return runtime.confirm_assistant_action(payload.confirmation_id, decision=payload.decision)
+        return runtime.confirm_assistant_action(
+            payload.confirmation_id, decision=payload.decision,
+            actor_role=str(_current_auth(request).user.get("role") or ""),
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

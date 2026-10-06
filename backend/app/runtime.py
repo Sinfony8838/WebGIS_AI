@@ -20,6 +20,7 @@ from .services.assistant import AssistantService
 from .services.agent_harness import HARNESS_ID, HARNESS_VERSION, HarnessExecutionError
 from .services.classroom_workflow import ClassroomWorkflowRuntime
 from .services.classroom_binding import require_classroom_context, require_confirmation_classroom, require_project_session
+from .services.classroom_binding import require_context_lesson, require_project_lesson, require_confirmation_lessons
 from .services.datasets import DatasetService
 from .services.knowledge import KnowledgeService
 from .services.knowledge_base import KnowledgeBaseService
@@ -1026,6 +1027,8 @@ class WebGISRuntime:
         self.session_engine.memory.require_project_conversation(project_id, conversation_id)
         require_classroom_context(self.store, project_id, map_context)
         require_classroom_context(self.store, project_id, {"teaching_context": teaching_context})
+        require_context_lesson(self.store, project_id, map_context, actor_role=actor_role)
+        require_context_lesson(self.store, project_id, {"teaching_context": teaching_context}, actor_role=actor_role)
         normalized_target = "webgis"
         normalized_input_mode = input_mode if input_mode in {"text", "voice"} else "text"
         normalized_mode = assistant_mode if assistant_mode in {"teaching", "knowledge", "tool", "interaction"} else "teaching"
@@ -1082,7 +1085,7 @@ class WebGISRuntime:
             ),
         }
 
-    def confirm_assistant_action(self, confirmation_id: str, decision: str = "approve") -> Dict[str, Any]:
+    def confirm_assistant_action(self, confirmation_id: str, decision: str = "approve", *, actor_role: str = "") -> Dict[str, Any]:
         confirmation = self.store.get_confirmation(confirmation_id)
         if confirmation is None:
             raise KeyError(f"Unknown confirmation: {confirmation_id}")
@@ -1092,6 +1095,7 @@ class WebGISRuntime:
         )
         normalized_decision = "reject" if str(decision).strip().lower() == "reject" else "approve"
         require_confirmation_classroom(self.store, confirmation.project_id, confirmation.payload or {})
+        require_confirmation_lessons(self.store, confirmation.project_id, confirmation.payload or {}, actor_role=actor_role)
         job = self.store.create_job(
             project_id=confirmation.project_id,
             job_type="assistant_confirmation",
@@ -1100,7 +1104,7 @@ class WebGISRuntime:
             request={"confirmation_id": confirmation_id, "conversation_id": confirmation.conversation_id, "decision": normalized_decision},
             stages=build_assistant_v2_stages(),
         )
-        threading.Thread(target=self._run_confirmation_job, args=(job.job_id, confirmation_id, normalized_decision), daemon=True).start()
+        threading.Thread(target=self._run_confirmation_job, args=(job.job_id, confirmation_id, normalized_decision, actor_role), daemon=True).start()
         return {
             "status": "accepted",
             "job_id": job.job_id,
@@ -2350,7 +2354,7 @@ class WebGISRuntime:
         except Exception as exc:  # pragma: no cover - defensive runtime branch
             self._fail_job(job_id, "assistant_message", str(exc))
 
-    def _run_confirmation_job(self, job_id: str, confirmation_id: str, decision: str = "approve") -> None:
+    def _run_confirmation_job(self, job_id: str, confirmation_id: str, decision: str = "approve", actor_role: str = "") -> None:
         try:
             self.store.set_job_status(job_id, "running")
             self.store.append_job_step(
@@ -2366,12 +2370,13 @@ class WebGISRuntime:
             confirmation = self.store.get_confirmation(confirmation_id)
             confirmation_payload = dict(confirmation.payload or {}) if confirmation is not None else {}
             if decision == "reject":
-                result = self.session_engine.reject_confirmation(confirmation_id, job_id=job_id)
+                result = self.session_engine.reject_confirmation(confirmation_id, job_id=job_id, actor_role=actor_role)
             else:
                 result = self.session_engine.execute_confirmation(
                     confirmation_id,
                     stage_callback=update_stage,
                     job_id=job_id,
+                    actor_role=actor_role,
                 )
                 self._log_assistant_exchange(
                     job_id,
@@ -2419,6 +2424,7 @@ class WebGISRuntime:
 
     def _execute_assistant_action(self, project_id: str, action: Dict[str, Any], map_context: Dict[str, Any]) -> Dict[str, Any]:
         require_classroom_context(self.store, project_id, map_context)
+        require_context_lesson(self.store, project_id, map_context)
         tool_name = action["tool_name"]
         params = action.get("tool_params", {})
         if tool_name == "set_view":
@@ -2792,15 +2798,17 @@ class WebGISRuntime:
             lesson_id = str(params.get("lesson_id") or (teaching_context or {}).get("lesson_id") or "").strip()
             lesson_title = str(params.get("lesson_title") or "").strip()
             if not lesson_id and lesson_title:
-                matched = self.store.list_lessons() if hasattr(self.store, "list_lessons") else []
-                # store.list_lessons 不存在时经由 lesson_service 匹配
-                lessons = matched.get("items", []) if isinstance(matched, dict) else matched
-                lesson_id = next(
-                    (str(item.get("lesson_id") or "") for item in lessons if lesson_title in str(item.get("title") or "")),
-                    "",
-                )
+                for lesson in self.store.list_lessons():
+                    try:
+                        require_project_lesson(self.store, project_id, lesson.lesson_id)
+                    except KeyError:
+                        continue
+                    if lesson_title in lesson.title:
+                        lesson_id = lesson.lesson_id
+                        break
             if not lesson_id:
                 return {"assistant_message": "开始上课需要先绑定教案（在课前面板选择教案后再试）。", "artifacts": []}
+            require_project_lesson(self.store, project_id, lesson_id)
             result = self.classroom.create_class_session(lesson_id, project_id)
             session = result.get("session") or {}
             summary = f"已开始上课（班课码 {session.get('join_code', '')}）。"

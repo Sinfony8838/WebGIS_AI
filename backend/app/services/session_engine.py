@@ -20,6 +20,7 @@ from .agent_harness import (
 )
 from .assistant import ASSISTANT_TOOL_INPUT_SCHEMAS, ASSISTANT_TOOL_SCHEMA, AssistantService
 from .classroom_binding import require_classroom_context, require_confirmation_classroom
+from .classroom_binding import assistant_actor_scope, require_context_lesson, require_project_lesson, require_confirmation_lessons
 from .knowledge_base import KnowledgeBaseService
 from .knowledge_retrieval import RetrievalDoc, RetrievalEngine
 from .llm_planner import LLMPlanner
@@ -2115,6 +2116,9 @@ class ToolExecutor:
         allow_image_generation: bool = False,
     ) -> List[Dict[str, Any]]:
         require_classroom_context(self.store, project_id, map_context)
+        require_context_lesson(self.store, project_id, map_context)
+        require_confirmation_lessons(self.store, project_id, {"actions": actions})
+        project_state = {**(project_state or {}), "project_id": project_id}
         permission_context = ToolPermissionContext.from_pinned_state(pinned_state)
         executed = []
         for action in actions:
@@ -2340,6 +2344,13 @@ class ToolExecutor:
             return "开始上课需要当前课堂绑定的教案（teaching_context.lesson_id）或显式 lesson_id"
         project_id = str(project_state.get("project_id") or "").strip()
         if project_id:
+            try:
+                require_context_lesson(self.store, project_id, map_context)
+                explicit_lesson = str(params.get("lesson_id") or lesson_id).strip()
+                if explicit_lesson:
+                    require_project_lesson(self.store, project_id, explicit_lesson)
+            except (KeyError, ValueError) as exc:
+                return str(exc)
             running = self.store.list_class_sessions(project_id=project_id, status="running")
             if running:
                 return "已有一节进行中的班课，请先结束当前课再开始新课"
@@ -2417,20 +2428,21 @@ class AssistantSessionEngine:
             stage_callback(stage_name, status, summary, detail)
 
         try:
-            result = self._handle_once(
-                job_id=job_id,
-                project=project,
-                message=message,
-                assistant_mode=assistant_mode,
-                conversation_id=conversation_id,
-                history=history,
-                map_context=map_context,
-                target=target,
-                input_mode=input_mode,
-                stage_callback=traced_stage,
-                run_context=run_context,
-                actor_role=actor_role,
-            )
+            with assistant_actor_scope(actor_role):
+                result = self._handle_once(
+                    job_id=job_id,
+                    project=project,
+                    message=message,
+                    assistant_mode=assistant_mode,
+                    conversation_id=conversation_id,
+                    history=history,
+                    map_context=map_context,
+                    target=target,
+                    input_mode=input_mode,
+                    stage_callback=traced_stage,
+                    run_context=run_context,
+                    actor_role=actor_role,
+                )
             verification = run_context.verify_result(result)
             result["harness"] = run_context.finish(
                 status="waiting_for_approval" if result.get("requires_confirmation") else "completed",
@@ -2470,6 +2482,7 @@ class AssistantSessionEngine:
         del target  # ignored (kept for API back-compat)
         map_context = map_context or {}
         require_classroom_context(self.store, project.project_id, map_context)
+        require_context_lesson(self.store, project.project_id, map_context, actor_role=actor_role)
 
         conversation = self.memory.get_or_create(
             project.project_id,
@@ -2821,6 +2834,7 @@ class AssistantSessionEngine:
         confirmation_id: str,
         stage_callback: Callable[[str, str, str, str], None],
         job_id: str = "",
+        *, actor_role: str = "",
     ) -> Dict[str, Any]:
         confirmation = self.store.get_confirmation(confirmation_id)
         if confirmation is None:
@@ -2844,11 +2858,12 @@ class AssistantSessionEngine:
             stage_callback(stage_name, status, summary, detail)
 
         try:
-            result = self._execute_confirmation_once(
-                confirmation_id,
-                traced_stage,
-                run_context=run_context,
-            )
+            with assistant_actor_scope(actor_role):
+                result = self._execute_confirmation_once(
+                    confirmation_id,
+                    traced_stage,
+                    run_context=run_context,
+                )
             verification = run_context.verify_result(result)
             result["harness"] = run_context.finish(
                 status="completed",
@@ -2882,6 +2897,7 @@ class AssistantSessionEngine:
             confirmation.project_id, confirmation.conversation_id
         )
         require_confirmation_classroom(self.store, confirmation.project_id, payload)
+        require_confirmation_lessons(self.store, confirmation.project_id, payload)
         if confirmation.expires_at:
             expires_at = _parse_timestamp(confirmation.expires_at)
             if expires_at and expires_at <= datetime.now(timezone.utc):
@@ -3014,6 +3030,7 @@ class AssistantSessionEngine:
         self,
         confirmation_id: str,
         job_id: str = "",
+        *, actor_role: str = "",
     ) -> Dict[str, Any]:
         confirmation = self.store.get_confirmation(confirmation_id)
         if confirmation is None:
@@ -3032,7 +3049,8 @@ class AssistantSessionEngine:
             },
         )
         try:
-            result = self._reject_confirmation_once(confirmation_id)
+            with assistant_actor_scope(actor_role):
+                result = self._reject_confirmation_once(confirmation_id)
             run_context.event("approval", "human_decision", "rejected")
             verification = run_context.verify_result(result)
             result["harness"] = run_context.finish(
@@ -3067,6 +3085,7 @@ class AssistantSessionEngine:
         frozen_plan = payload.get("frozen_plan") or {}
         actions = list((frozen_plan or payload).get("actions") or payload.get("actions") or [])
         require_confirmation_classroom(self.store, confirmation.project_id, payload)
+        require_confirmation_lessons(self.store, confirmation.project_id, payload)
         target = str((frozen_plan or payload).get("target") or payload.get("target") or "webgis")
         self.store.resolve_confirmation(confirmation_id, "rejected")
         permission_context = ToolPermissionContext.from_pinned_state(conversation.pinned_state if conversation else {})
