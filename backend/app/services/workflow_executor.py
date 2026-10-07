@@ -22,7 +22,7 @@ import queue
 import re
 import threading
 import time
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import dataclass, field as dataclass_field, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 
@@ -427,6 +427,10 @@ class _Event:
         return {"type": self.type, "payload": self.payload, "timestamp": time.time()}
 
 
+class _WorkflowCancelled(Exception):
+    """Internal control flow; public cancellation codes remain unchanged."""
+
+
 class _EventBus:
     """In-memory pub-sub keyed by workflow_id; subscribers are queue.Queue."""
 
@@ -495,6 +499,7 @@ class WorkflowExecutor:
         self.bus = _EventBus()
         self._workers: Dict[str, threading.Thread] = {}
         self._workers_lock = threading.RLock()
+        self._cancel_events: Dict[str, threading.Event] = {}
 
     def qgis_gate_timeout_hint(self) -> str:
         seconds = float(self.qgis_gate.timeout)
@@ -547,6 +552,10 @@ class WorkflowExecutor:
         # Persist & emit creation event
         thread = None
         try:
+            # Register before initial persistence/events so cancellation also
+            # covers preparation and the gap before the thread starts.
+            with self._workers_lock:
+                self._cancel_events[workflow.workflow_id] = threading.Event()
             self.store.create_workflow(workflow)
             self._write_workflow_files(workflow)
             self.bus.publish(workflow.workflow_id, _Event(
@@ -632,9 +641,13 @@ class WorkflowExecutor:
     def _run_workflow(self, workflow_id: str) -> None:
         record = None
         try:
+            with self._workers_lock:
+                self._cancel_events.setdefault(workflow_id, threading.Event())
             record = self.store.get_workflow(workflow_id)
             if record is not None:
                 self._execute_workflow(record)
+        except _WorkflowCancelled:
+            self._fail_unexpected_execution(workflow_id, record)
         except Exception:
             logger.exception("unexpected workflow execution failure %s", workflow_id)
             self._fail_unexpected_execution(workflow_id, record)
@@ -642,17 +655,27 @@ class WorkflowExecutor:
             self._release_execution(workflow_id, threading.current_thread())
 
     def _fail_unexpected_execution(self, workflow_id: str, record: Optional[WorkflowRecord]) -> None:
+        # Serialize the terminal outcome with cancellation acceptance.
+        with self._workers_lock:
+            self._report_execution_failure(workflow_id, record)
+            self._cancel_events.pop(workflow_id, None)
+
+    def _report_execution_failure(self, workflow_id: str, record: Optional[WorkflowRecord]) -> None:
         # Retain an already-established processing/cancellation error if
         # terminal persistence failed. Exception details stay in local logs.
         known_error = record.error if record is not None and record.status in {"error", "cancelled"} else None
-        error = known_error or make_error(
+        cancelled = self._cancel_requested(workflow_id) or (record is not None and record.status == "cancelled")
+        cancellation_error = known_error if known_error and known_error.get("code") == "STEP_CANCELLED" else make_error(
+            "STEP_CANCELLED", "workflow cancelled",
+            "已取消本次分析。已完成的结果保留；未完成步骤不会继续执行。",
+        )
+        error = cancellation_error if cancelled else known_error or make_error(
             "INTERNAL_ERROR", "unexpected workflow execution failure",
             "本次分析遇到内部错误，已停止执行，请查看日志后重试。",
         )
         failed_steps = []
         if record is not None:
-            if record.status != "cancelled":
-                record.status = "error"
+            record.status = "cancelled" if cancelled else "error"
             record.error = error
             record.finished_at = utc_now()
             for state in record.steps:
@@ -695,16 +718,28 @@ class WorkflowExecutor:
             with self._workers_lock:
                 if self._workers.get(workflow_id) is thread:
                     self._workers.pop(workflow_id, None)
+                    self._cancel_events.pop(workflow_id, None)
+
+    def _cancel_requested(self, workflow_id: str) -> bool:
+        with self._workers_lock:
+            event = self._cancel_events.get(workflow_id)
+            return event is not None and event.is_set()
+
+    def _check_cancel(self, workflow_id: str) -> None:
+        if self._cancel_requested(workflow_id):
+            raise _WorkflowCancelled()
 
     def _execute_workflow(self, record: WorkflowRecord) -> None:
         workflow_id = record.workflow_id
-        record.status = "running"
-        record.started_at = utc_now()
-        record.touch()
-        self.store.save_workflow(record)
-        self.bus.publish(workflow_id, _Event(
-            "workflow_started", {"workflow_id": workflow_id, "status": "running"},
-        ))
+        with self._workers_lock:
+            self._check_cancel(workflow_id)
+            record.status = "running"
+            record.started_at = utc_now()
+            record.touch()
+            self.store.save_workflow(record)
+            self.bus.publish(workflow_id, _Event(
+                "workflow_started", {"workflow_id": workflow_id, "status": "running"},
+            ))
 
         steps_def = list(record.workflow_json.get("steps") or [])
         ordered_step_ids = self._topological_order(steps_def)
@@ -719,25 +754,34 @@ class WorkflowExecutor:
                 "started_at": "",
                 "finished_at": "",
             })
-        record.steps = steps_state
-        self.store.save_workflow(record)
+        with self._workers_lock:
+            self._check_cancel(workflow_id)
+            record.steps = steps_state
+            self.store.save_workflow(record)
 
         success = True
         for step_id in ordered_step_ids:
+            self._check_cancel(workflow_id)
             step = next((s for s in steps_def if str(s.get("id")) == step_id), None)
             if step is None:
                 continue
             state = next((s for s in steps_state if s["id"] == step_id), None)
             if state is None:
                 continue
-            state["status"] = "running"
-            state["started_at"] = utc_now()
-            self.store.save_workflow(record)
-            self.bus.publish(workflow_id, _Event(
-                "step_started", {"workflow_id": workflow_id, "step": dict(state)},
-            ))
+            with self._workers_lock:
+                self._check_cancel(workflow_id)
+                state["status"] = "running"
+                state["started_at"] = utc_now()
+                self.store.save_workflow(record)
+                self.bus.publish(workflow_id, _Event(
+                    "step_started", {"workflow_id": workflow_id, "step": dict(state)},
+                ))
 
-            if not self.qgis_gate.acquire():
+            self._check_cancel(workflow_id)
+            with self._workers_lock:
+                cancel_event = self._cancel_events[workflow_id]
+            if not self.qgis_gate.acquire(cancel_event=cancel_event):
+                self._check_cancel(workflow_id)
                 error = make_error(
                     "QGIS_BUSY",
                     "qgis worker queue exhausted",
@@ -753,56 +797,65 @@ class WorkflowExecutor:
                 success = False
                 break
             try:
-                result = self.worker_manager.run_step(workflow_id, step)
+                self._check_cancel(workflow_id)
+                result = self.worker_manager.run_step(workflow_id, step, cancel_event=cancel_event)
             finally:
                 self.qgis_gate.release()
+            self._check_cancel(workflow_id)
             timings = result.get("timings") if isinstance(result, dict) else None
             if timings:
                 logger.info(
                     "step %s/%s timings %s", workflow_id, step_id, timings
                 )
-            state["finished_at"] = utc_now()
-            if result.get("status") == "success":
-                state["status"] = "success"
-                state["outputs"] = result.get("outputs") or {}
-                state["error"] = None
-                self._register_artifacts(record, state)
-                self.store.save_workflow(record)
-                self.bus.publish(workflow_id, _Event(
-                    "step_success", {"workflow_id": workflow_id, "step": dict(state)},
-                ))
-            else:
-                error = result.get("error") or make_error(
-                    "PROCESSING_FAILED", "unknown step failure", "步骤执行失败", step_id=step_id,
-                )
-                state["status"] = "error"
-                state["error"] = error
-                self.store.save_workflow(record)
-                self.bus.publish(workflow_id, _Event(
-                    "step_error", {"workflow_id": workflow_id, "step": dict(state), "error": error},
-                ))
-                if (step.get("on_error") or "abort") == "skip":
-                    continue
-                success = False
-                break
+            with self._workers_lock:
+                self._check_cancel(workflow_id)
+                state["finished_at"] = utc_now()
+                if result.get("status") == "success":
+                    state["status"] = "success"
+                    state["outputs"] = result.get("outputs") or {}
+                    state["error"] = None
+                    self._register_artifacts(record, state)
+                    self.store.save_workflow(record)
+                    self.bus.publish(workflow_id, _Event(
+                        "step_success", {"workflow_id": workflow_id, "step": dict(state)},
+                    ))
+                else:
+                    error = result.get("error") or make_error(
+                        "PROCESSING_FAILED", "unknown step failure", "步骤执行失败", step_id=step_id,
+                    )
+                    state["status"] = "error"
+                    state["error"] = error
+                    self.store.save_workflow(record)
+                    self.bus.publish(workflow_id, _Event(
+                        "step_error", {"workflow_id": workflow_id, "step": dict(state), "error": error},
+                    ))
+                    if (step.get("on_error") or "abort") == "skip":
+                        continue
+                    success = False
+                    break
 
-        record.finished_at = utc_now()
         if success:
-            record.status = "success"
             # Optional: ask the summary callback to write a summary.md
             if self.summary_callback is not None:
+                self._check_cancel(workflow_id)
                 try:
-                    summary_text = self.summary_callback(record, self._collect_outputs(record))
+                    # Preserve the callback's successful-record contract,
+                    # without exposing success to GET before the run commits.
+                    summary_record = replace(record, status="success", finished_at=utc_now())
+                    summary_text = self.summary_callback(summary_record, self._collect_outputs(record))
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("summary_callback failed: %s", exc)
                     summary_text = ""
-                if summary_text:
-                    summary_path = self.config.workflow_dir(workflow_id) / "outputs" / "summary.md"
-                    try:
-                        summary_path.write_text(summary_text, encoding="utf-8")
-                        self._add_artifact(record, "summary", "AI 解释", "outputs/summary.md")
-                    except Exception:
-                        logger.exception("failed to write summary.md")
+                self._check_cancel(workflow_id)
+                with self._workers_lock:
+                    self._check_cancel(workflow_id)
+                    if summary_text:
+                        summary_path = self.config.workflow_dir(workflow_id) / "outputs" / "summary.md"
+                        try:
+                            summary_path.write_text(summary_text, encoding="utf-8")
+                            self._add_artifact(record, "summary", "AI 解释", "outputs/summary.md")
+                        except Exception:
+                            logger.exception("failed to write summary.md")
         else:
             first_err = next((s for s in steps_state if s["status"] == "error"), None)
             first_error = (first_err or {}).get("error") or {}
@@ -819,6 +872,16 @@ class WorkflowExecutor:
                     # bubble up first failed step error
                     if first_err and first_err.get("error"):
                         record.error = first_err["error"]
+        with self._workers_lock:
+            self._check_cancel(workflow_id)
+            record.finished_at = utc_now()
+            if success:
+                record.status = "success"
+            self._commit_terminal(record, success)
+            self._cancel_events.pop(workflow_id, None)
+
+    def _commit_terminal(self, record: WorkflowRecord, success: bool) -> None:
+        workflow_id = record.workflow_id
         if success:
             self._sync_artifacts_to_database(record)
         record.touch()
@@ -996,21 +1059,25 @@ class WorkflowExecutor:
     # ------------------------------------------------------------------
 
     def cancel_workflow(self, workflow_id: str) -> int:
-        """Cancel the in-flight worker request(s) of ``workflow_id``.
+        """Latch cancellation across preparation, gate, steps and summary.
 
-        The running workflow thread will observe ``STEP_CANCELLED`` for the
-        affected step and the workflow fails with that error. Late worker
-        results are isolated by request_id and can never leak into a rerun.
-        Returns how many in-flight requests were cancelled.
+        Returns cancelled request count, or one when the orchestration itself
+        accepted cancellation without an already-registered worker request.
+        Repeated cancellation and committed terminal workflows return zero.
         """
+        with self._workers_lock:
+            event = self._cancel_events.get(workflow_id)
+            if event is None or event.is_set():
+                return 0
+            event.set()
         cancel = getattr(self.worker_manager, "cancel_workflow", None)
         if cancel is None:  # stub managers in tests
-            return 0
+            return 1
         try:
-            return int(cancel(workflow_id))
+            return max(1, int(cancel(workflow_id)))
         except Exception:  # pragma: no cover
             logger.exception("failed to cancel workflow %s", workflow_id)
-            return 0
+            return 1
 
     def shutdown(self) -> None:
         try:

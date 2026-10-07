@@ -19,7 +19,7 @@ class Worker:
         self.released = []
         self.steps = []
 
-    def run_step(self, workflow_id, step):
+    def run_step(self, workflow_id, step, cancel_event=None):
         self.steps.append(step["id"])
         if self.outcome == "raise":
             raise RuntimeError("synthetic worker exception")
@@ -259,7 +259,7 @@ def test_real_execution_thread_releases_its_reference(execution):
     entered = threading.Event()
     finish = threading.Event()
     original = worker.run_step
-    def blocking_step(workflow_id, step):
+    def blocking_step(workflow_id, step, cancel_event=None):
         entered.set()
         assert finish.wait(timeout=5)
         return original(workflow_id, step)

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any, Dict
 
 CHUNK_SIZE = 1024 * 1024
@@ -123,11 +124,25 @@ class AdmissionGate:
         self._lock = threading.Lock()
         self._waiting = 0
 
-    def acquire(self, timeout: float | None = None) -> bool:
+    def acquire(self, timeout: float | None = None, *, cancel_event: threading.Event | None = None) -> bool:
         with self._lock:
             self._waiting += 1
         try:
-            return self._semaphore.acquire(timeout=self.timeout if timeout is None else timeout)
+            budget = self.timeout if timeout is None else timeout
+            if cancel_event is None:
+                return self._semaphore.acquire(timeout=budget)
+            deadline = time.monotonic() + max(0.0, budget)
+            while not cancel_event.is_set():
+                remaining = max(0.0, deadline - time.monotonic())
+                acquired = self._semaphore.acquire(timeout=min(remaining, 0.2))
+                if acquired:
+                    if cancel_event.is_set():
+                        self._semaphore.release()
+                        return False
+                    return True
+                if remaining <= 0:
+                    return False
+            return False
         finally:
             with self._lock:
                 self._waiting -= 1
