@@ -602,10 +602,39 @@ class WorkflowExecutor:
     # Streaming
     # ------------------------------------------------------------------
 
+    def get_workflow_snapshot(self, workflow_id: str) -> Optional[Dict[str, Any]]:
+        # Terminal assignment, persistence and event publication share this
+        # lock. Queries must not expose success while its commit is in flight.
+        with self._workers_lock:
+            record = self.store.get_workflow(workflow_id)
+            if record is None:
+                return None
+            snapshot = record.to_dict()
+            if workflow_id in self._cancel_events and snapshot["status"] in {"success", "error", "cancelled"}:
+                # A failed terminal commit releases the lock before the outer
+                # failure handler reacquires it. The lifecycle latch still
+                # marks that transient assignment as uncommitted.
+                snapshot["status"] = "running"
+                snapshot["finished_at"] = ""
+            return snapshot
+
+    @staticmethod
+    def _terminal_snapshot_event(snapshot: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if snapshot is None or snapshot["status"] not in {"success", "error", "cancelled"}:
+            return None
+        payload = {"workflow_id": snapshot["workflow_id"], "workflow": snapshot}
+        if snapshot["status"] == "success":
+            payload["artifacts"] = snapshot["artifacts"]
+            event_type = "workflow_success"
+        else:
+            payload["error"] = snapshot["error"]
+            event_type = "workflow_error"
+        return {"type": event_type, "payload": payload}
+
     def stream(self, workflow_id: str, idle_timeout: float = 90.0) -> Iterator[Dict[str, Any]]:
         """Yield event dicts for the given workflow until completion."""
-        record = self.store.get_workflow(workflow_id)
-        if record is None:
+        snapshot = self.get_workflow_snapshot(workflow_id)
+        if snapshot is None:
             yield {"type": "workflow_error", "payload": {
                 "workflow_id": workflow_id,
                 "error": make_error("INTERNAL_ERROR", "workflow not found", "找不到该工作流"),
@@ -614,12 +643,23 @@ class WorkflowExecutor:
         q = self.bus.subscribe(workflow_id)
         try:
             terminal = {"workflow_success", "workflow_error"}
-            last_seen = time.time()
+            # Subscribe first, then inspect again: a terminal commit between
+            # lookup and subscription cannot be lost, including after restart
+            # when the in-memory event history is empty.
+            persisted_terminal = self._terminal_snapshot_event(self.get_workflow_snapshot(workflow_id))
+            if persisted_terminal is not None:
+                yield persisted_terminal
+                return
+            last_seen = time.monotonic()
             while True:
                 try:
                     event = q.get(timeout=2.0)
                 except queue.Empty:
-                    if time.time() - last_seen > idle_timeout:
+                    persisted_terminal = self._terminal_snapshot_event(self.get_workflow_snapshot(workflow_id))
+                    if persisted_terminal is not None:
+                        yield persisted_terminal
+                        return
+                    if time.monotonic() - last_seen > idle_timeout:
                         yield {"type": "stream_idle_timeout", "payload": {"workflow_id": workflow_id}}
                         return
                     # heartbeat for SSE clients
@@ -627,7 +667,7 @@ class WorkflowExecutor:
                     continue
                 if event is None:
                     return
-                last_seen = time.time()
+                last_seen = time.monotonic()
                 yield event.to_dict()
                 if event.type in terminal:
                     return

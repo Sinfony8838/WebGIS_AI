@@ -41,7 +41,7 @@ describe("WorkflowDock", () => {
       job_id: "assistant_job", project_id: "project_demo", status: "completed",
       result: { actions_executed: [{ action: { tool_name: "run_workflow", tool_params: {} }, result: { workflow: { workflow_id: "wf_assistant" } } }] }
     } as never} />);
-    await waitFor(() => expect(useWorkflowStream).toHaveBeenLastCalledWith("wf_assistant"));
+    await waitFor(() => expect(useWorkflowStream).toHaveBeenLastCalledWith("wf_assistant", "project_demo"));
   });
 
   it("opens in-panel dropdown menus instead of native selects", async () => {

@@ -1965,10 +1965,10 @@ class WebGISRuntime:
         }
 
     def get_workflow(self, workflow_id: str) -> Dict[str, Any]:
-        record = self.store.get_workflow(workflow_id)
-        if record is None:
+        snapshot = self.workflow_executor.get_workflow_snapshot(workflow_id)
+        if snapshot is None:
             raise KeyError(f"Unknown workflow: {workflow_id}")
-        return {"status": "success", **record.to_dict()}
+        return {"status": "success", **snapshot}
 
     def list_workflow_artifacts(self, workflow_id: str) -> Dict[str, Any]:
         record = self.store.get_workflow(workflow_id)

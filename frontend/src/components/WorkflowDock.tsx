@@ -337,7 +337,7 @@ export function WorkflowDock({
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, [open, projectId, message, templateId, requestParameters]);
 
-  const stream = useWorkflowStream(activeWorkflowId);
+  const stream = useWorkflowStream(activeWorkflowId, projectId);
   const notifiedArtifacts = useRef("");
   useEffect(() => {
     if (stream.status !== "success") return;

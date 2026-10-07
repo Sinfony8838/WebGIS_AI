@@ -1541,8 +1541,8 @@ export async function previewWorkflow(payload: {
   });
 }
 
-export async function fetchWorkflow(workflowId: string): Promise<WorkflowRecord & { status: string }> {
-  return requestJson<WorkflowRecord & { status: string }>(`/workflow/${encodeURIComponent(workflowId)}`);
+export async function fetchWorkflow(workflowId: string, signal?: AbortSignal): Promise<WorkflowRecord & { status: string }> {
+  return requestJson<WorkflowRecord & { status: string }>(`/workflow/${encodeURIComponent(workflowId)}`, { signal });
 }
 
 export function cancelTeacherWorkflow(workflowId:string) {
