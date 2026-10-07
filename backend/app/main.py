@@ -5,6 +5,7 @@ import json
 import os
 import secrets
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -19,6 +20,7 @@ from .runtime import WebGISRuntime
 from .services.minimax_image_client import ALLOWED_ASPECT_RATIOS, ALLOWED_IMAGE_MODELS, MiniMaxImageError
 from .services import request_limits, resource_access
 from .services.ppt_renderer import PptRenderError, render_pptx_to_images
+from .services.bounded_executor import BoundedExecutor, ExecutorBusy
 from .services.map_profiles import ProfileError, preview as preview_map_profile
 from .services.auth import AuthContext, AuthError, AuthService
 
@@ -41,7 +43,22 @@ LESSON_DESIGN_REQUEST_HINTS = (
     "逐步设计教案", "教案助手", "完整教案",
 )
 
-app = FastAPI(title="WebGIS-AI Runtime", version="1.1.0")
+@asynccontextmanager
+async def _lifespan(application: FastAPI):
+    executor = BoundedExecutor()
+    application.state.ppt_executor = executor
+    try:
+        yield
+    finally:
+        # Join outside the event loop; existing converter subprocess deadlines
+        # and cleanup still own running native work. Queued work is cancelled.
+        await executor.aclose()
+
+
+app = FastAPI(title="WebGIS-AI Runtime", version="1.1.0", lifespan=_lifespan)
+# Also supports direct route/TestClient use without a lifespan. No thread is
+# created until a conversion is admitted; real ASGI startup owns a fresh pool.
+app.state.ppt_executor = BoundedExecutor()
 
 # Outermost byte budget for JSON bodies: rejects oversized payloads while the
 # bytes are still being received, before any request-model deserialization.
@@ -1979,11 +1996,18 @@ def summarize_dataset_catalog_layers(
 async def render_ppt(request: Request, file: UploadFile = File(...)) -> Dict[str, Any]:
     try:
         raw = await request_limits.read_upload_limited(file, config.max_ppt_upload_bytes)
-        result = render_pptx_to_images(config, file.filename or "presentation.pptx", raw)
+        result = await request.app.state.ppt_executor.run(
+            render_pptx_to_images, config, file.filename or "presentation.pptx", raw
+        )
         _grant_response_files(request, result, allowed_roots=(config.outputs_dir / "ppt_previews",))
         return result
     except request_limits.PayloadTooLarge:
         raise HTTPException(status_code=413, detail="演示文稿超过大小限制") from None
+    except ExecutorBusy as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=PptRenderError("PPT_RENDERER_BUSY", str(exc)).to_dict(),
+        ) from exc
     except PptRenderError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.to_dict()) from exc
 
