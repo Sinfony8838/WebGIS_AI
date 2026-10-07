@@ -323,7 +323,14 @@ class WebGISRuntime:
     def __init__(self, config: Optional[AppConfig] = None, store: Optional[RuntimeStore] = None):
         self.config = config or AppConfig()
         self.config.ensure_dirs()
-        self.store = store or RuntimeStore(self.config.state_file)
+        self.store = store if store is not None else RuntimeStore(self.config.state_file)
+        interrupted = {"jobs": [], "workflows": []}
+        if store is None:
+            try:
+                interrupted = self.store.reconcile_interrupted_tasks()
+            except BaseException:
+                self.store.close()
+                raise
         self.dataset_service = DatasetService(self.config, self.store)
         self.template_service = TemplateService(self.config, self.store)
         self.assistant_service = AssistantService(self.config)
@@ -359,6 +366,8 @@ class WebGISRuntime:
             self.store,
             summary_callback=self._generate_workflow_summary,
         )
+        for workflow_id in interrupted["workflows"]:
+            self.workflow_executor._write_workflow_files(self.store.get_workflow(workflow_id))
         self.timeline_service = TimelineService(self.minimax_client)
         self.voice_asr = VoiceAsrEngine(self.config)
         # Preload the ONNX recognizer in the background so the first browser

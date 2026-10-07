@@ -6,6 +6,7 @@ import os
 import threading
 import time
 import weakref
+from copy import deepcopy
 from contextlib import contextmanager
 from dataclasses import MISSING, fields, is_dataclass
 from functools import wraps
@@ -74,6 +75,7 @@ class RuntimeStore:
         self.workflows: Dict[str, WorkflowRecord] = {}
         self._batch_depth = 0
         self._batch_dirty = False
+        self._startup_reconciled = False
         # Large GeoJSON feature payloads are offloaded to files so every
         # state save does not rewrite megabytes of coordinates (see
         # _offload_large_layer_data).
@@ -746,6 +748,69 @@ class RuntimeStore:
             project.updated_at = utc_now()
             self._save()
             return job
+
+    @_requires_writer
+    def reconcile_interrupted_tasks(self) -> Dict[str, List[str]]:
+        """Finalize process-owned work once at startup, without resubmitting it.
+
+        Call only on a freshly loaded writer, before services start. Ordinary
+        pending jobs may represent human decisions and are deliberately kept.
+        """
+        empty = {"jobs": [], "workflows": []}
+        if self._startup_reconciled:
+            return empty
+        if self._batch_depth:
+            raise RuntimeError("Startup reconciliation cannot run inside a batch")
+        now = utc_now()
+        jobs = dict(self.jobs)
+        workflows = dict(self.workflows)
+        changed = {"jobs": [], "workflows": []}
+        for job_id, original in self.jobs.items():
+            request = original.request or {}
+            practice = (original.job_type == "practice_export"
+                        and request.get("execution_mode") == "in_process")
+            if original.status not in {"queued", "running"} and not (practice and original.status == "pending"):
+                continue
+            job = deepcopy(original)
+            job.status = "failed"
+            job.error = ("服务重启中断了练习卷生成，请重新导出。" if practice
+                         else "服务重启中断了任务，请重新提交。")
+            job.updated_at = now
+            for stage in job.stages.values():
+                if stage.get("status") == "running":
+                    stage["status"] = "error"
+                    stage["message"] = job.error
+            jobs[job_id] = job
+            changed["jobs"].append(job_id)
+        for workflow_id, original in self.workflows.items():
+            if original.status not in {"pending", "running"}:
+                continue
+            workflow = deepcopy(original)
+            workflow.status = "error"
+            workflow.updated_at = workflow.finished_at = now
+            workflow.error = {
+                "code": "INTERNAL_ERROR", "message": "workflow interrupted by service restart",
+                "user_friendly": "服务重启中断了工作流，请重新提交。",
+                "step_id": "", "details": {"reason": "service_restart"},
+            }
+            for step in workflow.steps:
+                if step.get("status") == "running":
+                    step["status"] = "error"
+                    step["finished_at"] = now
+                    step["error"] = {**deepcopy(workflow.error), "step_id": step.get("id", "")}
+            workflows[workflow_id] = workflow
+            changed["workflows"].append(workflow_id)
+        if changed["jobs"] or changed["workflows"]:
+            previous_jobs, previous_workflows = self.jobs, self.workflows
+            self.jobs, self.workflows = jobs, workflows
+            try:
+                self._save()
+            except BaseException:
+                self.jobs, self.workflows = previous_jobs, previous_workflows
+                raise
+            self._job_changed.notify_all()
+        self._startup_reconciled = True
+        return changed
 
     @_requires_writer
     def fail_interrupted_practice_exports(self, worker_run_id: str) -> List[str]:
