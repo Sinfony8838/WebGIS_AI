@@ -69,7 +69,7 @@ class _StubWorkerManager:
     def init_warning(self):
         return None
 
-    def run_step(self, workflow_id: str, step: Dict[str, Any], timeout: float | None = None) -> Dict[str, Any]:
+    def run_step(self, workflow_id: str, step: Dict[str, Any], timeout: float | None = None, cancel_event=None) -> Dict[str, Any]:
         step_id = str(step.get("id"))
         self.run_step_calls.append((workflow_id, step_id))
         if step_id == self._fail_step:
@@ -110,7 +110,7 @@ class _CancellableStubManager(_StubWorkerManager):
         super().__init__()
         self._cancel_requested = threading.Event()
 
-    def run_step(self, workflow_id: str, step: Dict[str, Any], timeout: float | None = None) -> Dict[str, Any]:
+    def run_step(self, workflow_id: str, step: Dict[str, Any], timeout: float | None = None, cancel_event=None) -> Dict[str, Any]:
         self.run_step_calls.append((workflow_id, str(step.get("id"))))
         self._cancel_requested.wait(timeout=30.0)
         return {

@@ -32,7 +32,7 @@ class _StubWorkerManager:
     def init_warning(self):
         return self._init_warning
 
-    def run_step(self, workflow_id: str, step: Dict[str, Any], timeout: float | None = None) -> Dict[str, Any]:
+    def run_step(self, workflow_id: str, step: Dict[str, Any], timeout: float | None = None, cancel_event=None) -> Dict[str, Any]:
         step_id = str(step.get("id"))
         if step_id == self._fail_step:
             return {
@@ -220,7 +220,7 @@ class _BlockingWorkerManager(_StubWorkerManager):
         self.started = threading.Event()
         self.release = threading.Event()
 
-    def run_step(self, workflow_id, step, timeout: float | None = None) -> Dict[str, Any]:
+    def run_step(self, workflow_id, step, timeout: float | None = None, cancel_event=None) -> Dict[str, Any]:
         self.started.set()
         self.release.wait(timeout=30)
         return super().run_step(workflow_id, step, timeout)

@@ -180,9 +180,14 @@ class PyQgisWorkerManager:
         with self._lock:
             return self._generation
 
-    def ensure_started(self) -> None:
-        with self._lifecycle_lock:
+    def ensure_started(self, cancel_event: Optional[threading.Event] = None) -> None:
+        while not self._lifecycle_lock.acquire(timeout=0.2):
+            if self._poll_cancel(cancel_event):
+                return
+        try:
             with self._lock:
+                if self._poll_cancel(cancel_event):
+                    return
                 # A crashed generation must never serve new requests, even while
                 # the dying process is still technically alive.
                 if self._restart_needed:
@@ -198,7 +203,9 @@ class PyQgisWorkerManager:
                     self._start_worker_locked()
                     need_wait = True
             if need_wait:
-                self._wait_ready()
+                self._wait_ready(cancel_event)
+        finally:
+            self._lifecycle_lock.release()
 
     def _start_worker_locked(self) -> None:
         ctx = mp.get_context("spawn")  # spawn keeps Windows imports clean
@@ -255,10 +262,13 @@ class PyQgisWorkerManager:
             "PyQGIS worker process spawned pid=%s generation=%s", process.pid, self._generation
         )
 
-    def _wait_ready(self) -> None:
+    def _wait_ready(self, cancel_event: Optional[threading.Event] = None) -> None:
         """Wait for ``worker_ready``; raise on early death or silence."""
         deadline = time.time() + self.startup_timeout
         while time.time() < deadline:
+            if self._poll_cancel(cancel_event):
+                # Leave a shared worker's startup intact for other requests.
+                return
             if self._ready.wait(0.2):
                 return
             if not self.is_alive():
@@ -513,7 +523,10 @@ class PyQgisWorkerManager:
             workflow_id, step, timeout, queue_timeout, cancel_event
         )
         attempt = 1
-        if meta.get("failure") == "crash" and self._auto_retriable(step):
+        if self._poll_cancel(cancel_event):
+            response = self._error_response(workflow_id, str(step.get("id") or ""),
+                                            "STEP_CANCELLED", "workflow cancelled; no retry dispatched", request_id="")
+        elif meta.get("failure") == "crash" and self._auto_retriable(step):
             # Crash recovery: fresh worker generation, fresh request_id, so
             # nothing from the dead generation can leak into the retry.
             self.stats["auto_retries"] += 1
@@ -545,6 +558,13 @@ class PyQgisWorkerManager:
         meta: Dict[str, Any] = {"failure": None, "timings": {}}
         sent_at = time.time()
 
+        def cancelled_response():
+            meta["timings"] = self._timings(sent_at, None)
+            return self._error_response(workflow_id, step_id, "STEP_CANCELLED",
+                                        "step cancelled before dispatch", request_id=""), meta
+
+        if self._poll_cancel(cancel_event):
+            return cancelled_response()
         with self._lock:
             if time.time() < self._suspect_until:
                 meta["timings"] = {"total_ms": round((time.time() - sent_at) * 1000, 1)}
@@ -561,7 +581,7 @@ class PyQgisWorkerManager:
                 )
         # 1) Ensure worker (spawns + waits for readiness on first use).
         try:
-            self.ensure_started()
+            self.ensure_started(cancel_event=cancel_event)
         except Exception as exc:
             self.last_error = {"code": "WORKER_START_FAILED", "message": str(exc)}
             meta["timings"] = {"total_ms": round((time.time() - sent_at) * 1000, 1)}
@@ -574,31 +594,38 @@ class PyQgisWorkerManager:
 
         # 2) Register pending request under a unique id, then enqueue.
         with self._lock:
+            if self._poll_cancel(cancel_event):
+                return cancelled_response()
             generation = self._generation
             request_id = uuid.uuid4().hex
             pending = _PendingRequest(request_id, workflow_id, step_id, generation)
             self._pending[request_id] = pending
             input_queue = self._input_queue
-        try:
-            if input_queue is None:
-                raise RuntimeError("worker queues unavailable")
-            input_queue.put({
-                "type": "run_step",
-                "request_id": request_id,
-                "workflow_id": workflow_id,
-                "step": step,
-            })
-        except Exception as exc:
-            self._drop_pending(request_id)
-            meta["failure"] = "crash"
-            meta["timings"] = {"total_ms": round((time.time() - sent_at) * 1000, 1)}
-            return (
-                self._error_response(
-                    workflow_id, step_id, "WORKER_CRASHED",
-                    f"failed to send step to worker: {exc}", request_id=request_id,
-                ),
-                meta,
-            )
+            # Enqueue and manager-side cancellation share this lock. A
+            # cancellation accepted before enqueue cannot dispatch new work.
+            try:
+                if self._poll_cancel(cancel_event):
+                    self._pending.pop(request_id, None)
+                    return cancelled_response()
+                if input_queue is None:
+                    raise RuntimeError("worker queues unavailable")
+                input_queue.put({
+                    "type": "run_step",
+                    "request_id": request_id,
+                    "workflow_id": workflow_id,
+                    "step": step,
+                })
+            except Exception as exc:
+                self._drop_pending(request_id)
+                meta["failure"] = "crash"
+                meta["timings"] = {"total_ms": round((time.time() - sent_at) * 1000, 1)}
+                return (
+                    self._error_response(
+                        workflow_id, step_id, "WORKER_CRASHED",
+                        f"failed to send step to worker: {exc}", request_id=request_id,
+                    ),
+                    meta,
+                )
 
         # 3) Phase one: wait for the worker to dequeue and acknowledge.
         q_budget = queue_timeout if queue_timeout is not None else self.queue_timeout
