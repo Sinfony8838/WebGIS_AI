@@ -12,6 +12,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <AuthGate>
       {(user, signOut, updateUser) => (
         <App
+          key={user.user_id}
           currentUser={user}
           onLogout={signOut}
           onUserChanged={updateUser}

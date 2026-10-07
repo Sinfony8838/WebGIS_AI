@@ -11,6 +11,7 @@ import { forgetPendingJob, rememberPendingJob, type PendingJob } from "./lib/pen
 import { usePendingJobs } from "./hooks/usePendingJobs";
 import { subscribeJob, type JobSubscription } from "./lib/jobSubscription";
 import { restoreClassroomProject } from "./lib/projectRecovery";
+import { useProjectSnapshotRefresh, type ProjectSnapshot } from "./hooks/useProjectSnapshotRefresh";
 import { MapToolsDock } from "./components/MapToolsDock";
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "ol/ol.css";
@@ -57,11 +58,9 @@ import {
   fetchDatasetCatalog,
   fetchJob,
   fetchPopulationRasterPackages,
-  fetchLessonResources,
   fetchUiCapabilities,
   fetchKbManifest,
   fetchKbTopics,
-  fetchLayers,
   fetchOutputs,
   fetchProject,
   fetchQuestionBanks,
@@ -91,7 +90,6 @@ import {
   uploadKbMaterial,
   fetchTeachingMaps,
   toggleTeachingMap,
-  fetchActiveTeachingMaps,
   type TeachingMapItem,
 } from "./api";
 import { AnnotationDialog } from "./components/AnnotationDialog";
@@ -1077,21 +1075,35 @@ export default function App({
     []
   );
 
-  const refreshProjectState = useCallback(async (projectId: string) => {
-      const [projectPayload, layerPayload, outputsPayload, lessonPayload, activeTeachingPayload] = await Promise.all([
-        fetchProject(projectId),
-        fetchLayers(projectId),
-        fetchOutputs(projectId),
-        fetchLessonResources(projectId),
-        fetchActiveTeachingMaps(projectId)
-      ]);
-      setProject(projectPayload);
-      setLayerState(layerPayload);
-      setOutputs(outputsPayload.items);
-      setLessonResourceSets(lessonPayload.items);
-      setActiveLessonResourceSetId(lessonPayload.active_lesson_resource_set_id);
-      setActiveTeachingMapIds(new Set(activeTeachingPayload.active));
-    }, []);
+  const commitProjectSnapshot = useCallback((snapshot: ProjectSnapshot) => {
+    setProject(snapshot.project);
+    setLayerState(snapshot.layers);
+    setOutputs(snapshot.outputs.items);
+    setLessonResourceSets(snapshot.lessons.items);
+    setActiveLessonResourceSetId(snapshot.lessons.active_lesson_resource_set_id);
+    setActiveTeachingMapIds(new Set(snapshot.teachingMaps.active));
+  }, []);
+  const resetProjectSnapshot = useCallback((actorChanged: boolean) => {
+    if (actorChanged) setProject(null);
+    setBasemapSwitchPending(false);
+    setLayerState(null);
+    setOutputs([]);
+    setLessonResourceSets([]);
+    setActiveLessonResourceSetId("");
+    setActiveTeachingMapIds(new Set());
+  }, []);
+  const {
+    refresh: refreshProjectState,
+    selectProject: selectSnapshotProject,
+    captureScope: captureProjectScope,
+    invalidate: invalidateProjectSnapshot
+  } = useProjectSnapshotRefresh(currentUser.user_id, project?.project_id || "", commitProjectSnapshot, resetProjectSnapshot);
+
+  const reconcileProjectSnapshot = useCallback((projectId: string, isCurrent: () => boolean) => {
+    void refreshProjectState(projectId).catch(error => {
+      if (isCurrent()) pushToast("error", "项目状态刷新失败", error instanceof Error ? error.message : "请重试刷新。");
+    });
+  }, [refreshProjectState, pushToast]);
 
   const runKbSearch = useCallback(
     async (queryOverride?: Partial<KnowledgeQuery>) => {
@@ -1431,6 +1443,8 @@ export default function App({
         if (!project || !item.id) {
           return;
         }
+        const isCurrent = captureProjectScope(project.project_id);
+        if (!isCurrent()) return;
         const active = activeLessonResourceSet || {
           id: "",
           title: "当前课时资料包",
@@ -1453,11 +1467,14 @@ export default function App({
           region_bindings: [...(active.region_bindings || []), binding],
           active: true
         });
+        if (!isCurrent()) return;
+        invalidateProjectSnapshot();
         setLessonResourceSets(response.items);
         setActiveLessonResourceSetId(response.item.id);
+        reconcileProjectSnapshot(project.project_id, isCurrent);
         pushToast("success", "已导入本课时", material?.title || item.title);
       },
-      [activeLessonResourceSet, project, pushToast]
+      [activeLessonResourceSet, project, pushToast, captureProjectScope, invalidateProjectSnapshot, reconcileProjectSnapshot]
     );
 
     const handleOpenResourceResult = useCallback(
@@ -2244,6 +2261,8 @@ export default function App({
     if (!project) {
       return;
     }
+    const isCurrent = captureProjectScope(project.project_id);
+    if (!isCurrent()) return;
     // Missing-image maps would otherwise create a blank overlay.
     const mapInfo = teachingMaps.find((item) => item.id === mapId);
     if (visible && mapInfo?.available === false) {
@@ -2252,6 +2271,8 @@ export default function App({
     }
     try {
       const result = await toggleTeachingMap(project.project_id, mapId, visible);
+      if (!isCurrent()) return;
+      invalidateProjectSnapshot();
       setActiveTeachingMapIds((prev) => {
         const next = new Set(prev);
         if (visible) {
@@ -2263,6 +2284,7 @@ export default function App({
       });
       // Refresh layers so the new raster layer appears on the map
       await refreshProjectState(project.project_id);
+      if (!isCurrent()) return;
       // Optionally fly to the map's recommended view
       if (visible && result.view?.center && result.view?.zoom) {
         const map = mapRef.current;
@@ -2276,9 +2298,9 @@ export default function App({
         }
       }
     } catch (error: unknown) {
-      pushToast("error", "教学地图切换失败", String(error));
+      if (isCurrent()) pushToast("error", "教学地图切换失败", String(error));
     }
-  }, [project, pushToast, refreshProjectState, teachingMaps]);
+  }, [project, pushToast, refreshProjectState, teachingMaps, captureProjectScope, invalidateProjectSnapshot]);
 
   const handleToggleTextbookMap = useCallback(
     async (datasetId: string, visible: boolean) => {
@@ -2541,37 +2563,49 @@ export default function App({
       if (!project) {
         return;
       }
+      const isCurrent = captureProjectScope(project.project_id);
+      if (!isCurrent()) return;
       try {
         const response = await loadOutputAsLayer(artifact.artifact_id, project.project_id);
+        if (!isCurrent()) return;
         await refreshProjectState(project.project_id);
+        if (!isCurrent()) return;
         setDatabaseViewerOpen(false);
         const layer = response.item as LayerRecord | undefined;
         if (layer) focusLayerExtent(layer.layer_id, layer);
         pushToast("success", "产物已上图", layer?.name || artifact.title || artifact.artifact_id);
       } catch (error) {
-        pushToast("error", "产物上图失败", error instanceof Error ? error.message : "请求失败");
+        if (isCurrent()) pushToast("error", "产物上图失败", error instanceof Error ? error.message : "请求失败");
       }
     },
-    [project, pushToast, refreshProjectState, focusLayerExtent]
+    [project, pushToast, refreshProjectState, focusLayerExtent, captureProjectScope]
   );
 
   const handleWorkflowArtifactsChanged = useCallback(async (artifacts: import("./types").WorkflowArtifactRecord[]) => {
     if (!project) return;
+    const isCurrent = captureProjectScope(project.project_id);
+    if (!isCurrent()) return;
     try {
       const result = artifacts.find(item => item.kind === "geojson");
+      // This lookup selects an existing workflow artifact, never writes UI
+      // output state. Another same-project refresh must not drop auto-loading.
       const outputsPayload = await fetchOutputs(project.project_id);
-      setOutputs(outputsPayload.items);
+      if (!isCurrent()) return;
       const stored = result && outputsPayload.items.find(item => item.metadata.workflow_id === result.workflow_id && item.metadata.kind === "geojson");
       if (stored) {
         const loaded = await loadOutputAsLayer(stored.artifact_id, project.project_id);
+        if (!isCurrent()) return;
         await refreshProjectState(project.project_id);
+        if (!isCurrent()) return;
         const layer = loaded.item as LayerRecord;
         focusLayerExtent(layer.layer_id, layer);
+      } else {
+        await refreshProjectState(project.project_id);
       }
     } catch (error) {
-      pushToast("error", "分析已完成，结果加载失败", error instanceof Error ? error.message : "请从数据库重新上图");
+      if (isCurrent()) pushToast("error", "分析已完成，结果加载失败", error instanceof Error ? error.message : "请从数据库重新上图");
     }
-  }, [project, refreshProjectState, focusLayerExtent, pushToast]);
+  }, [project, refreshProjectState, focusLayerExtent, pushToast, captureProjectScope]);
 
   const handleDatabaseAttachImage = useCallback(
     (artifact: ArtifactRecord) => {
@@ -2651,15 +2685,20 @@ export default function App({
     if (!project) {
       return;
     }
+    const isCurrent = captureProjectScope(project.project_id);
+    if (!isCurrent()) return;
     try {
       const response = await activateLessonResourceSet(project.project_id, setId, { active: true });
+      if (!isCurrent()) return;
+      invalidateProjectSnapshot();
       setLessonResourceSets(response.items);
       setActiveLessonResourceSetId(response.active_lesson_resource_set_id || setId);
+      reconcileProjectSnapshot(project.project_id, isCurrent);
       pushToast("success", "课时资源已启用", setId);
     } catch (error) {
-      pushToast("error", "课时资源切换失败", error instanceof Error ? error.message : "请求失败");
+      if (isCurrent()) pushToast("error", "课时资源切换失败", error instanceof Error ? error.message : "请求失败");
     }
-  }, [project, pushToast]);
+  }, [project, pushToast, captureProjectScope, invalidateProjectSnapshot, reconcileProjectSnapshot]);
 
   const handleResetView = useCallback(() => {
     const map = mapRef.current;
@@ -3318,8 +3357,11 @@ export default function App({
       });
       if (!initial) return;
       const { project: active, restored } = initial;
+      if (!selectSnapshotProject(active.project_id)) return;
       setProject(active);
+      const isCurrent = captureProjectScope(active.project_id);
       await refreshProjectState(active.project_id);
+      if (cancelled || !isCurrent()) return;
       await loadKnowledgeBase();
       try {
         const catalog = await fetchDatasetCatalog();
@@ -3338,10 +3380,6 @@ export default function App({
         const tmaps = await fetchTeachingMaps();
         if (!cancelled) {
           setTeachingMaps(tmaps.items);
-        }
-        const activeOverlays = await fetchActiveTeachingMaps(active.project_id);
-        if (!cancelled) {
-          setActiveTeachingMapIds(new Set(activeOverlays.active));
         }
       } catch {
         // teaching maps are optional – do not block init
@@ -3372,7 +3410,7 @@ export default function App({
     return () => {
       cancelled = true;
     };
-  }, [currentUser.user_id, initAttempt, loadKnowledgeBase, pushToast, refreshProjectState]);
+  }, [currentUser.user_id, initAttempt, loadKnowledgeBase, pushToast, refreshProjectState, selectSnapshotProject, captureProjectScope]);
 
   const basemapDescriptorKey = JSON.stringify(layerState?.base_map);
   useEffect(() => {
@@ -3917,20 +3955,24 @@ export default function App({
         }}
         onRestore={async () => {
           if (!project || basemapSwitchPending) return;
+          const isCurrent = captureProjectScope(project.project_id);
+          if (!isCurrent()) return;
           const scope = jobScopeEpochRef.current;
           setBasemapSwitchPending(true);
           try {
             const response = await switchBasemap(project.project_id, "amap_vector");
-            if (scope !== jobScopeEpochRef.current) return;
+            if (!isCurrent() || scope !== jobScopeEpochRef.current) return;
+            invalidateProjectSnapshot();
             basemapCacheRef.current.clear();
             setBasemapRetryKey(value => value + 1);
             setProject(previous => previous ? { ...previous, base_map: response.base_map } : previous);
             setLayerState(previous => previous ? { ...previous, base_map: response.base_map } : previous);
+            reconcileProjectSnapshot(project.project_id, isCurrent);
             pushToast("info", "已选择高德标准底图", "教学图层与笔迹保留，底图按当前视野加载。");
           } catch (error) {
-            pushToast("error", "底图切换失败", error instanceof Error ? error.message : "请重试。");
+            if (isCurrent()) pushToast("error", "底图切换失败", error instanceof Error ? error.message : "请重试。");
           } finally {
-            setBasemapSwitchPending(false);
+            if (isCurrent()) setBasemapSwitchPending(false);
           }
         }}
       />
@@ -3953,13 +3995,15 @@ export default function App({
             if (!project) {
               return;
             }
+            const isCurrent = captureProjectScope(project.project_id);
+            if (!isCurrent()) return;
             void switchBasemap(project.project_id, "amap_vector")
-              .then(() => refreshProjectState(project.project_id))
+              .then(() => isCurrent() ? refreshProjectState(project.project_id) : null)
               .then(() => {
-                pushToast("info", "已恢复高德标准底图", "天气叠加已关闭。");
+                if (isCurrent()) pushToast("info", "已恢复高德标准底图", "天气叠加已关闭。");
               })
               .catch(() => {
-                pushToast("error", "底图切换失败", "恢复高德标准底图未成功，请重试。");
+                if (isCurrent()) pushToast("error", "底图切换失败", "恢复高德标准底图未成功，请重试。");
               });
           }}
         />
@@ -4118,18 +4162,22 @@ export default function App({
               if (!project || basemapSwitchPending || basemapId === activeBasemapId) {
                 return;
               }
+              const isCurrent = captureProjectScope(project.project_id);
+              if (!isCurrent()) return;
               const scope = jobScopeEpochRef.current;
               setBasemapSwitchPending(true);
               try {
                 const response = await switchBasemap(project.project_id, basemapId);
-                if (scope !== jobScopeEpochRef.current) return;
+                if (!isCurrent() || scope !== jobScopeEpochRef.current) return;
+                invalidateProjectSnapshot();
                 setProject(previous => previous ? { ...previous, base_map: response.base_map } : previous);
                 setLayerState(previous => previous ? { ...previous, base_map: response.base_map } : previous);
+                reconcileProjectSnapshot(project.project_id, isCurrent);
                 pushToast("success", "底图已选择", `当前底图：${response.base_map.title}，瓦片将按视野加载。`);
               } catch (error) {
-                pushToast("error", "底图切换失败", error instanceof Error ? error.message : "请稍后重试。");
+                if (isCurrent()) pushToast("error", "底图切换失败", error instanceof Error ? error.message : "请稍后重试。");
               } finally {
-                setBasemapSwitchPending(false);
+                if (isCurrent()) setBasemapSwitchPending(false);
               }
             }}
           />
@@ -4563,7 +4611,7 @@ export default function App({
           onOpenDesignWorkspace={openLessonDesignWorkspace}
           rehearsalSignal={rehearsalTarget.signal}
           rehearsalLessonId={rehearsalTarget.lessonId}
-          onRefresh={() => (project ? refreshProjectState(project.project_id) : undefined)}
+          onRefresh={async () => { if (project) await refreshProjectState(project.project_id); }}
           onTeachingContextChange={(ctx) => {
             teachingContextRef.current = ctx;
             setTeachingPhase(ctx?.phase || "");

@@ -84,10 +84,13 @@ import { fetchReadRequest } from "./lib/readRequest";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:18999";
 let csrfToken = "";
+let authGeneration = 0;
 let unauthorizedHandler: (() => void) | null = null;
 
 export function setCsrfToken(value: string): void {
-  csrfToken = value || "";
+  const next = value || "";
+  if (next !== csrfToken) authGeneration += 1;
+  csrfToken = next;
 }
 
 export function setUnauthorizedHandler(handler: (() => void) | null): void {
@@ -99,6 +102,7 @@ export class ApiError extends Error {
 }
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const requestAuthGeneration = authGeneration;
   const method = String(init?.method || "GET").toUpperCase();
   const headers = new Headers(init?.headers);
   if (!["GET", "HEAD", "OPTIONS"].includes(method) && csrfToken) {
@@ -112,13 +116,15 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
       credentials: "include"
     });
   } catch (err) {
+    init?.signal?.throwIfAborted();
     throw new Error(
       `无法连接到后端服务 (${API_BASE})，请确认服务已启动`
     );
   }
+  init?.signal?.throwIfAborted();
   if (!response.ok) {
-    if (response.status === 401) {
-      csrfToken = "";
+    if (response.status === 401 && requestAuthGeneration === authGeneration) {
+      setCsrfToken("");
       unauthorizedHandler?.();
     }
     let message = `请求失败 (${response.status})`;
@@ -414,8 +420,8 @@ export async function createProject(name = "WebGIS 实时课堂"): Promise<Proje
   });
 }
 
-export async function fetchProject(projectId: string): Promise<ProjectRecord & { status: string }> {
-  return requestJson<ProjectRecord & { status: string }>(`/projects/${projectId}`);
+export async function fetchProject(projectId: string, signal?: AbortSignal): Promise<ProjectRecord & { status: string }> {
+  return requestJson<ProjectRecord & { status: string }>(`/projects/${projectId}`, { signal });
 }
 
 export async function previewMapProfile(projectId: string, payload: {
@@ -438,8 +444,8 @@ export async function switchBasemap(projectId: string, basemapId: string): Promi
   });
 }
 
-export async function fetchLayers(projectId: string): Promise<LayersResponse> {
-  return requestJson<LayersResponse>(`/layers?project_id=${encodeURIComponent(projectId)}`);
+export async function fetchLayers(projectId: string, signal?: AbortSignal): Promise<LayersResponse> {
+  return requestJson<LayersResponse>(`/layers?project_id=${encodeURIComponent(projectId)}`, { signal });
 }
 
 export async function fetchDatasetCatalog(): Promise<DatasetCatalogResponse> {
@@ -671,8 +677,8 @@ export async function exportSnapshot(
   });
 }
 
-export async function fetchOutputs(projectId: string): Promise<{ items: ArtifactRecord[] }> {
-  return requestJson<{ items: ArtifactRecord[] }>(`/outputs?project_id=${encodeURIComponent(projectId)}`);
+export async function fetchOutputs(projectId: string, signal?: AbortSignal): Promise<{ items: ArtifactRecord[] }> {
+  return requestJson<{ items: ArtifactRecord[] }>(`/outputs?project_id=${encodeURIComponent(projectId)}`, { signal });
 }
 
 export async function fetchJob(jobId: string, signal?: AbortSignal): Promise<JobRecord> {
@@ -1428,8 +1434,8 @@ export async function createKbMaterialLink(payload: {
   });
 }
 
-export async function fetchLessonResources(projectId: string): Promise<LessonResourceResponse> {
-  return requestJson<LessonResourceResponse>(`/projects/${projectId}/lesson-resources`);
+export async function fetchLessonResources(projectId: string, signal?: AbortSignal): Promise<LessonResourceResponse> {
+  return requestJson<LessonResourceResponse>(`/projects/${projectId}/lesson-resources`, { signal });
 }
 
 export async function saveLessonResourceSet(
@@ -1500,9 +1506,10 @@ export async function toggleTeachingMap(
 }
 
 export async function fetchActiveTeachingMaps(
-  projectId: string
+  projectId: string,
+  signal?: AbortSignal
 ): Promise<{ status: string; active: string[] }> {
-  return requestJson<{ status: string; active: string[] }>(`/projects/${projectId}/teaching-maps/active`);
+  return requestJson<{ status: string; active: string[] }>(`/projects/${projectId}/teaching-maps/active`, { signal });
 }
 
 // ---------------------------------------------------------------------------
