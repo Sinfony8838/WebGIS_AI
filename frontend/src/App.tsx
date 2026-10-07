@@ -4678,6 +4678,7 @@ export default function App({
         />
         <UploadDialog open={uploadOpen && !studentDisplay} busy={mapBusy} onClose={() => setUploadOpen(false)} onSubmit={handleUploadDataset} />
         <WorkflowDock
+          key={`${currentUser.user_id}:${project?.project_id || ""}`}
           projectId={project?.project_id || ""}
           assistantJob={currentJob}
           mapRef={mapRef}
