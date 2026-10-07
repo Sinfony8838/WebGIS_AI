@@ -545,22 +545,28 @@ class WorkflowExecutor:
                 )
                 return self._reject_before_run(workflow), validation
         # Persist & emit creation event
-        self.store.create_workflow(workflow)
-        self._write_workflow_files(workflow)
-        self.bus.publish(workflow.workflow_id, _Event(
-            "workflow_created",
-            {"workflow": workflow.to_dict()},
-        ))
-
-        thread = threading.Thread(
-            target=self._run_workflow,
-            args=(workflow.workflow_id,),
-            name=f"workflow-{workflow.workflow_id}",
-            daemon=True,
-        )
-        with self._workers_lock:
-            self._workers[workflow.workflow_id] = thread
-        thread.start()
+        thread = None
+        try:
+            self.store.create_workflow(workflow)
+            self._write_workflow_files(workflow)
+            self.bus.publish(workflow.workflow_id, _Event(
+                "workflow_created", {"workflow": workflow.to_dict()},
+            ))
+            thread = threading.Thread(
+                target=self._run_workflow,
+                args=(workflow.workflow_id,),
+                name=f"workflow-{workflow.workflow_id}",
+                daemon=True,
+            )
+            with self._workers_lock:
+                self._workers[workflow.workflow_id] = thread
+            thread.start()
+        except Exception:
+            logger.exception("failed to prepare workflow execution %s", workflow.workflow_id)
+            try:
+                self._fail_unexpected_execution(workflow.workflow_id, workflow)
+            finally:
+                self._release_execution(workflow.workflow_id, thread)
         return workflow, validation
 
     def _reject_before_run(self, workflow: WorkflowRecord) -> WorkflowRecord:
@@ -624,9 +630,74 @@ class WorkflowExecutor:
     # ------------------------------------------------------------------
 
     def _run_workflow(self, workflow_id: str) -> None:
-        record = self.store.get_workflow(workflow_id)
-        if record is None:
-            return
+        record = None
+        try:
+            record = self.store.get_workflow(workflow_id)
+            if record is not None:
+                self._execute_workflow(record)
+        except Exception:
+            logger.exception("unexpected workflow execution failure %s", workflow_id)
+            self._fail_unexpected_execution(workflow_id, record)
+        finally:
+            self._release_execution(workflow_id, threading.current_thread())
+
+    def _fail_unexpected_execution(self, workflow_id: str, record: Optional[WorkflowRecord]) -> None:
+        # Retain an already-established processing/cancellation error if
+        # terminal persistence failed. Exception details stay in local logs.
+        known_error = record.error if record is not None and record.status in {"error", "cancelled"} else None
+        error = known_error or make_error(
+            "INTERNAL_ERROR", "unexpected workflow execution failure",
+            "本次分析遇到内部错误，已停止执行，请查看日志后重试。",
+        )
+        failed_steps = []
+        if record is not None:
+            if record.status != "cancelled":
+                record.status = "error"
+            record.error = error
+            record.finished_at = utc_now()
+            for state in record.steps:
+                if state.get("status") == "running":
+                    state["status"] = "error"
+                    state["error"] = dict(error, step_id=state.get("id", ""))
+                    state["finished_at"] = record.finished_at
+                    failed_steps.append(dict(state))
+            record.touch()
+            try:
+                self.store.save_workflow(record)
+            except Exception:
+                logger.exception("failed to persist workflow failure %s", workflow_id)
+            try:
+                self._write_workflow_files(record)
+            except Exception:
+                logger.exception("failed to write workflow failure files %s", workflow_id)
+        for state in failed_steps:
+            try:
+                self.bus.publish(workflow_id, _Event("step_error", {
+                    "workflow_id": workflow_id, "step": state, "error": state["error"],
+                }))
+            except Exception:
+                logger.exception("failed to publish step failure %s", workflow_id)
+        payload = {"workflow_id": workflow_id, "error": error}
+        if record is not None:
+            payload["workflow"] = record.to_dict()
+        try:
+            self.bus.publish(workflow_id, _Event("workflow_error", payload))
+        except Exception:
+            logger.exception("failed to publish workflow failure %s", workflow_id)
+
+    def _release_execution(self, workflow_id: str, thread: Optional[threading.Thread]) -> None:
+        try:
+            # Release only worker-side memory; keep generated files on disk.
+            self.worker_manager.release_workflow(workflow_id)
+        except Exception:
+            logger.exception("failed to release workflow workspace %s", workflow_id)
+        finally:
+            with self._workers_lock:
+                if self._workers.get(workflow_id) is thread:
+                    self._workers.pop(workflow_id, None)
+
+    def _execute_workflow(self, record: WorkflowRecord) -> None:
+        workflow_id = record.workflow_id
         record.status = "running"
         record.started_at = utc_now()
         record.touch()
@@ -774,12 +845,6 @@ class WorkflowExecutor:
                     "workflow": record.to_dict(),
                 },
             ))
-
-        # Free the worker-side workspace (paths on disk are kept).
-        try:
-            self.worker_manager.release_workflow(workflow_id)
-        except Exception:  # pragma: no cover
-            pass
 
     # ------------------------------------------------------------------
     # Artifact / output helpers
