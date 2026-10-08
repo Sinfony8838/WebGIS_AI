@@ -44,6 +44,7 @@ from .services.workflow_templates import INTERACTION_ALLOWED_TEMPLATES, detect_t
 from .services.templates import DISABLED_TEMPLATE_IDS, TemplateService
 from .services.vision import MapVisionService
 from .store import RuntimeStore
+from .runtime_assembly import RuntimeServiceFactories, assemble_runtime_services
 
 
 MAX_IMAGE_LIBRARY_BYTES = 20 * 1024 * 1024
@@ -331,51 +332,31 @@ class WebGISRuntime:
             except BaseException:
                 self.store.close()
                 raise
-        self.dataset_service = DatasetService(self.config, self.store)
-        self.template_service = TemplateService(self.config, self.store)
-        self.assistant_service = AssistantService(self.config)
-        self.knowledge_service = KnowledgeService(self.config)
-        self.knowledge_base_service = KnowledgeBaseService(self.config)
-        self.one_map_catalog_service = OneMapCatalogService(self.config)
-        self.population_source_registry_service = PopulationSourceRegistryService(
-            self.config,
-            self.store,
-            self.one_map_catalog_service,
-            self.knowledge_base_service,
+        assemble_runtime_services(
+            self,
+            RuntimeServiceFactories(
+                dataset=DatasetService,
+                template=TemplateService,
+                assistant=AssistantService,
+                knowledge=KnowledgeService,
+                knowledge_base=KnowledgeBaseService,
+                one_map=OneMapCatalogService,
+                population_sources=PopulationSourceRegistryService,
+                resource_search=ResourceSearchService,
+                poi=PoiService,
+                vision=MapVisionService,
+                llm_client=build_llm_client,
+                image_generation=MiniMaxImageClient,
+                teaching_maps=TeachingMapService,
+                planner=LLMPlanner,
+                session=AssistantSessionEngine,
+                workflow=WorkflowExecutor,
+                timeline=TimelineService,
+                voice_asr=VoiceAsrEngine,
+                classroom=ClassroomWorkflowRuntime,
+            ),
+            interrupted["workflows"],
         )
-        self.resource_search_service = ResourceSearchService(self.config, self.knowledge_base_service)
-        self.poi_service = PoiService(self.config, self.store)
-        self.vision_service = MapVisionService(self.config, store=self.store)
-        self.minimax_client = build_llm_client(self.config)
-        self.image_generation_service = MiniMaxImageClient(self.config)
-        self.teaching_map_service = TeachingMapService(self.config, self.store)
-        self.assistant_service.teaching_map_service = self.teaching_map_service
-        self.assistant_service.minimax_client = self.minimax_client
-        self.llm_planner = LLMPlanner(self.minimax_client, self.assistant_service)
-        self.session_engine = AssistantSessionEngine(
-            self.config,
-            self.store,
-            self.llm_planner,
-            self.assistant_service,
-            self._execute_assistant_action,
-            vision_service=self.vision_service,
-        )
-        self.session_engine.set_resource_search(self.resource_search_service)
-        self.workflow_executor = WorkflowExecutor(
-            self.config,
-            self.store,
-            summary_callback=self._generate_workflow_summary,
-        )
-        for workflow_id in interrupted["workflows"]:
-            self.workflow_executor._write_workflow_files(self.store.get_workflow(workflow_id))
-        self.timeline_service = TimelineService(self.minimax_client)
-        self.voice_asr = VoiceAsrEngine(self.config)
-        # Preload the ONNX recognizer in the background so the first browser
-        # voice session connects instantly and /health reports "initializing"
-        # while the model is still loading instead of a slow first connect.
-        self.voice_asr.warm_up()
-        self.classroom = ClassroomWorkflowRuntime(self)
-        self.session_engine.set_session_stats_provider(self._session_statistics_for_assistant)
         self._normalize_loaded_projects()
 
     # Compatibility entry points retained for callers built against the
