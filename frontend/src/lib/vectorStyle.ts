@@ -81,12 +81,13 @@ export function openLayersVectorStyle(record: LayerRecord, showFit = false) {
     ].includes(catalogId) || ["population_distribution", "population_density", "hu_line_comparison"].includes(templateId);
     return new Style({
       fill: geometryType.includes("Polygon") ? new Fill({ color: colorWithOpacity(fillColor, fillOpacity) }) : undefined,
-      stroke: new Stroke({ color: strokeColor, width: strokeWidth,
-        lineDash: record.layer_id === "generated_hu_line" ? feature.get("line_type") === "dynamic" ? [7, 5] : undefined : (feature.get("__lineDash") as number[] | undefined) || undefined }),
+      // Canvas ignores lineWidth=0; omit the stroke so zero cannot leave a visible outline.
+      stroke: strokeWidth > 0 ? new Stroke({ color: strokeColor, width: strokeWidth,
+        lineDash: record.layer_id === "generated_hu_line" ? feature.get("line_type") === "dynamic" ? [7, 5] : undefined : (feature.get("__lineDash") as number[] | undefined) || undefined }) : undefined,
       image: geometryType.includes("Point") ? new Circle({
         declutterMode: densityTemplate ? "none" : undefined, radius,
         fill: new Fill({ color: colorWithOpacity(fillColor, pointOpacity) }),
-        stroke: new Stroke({ color: strokeColor, width: pointStrokeWidth })
+        stroke: pointStrokeWidth > 0 ? new Stroke({ color: strokeColor, width: pointStrokeWidth }) : undefined
       }) : undefined,
       text: labelValue && (!provinceLevelLayer || geometryType.includes("Point")) ? new Text({
         text: labelValue, font: "500 12px 'Microsoft YaHei UI', 'Segoe UI', sans-serif",

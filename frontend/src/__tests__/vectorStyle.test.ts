@@ -77,18 +77,38 @@ describe("shared vector display contract", () => {
     const rendered = engines(record, origin === "feature" ? { __fillOpacity: 0, __strokeWidth: 0, __radius: 0 } : { __fillOpacity: .9, __strokeWidth: 9, __radius: 9 });
     expect(rendered.polygonColor.alpha).toBe(0);
     expect(asArray(rendered.polygonStyle.getFill()!.getColor() as string)[3]).toBe(0);
-    expect(rendered.lineStyle.getStroke()!.getWidth()).toBe(0);
+    expect(rendered.lineStyle.getStroke()).toBeNull();
+    expect(rendered.polygonStyle.getStroke()).toBeNull();
     expect(rendered.line.polyline!.width!.getValue(rendered.time)).toBe(0);
     expect(rendered.polygon.polygon!.outline!.getValue(rendered.time)).toBe(false);
     const circle = rendered.pointStyle.getImage() as CircleStyle;
     expect(circle.getRadius()).toBe(0);
-    expect(circle.getStroke()!.getWidth()).toBe(0);
+    expect(circle.getStroke()).toBeNull();
     expect(rendered.point.point!.pixelSize!.getValue(rendered.time)).toBe(0);
     expect(rendered.point.point!.color!.getValue(rendered.time).alpha).toBe(0);
   });
 
   it("numeric strings preserve zero instead of taking a fallback", () => {
     expect(resolveVectorStyle(layer({ style: { fillOpacity: "0", strokeWidth: "0", radius: "0" } }), () => 8)).toMatchObject({ fillOpacity: 0, strokeWidth: 0, radius: 0 });
+  });
+
+  it.each(["layer", "feature"])("omits zero outlines on nonzero-radius transparent points from %s", origin => {
+    const record = layer({ style: origin === "layer" ? { fillOpacity: 0, strokeWidth: 0, radius: 12 } : {} });
+    const rendered = engines(record, origin === "feature" ? { __fillOpacity: 0, __strokeWidth: 0, __radius: 12 } : {});
+    const circle = rendered.pointStyle.getImage() as CircleStyle;
+    expect(circle.getRadius()).toBe(12);
+    expect(asArray(circle.getFill()!.getColor() as string)[3]).toBe(0);
+    expect(circle.getStroke()).toBeNull();
+    expect(rendered.point.point!.outlineWidth!.getValue(rendered.time)).toBe(0);
+    expect(rendered.point.point!.color!.getValue(rendered.time).alpha).toBe(0);
+  });
+
+  it("retains positive outlines when fill is explicitly transparent", () => {
+    const rendered = engines(layer({ style: { fillOpacity: 0, strokeWidth: 2, radius: 12 } }));
+    expect(rendered.polygonStyle.getStroke()!.getWidth()).toBe(2);
+    expect(rendered.lineStyle.getStroke()!.getWidth()).toBe(2);
+    expect((rendered.pointStyle.getImage() as CircleStyle).getStroke()!.getWidth()).toBe(1.2);
+    expect(rendered.point.point!.outlineWidth!.getValue(rendered.time)).toBe(1.2);
   });
 
   it.each([undefined, null, "", false, {}, NaN, Infinity, -1])("invalid numeric override %s falls back to valid feature metadata", value => {
