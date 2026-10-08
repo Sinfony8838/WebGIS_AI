@@ -3832,6 +3832,7 @@ export default function App({
       <Map3DGlobe
         ref={globeRef}
         visible={viewMode === "globe"}
+        projectScopeKey={JSON.stringify([currentUser.user_id, project?.project_id || ""])}
         imageryLayer={globeImageryLayer}
         basemapRetryKey={basemapRetryKey}
         onBasemapStatus={setGlobeBasemapStatus}

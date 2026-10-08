@@ -28,8 +28,7 @@ import { GlobeThemeManager, getEntityTooltip } from "../lib/globeThemes";
 import { GlobeBasemap } from "../lib/globeBasemap";
 import { basemapSourceKey } from "../lib/basemap";
 import type { BasemapLoadPhase } from "../lib/basemapLoadStatus";
-import { normalizeGlobeGeoJson } from "../lib/globeGeojson";
-import { applyCesiumVectorStyle } from "../lib/vectorStyle";
+import { GlobeProjectLayers } from "../lib/globeProjectLayers";
 import type { BasemapLayerDescriptor, LayerRecord } from "../types";
 
 export type CameraState = {
@@ -59,6 +58,7 @@ export type Map3DGlobeHandle = {
 };
 
 type Props = {
+  projectScopeKey: string;
   projectLayers?: LayerRecord[];
   urbanSource?: UrbanSource|null;
   onUrbanStatus?: (status:UrbanStatus) => void;
@@ -100,6 +100,7 @@ const DEFAULT_INITIAL_VIEW = {
 export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlobe(
   {
     visible,
+    projectScopeKey,
     projectLayers,
     urbanSource,
     onUrbanStatus,
@@ -123,6 +124,7 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
   urbanStatusRef.current = onUrbanStatus;
   const tooltipRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<Cesium.Viewer | null>(null);
+  const projectLayerManagerRef = useRef<GlobeProjectLayers | null>(null);
   const screenHandlerRef = useRef<Cesium.ScreenSpaceEventHandler | null>(null);
   const gridLayerRef = useRef<Cesium.ImageryLayer | null>(null);
   const gridLabelsRef = useRef<Cesium.LabelCollection | null>(null);
@@ -201,6 +203,7 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
     }
 
     viewerRef.current = viewer;
+    projectLayerManagerRef.current = new GlobeProjectLayers(viewer, (name, message) => callbacksRef.current.onThemeError?.(name, message));
     basemapRef.current = new GlobeBasemap(viewer, phase => basemapStatusRef.current?.(phase));
     if (import.meta.env.DEV) {
       // Debug handle for DevTools / automated verification only.
@@ -375,6 +378,8 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
       }
       themeManagerRef.current?.destroy();
       themeManagerRef.current = null;
+      projectLayerManagerRef.current?.destroy();
+      projectLayerManagerRef.current = null;
       try {
         viewer.scene.preRender.removeEventListener(syncLight);
         viewer.camera.changed.removeEventListener(onCameraMoved);
@@ -468,25 +473,8 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
 
   // Imported data and persisted analysis outputs use the same feature colors as 2D.
   useEffect(() => {
-    const viewer = viewerRef.current;
-    if (!viewer) return;
-    let cancelled = false;
-    const sources: Cesium.GeoJsonDataSource[] = [];
-    for (const layer of projectLayers || []) {
-      if (!layer.visible || layer.kind !== "vector" || !["output_artifact", "upload"].includes(layer.source)) continue;
-      void Cesium.GeoJsonDataSource.load(normalizeGlobeGeoJson(layer.data), { clampToGround: true }).then(async source => {
-        if (cancelled || viewer.isDestroyed()) return;
-        applyCesiumVectorStyle(source, layer);
-        await viewer.dataSources.add(source);
-        if (cancelled || viewer.isDestroyed()) { if (!viewer.isDestroyed()) viewer.dataSources.remove(source, true); return; }
-        sources.push(source);
-        viewer.scene.requestRender();
-      }).catch(error => {
-        if (!cancelled) callbacksRef.current.onThemeError?.(layer.name, String(error));
-      });
-    }
-    return () => { cancelled = true; if (!viewer.isDestroyed()) sources.forEach(source => viewer.dataSources.remove(source, true)); };
-  }, [projectLayers]);
+    projectLayerManagerRef.current?.sync(projectScopeKey, projectLayers || [], visible);
+  }, [projectScopeKey, projectLayers, visible]);
 
   // Live-swap the base imagery layer when the URL prop changes.
   useEffect(() => {
