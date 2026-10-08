@@ -77,7 +77,7 @@ FULL_DRAFT_INTENT_PATTERN = re.compile(
 FULL_DRAFT_INTENT_STEPS = frozenset(STEP_KEYS) - {"rehearsal", "confirmation"}
 SCALAR_LABELS = {"title": "课题", "topic": "课题主题", "grade": "年级", "duration_minutes": "课时", "subject": "学科"}
 EXPLICIT_TOPIC_PATTERN = re.compile(
-    r"(?:课题|标题)\s*(?:(?:改为|调整为|改成|为|是)\s*[:：]?|[:：])\s*[\"“]?([^，,。；;、\n”\"！？!?]{1,80})"
+    r"(?:课题|标题)\s*(?:必须|应当)?\s*(?:(?:改为|调整为|改成|为|是)\s*[:：]?|[:：])\s*[\"“]?([^，,。；;、\n”\"！？!?]{1,80})"
 )
 # 只修改当前环节：一轮补丁只允许落在当前步骤的章节内。
 STEP_PATCH_SCOPES = {step: set(STEP_SECTIONS.get(step, ())) for step in STEP_KEYS}
@@ -504,6 +504,9 @@ class LessonDesignService:
                 if not patch_value:
                     raise ValueError("直接编辑内容不能为空")
             design.draft[section_id] = patch_value
+            if section_id == "title":
+                # Requirements follow-ups use topic; keep the directly edited title authoritative.
+                design.draft["topic"] = patch_value
             self._normalize_text_lists(design.draft)
             if section_id in SECTION_KEYS:
                 design.section_status[section_id] = "proposed"
@@ -1303,14 +1306,14 @@ class LessonDesignService:
         explicit = EXPLICIT_TOPIC_PATTERN.search(clean)
         if book:
             topic = book.group(1).strip()
-        elif course:
-            topic = course.group(1).strip()
         elif explicit:
             topic = explicit.group(1).strip()
+        elif course:
+            topic = course.group(1).strip()
         elif not topic:
             topic = cls._extract_topic(clean)
-        duration_match = re.search(r"(\d+)\s*分钟", clean)
-        duration = int(duration_match.group(1)) if duration_match else int(draft.get("duration_minutes") or 40)
+        requested_duration = cls._requested_total_minutes(clean)
+        duration = requested_duration if requested_duration is not None else int(draft.get("duration_minutes") or 40)
         grade_match = re.search(r"(高[一二三]|初[一二三]|七年级|八年级|九年级)", clean)
         grade = grade_match.group(1) if grade_match else str(draft.get("grade") or "")
         focus = ""
@@ -2272,10 +2275,10 @@ class LessonDesignService:
                 "suggestions": [],
             }
         if step == "requirements":
-            duration_match = re.search(r"(\d+)\s*分钟", clean)
+            requested_duration = self._requested_total_minutes(clean)
             grade_match = re.search(r"(高[一二三]|初[一二三]|七年级|八年级|九年级)", clean)
             topic = self._extract_topic(clean) or str(draft.get("topic") or draft.get("title") or "人口地理专题课")
-            patch = {"title": topic or draft.get("title") or "人口地理专题课", "topic": topic or draft.get("topic") or "人口地理", "grade": grade_match.group(1) if grade_match else draft.get("grade") or "", "duration_minutes": int(duration_match.group(1)) if duration_match else int(draft.get("duration_minutes") or 40), "requirements": {"raw": clean}}
+            patch = {"title": topic or draft.get("title") or "人口地理专题课", "topic": topic or draft.get("topic") or "人口地理", "grade": grade_match.group(1) if grade_match else draft.get("grade") or "", "duration_minutes": requested_duration if requested_duration is not None else int(draft.get("duration_minutes") or 40), "requirements": {"raw": clean}}
             reply = f"我理解你想做一节“{patch['title']}”。目前先按 {patch['duration_minutes']} 分钟、{patch['grade'] or '年级待定'}来搭框架。接下来我们先确认学生最需要带走的核心认识，可以吗？"
             next_step = "analysis"
         elif step == "analysis":
@@ -2361,6 +2364,19 @@ class LessonDesignService:
         return parts[0] if parts else simplified.strip(" ：:，,。、")[:80]
 
     @classmethod
+    def _requested_total_minutes(cls, message: str) -> Optional[int]:
+        """Read a class duration without mistaking per-stage instructions for it."""
+        total = re.search(r"(?:总课时|总时长|整节课|单课时|一共|共计|总共)\s*(?:为|是|[:：])?\s*(\d+)\s*分钟", message)
+        if total:
+            return int(total.group(1))
+        for match in re.finditer(r"(\d+)\s*分钟", message):
+            prefix = re.split(r"[，,。；;\n]", message[:match.start()])[-1]
+            if re.search(r"(?:每|各)(?:个|一)?(?:教学)?(?:环节|步骤|阶段)", prefix):
+                continue
+            return int(match.group(1))
+        return None
+
+    @classmethod
     def _normalize_requirements_result(
         cls, result: Dict[str, Any], message: str, draft: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -2368,11 +2384,11 @@ class LessonDesignService:
         normalized = copy.deepcopy(result) if isinstance(result, dict) else {}
         patch = normalized.get("section_patch")
         patch = patch if isinstance(patch, dict) else {}
-        existing_topic = str(draft.get("topic") or draft.get("title") or "").strip()
+        existing_topic = str(draft.get("title") or draft.get("topic") or "").strip()
         topic = cls._extract_topic(message, existing_topic)
-        duration_match = re.search(r"(\d+)\s*分钟", message)
+        requested_duration = cls._requested_total_minutes(message)
         grade_match = re.search(r"(高[一二三]|初[一二三]|七年级|八年级|九年级)", message)
-        if existing_topic and topic == existing_topic and not duration_match and not grade_match and re.search(r"复述|重述|回顾|(?:不要|无需|不用)修改(?:内容|草稿|需求)", message):
+        if existing_topic and topic == existing_topic and requested_duration is None and not grade_match and re.search(r"复述|重述|回顾|(?:不要|无需|不用)修改(?:内容|草稿|需求)", message):
             # 只询问当前需求时，不让规则或模型把控制语句覆盖进教学草稿。
             normalized["section_patch"] = {}
             normalized["next_step"] = "requirements"
@@ -2386,8 +2402,10 @@ class LessonDesignService:
         if topic:
             patch["title"] = topic
             patch["topic"] = topic
-        if duration_match:
-            patch["duration_minutes"] = int(duration_match.group(1))
+        if requested_duration is not None:
+            patch["duration_minutes"] = requested_duration
+        elif re.search(r"(?:每|各)(?:个|一)?(?:教学)?(?:环节|步骤|阶段)\s*(?:为|是|[:：])?\s*\d+\s*分钟", message):
+            patch["duration_minutes"] = int(draft.get("duration_minutes") or 40)
         if grade_match:
             patch["grade"] = grade_match.group(1)
         requirements = patch.get("requirements")

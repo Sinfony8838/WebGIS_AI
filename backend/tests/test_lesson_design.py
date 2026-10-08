@@ -14,6 +14,38 @@ from backend.app.store import RuntimeStore
 
 
 class LessonDesignServiceTest(unittest.TestCase):
+    def test_manual_title_survives_requirement_followup_and_restart(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        first = service.turn(design.design_id, "高一《旧课题》，3分钟。", 0)
+        edited = service.resolve(design.design_id, "title", "edit", "", first["revision"], "验收_手动课题")
+        self.assertEqual(edited["design"]["draft"]["topic"], "验收_手动课题")
+        with patch.object(service, "_ask_minimax", return_value={"section_patch": {"title": "旧课题", "duration_minutes": 1}, "reply": "建议", "next_step": "analysis"}):
+            followup = service.turn(design.design_id, "学生分组讨论，每环节1分钟。", edited["design"]["revision"])
+        self.assertEqual(followup["draft"]["title"], "验收_手动课题")
+        self.assertEqual(followup["draft"]["duration_minutes"], 3)
+        restored = RuntimeStore(self.store.state_file, read_only=True).get_lesson_design(design.design_id)
+        self.assertEqual(restored.draft["title"], "验收_手动课题")
+        self.assertEqual(restored.draft["duration_minutes"], 3)
+
+    def test_explicit_quoted_title_and_total_minutes_win_over_stage_minutes(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        result = service.turn(design.design_id, '请设计独立验收教案，标题必须为“验收_合成点”。高一，每环节1分钟，总课时3分钟。', 0)
+        self.assertEqual(result["draft"]["title"], "验收_合成点")
+        self.assertEqual(result["draft"]["duration_minutes"], 3)
+        followup = service.turn(design.design_id, "标题改为城市化，每环节2分钟。", result["revision"])
+        self.assertEqual(followup["draft"]["title"], "城市化")
+        self.assertEqual(followup["draft"]["topic"], "城市化")
+        self.assertEqual(followup["draft"]["duration_minutes"], 3)
+
+    def test_model_duration_suggestion_without_per_stage_instruction_is_preserved(self) -> None:
+        service = self.runtime.classroom.lesson_design
+        design = service.create_or_resume(self.project, "local_admin")
+        with patch.object(service, "_ask_minimax", return_value={"section_patch": {"title": "人口分布", "duration_minutes": 30}, "reply": "建议", "next_step": "analysis"}):
+            result = service.turn(design.design_id, "高一《人口分布》，总时长缩短一些。", 0)
+        self.assertEqual(result["draft"]["duration_minutes"], 30)
+
     def test_requirement_cell_saves_raw_text_without_step_wrapper(self) -> None:
         service = self.runtime.classroom.lesson_design
         design = service.create_or_resume(self.project, "local_admin")
