@@ -174,6 +174,26 @@ describe("classroom student display integration", () => {
     expect(screen.getByTestId("visual-query-bars").textContent).toContain("上海市");
   });
 
+  it("passes the selected ranking city to the map adapter without refreshing classroom state", async () => {
+    const item = lesson();
+    const city = { rank: 8, name: "西安市", adm_code: "610100", value: 12952907 };
+    const layer = { layer_id: "population_top20", visible: true, data: { features: [] },
+      metadata: { visualization: { type: "bar", maximum: city.value, unit: "人", items: [city] } } };
+    api.fetchLessons.mockResolvedValue({ items: [item] });
+    api.fetchLesson.mockResolvedValue(item);
+    api.fetchClassSessions.mockResolvedValue({ items: [session(item)] });
+    const onRefresh = vi.fn();
+    const onFocusVisualQuery = vi.fn();
+    render(<LessonWorkflowShell project={project} layerState={{ items: [layer] } as unknown as LayersResponse}
+      onRefresh={onRefresh} onFocusVisualQuery={onFocusVisualQuery} />);
+    await screen.findByTestId("class-run-panel");
+    onRefresh.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "定位到 西安市", exact: true }));
+    expect(onFocusVisualQuery).toHaveBeenCalledWith(expect.objectContaining(city), layer);
+    expect(onRefresh).not.toHaveBeenCalled();
+    expect(api.enterSessionStage).not.toHaveBeenCalled();
+  });
+
   it("clears the foreground ranking popup while a teacher reads the review report", async () => {
     const item = lesson();
     const layerState = { items: [{ layer_id: "population_top20", visible: true, data: { features: [] },

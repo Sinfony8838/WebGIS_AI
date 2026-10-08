@@ -4,6 +4,7 @@ import type { LayerRecord } from "../types";
 
 export type VisualizationItem = {
   rank: number;
+  adm_code?: string;
   name?: string;
   province?: string;
   value?: number;
