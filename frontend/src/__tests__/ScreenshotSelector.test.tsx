@@ -80,4 +80,26 @@ describe("ScreenshotSelector", () => {
     expect(onDestination).toHaveBeenCalledWith("assistant", expect.objectContaining({width:800,height:500}));
   });
 
+  it("saves classroom evidence instead of silently downloading a local-only PNG", () => {
+    const onSaveEvidence = vi.fn(), onSaveLocal = vi.fn();
+    render(<ScreenshotSelector bounds={bounds} onSaveLocal={onSaveLocal} onSaveEvidence={onSaveEvidence} onDestination={vi.fn()} onCancel={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", {name:"选择整个页面"}));
+    expect(screen.queryByRole("button", {name:"保存 PNG"})).toBeNull();
+    fireEvent.click(screen.getByRole("button", {name:"保存课堂存证"}));
+    expect(onSaveEvidence).toHaveBeenCalledOnce();
+    expect(onSaveEvidence).toHaveBeenCalledWith({left:0,top:0,width:800,height:500,viewportWidth:800,viewportHeight:500});
+    expect(onSaveLocal).not.toHaveBeenCalled();
+  });
+
+  it("cannot save classroom evidence while an earlier save is in flight", () => {
+    const onSaveEvidence = vi.fn();
+    const { rerender } = render(<ScreenshotSelector bounds={bounds} onSaveLocal={vi.fn()} onSaveEvidence={onSaveEvidence} onDestination={vi.fn()} onCancel={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", {name:"选择整个页面"}));
+    rerender(<ScreenshotSelector bounds={bounds} busy onSaveLocal={vi.fn()} onSaveEvidence={onSaveEvidence} onDestination={vi.fn()} onCancel={vi.fn()} />);
+    const save = screen.getByRole("button", {name:"保存课堂存证"});
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+    expect(onSaveEvidence).not.toHaveBeenCalled();
+  });
+
 });
