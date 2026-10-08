@@ -135,7 +135,11 @@ ASSISTANT_TOOL_INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
     "run_visual_query": {
         "type": "object",
         "properties": {
-            "dataset": {"type": "string"},
+            "dataset": {
+                "type": "string",
+                "enum": ["prefecture_population", "population"],
+                "description": "Built-in 2020 prefecture resident population; omit to use the default. Other datasets are unavailable.",
+            },
             "year": {"type": "integer"},
             "geo_level": {"type": "string"},
             "metric": {"type": "string"},

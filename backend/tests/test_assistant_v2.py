@@ -182,6 +182,75 @@ class AssistantV2RuntimeTest(unittest.TestCase):
         self.assertIn("Switch the basemap first.", job["result"]["assistant_message"])
         self.assertGreater(len(job["result"]["assistant_message"]), 40)
 
+    def test_visual_query_answer_uses_executed_rows_instead_of_model_ranking(self) -> None:
+        for mode in ("tool", "teaching"):
+            with self.subTest(mode=mode):
+                runtime, project_id = self.build_runtime()
+                runtime.llm_planner.plan_actions = lambda *args, **kwargs: {
+                    "assistant_message": "错误排名：南京市第一，杭州市 12,200,000 人。",
+                    "target": "webgis",
+                    "actions": [{"tool_name": "run_visual_query", "tool_params": {"year": 2020, "limit": 20}}],
+                    "planner": "test_stub",
+                }
+                with mock.patch.object(runtime.session_engine.knowledge, "answer", side_effect=AssertionError("ungrounded query explanation")) as answer:
+                    response = runtime.submit_assistant_message(project_id, "查询2020年人口最多的前20个地级市并生成图层、解释排名", assistant_mode=mode)
+                    job = self.wait_for_job(runtime, response["job_id"])
+                self.assertEqual(job["status"], "completed", job.get("error"))
+                result = job["result"]
+                rows = result["actions_executed"][0]["result"]["items"]
+                self.assertEqual(len(rows), 20)
+                message = result["assistant_message"]
+                for row in rows:
+                    self.assertIn(f"{row['rank']}. {row['name']}：{row['value']:,} {row['unit']}", message)
+                self.assertNotIn("错误排名", message)
+                self.assertNotIn("南京市", message)
+                self.assertNotIn("12,200,000", message)
+                answer.assert_not_called()
+                self.assertIsNone(result["knowledge"])
+                conversation = runtime.store.get_conversation(result["conversation_id"])
+                self.assertEqual(conversation.raw_messages[-1]["text"], message)
+
+    def test_confirmed_visual_query_keeps_the_same_authoritative_answer(self) -> None:
+        runtime, project_id = self.build_runtime()
+        registry = runtime.session_engine.tool_executor.tool_registry
+        original_risk = registry["run_visual_query"]["risk_level"]
+        registry["run_visual_query"]["risk_level"] = "high"
+        self.addCleanup(lambda: registry["run_visual_query"].__setitem__("risk_level", original_risk))
+        runtime.llm_planner.plan_actions = lambda *args, **kwargs: {
+            "assistant_message": "错误排名：南京市第一。",
+            "target": "webgis",
+            "actions": [{"tool_name": "run_visual_query", "tool_params": {"year": 2020, "limit": 20}}],
+            "planner": "test_stub",
+        }
+        response = runtime.submit_assistant_message(project_id, "查询2020年人口最多的前20个地级市并生成图层", assistant_mode="teaching")
+        waiting = self.wait_for_job(runtime, response["job_id"])
+        self.assertTrue(waiting["result"]["requires_confirmation"])
+        with mock.patch.object(runtime.session_engine.knowledge, "answer", side_effect=AssertionError("ungrounded query explanation")) as answer:
+            confirmed = runtime.confirm_assistant_action(waiting["result"]["confirmation_id"])
+            job = self.wait_for_job(runtime, confirmed["job_id"])
+        self.assertEqual(job["status"], "completed", job.get("error"))
+        result = job["result"]
+        for row in result["actions_executed"][0]["result"]["items"]:
+            self.assertIn(f"{row['rank']}. {row['name']}：{row['value']:,} {row['unit']}", result["assistant_message"])
+        self.assertNotIn("错误排名", result["assistant_message"])
+        answer.assert_not_called()
+
+    def test_unknown_visual_query_dataset_is_rejected_before_execution(self) -> None:
+        runtime, project_id = self.build_runtime()
+        runtime.llm_planner.plan_actions = lambda *args, **kwargs: {
+            "assistant_message": "错误地宣称已完成查询。",
+            "target": "webgis",
+            "actions": [{"tool_name": "run_visual_query", "tool_params": {"dataset": "census"}}],
+            "planner": "test_stub",
+        }
+        with mock.patch.object(runtime.classroom.visual_query_service, "run", side_effect=AssertionError("unsupported dataset must not execute")) as query:
+            response = runtime.submit_assistant_message(project_id, "查询人口排名并生成图层", assistant_mode="teaching")
+            job = self.wait_for_job(runtime, response["job_id"])
+        self.assertEqual(job["status"], "completed", job.get("error"))
+        self.assertEqual(job["result"]["actions_executed"], [])
+        self.assertNotIn("已完成查询", job["result"]["assistant_message"])
+        query.assert_not_called()
+
     def test_legacy_request_body_remains_compatible(self) -> None:
         runtime, project_id = self.build_runtime(enable_v2=False)
 

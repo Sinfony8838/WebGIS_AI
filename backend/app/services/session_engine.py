@@ -2784,14 +2784,18 @@ class AssistantSessionEngine:
         citations: List[Dict[str, Any]] = []
         assistant_message = str(plan.get("assistant_message") or "").strip()
         image_only = bool(executed) and all(item["action"]["tool_name"] == "generate_image" for item in executed)
-        if intent == "interaction" or image_only:
+        visual_query_executed = any(item["action"]["tool_name"] == "run_visual_query" for item in executed)
+        if intent == "interaction" or image_only or visual_query_executed:
             # The executor may reject a missing target or only submit an
             # asynchronous job. Report its actual outcome instead of the plan.
             outcomes = [str(item.get("result", {}).get("assistant_message") or "").strip() for item in executed]
             assistant_message = "\n".join(dict.fromkeys(text for text in outcomes if text)) or assistant_message
         teaching_contract: Optional[Dict[str, str]] = None
 
-        if not image_only and (intent == "hybrid" or normalized_mode == "teaching"):
+        # Structured rankings must come from executed rows. The independent
+        # knowledge call does not receive those rows and can invent a second,
+        # contradictory ranking. Ordinary teaching explanations remain intact.
+        if not image_only and not visual_query_executed and (intent == "hybrid" or normalized_mode == "teaching"):
             stage_callback("grounding", "running", "Explaining executed result", "")
             if normalized_mode == "teaching":
                 map_context = self._inject_session_digest(project.project_id, map_context, "teaching_action")
@@ -2985,10 +2989,11 @@ class AssistantSessionEngine:
         teaching_contract: Optional[Dict[str, str]] = None
         confirmed_intent = str((frozen_plan or payload).get("intent") or payload.get("intent") or "tool")
         image_only = bool(executed) and all(item["action"]["tool_name"] == "generate_image" for item in executed)
-        if confirmed_intent == "interaction" or image_only:
+        visual_query_executed = any(item["action"]["tool_name"] == "run_visual_query" for item in executed)
+        if confirmed_intent == "interaction" or image_only or visual_query_executed:
             outcomes = [str(item.get("result", {}).get("assistant_message") or "").strip() for item in executed]
             assistant_message = "\n".join(dict.fromkeys(text for text in outcomes if text)) or "已执行确认的操作。"
-        if not image_only and (confirmed_intent == "hybrid" or confirmed_intent.startswith("teaching")):
+        if not image_only and not visual_query_executed and (confirmed_intent == "hybrid" or confirmed_intent.startswith("teaching")):
             stage_callback("grounding", "running", "Explaining confirmed result", "")
             confirmed_message = str((frozen_plan or payload).get("message") or "")
             if confirmed_intent.startswith("teaching"):

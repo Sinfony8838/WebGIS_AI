@@ -2447,7 +2447,10 @@ class WebGISRuntime:
                 metadata={"layer_id": layer.layer_id, "query": params},
             )
             return {
-                "assistant_message": summary,
+                "assistant_message": summary + "\n\n" + "\n".join(
+                    f"{item['rank']}. {item['name']}：{item['value']:,} {item['unit']}"
+                    for item in result.get("items", [])
+                ),
                 "layer": layer.to_dict(),
                 "items": result.get("items", []),
                 "visualization": result.get("visualization", {}),
