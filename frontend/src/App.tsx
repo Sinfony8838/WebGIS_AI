@@ -1,7 +1,7 @@
 import Polygon from "ol/geom/Polygon";
 import MultiPolygon from "ol/geom/MultiPolygon";
 import type { UrbanSource, UrbanStatus } from "./components/UrbanStudyPanel";
-import { shanghaiAgeColor, shanghaiDensityColor, densityColor, densityRadius, rankColor } from "./lib/populationVisual";
+import { openLayersVectorStyle as layerStyle } from "./lib/vectorStyle";
 import { MapEvidenceLegend } from "./components/MapEvidenceLegend";
 import { ProfileWindow, type MeasureRecord, type ProfileWindowGeometry } from "./components/ProfileWindow";
 import { ProfileManagerBar } from "./components/ProfileManagerBar";
@@ -207,18 +207,6 @@ function timestamp(): string {
   return new Date().toISOString();
 }
 
-function withOpacity(color: string, opacity: number): string {
-  if (!color.startsWith("#")) {
-    return color;
-  }
-  const normalized =
-    color.length === 4 ? `#${color[1]}${color[1]}${color[2]}${color[2]}${color[3]}${color[3]}` : color;
-  const red = Number.parseInt(normalized.slice(1, 3), 16);
-  const green = Number.parseInt(normalized.slice(3, 5), 16);
-  const blue = Number.parseInt(normalized.slice(5, 7), 16);
-  return `rgba(${red}, ${green}, ${blue}, ${opacity})`;
-}
-
 function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
@@ -389,80 +377,6 @@ function emptyKnowledgeItem(): KnowledgeBaseItem {
     materials: [],
     related_templates: [],
     updated_at: ""
-  };
-}
-
-function layerStyle(record: LayerRecord, showFit = false) {
-  const visualization = record.metadata?.visualization as { items?: unknown[] } | undefined;
-  const rankCount = (Array.isArray(visualization?.items) ? visualization.items.length : 0)
-    || (Array.isArray(record.data.features) ? record.data.features.length : 0) || 20;
-  return (feature: { getGeometry: () => { getType: () => string } | undefined; get: (key: string) => unknown }) => {
-    const geometryType = feature.getGeometry()?.getType() || record.geometry_type;
-    if (record.layer_id === "generated_hu_line" && feature.get("line_type") === "dynamic" && !showFit) return undefined;
-    const densityTemplate = ["builtin_population_regions", "builtin_population_density"].includes(record.layer_id);
-    const ranked = Boolean(record.metadata?.visualization) && Number(feature.get("rank")) > 0;
-    let fillColor = String(record.style.fillColor || feature.get("__fillColor") || "#47a3ff");
-    let fillOpacity = Number(record.style.fillOpacity || feature.get("__fillOpacity") || 0.22);
-    let strokeColor = String(record.style.strokeColor || feature.get("__strokeColor") || "#e7edf5");
-    let strokeWidth = Number(record.style.strokeWidth || feature.get("__strokeWidth") || 2);
-    let radius = Number(record.style.radius || feature.get("__radius") || 7);
-    if (densityTemplate) {
-      fillColor = densityColor(feature.get("density")); fillOpacity = .88; strokeColor = "#ffffff"; strokeWidth = .9;
-      radius = densityRadius(feature.get("density"));
-    }
-    if (record.metadata?.catalog_id === "shanghai_population_density") {
-      fillColor = shanghaiDensityColor(feature.get("density"));
-      fillOpacity = 0.98; strokeColor = "#4b7776"; strokeWidth = 0.9;
-    }
-    if (record.metadata?.catalog_id === "shanghai_age_60_plus_2020") {
-      fillColor = shanghaiAgeColor(feature.get("age_60_plus_pct"));
-      fillOpacity = 0.98; strokeColor = "#ffffff"; strokeWidth = 1;
-    }
-    if (ranked) { fillColor = rankColor(Number(feature.get("rank")), rankCount); fillOpacity = .94; strokeColor = "#ffffff"; strokeWidth = 1.4; }
-    if (record.layer_id === "generated_hu_line") { strokeColor = feature.get("line_type") === "dynamic" ? "#d88a26" : "#07575f"; strokeWidth = feature.get("line_type") === "dynamic" ? 2 : 3; }
-    const labelField = String(record.style.labelField || "name");
-    const labelValue = feature.get("__hideLabel") === true ? "" : String(feature.get(labelField) || feature.get("name") || "");
-    const catalogId = String(record.metadata?.catalog_id || "");
-    const coverage = String(record.metadata?.coverage || "").toLowerCase();
-    const templateId = String(record.metadata?.template_id || "");
-    const provinceLevelLayer = (
-      coverage.includes("china province-level") ||
-      [
-        "china_provinces",
-        "china_province_population_density",
-        "china_aging_rate_province",
-        "china_province_gdp_per_capita"
-      ].includes(catalogId) ||
-      ["population_distribution", "population_density", "hu_line_comparison"].includes(templateId)
-    );
-
-    return new Style({
-      fill: geometryType.includes("Polygon") ? new Fill({ color: withOpacity(fillColor, fillOpacity) }) : undefined,
-      stroke: new Stroke({
-        color: strokeColor,
-        width: strokeWidth,
-        lineDash: record.layer_id === "generated_hu_line" ? feature.get("line_type") === "dynamic" ? [7, 5] : undefined : (feature.get("__lineDash") as number[] | undefined) || undefined
-      }),
-      image: geometryType.includes("Point")
-        ? new CircleStyle({
-            declutterMode: densityTemplate ? "none" : undefined,
-            radius,
-            fill: new Fill({ color: withOpacity(fillColor, Math.min(fillOpacity + 0.36, 0.9)) }),
-            stroke: new Stroke({ color: strokeColor, width: 1.2 })
-          })
-        : undefined,
-      text: labelValue && (!provinceLevelLayer || geometryType.includes("Point"))
-        ? new Text({
-            text: labelValue,
-            font: "500 12px 'Microsoft YaHei UI', 'Segoe UI', sans-serif",
-            fill: new Fill({ color: "#18343f" }),
-            stroke: new Stroke({ color: "#ffffff", width: 3 }),
-            backgroundFill: new Fill({ color: "rgba(255,255,255,.9)" }),
-            padding: [3, 4, 3, 4],
-            offsetY: geometryType.includes("Point") ? -(radius + 12) : 0
-          })
-        : undefined
-    });
   };
 }
 
