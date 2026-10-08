@@ -18,6 +18,7 @@ type Props = {
   preview?: string;
   busy?: boolean;
   onSaveLocal: (selection: ScreenshotSelection) => void;
+  onSaveEvidence?: (selection: ScreenshotSelection) => void;
   onDestination: (destination: ScreenshotDestination, selection: ScreenshotSelection) => void;
   onCancel: () => void;
 };
@@ -33,7 +34,7 @@ function normalizedSelection(start: Point, end: Point, viewportWidth = window.in
   };
 }
 
-export function ScreenshotSelector({ bounds, preview, busy = false, onSaveLocal, onDestination, onCancel }: Props) {
+export function ScreenshotSelector({ bounds, preview, busy = false, onSaveLocal, onSaveEvidence, onDestination, onCancel }: Props) {
   const [start, setStart] = useState<Point | null>(null);
   const [current, setCurrent] = useState<Point | null>(null);
   const [lockedSelection, setLockedSelection] = useState<ScreenshotSelection | null>(null);
@@ -107,7 +108,7 @@ export function ScreenshotSelector({ bounds, preview, busy = false, onSaveLocal,
         {!lockedSelection ? <button type="button" className="toolbar-button compact" disabled={busy} onClick={useFullPage}>选择整个页面</button> : null}
         {lockedSelection ? (
           <>
-            <button type="button" className="toolbar-button compact primary" disabled={busy} onClick={() => onSaveLocal(lockedSelection)}>保存 PNG</button>
+            <button type="button" className="toolbar-button compact primary" disabled={busy} onClick={() => (onSaveEvidence || onSaveLocal)(lockedSelection)}>{onSaveEvidence ? "保存课堂存证" : "保存 PNG"}</button>
             <button type="button" className="toolbar-button compact" disabled={busy} onClick={() => setLockedSelection(null)}>重新框选</button>
           </>
         ) : null}

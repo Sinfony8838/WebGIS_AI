@@ -4511,6 +4511,9 @@ export default function App({
           preview={screenshotSource}
           busy={screenshotSaving}
           onSaveLocal={(selection) => void handleSaveScreenshotLocally(selection)}
+          onSaveEvidence={screenshotDocumentRef.current?.evidence
+            ? (selection) => void handleScreenshotDestination("database", selection)
+            : undefined}
           onDestination={(destination, selection) => void handleScreenshotDestination(destination, selection)}
           onCancel={clearScreenshotDraft}
         />
