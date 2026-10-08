@@ -53,6 +53,7 @@ import { RehearsalPanel } from "./RehearsalPanel";
 import { StagePresentationSurface } from "./StagePresentationSurface";
 import { ReportPanel } from "./ReportPanel";
 import { VisualQueryPopup, type VisualizationItem } from "./VisualQueryPopup";
+import type { LayerRecord } from "../types";
 import "./ClassroomWorkflow.css";
 
 type LessonMode = "off" | "prep" | "rehearsal" | "teach" | "review";
@@ -86,6 +87,7 @@ type Props = {
   getGlobeSceneSnapshot?: () => LessonGlobeScene;
   /** 课中按教学顺序聚焦一张证据图层，避免多图层同时堆叠。 */
   onFocusEvidenceLayer?: (datasetId: string, stageDatasetIds: string[]) => void;
+  onFocusVisualQuery?: (item: VisualizationItem, layer: LayerRecord) => void;
   /** 三维宏观导入结束后，教师一键回到二维规范专题图判读。 */
   onRequestPlaneView?: () => void;
   /** 框选真实地图截图并将 Artifact 记入当前课堂事件。 */
@@ -209,6 +211,7 @@ export function LessonWorkflowShell({
   onApplyGlobeScene,
   getGlobeSceneSnapshot,
   onFocusEvidenceLayer,
+  onFocusVisualQuery,
   onRequestPlaneView,
   onCaptureEvidence,
   getProfilePreset,
@@ -1068,9 +1071,7 @@ export function LessonWorkflowShell({
           layer={visualQueryLayer}
           shifted={teachPanelVisible && !studentDisplay && !panelCollapsed}
           onClose={() => setVisualQueryDismissed(true)}
-          onFocusItem={(_item: VisualizationItem) => {
-            void onRefresh();
-          }}
+          onFocusItem={(item, layer) => onFocusVisualQuery?.(item, layer)}
         />
       )}
     </>

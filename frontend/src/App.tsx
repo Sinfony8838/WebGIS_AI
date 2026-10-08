@@ -2,6 +2,7 @@ import Polygon from "ol/geom/Polygon";
 import MultiPolygon from "ol/geom/MultiPolygon";
 import type { UrbanSource, UrbanStatus } from "./components/UrbanStudyPanel";
 import { openLayersVectorStyle as layerStyle } from "./lib/vectorStyle";
+import { visualQueryFocusRecord } from "./lib/visualQueryFocus";
 import { MapEvidenceLegend } from "./components/MapEvidenceLegend";
 import { ProfileWindow, type MeasureRecord, type ProfileWindowGeometry } from "./components/ProfileWindow";
 import { ProfileManagerBar } from "./components/ProfileManagerBar";
@@ -4577,6 +4578,12 @@ export default function App({
           onApplyProfilePreset={applyProfilePreset}
           onFocusEvidenceLayer={(datasetId, stageDatasetIds) => {
             void handleFocusLessonEvidenceLayer(datasetId, stageDatasetIds);
+          }}
+          onFocusVisualQuery={(item, layer) => {
+            const focused = visualQueryFocusRecord(item, layer);
+            if (!focused || !focusLayerExtent(layer.layer_id, focused)) {
+              pushToast("error", "无法定位该城市", "查询结果缺少对应的城市几何。");
+            }
           }}
           onRequestPlaneView={() => handleViewModeToggle("plane")}
           teachingGeometry={searchAreaGeometry}
