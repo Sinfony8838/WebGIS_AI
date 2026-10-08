@@ -29,6 +29,7 @@ import { GlobeBasemap } from "../lib/globeBasemap";
 import { basemapSourceKey } from "../lib/basemap";
 import type { BasemapLoadPhase } from "../lib/basemapLoadStatus";
 import { normalizeGlobeGeoJson } from "../lib/globeGeojson";
+import { applyCesiumVectorStyle } from "../lib/vectorStyle";
 import type { BasemapLayerDescriptor, LayerRecord } from "../types";
 
 export type CameraState = {
@@ -475,19 +476,7 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
       if (!layer.visible || layer.kind !== "vector" || !["output_artifact", "upload"].includes(layer.source)) continue;
       void Cesium.GeoJsonDataSource.load(normalizeGlobeGeoJson(layer.data), { clampToGround: true }).then(async source => {
         if (cancelled || viewer.isDestroyed()) return;
-        const time = Cesium.JulianDate.now();
-        for (const entity of source.entities.values) {
-          const props = entity.properties?.getValue(time) || {};
-          const fill = Cesium.Color.fromCssColorString(String(props.__fillColor || layer.style.fillColor || "#60a5fa"));
-          const stroke = Cesium.Color.fromCssColorString(String(props.__strokeColor || "#1d4ed8"));
-          if (entity.billboard || entity.point) {
-            entity.billboard = undefined;
-            entity.point = new Cesium.PointGraphics({ color: fill, pixelSize: Number(props.__radius || 6) * 2,
-              outlineColor: stroke, outlineWidth: 1, heightReference: Cesium.HeightReference.CLAMP_TO_GROUND });
-          }
-          if (entity.polygon) entity.polygon.material = new Cesium.ColorMaterialProperty(fill.withAlpha(Number(props.__fillOpacity || .3)));
-          if (entity.polyline) entity.polyline.material = new Cesium.ColorMaterialProperty(stroke);
-        }
+        applyCesiumVectorStyle(source, layer);
         await viewer.dataSources.add(source);
         if (cancelled || viewer.isDestroyed()) { if (!viewer.isDestroyed()) viewer.dataSources.remove(source, true); return; }
         sources.push(source);
