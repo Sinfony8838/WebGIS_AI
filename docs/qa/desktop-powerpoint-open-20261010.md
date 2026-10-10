@@ -1,33 +1,46 @@
 # 教师电脑 PowerPoint 打开与切回
 
 - 起点：095ddda959b6bf8976b924fb0536065cc0926b48，origin/main。
-- 分支：codex/desktop-powerpoint-open。
-- 独立工作树：desktop-powerpoint-open/WebGIS-AI；没有生产数据 Junction。使用本项目已有、版本一致的 node_modules 的独立副本，没有安装依赖。
-- 范围：PPT工具栏、新增本机请求/按钮模块及测试，独立标准库连接器、Windows PowerPoint工作脚本/启动器和说明。没有改动GIS数值、持久化格式、模型调用、项目权限或原课件。
+- 分支：codex/desktop-powerpoint-open；草稿 PR83。
+- 独立工作树：desktop-powerpoint-open/WebGIS-AI；没有生产数据 Junction。使用版本一致的独立 node_modules 副本，没有安装依赖。
+- 范围共11文件：PPT工具栏、新增本机请求/按钮及测试，独立连接器、Windows工作脚本/启动器和说明。没有改动GIS数值、持久化格式、模型调用、项目权限或原课堂文件。
 
-## 行为
+## 最终行为与真实修复
 
-“打开 PPT”在教师电脑选择原文件并使用 PowerPoint 打开；匹配完整文件路径后复用现有课件窗口。“切回 PPT”复用已选择课件或当前活动课件。窗口最小化时才恢复；不重置页码、视图、笔迹或放映。“页面预览 PPT”保留原网页渲染与笔迹链路，原预览失败流程仍需教师明确选择简易预览。
+“打开 PPT”启动/复用教师电脑的 PowerPoint，由 PowerPoint 自带 FileDialog 选择文件，再验证路径与后缀、匹配完整路径并复用课件。“切回 PPT”返回已选择或当前活动课件。原“页面预览 PPT”及其笔迹与失败流程保留。
 
-本机连接器独立于FastAPI、Store与生产数据根，只接受open/focus操作；拒绝路径/文件上传、未知来源、DNS rebinding Host、代理头、缺少本机随机校验值及同时进行的第二个原生操作。不自动保存/关闭PowerPoint，不修改Office信任中心或Windows电源设置。PowerPoint COM默认自动化宏策略为Low；本次程序化打开暂用已有信任中心策略，已有ForceDisable保留，finally恢复先前模式。[Microsoft AutomationSecurity说明](https://learn.microsoft.com/en-us/office/vba/api/powerpoint.application.automationsecurity)
+实测确认隐藏控制台中的 WinForms ShowDialog 持续等待、选择框不可见，不能确定其底层 Windows 原因。改用 Office 自带选择框后已实际显示并选取合成课件。随后发现本机 Office 的 Application.HWND、DocumentWindow.HWND 为空，打开成功但切换报错。最终使用当前用户会话内、由 POWERPNT 持有的唯一匹配 PPTFrameClass 窗口；按 Office 窗口标题匹配，歧义时拒绝切换，不猜测窗口。放映使用已有 SlideShowWindow.HWND。仅最小化时恢复，不自动保存、关闭或重置页码。
 
-## 已完成检查
+连接器只绑定127.0.0.1，只接受open/focus；路径由本机选择框引入，不接受网页传入路径/文件。严格校验Origin、Host和本机随机校验值，拒绝代理和并发原生操作。不会读取项目配置、登录cookie、模型密钥、认证数据库或教学数据。
 
-- 本机连接器测试：18 passed，8.37秒。
-- 前端定向检查：3文件7测试通过，包括原PPT预览失败提示。
-- 完整前端：93文件707测试通过；连接提示和720p对话框修复后的最终回归23.64秒，TypeScript/Vite构建4.04秒。现有大分块警告仍存在。
-- 完整Windows后端：1321 passed、8 skipped、180 subtests passed，450.30秒。
-- Windows PowerShell语法解析通过；无已打开课件时focus返回明确失败提示，不启动空PowerPoint。
-- 合成文件沿用QA_20261008_three_pages-r2.pptx，3页，SHA256 e9a1102b47369c1d2a9bdbe821e8a683b0d224e1e2a1b7de33d2861c82f85342。没有读取或修改私人原PPT。
+打开遵循已有Office信任中心策略，已有ForceDisable保持，finally恢复原自动化模式；不接受安全/授权提示。[Microsoft AutomationSecurity](https://learn.microsoft.com/en-us/office/vba/api/powerpoint.application.automationsecurity)；[PowerPoint FileDialog](https://learn.microsoft.com/en-us/office/vba/api/powerpoint.application.filedialog)。
 
-## 待完成及环境限制
+## 检查与证据边界
 
-真实网页按钮已经在独立19009后端/5173前端出现，并触发本机异步操作；首次自动化验收没有发现可操作的文件选择窗口。检查进程窗口站/桌面为WinSta0/Default，不能将此现象确定归因为Windows非交互会话。随后移除了选择框的不可见Form所有者，改用独立顶层文件选择框，尚待复验。桌面工具明确返回“product policy blocks this app”并拒绝启动PowerShell；没有改用其他UI方法绕过该限制。仅结束经PID、父进程和创建时间核对的本任务测试选择工作进程及连接器，确认当时没有PowerPoint进程；未结束任何原有服务。已请求教师在交互桌面手动启动连接器。
+- 基线10b6ea815c0af2f14ba845e8a1ba630dea27fac7：完整前端93文件707测试通过（23.64秒），TypeScript/Vite构建通过（4.04秒）；完整Windows后端1321 passed、8 skipped、180 subtests passed（450.30秒）。这些检查不能代替后续Windows原生改动验收。
+- 同一基线CI38040616675的Backend tests与Frontend tests and build均成功。最终原生修复提交须独立检查CI。
+- 后续连接器定向回归：18 passed（8.41秒）。首次重复运行被既有测试数据标记保护拒绝、未执行测试；确认专用工作树backend/data是独立普通目录，既有标记来自本任务验收，再仅对此测试子进程显式设置WEBGIS_AI_ALLOW_EXISTING_DATA=1。未删除或读取标记文件内容；本组测试使用独立HTTP服务和fake runner，不打开业务存储。
+- PowerShell语法解析及diff检查通过；C#窗口定位代码已由真实连接器编译并执行。
+- 合成课件QA_20261008_three_pages-r2.pptx为3页，SHA256 E9A1102B47369C1D2A9BDBE821E8A683B0D224E1E2A1B7DE33D2861C82F85342；实际打开、翻页、重复选择之后哈希一致。没有打开私人原课堂文件。
 
-连接中断的真实页面曾显示英文Failed to fetch；已改为中文说明操作可能已开始、需要检查原生窗口，不重发POST。连接器未启动时显示本机启动说明，不能误判为课件已打开。720p实测还发现长提示在工具栏内被裁切，现改为挂载在body的可关闭对话框；修复后的实际截图确认正文与关闭按钮完整可见，焦点位于关闭按钮，Esc实际关闭。截图保留在本机，未上传私人验收产物。
+真实浏览器环境是独立19009后端/5173前端、本机管理员、合成数据和stub模型，不能称为公网Demo或正式部署验收。通过computer-use观察实际PowerPoint，未执行模型或GIS任务。
 
-初始提交38dbd1521653832db78ec02afe338712b23fbb52已推送为草稿PR83；CI38040273435后端和前端均成功。后续连接提示修复须检查最终提交对应CI，不能沿用初始CI作为完整证明。
+| 场景 | 已观察结果 |
+|---|---|
+| 页面入口/连接失败 | 打开、切回、页面预览三个入口存在；中文断连提示不自动重发POST。720p完整对话框、关闭按钮焦点与Esc关闭已实测。 |
+| PowerPoint已有实例，打开课件 | Office选择框可见，合成3页课件实际打开；最初句柄错误已修复。 |
+| 最小化后切回 | 真实结果focused、foreground=true；课件恢复，仍为第2页。 |
+| 重复选择同一完整路径 | 原窗口id未变，仅一个课件窗口，仍停第2页；没有重复打开。 |
+| 取消选择 | Esc关闭Office选择框，原课件和第2页保留；网页按钮恢复。 |
+| PowerPoint未运行 | 关闭本次合成验收窗口后核实没有POWERPNT进程；从网页自动启动新进程并显示Office选择框。新窗口模态输入受桌面工具定位限制，完整首次选取后的打开结果尚待完成。 |
+| 放映/实际笔迹保留 | 未完成，不计通过。 |
 
-首次打开、同一文件重复打开、后台切回、取消选择、实际窗口/页码/笔迹保留及原文件哈希复查必须在交互桌面实测后分别记结果，目前不计通过。网页预览旧链路的单元回归通过不代替本机PowerPoint验收。
+Windows非交互桌面不能作为不可见选择框的已证实根因。桌面工具禁止操作PowerShell等终端，本机连接器由用户手动启动；没有绕过限制。只结束经PID、父进程、创建时间及执行阶段核对的本任务不可见选择工作进程。computer-use直接启动/关闭的Office窗口仅为本次合成课件验收，不是连接器自动关闭行为。
 
-之前的public-teacher-release工作树现已不存在，原18999/18080端口未监听；当前正式运行路径等待用户确认。没有根据旧聊天记录重建生产环境或恢复教学数据。合并/上线状态须在实际完成后记录，不以本机开发页替代正式部署。
+临时执行阶段和异常诊断已从源码移除，诊断与截图只留本机scratch/验收目录，不提交。现有大分块警告保持。
+
+## 发布与剩余门槛
+
+用户确认正式目录没有迁移。沙箱外只读核实历史public-teacher-release/WebGIS-AI目录及Git登记已缺失，主目录backend/data为空，18999/18080未监听；Cloudflared服务仍运行。删除执行者和底层原因未知，不从时间戳或旧聊天推断。最近已知备份仅完成文件存在性与大小核对，尚未做哈希校验或恢复，后续恢复需确认恢复点及备份之后的数据差异。
+
+原生首次完整打开、放映/笔迹保留、最终提交CI及正式环境恢复边界仍须完成。保留草稿，不合并、上线或启动空生产环境。保护视图、宏安全、不同Office版本/显示器、Windows拒绝前台切换及重名窗口歧义尚未现场复现，不以mock测试充当证明。

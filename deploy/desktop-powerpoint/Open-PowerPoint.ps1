@@ -15,6 +15,38 @@ public static class WebGisPptWindow {
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindow callback, IntPtr parameter);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr window, System.Text.StringBuilder text, int length);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr window, System.Text.StringBuilder text, int length);
+    private delegate bool EnumWindow(IntPtr window, IntPtr parameter);
+    // PowerPoint's Application/DocumentWindow COM objects do not expose HWND
+    // on all Office versions. Resolve only a unique matching PowerPoint frame
+    // in this user session; ambiguous document names fail without switching.
+    public static IntPtr FindFrame(string caption, string name) {
+        var matches = new System.Collections.Generic.List<IntPtr>();
+        int session = System.Diagnostics.Process.GetCurrentProcess().SessionId;
+        EnumWindows(delegate(IntPtr window, IntPtr parameter) {
+            if (!IsWindowVisible(window)) return true;
+            var kind = new System.Text.StringBuilder(128);
+            GetClassName(window, kind, kind.Capacity);
+            if (kind.ToString() != "PPTFrameClass") return true;
+            uint pid; GetWindowThreadProcessId(window, out pid);
+            try {
+                var process = System.Diagnostics.Process.GetProcessById((int)pid);
+                if (process.SessionId != session || !string.Equals(process.ProcessName, "POWERPNT", StringComparison.OrdinalIgnoreCase)) return true;
+            } catch { return true; }
+            var text = new System.Text.StringBuilder(1024);
+            GetWindowText(window, text, text.Capacity);
+            string title = text.ToString();
+            bool match = !string.IsNullOrEmpty(caption) && (title == caption || title == caption + " - PowerPoint");
+            match |= !string.IsNullOrEmpty(name) && (title == name || title == name + " - PowerPoint");
+            if (match) matches.Add(window);
+            return true;
+        }, IntPtr.Zero);
+        return matches.Count == 1 ? matches[0] : IntPtr.Zero;
+    }
 }
 '@
 
@@ -29,8 +61,9 @@ function Show-Presentation($Presentation, $Application) {
     if ($handle -eq [IntPtr]::Zero) {
         if ($Presentation.Windows.Count -eq 0) { throw 'Presentation has no visible document window' }
         $window = $Presentation.Windows.Item(1)
+        $handle = [WebGisPptWindow]::FindFrame([string]$window.Caption, [string]$Presentation.Name)
+        if ($handle -eq [IntPtr]::Zero) { throw 'PowerPoint document window is unavailable or ambiguous' }
         $window.Activate()
-        $handle = [IntPtr]$Application.HWND
     }
     if ([WebGisPptWindow]::IsIconic($handle)) { [void][WebGisPptWindow]::ShowWindowAsync($handle, 9) }
     [void][WebGisPptWindow]::SetForegroundWindow($handle)
@@ -40,19 +73,21 @@ function Show-Presentation($Presentation, $Application) {
 try {
     $application = Get-PowerPoint
     if ($Action -eq 'open') {
-        Add-Type -AssemblyName System.Windows.Forms
-        $picker = New-Object System.Windows.Forms.OpenFileDialog
+        # Office owns the visible picker. A hidden console host must not own
+        # the dialog; never use Execute(), which could bypass validation.
+        if (-not $application) { $application = New-Object -ComObject PowerPoint.Application }
+        $application.Visible = -1
+        $picker = $application.FileDialog(3) # msoFileDialogFilePicker
         $picker.Title = 'WebGIS：选择用 PowerPoint 打开的课件'
-        $picker.Filter = 'PowerPoint 课件 (*.pptx;*.ppt)|*.pptx;*.ppt'
-        $picker.CheckFileExists = $true
-        $picker.Multiselect = $false
-        try {
-            if ($picker.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
-                @{status='cancelled'} | ConvertTo-Json -Compress
-                exit 0
-            }
-            $SelectedPath = $picker.FileName
-        } finally { $picker.Dispose() }
+        $picker.AllowMultiSelect = $false
+        $picker.Filters.Clear()
+        [void]$picker.Filters.Add('PowerPoint 课件', '*.pptx;*.ppt')
+        $picker.InitialFileName = [Environment]::GetFolderPath('UserProfile') + '\'
+        if ($picker.Show() -ne -1) {
+            @{status='cancelled'} | ConvertTo-Json -Compress
+            exit 0
+        }
+        $SelectedPath = [string]$picker.SelectedItems.Item(1)
     }
     if ($SelectedPath -and $Action -eq 'open') {
         $resolved = Get-Item -LiteralPath $SelectedPath
@@ -73,8 +108,9 @@ try {
             foreach ($protectedWindow in $application.ProtectedViewWindows) {
                 $candidate = $protectedWindow.Presentation
                 if ([string]::Equals($candidate.FullName, $SelectedPath, [StringComparison]::OrdinalIgnoreCase)) {
+                    $handle = [WebGisPptWindow]::FindFrame([string]$protectedWindow.Caption, [string]$candidate.Name)
+                    if ($handle -eq [IntPtr]::Zero) { throw 'Protected View window is unavailable or ambiguous' }
                     $protectedWindow.Activate()
-                    $handle = [IntPtr]$application.HWND
                     if ([WebGisPptWindow]::IsIconic($handle)) { [void][WebGisPptWindow]::ShowWindowAsync($handle, 9) }
                     [void][WebGisPptWindow]::SetForegroundWindow($handle)
                     @{status='focused';file_name=$candidate.Name;selected_path=$SelectedPath;foreground=([WebGisPptWindow]::GetForegroundWindow() -eq $handle)} | ConvertTo-Json -Compress
@@ -92,7 +128,8 @@ try {
     if (-not $SelectedPath -and -not $presentation -and $application) {
         # Also focus an existing start screen or Protected View window;
         # selecting/activating it must never implicitly enable editing.
-        $handle = [IntPtr]$application.HWND
+        $handle = [WebGisPptWindow]::FindFrame('PowerPoint', '')
+        if ($handle -eq [IntPtr]::Zero) { throw 'PowerPoint start window is unavailable or ambiguous' }
         if ([WebGisPptWindow]::IsIconic($handle)) { [void][WebGisPptWindow]::ShowWindowAsync($handle, 9) }
         [void][WebGisPptWindow]::SetForegroundWindow($handle)
         @{status='focused';file_name='PowerPoint';foreground=([WebGisPptWindow]::GetForegroundWindow() -eq $handle)} | ConvertTo-Json -Compress
