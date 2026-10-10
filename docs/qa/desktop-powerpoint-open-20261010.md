@@ -18,7 +18,7 @@
 ## 检查与证据边界
 
 - 基线10b6ea815c0af2f14ba845e8a1ba630dea27fac7：完整前端93文件707测试通过（23.64秒），TypeScript/Vite构建通过（4.04秒）；完整Windows后端1321 passed、8 skipped、180 subtests passed（450.30秒）。这些检查不能代替后续Windows原生改动验收。
-- 同一基线CI38040616675的Backend tests与Frontend tests and build均成功。a1a4ec319ff7a2e5a2610f6f9de00cefa85a9924 的 CI38044991287 两项检查亦成功；其后的等待与放映修复仍需检查新提交CI。
+- 同一基线CI38040616675的Backend tests与Frontend tests and build均成功。a1a4ec319ff7a2e5a2610f6f9de00cefa85a9924 的 CI38044991287 两项检查亦成功；其后的等待与放映修复43713530d7ac005cf57b3fc11c0d2f8a8e6fbe7f对应CI38045984953，Backend tests和Frontend tests and build均成功。
 - 后续连接器定向回归：18 passed（8.39秒，最新放映修复后重跑）。首次重复运行被既有测试数据标记保护拒绝、未执行测试；确认专用工作树backend/data是独立普通目录，既有标记来自本任务验收，再仅对此测试子进程显式设置WEBGIS_AI_ALLOW_EXISTING_DATA=1。未删除或读取标记文件内容；本组测试使用独立HTTP服务和fake runner，不打开业务存储。
 - 最终前端 npm test：93文件708测试通过（29.98秒）；npm run build 通过（4.78秒）。新增第6分钟才完成的fake-timer回归，确认只提交一次POST、持续查询原操作ID。原生工作允许600秒，网页观察延长至660轮，避免先报等待、后打开成功。
 - PowerShell语法解析及git diff --check通过；新增C#放映窗口定位代码已由真实连接器编译并执行。
@@ -44,4 +44,4 @@ Windows非交互桌面不能作为不可见选择框的已证实根因。桌面�
 
 用户确认正式目录没有迁移。沙箱外只读核实历史public-teacher-release/WebGIS-AI目录及Git登记已缺失，主目录backend/data为空，18999/18080未监听；Cloudflared服务仍运行。删除执行者和底层原因未知，不从时间戳或旧聊天推断。候选10月8日22:31备份：500文件的存在性和大小匹配，498个非认证/非秘密文件SHA256匹配，另2个认证文件未读取；不能称为完整备份校验。没有复制或恢复生产数据，后续正式恢复仍需确认恢复点及备份之后的数据差异。
 
-首次完整打开和放映/笔迹保留已完成；最终提交CI及正式环境恢复边界仍须完成。保留草稿，不合并、上线或启动空生产环境。保护视图、宏安全、不同Office版本/显示器、Windows拒绝前台切换及重名窗口歧义尚未现场复现，不以mock测试充当证明。
+首次完整打开和放映/笔迹保留已完成，功能提交CI已通过。代码集成按已授权的main评审流程进行；正式上线仍须确认数据恢复边界，未恢复数据或启动空生产环境。保护视图、宏安全、不同Office版本/显示器、Windows拒绝前台切换及重名窗口歧义尚未现场复现，不以mock测试充当证明。
