@@ -119,6 +119,7 @@ import { WorkflowDock } from "./components/WorkflowDock";
 import { UserMenu } from "./components/UserMenu";
 import { PptViewer } from "./components/PptViewer";
 import { PptImportFailure } from "./components/PptImportFailure";
+import { DesktopPptControls } from "./components/DesktopPptControls";
 import { type BrushOverlayHandle, type BrushSettings } from "./components/BrushOverlay";
 import { BrushToolbar } from "./components/BrushToolbar";
 import { PptBrushFloat } from "./components/PptBrushFloat";
@@ -4112,15 +4113,16 @@ export default function App({
           >
             数据库
           </button> : null}
+          <DesktopPptControls onNotice={(message) => pushToast("info", "本机 PowerPoint", message)} />
           <button
             type="button"
             className="toolbar-button"
             disabled={pptLoading}
             onClick={() => pptFileInputRef.current?.click()}
           >
-            {pptLoading ? "渲染中…" : "导入 PPT"}
+            {pptLoading ? "渲染中…" : "页面预览 PPT"}
           </button>
-          <input ref={pptFileInputRef} type="file" accept=".pptx" hidden aria-label="选择 PPT 文件"
+          <input ref={pptFileInputRef} type="file" accept=".pptx" hidden aria-label="选择页面预览 PPT 文件"
             onChange={(event) => {
               const file = event.currentTarget.files?.[0];
               event.currentTarget.value = "";
