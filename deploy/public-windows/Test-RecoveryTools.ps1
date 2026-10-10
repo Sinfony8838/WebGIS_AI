@@ -230,6 +230,41 @@ Run-Case 'nested source junction is refused instead of silently omitted' {
     Assert-Throws { & $backupScript -RepoRoot $repo -DestinationRoot $target } 'Nested filesystem links'
     Assert-True (-not (Test-Path $target)) 'nested link rejection wrote files'
 }
+. (Join-Path $PSScriptRoot 'ExistingData.Common.ps1')
+$startScript = Join-Path $PSScriptRoot 'Start-PublicWebGIS.ps1'
+Run-Case 'existing data guard accepts populated files without hashing auth' {
+    $start = $global:WebGISRecoveryTestState.HashCalls
+    Assert-PublicWebGISExistingData -DataRoot (Join-Path $repo 'backend/data')
+    Assert-True ($start -eq $global:WebGISRecoveryTestState.HashCalls) 'guard hashed account bytes'
+}
+foreach ($missing in @('state/runtime.json', 'auth/auth.db')) {
+    Run-Case "actual restart refuses missing $missing before any runtime writes" {
+        $code = Join-Path $fixtureRoot ('missing-' + $missing.Split('/')[0])
+        New-Item -ItemType Directory -Path $code | Out-Null
+        $other = if ($missing -eq 'state/runtime.json') { 'auth/auth.db' } else { 'state/runtime.json' }
+        $path = Join-Path $code ('backend/data/' + $other)
+        New-Item -ItemType Directory -Path (Split-Path $path -Parent) -Force | Out-Null
+        [IO.File]::WriteAllText($path, 'synthetic existing bytes')
+        Assert-Throws { & $startScript -RepoRoot $code -RequireExistingData } 'Existing installation data missing'
+        Assert-True (-not (Test-Path (Join-Path $code 'backend/data/public-runtime'))) 'restart wrote runtime state'
+        Assert-True (-not (Test-Path (Join-Path $code ('backend/data/' + $missing)))) 'restart initialized missing data'
+    }
+}
+foreach ($empty in @('state/runtime.json', 'auth/auth.db')) {
+    Run-Case "existing data guard refuses empty $empty" {
+        $code = Join-Path $fixtureRoot ('empty-' + $empty.Split('/')[0])
+        foreach ($relative in @('state/runtime.json', 'auth/auth.db')) {
+            $path = Join-Path $code ('backend/data/' + $relative)
+            New-Item -ItemType Directory -Path (Split-Path $path -Parent) -Force | Out-Null
+            [IO.File]::WriteAllText($path, $(if ($relative -eq $empty) { '' } else { 'synthetic existing bytes' }))
+        }
+        Assert-Throws { & $startScript -RepoRoot $code -RequireExistingData } 'Existing installation data empty'
+        Assert-True (-not (Test-Path (Join-Path $code 'backend/data/public-runtime'))) 'restart wrote runtime state'
+    }
+}
+Run-Case 'existing data guard accepts intentional data junction' {
+    Assert-PublicWebGISExistingData -DataRoot (Join-Path $fixtureRoot 'junction-source/backend/data')
+}
 $failed = @($script:Results | Where-Object status -eq 'FAIL').Count
 @{ fixture_root = $fixtureRoot; tests = $script:Results; passed = $script:Results.Count - $failed; failed = $failed
    production_accessed = $false; services_started = $false } |
