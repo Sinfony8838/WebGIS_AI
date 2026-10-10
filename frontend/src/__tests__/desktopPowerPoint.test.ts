@@ -25,6 +25,6 @@ it("does not repeat an action after transport failure", async () => {
   const fetch = vi.fn().mockResolvedValueOnce(reply({ service: "webgis-desktop-powerpoint", protocol: 1, token: "nonce" }))
     .mockRejectedValueOnce(new Error("response lost"));
   vi.stubGlobal("fetch", fetch);
-  await expect(openDesktopPowerPoint("open")).rejects.toThrow("response lost");
+  await expect(openDesktopPowerPoint("open")).rejects.toThrow("操作可能已经开始");
   expect(fetch).toHaveBeenCalledTimes(2);
 });

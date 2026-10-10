@@ -7,9 +7,14 @@ export interface DesktopPptResult {
 }
 
 async function desktopRequest(path: string, init?: RequestInit): Promise<Record<string, unknown>> {
-  const response = await fetch(`${DESKTOP_URL}${path}`, {
-    ...init, credentials: "omit", cache: "no-store", signal: AbortSignal.timeout(5000)
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${DESKTOP_URL}${path}`, {
+      ...init, credentials: "omit", cache: "no-store", signal: AbortSignal.timeout(5000)
+    });
+  } catch {
+    throw new Error("本机连接中断。请检查文件选择框或 PowerPoint；操作可能已经开始，页面不会自动重复打开。");
+  }
   const result = await response.json();
   if (!response.ok) throw new Error(String(result.message || "本机 PowerPoint 操作失败。"));
   return result;

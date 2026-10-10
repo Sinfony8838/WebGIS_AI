@@ -23,6 +23,10 @@ it("reports connector failures and never silently opens the in-page viewer", asy
   render(<DesktopPptControls onNotice={onNotice} />);
   fireEvent.click(screen.getByRole("button", { name: "打开 PPT" }));
   await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("请启动本机连接器"));
+  expect(screen.getByRole("dialog")).toHaveTextContent("请启动本机连接器");
+  expect(screen.getByRole("button", { name: "关闭 PPT 连接提示" })).toHaveFocus();
+  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(onNotice).not.toHaveBeenCalled();
   expect(screen.getByRole("button", { name: "打开 PPT" })).toBeEnabled();
 });
