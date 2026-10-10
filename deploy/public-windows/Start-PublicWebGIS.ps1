@@ -5,7 +5,8 @@ param(
     [int]$BackendPort = 18999,
     [int]$ProxyPort = 18080,
     [switch]$InstallFrontendDependencies,
-    [switch]$SkipFrontendBuild
+    [switch]$SkipFrontendBuild,
+    [switch]$RequireExistingData
 )
 
 $ErrorActionPreference = "Stop"
@@ -88,6 +89,12 @@ $repoRoot = if ($RepoRoot) {
 else {
     (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
 }
+# Fail before environment loading, builds, bootstrap or service operations.
+if ($RequireExistingData) {
+    . (Join-Path $PSScriptRoot 'ExistingData.Common.ps1')
+    Assert-PublicWebGISExistingData -DataRoot (Join-Path $repoRoot 'backend/data')
+}
+
 $frontendDir = Join-Path $repoRoot "frontend"
 $frontendDist = Join-Path $frontendDir "dist"
 $runtimeDir = Join-Path $repoRoot "backend\data\public-runtime"
