@@ -265,6 +265,14 @@ foreach ($empty in @('state/runtime.json', 'auth/auth.db')) {
 Run-Case 'existing data guard accepts intentional data junction' {
     Assert-PublicWebGISExistingData -DataRoot (Join-Path $fixtureRoot 'junction-source/backend/data')
 }
+Run-Case 'git ignores the runtime junction itself via repository rules' {
+    $code = Join-Path $fixtureRoot 'junction-source'
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot '../../.gitignore') -Destination (Join-Path $code '.gitignore')
+    & git -c init.defaultBranch=main init --quiet $code
+    Assert-True ($LASTEXITCODE -eq 0) 'fixture git init failed'
+    $ignored = & git -C $code check-ignore --no-index --verbose -- backend/data
+    Assert-True ($LASTEXITCODE -eq 0 -and $ignored -match '\.gitignore:\d+:/backend/data/') 'runtime junction is not ignored by source rules'
+}
 $failed = @($script:Results | Where-Object status -eq 'FAIL').Count
 @{ fixture_root = $fixtureRoot; tests = $script:Results; passed = $script:Results.Count - $failed; failed = $failed
    production_accessed = $false; services_started = $false } |
