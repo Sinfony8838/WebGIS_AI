@@ -24,14 +24,16 @@ public static class WebGisPptWindow {
     // PowerPoint's Application/DocumentWindow COM objects do not expose HWND
     // on all Office versions. Resolve only a unique matching PowerPoint frame
     // in this user session; ambiguous document names fail without switching.
-    public static IntPtr FindFrame(string caption, string name) {
+    public static IntPtr FindFrame(string caption, string name) { return FindMatching(caption, name, false); }
+    public static IntPtr FindSlideShow(string name) { return FindMatching("", name, true); }
+    private static IntPtr FindMatching(string caption, string name, bool slideShow) {
         var matches = new System.Collections.Generic.List<IntPtr>();
         int session = System.Diagnostics.Process.GetCurrentProcess().SessionId;
         EnumWindows(delegate(IntPtr window, IntPtr parameter) {
             if (!IsWindowVisible(window)) return true;
             var kind = new System.Text.StringBuilder(128);
             GetClassName(window, kind, kind.Capacity);
-            if (kind.ToString() != "PPTFrameClass") return true;
+            if (slideShow ? kind.ToString() == "PPTFrameClass" : kind.ToString() != "PPTFrameClass") return true;
             uint pid; GetWindowThreadProcessId(window, out pid);
             try {
                 var process = System.Diagnostics.Process.GetProcessById((int)pid);
@@ -42,6 +44,7 @@ public static class WebGisPptWindow {
             string title = text.ToString();
             bool match = !string.IsNullOrEmpty(caption) && (title == caption || title == caption + " - PowerPoint");
             match |= !string.IsNullOrEmpty(name) && (title == name || title == name + " - PowerPoint");
+            if (slideShow) match = !string.IsNullOrEmpty(name) && title.TrimEnd().EndsWith(name, StringComparison.OrdinalIgnoreCase);
             if (match) matches.Add(window);
             return true;
         }, IntPtr.Zero);
@@ -57,8 +60,17 @@ function Get-PowerPoint {
 
 function Show-Presentation($Presentation, $Application) {
     $handle = [IntPtr]::Zero
-    try { $handle = [IntPtr]$Presentation.SlideShowWindow.HWND } catch {}
-    if ($handle -eq [IntPtr]::Zero) {
+    # Resolve the running show by its presentation, not the editor's HWND.
+    # Office versions that omit HWND still expose the SlideShowWindows collection.
+    $shows = @($Application.SlideShowWindows | Where-Object {
+        [string]::Equals($_.Presentation.FullName, $Presentation.FullName, [StringComparison]::OrdinalIgnoreCase)
+    })
+    if ($shows.Count -gt 1) { throw 'Presentation has ambiguous slide show windows' }
+    if ($shows.Count -eq 1) {
+        $handle = [WebGisPptWindow]::FindSlideShow([string]$Presentation.Name)
+        if ($handle -eq [IntPtr]::Zero) { throw 'PowerPoint slide show window is unavailable or ambiguous' }
+        $shows[0].Activate()
+    } else {
         if ($Presentation.Windows.Count -eq 0) { throw 'Presentation has no visible document window' }
         $window = $Presentation.Windows.Item(1)
         $handle = [WebGisPptWindow]::FindFrame([string]$window.Caption, [string]$Presentation.Name)

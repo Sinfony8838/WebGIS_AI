@@ -39,7 +39,8 @@ export async function openDesktopPowerPoint(action: "open" | "focus"): Promise<D
   if (typeof id !== "string" || !/^[a-f0-9]{32}$/.test(id)) throw new Error("本机连接器返回了无效操作编号。");
   // The native picker can stay open. Never retry a POST on timeout: doing so
   // could open a second native dialog or duplicate an already opened deck.
-  for (let attempt = 0; attempt < 300; attempt += 1) {
+  // Observe the original action beyond the worker's 600-second deadline.
+  for (let attempt = 0; attempt < 660; attempt += 1) {
     const result = await desktopRequest(`/actions/${id}`, { headers: { "X-WebGIS-Desktop": connection.token } });
     if (result.status === "failed") throw new Error(String(result.message || "PowerPoint 未能打开课件。"));
     if (["opened", "focused", "cancelled"].includes(String(result.status))) return result as unknown as DesktopPptResult;
