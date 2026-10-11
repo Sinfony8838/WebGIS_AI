@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from .config import AppConfig
 from .logging_filters import install_request_log_filters
+from .private_file_cache import PrivateFileCacheMiddleware
 from .runtime import WebGISRuntime
 from .services.minimax_image_client import ALLOWED_ASPECT_RATIOS, ALLOWED_IMAGE_MODELS, MiniMaxImageError
 from .services import request_limits, resource_access
@@ -220,6 +221,9 @@ app.add_middleware(
     ],
     allow_credentials=True,
 )
+
+# Wrap authentication/CORS too: cached bytes must never bypass file ownership.
+app.add_middleware(PrivateFileCacheMiddleware)
 
 
 def _current_auth(request: Request) -> AuthContext:
