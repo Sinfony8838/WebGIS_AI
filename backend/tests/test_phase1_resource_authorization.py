@@ -233,6 +233,34 @@ class ResourceAuthorizationMatrixTest(unittest.TestCase):
 
     # ------------------------------------------------- scoped grant checks
 
+    def test_file_download_and_range_are_private_without_changing_bytes(self) -> None:
+        path = Path(app_main.config.outputs_dir) / self.project_a / "cache-fixture.bin"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"0123456789")
+        url = f"/files/outputs/{self.project_a}/cache-fixture.bin"
+        for headers, status, body in (({}, 200, b"0123456789"),
+                                      ({"Range": "bytes=0-3"}, 206, b"0123")):
+            response = self.client.get(url, headers=headers)
+            self.assertEqual(response.status_code, status)
+            self.assertEqual(response.content, body)
+            self.assertEqual(response.headers["cache-control"], "private, no-store, max-age=0")
+            self.assertEqual(response.headers["cloudflare-cdn-cache-control"], "no-store")
+            self.assertIn("Cookie", response.headers["vary"])
+            self.assertIn("Authorization", response.headers["vary"])
+
+    def test_file_authentication_denials_cannot_seed_a_shared_cache(self) -> None:
+        path = Path(app_main.config.outputs_dir) / self.project_a / "private-cache.png"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"synthetic-private-bytes")
+        url = f"/files/outputs/{self.project_a}/private-cache.png"
+        with TestClient(app_main.app) as anonymous:
+            response = anonymous.get(url)
+            self.assertEqual(response.status_code, 401)
+            self.assertIn("no-store", response.headers["cache-control"])
+        response = self.teacher_b_client.get(url)
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("no-store", response.headers["cache-control"])
+
     def test_grant_response_files_only_grants_allowed_roots(self) -> None:
         config = app_main.config
         legit_dir = Path(config.uploads_dir) / "kb_materials"
