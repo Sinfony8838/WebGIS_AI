@@ -38,6 +38,8 @@ def make_palette():
     palette.desktop = Mock()
     palette.actions = Mock()
     palette.last_target = "webgis"
+    palette.palette_size, palette.edge_margin = 48, 8
+    palette.root = Mock()
     return palette
 
 
@@ -205,6 +207,7 @@ def test_drag_threshold_scales_and_release_does_not_toggle():
     palette.dragged = False
     palette.operation = None
     palette._place = Mock()
+    palette.desktop.cursor_position.side_effect = [(104, 100), (113, 104)]
     palette.focus_webgis, palette.focus_ppt = Mock(), Mock()
     palette._drag(SimpleNamespace(x_root=104, y_root=100))
     palette._place.assert_not_called()
@@ -392,3 +395,96 @@ def test_same_browser_handle_switching_to_webgis_tab_updates_target_icon():
     assert palette.last_target == "webgis"
     assert palette.target == window()
     palette.desktop.describe.assert_any_call(45)
+
+
+@pytest.mark.parametrize("area,requested,expected", [
+    ((0, 0, 1536, 1000), (-10000, -10000), (8, 8)),
+    ((0, 0, 1536, 1000), (10000, 10000), (1480, 944)),
+    ((0, 0, 1536, 1000), (10000, 300), (1480, 300)),
+    ((0, 0, 1536, 1000), (500, -10000), (500, 8)),
+    ((-1920, 0, 0, 1040), (-10000, 300), (-1912, 300)),
+    ((-1920, 0, 0, 1040), (10000, 10000), (-56, 984)),
+])
+def test_drag_edge_keeps_entire_ball_inside_work_area(area, requested, expected):
+    palette = make_palette()
+    palette.desktop.work_area.return_value = area
+    palette._place(*requested)
+    palette.desktop.move_palette.assert_called_once_with(palette.root, *expected, 48, 48)
+    x, y = expected
+    assert area[0] <= x < x + 48 <= area[2]
+    assert area[1] <= y < y + 48 <= area[3]
+
+
+def test_drag_ignores_stale_tk_geometry_and_can_drag_again_after_edge():
+    from types import SimpleNamespace
+    palette = make_palette()
+    palette.drag_threshold = 6
+    palette.close_preview, palette._toggle = Mock(), Mock()
+    palette.desktop.work_area.return_value = (0, 0, 1536, 1000)
+    palette.desktop.palette_rect.side_effect = [(1480, 930, 1528, 978), (1480, 944, 1528, 992)]
+    palette.desktop.cursor_position.side_effect = [(1490, 940), (2000, 1500), (1490, 954), (400, 400)]
+    # Tk may still report an older position or a minimized sentinel. Neither
+    # Tk geometry nor event coordinates may become the physical drag origin.
+    palette.root.winfo_x.return_value = -32000
+    palette.root.winfo_y.return_value = -32000
+    stale_event = SimpleNamespace(x_root=-32000, y_root=-32000)
+    palette._drag_begin(stale_event)
+    palette._drag(stale_event)
+    palette._release(None)
+    palette.desktop.move_palette.assert_called_with(palette.root, 1480, 944, 48, 48)
+    palette.desktop.show_palette.assert_called_with(palette.root, True)
+    palette._drag_begin(stale_event)
+    palette._drag(stale_event)
+    palette._release(None)
+    palette.desktop.move_palette.assert_called_with(palette.root, 390, 390, 48, 48)
+    palette.root.winfo_x.assert_not_called()
+    palette.root.winfo_y.assert_not_called()
+    palette._toggle.assert_not_called()
+
+
+def test_coordinate_failure_stops_drag_without_hiding_or_opening_preview():
+    palette = make_palette()
+    palette.drag_origin, palette.dragged, palette.drag_threshold = (100, 100, 80, 80), False, 6
+    palette.desktop.cursor_position.side_effect = OSError("synthetic cursor failure")
+    palette._notice, palette._toggle = Mock(), Mock()
+    palette._drag(None)
+    palette._release(None)
+    palette._toggle.assert_not_called()
+    palette.desktop.move_palette.assert_not_called()
+    palette.desktop.show_palette.assert_not_called()
+    palette._notice.assert_called_once()
+    assert palette.drag_origin is None
+
+
+def test_native_drag_coordinates_and_owned_window_rect_use_screen_coordinates():
+    desktop = WindowsDesktop.__new__(WindowsDesktop)
+    desktop.user, desktop.palette_handle = Mock(), Mock(return_value=42)
+    def cursor(point):
+        point._obj.x, point._obj.y = -100, 500
+        return True
+    def rectangle(handle, rect):
+        assert handle == 42
+        rect._obj.left, rect._obj.top, rect._obj.right, rect._obj.bottom = -120, 480, -72, 528
+        return True
+    desktop.user.GetCursorPos.side_effect = cursor
+    desktop.user.GetWindowRect.side_effect = rectangle
+    assert desktop.cursor_position() == (-100, 500)
+    assert desktop.palette_rect(Mock()) == (-120, 480, -72, 528)
+
+
+@pytest.mark.parametrize("method", ["cursor_position", "palette_rect"])
+def test_native_coordinate_error_does_not_return_zero_or_stale_coordinates(method):
+    desktop = WindowsDesktop.__new__(WindowsDesktop)
+    desktop.user, desktop.palette_handle = Mock(), Mock(return_value=42)
+    desktop.user.GetCursorPos.return_value = False
+    desktop.user.GetWindowRect.return_value = False
+    with pytest.raises(OSError):
+        getattr(desktop, method)(*([Mock()] if method == "palette_rect" else []))
+
+
+def test_failed_native_move_is_reported_instead_of_silently_accepting_position():
+    desktop = WindowsDesktop.__new__(WindowsDesktop)
+    desktop.user, desktop.palette_handle = Mock(), Mock(return_value=42)
+    desktop.user.SetWindowPos.return_value = False
+    with pytest.raises(OSError, match="未接受移动"):
+        desktop.move_palette(Mock(), 100, 200, 48, 48)

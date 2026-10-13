@@ -79,6 +79,8 @@ class WindowsDesktop:
         signatures = {
             "GetForegroundWindow": ([], wintypes.HWND),
             "GetAncestor": ([wintypes.HWND, wintypes.UINT], wintypes.HWND),
+            "GetCursorPos": ([ctypes.POINTER(wintypes.POINT)], wintypes.BOOL),
+            "GetWindowRect": ([wintypes.HWND, ctypes.POINTER(wintypes.RECT)], wintypes.BOOL),
             "IsWindowVisible": ([wintypes.HWND], wintypes.BOOL),
             "GetWindowTextW": ([wintypes.HWND, wintypes.LPWSTR, ctypes.c_int], ctypes.c_int),
             "GetClassNameW": ([wintypes.HWND, wintypes.LPWSTR, ctypes.c_int], ctypes.c_int),
@@ -226,10 +228,23 @@ class WindowsDesktop:
         if visible:
             self.user.SetWindowPos(handle, -1, 0, 0, 0, 0, 0x13)  # TOPMOST / no move, resize, activation
 
+    def cursor_position(self) -> tuple[int, int]:
+        point = wintypes.POINT()
+        if not self.user.GetCursorPos(ctypes.byref(point)):
+            raise OSError("无法读取鼠标位置，已停止本次拖动。")
+        return point.x, point.y
+
+    def palette_rect(self, root) -> tuple[int, int, int, int]:
+        rect = wintypes.RECT()
+        if not self.user.GetWindowRect(self.palette_handle(root), ctypes.byref(rect)):
+            raise OSError("无法读取悬浮球位置，已停止本次拖动。")
+        return rect.left, rect.top, rect.right, rect.bottom
+
     def move_palette(self, root, x: int, y: int, width: int, height: int):
         # Tk interprets negative geometry positions relative to the right edge;
         # use absolute desktop coordinates for monitors left of the primary.
-        self.user.SetWindowPos(self.palette_handle(root), -1, x, y, width, height, 0x10)
+        if not self.user.SetWindowPos(self.palette_handle(root), -1, x, y, width, height, 0x10):
+            raise OSError("Windows 未接受移动，悬浮球保留原位置。")
 
     def configure_palette(self, root):
         handle = self.palette_handle(root)
@@ -354,6 +369,7 @@ class SwitchPalette:
         self.scale = max(1.0, dpi / 96.0)
         px = self.px = lambda value: round(value * self.scale)
         self.palette_size = px(48)
+        self.edge_margin = px(8)
         self.drag_threshold = px(6)
         self.root.title("WebGIS · PPT 悬浮球")
         self.root.resizable(False, False)
@@ -479,25 +495,45 @@ class SwitchPalette:
 
     def _place(self, x, y):
         width = height = self.palette_size
-        area = self.desktop.work_area(x + width // 2, y + height // 2)
+        left, top, right, bottom = self.desktop.work_area(x + width // 2, y + height // 2)
+        margin = min(self.edge_margin, max(0, (right - left - width) // 2),
+                     max(0, (bottom - top - height) // 2))
+        area = (left + margin, top + margin, right - margin, bottom - margin)
         x, y = clamp_position(x, y, width, height, area)
         self.desktop.move_palette(self.root, x, y, width, height)
 
-    def _drag_begin(self, event):
-        self.drag_origin = (event.x_root, event.y_root, self.root.winfo_x(), self.root.winfo_y())
+    def _drag_begin(self, _):
+        self.drag_origin = None
         self.dragged = False
+        try:
+            # Movement uses SetWindowPos: sample cursor and owned window from
+            # the same desktop API, not Tk's cached geometry/event coordinates.
+            sx, sy = self.desktop.cursor_position()
+            x, y, _, _ = self.desktop.palette_rect(self.root)
+            self.drag_origin = (sx, sy, x, y)
+        except OSError as exc:
+            self._notice(str(exc))
 
-    def _drag(self, event):
+    def _drag(self, _):
         if self.drag_origin:
-            sx, sy, x, y = self.drag_origin
-            if abs(event.x_root - sx) + abs(event.y_root - sy) >= self.drag_threshold:
-                self.dragged = True
-                self._place(x + event.x_root - sx, y + event.y_root - sy)
+            try:
+                sx, sy, x, y = self.drag_origin
+                cx, cy = self.desktop.cursor_position()
+                if abs(cx - sx) + abs(cy - sy) >= self.drag_threshold:
+                    if not self.dragged:
+                        self.close_preview()
+                    self.dragged = True
+                    self._place(x + cx - sx, y + cy - sy)
+            except OSError as exc:
+                self.drag_origin = None
+                self._notice(str(exc))
 
     def _release(self, _):
-        if self.drag_origin and not self.dragged and not self.operation:
+        origin, self.drag_origin = self.drag_origin, None
+        if origin and self.dragged:
+            self.desktop.show_palette(self.root, True)
+        elif origin and not self.operation:
             self._toggle()
-        self.drag_origin = None
 
     def _toggle(self):
         if self.operation:
@@ -614,7 +650,8 @@ class SwitchPalette:
         dialog.bind("<Escape>", lambda _: self.close_preview())
         dialog.update_idletasks()
         width, height = dialog.winfo_width(), dialog.winfo_height()
-        x, y = self.root.winfo_x() + self.palette_size - width, self.root.winfo_y() - height - px(12)
+        left, top, _, _ = self.desktop.palette_rect(self.root)
+        x, y = left + self.palette_size - width, top - height - px(12)
         x, y = clamp_position(x, y, width, height, self.desktop.work_area(x, y))
         self.desktop.move_palette(dialog, x, y, width, height)
         try:
