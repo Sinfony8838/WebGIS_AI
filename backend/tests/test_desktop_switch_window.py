@@ -143,7 +143,8 @@ def test_palette_keeps_keyboard_activation_but_mouse_does_not_take_focus():
     desktop.subclass_callback = lambda callback: callback
     desktop.configure_palette(Mock())
     desktop.user.SetWindowLongW.assert_any_call(42, -20, 0x40000)
-    desktop.user.SetWindowLongW.assert_any_call(42, -16, 0)
+    desktop.user.GetWindowLongW.assert_called_once_with(42, -20)
+    desktop.user.SetWindowLongW.assert_called_once_with(42, -20, 0x40000)
     assert desktop._palette_message(42, 0x21, 0, 0, 1, 0) == 3
     desktop.controls.DefSubclassProc.assert_not_called()
     desktop._palette_message(42, 0x82, 0, 0, 1, 0)
@@ -482,9 +483,39 @@ def test_native_coordinate_error_does_not_return_zero_or_stale_coordinates(metho
         getattr(desktop, method)(*([Mock()] if method == "palette_rect" else []))
 
 
-def test_failed_native_move_is_reported_instead_of_silently_accepting_position():
+def test_failed_native_raise_is_reported_instead_of_silently_accepting_visibility():
     desktop = WindowsDesktop.__new__(WindowsDesktop)
     desktop.user, desktop.palette_handle = Mock(), Mock(return_value=42)
     desktop.user.SetWindowPos.return_value = False
-    with pytest.raises(OSError, match="未接受移动"):
+    with pytest.raises(OSError, match="未确认显示层级"):
         desktop.move_palette(Mock(), 100, 200, 48, 48)
+
+
+@pytest.mark.parametrize("x,y,geometry", [
+    (100, 200, "48x48+100+200"),
+    (-300, 200, "48x48+-300+200"),
+    (-300, -100, "48x48+-300+-100"),
+])
+def test_movement_preserves_tk_client_layout_instead_of_resizing_native_wrapper(x, y, geometry):
+    desktop = WindowsDesktop.__new__(WindowsDesktop)
+    desktop.user, desktop.palette_handle = Mock(), Mock(return_value=42)
+    root = Mock()
+    desktop.move_palette(root, x, y, 48, 48)
+    root.geometry.assert_called_once_with(geometry)
+    root.update_idletasks.assert_called_once()
+    desktop.user.SetWindowPos.assert_called_once_with(42, -1, 0, 0, 0, 0, 0x13)
+    # NOMOVE and NOSIZE prohibit a second native resize from clipping the Tk canvas.
+    assert desktop.user.SetWindowPos.call_args.args[-1] & 3 == 3
+
+
+def test_drag_can_return_to_start_without_latching_at_last_large_delta():
+    palette = make_palette()
+    palette.drag_origin, palette.dragged, palette.drag_threshold = (400, 400, 390, 390), False, 6
+    palette.desktop.cursor_position.side_effect = [(500, 500), (401, 400)]
+    palette.close_preview, palette._place, palette._toggle = Mock(), Mock(), Mock()
+    palette._drag(None)
+    palette._drag(None)
+    palette._place.assert_called_with(391, 390)
+    palette.close_preview.assert_called_once()
+    palette._release(None)
+    palette._toggle.assert_not_called()

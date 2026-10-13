@@ -241,10 +241,14 @@ class WindowsDesktop:
         return rect.left, rect.top, rect.right, rect.bottom
 
     def move_palette(self, root, x: int, y: int, width: int, height: int):
-        # Tk interprets negative geometry positions relative to the right edge;
-        # use absolute desktop coordinates for monitors left of the primary.
-        if not self.user.SetWindowPos(self.palette_handle(root), -1, x, y, width, height, 0x10):
-            raise OSError("Windows 未接受移动，悬浮球保留原位置。")
+        # Tk owns client sizing and frame offsets. A leading '+' followed by a
+        # signed coordinate also supports monitors left/above the primary;
+        # '-300' alone would instead mean an offset from the right edge.
+        root.geometry(f"{width}x{height}+{x}+{y}")
+        root.update_idletasks()
+        # Raise without overriding Tk's wrapper/client dimensions on each drag.
+        if not self.user.SetWindowPos(self.palette_handle(root), -1, 0, 0, 0, 0, 0x13):
+            raise OSError("位置已更新，但 Windows 未确认显示层级。请重新显示悬浮球。")
 
     def configure_palette(self, root):
         handle = self.palette_handle(root)
@@ -253,10 +257,9 @@ class WindowsDesktop:
         # subclassed; unrelated applications' windows are never modified.
         style = self.user.GetWindowLongW(handle, -20)
         self.user.SetWindowLongW(handle, -20, (style | 0x40000) & ~0x08000080)
-        # Keep a normal managed window for taskbar/keyboard access, removing
-        # only its visual titlebar and resize border for the round launcher.
-        frame = self.user.GetWindowLongW(handle, -16)
-        self.user.SetWindowLongW(handle, -16, frame & ~0x00C40000)
+        # Tk creates the undecorated popup. Do not strip native frame bits
+        # behind its geometry manager: stale border metrics can crop the canvas.
+        # The extended APPWINDOW style above keeps explicit taskbar access.
         self.user.SetWindowPos(handle, 0, 0, 0, 0, 0, 0x37)
         self._palette_callback = self.subclass_callback(self._palette_message)
         if not self.controls.SetWindowSubclass(handle, self._palette_callback, 1, 0):
@@ -364,6 +367,7 @@ class SwitchPalette:
         self.tick_count = 0
         self.last_foreground = None
         self.root = tk.Tk()
+        self.root.overrideredirect(True)
         dpi = self.desktop.palette_dpi(self.root)
         self.root.tk.call("tk", "scaling", dpi / 72.0)
         self.scale = max(1.0, dpi / 96.0)
@@ -519,7 +523,7 @@ class SwitchPalette:
             try:
                 sx, sy, x, y = self.drag_origin
                 cx, cy = self.desktop.cursor_position()
-                if abs(cx - sx) + abs(cy - sy) >= self.drag_threshold:
+                if self.dragged or abs(cx - sx) + abs(cy - sy) >= self.drag_threshold:
                     if not self.dragged:
                         self.close_preview()
                     self.dragged = True
