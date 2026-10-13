@@ -120,3 +120,32 @@ def test_cancel_does_not_replace_the_last_selected_presentation():
     actions.selected_path = "C:/existing.pptx"
     assert wait_result(actions, actions.start("open")) == {"status": "cancelled"}
     assert actions.selected_path == "C:/existing.pptx"
+
+
+def test_switcher_stays_local_and_never_calls_office_or_returns_handles(connector):
+    from unittest.mock import Mock
+    server, calls = connector
+    palette = Mock()
+    palette.request_show.return_value = {"status": "shown"}
+    server.actions.palette = palette
+    _, _, connection = request(server, "GET", "/connection")
+    assert connection["capabilities"] == ["switcher"]
+    status, _, accepted = request(server, "POST", "/actions", '{"action":"switcher"}',
+                                 **{"X-WebGIS-Desktop": connection["token"]})
+    assert status == 202
+    assert wait_result(server.actions, accepted["action_id"]) == {"status": "shown"}
+    assert calls == []
+    palette.request_show.assert_called_once()
+    assert request(server, "POST", "/actions", '{"action":"launch"}',
+                   **{"X-WebGIS-Desktop": connection["token"]})[0] == 400
+
+
+def test_success_shows_palette_but_cancel_does_not():
+    from unittest.mock import Mock
+    actions = DesktopActions(lambda *_: {"status": "focused", "foreground": True})
+    actions.palette = Mock()
+    assert wait_result(actions, actions.start("launch"))["status"] == "focused"
+    actions.palette.notify_show.assert_called_once()
+    actions.runner = lambda *_: {"status": "cancelled"}
+    assert wait_result(actions, actions.start("open"))["status"] == "cancelled"
+    actions.palette.notify_show.assert_called_once()

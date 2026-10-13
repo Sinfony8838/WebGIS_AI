@@ -28,6 +28,8 @@ def native_action(action: str, selected_path: str) -> dict:
                "-NoProfile", "-STA", "-File", str(WORKER), "-Action", action]
     if selected_path and action == "focus":
         command += ["-SelectedPath", selected_path]
+    # The ball follows the current PowerPoint presentation, including decks
+    # opened manually. Only the existing "focus" entry pins a selected file.
     # User-visible picker and Office windows are intentional. The worker's
     # console is hidden; it never kills, saves or closes PowerPoint documents.
     result = subprocess.run(command, capture_output=True, encoding="utf-8-sig", errors="replace",
@@ -48,10 +50,13 @@ class DesktopActions:
         self.selected_path = ""
         self.jobs: dict[str, dict] = {}
         self.active = False
+        self.palette = None
 
     def start(self, action: str) -> str:
-        if action not in {"open", "focus"}:
+        if action not in {"open", "focus", "launch", "switcher"}:
             raise ValueError("只支持打开或切回 PowerPoint。")
+        if action == "switcher" and self.palette is None:
+            raise ValueError("本机连接器未启用切换小窗，请重启新版连接器。")
         with self.lock:
             if self.active:
                 raise RuntimeError("本机文件选择或 PowerPoint 操作尚未结束，请先完成或取消。")
@@ -66,14 +71,17 @@ class DesktopActions:
 
     def _run(self, key: str, action: str):
         try:
-            result = self.runner(action, self.selected_path)
-            if result.get("status") not in {"opened", "focused", "cancelled", "failed"}:
+            result = (self.palette.request_show() if action == "switcher"
+                      else self.runner(action, self.selected_path))
+            if result.get("status") not in {"opened", "focused", "cancelled", "failed", "shown"}:
                 raise RuntimeError("本机 PowerPoint 返回了未知状态。")
             path = result.pop("selected_path", "")
             if path and result["status"] in {"opened", "focused"}:
                 self.selected_path = path
             # No raw worker errors or local paths are returned to the browser.
             public = {name: result[name] for name in ("status", "file_name", "foreground", "message") if name in result}
+            if self.palette and result["status"] in {"opened", "focused"}:
+                self.palette.notify_show()
         except subprocess.TimeoutExpired:
             public = {"status": "failed", "message": "本机操作等待超时。请检查文件选择框或 Office 提示，确认实际结果后重试。"}
         except Exception:
@@ -154,7 +162,8 @@ class DesktopHandler(BaseHTTPRequestHandler):
         if not self._guard():
             return
         if self.path == "/connection":
-            self._reply(200, {"service": SERVICE, "protocol": 1, "token": self.server.actions.token})
+            self._reply(200, {"service": SERVICE, "protocol": 1, "token": self.server.actions.token,
+                              "capabilities": ["switcher"] if self.server.actions.palette else []})
         elif self.path.startswith("/actions/"):
             if not self._guard(token=True):
                 return
@@ -173,7 +182,7 @@ class DesktopHandler(BaseHTTPRequestHandler):
             if not 0 < length <= 256 or self.headers.get("Transfer-Encoding") or self.headers.get_content_type() != "application/json":
                 raise ValueError()
             body = json.loads(self.rfile.read(length))
-            if not isinstance(body, dict) or set(body) != {"action"} or body["action"] not in {"open", "focus"}:
+            if not isinstance(body, dict) or set(body) != {"action"} or body["action"] not in {"open", "focus", "switcher"}:
                 raise ValueError()
         except (ValueError, TypeError):
             self._reply(400, {"message": "只接受打开或切回操作，不能提交路径或文件。"}); return
@@ -182,6 +191,8 @@ class DesktopHandler(BaseHTTPRequestHandler):
             self._reply(202, {"action_id": key})
         except RuntimeError as exc:
             self._reply(409, {"message": str(exc)})
+        except ValueError as exc:
+            self._reply(400, {"message": str(exc)})
 
 
 def main():
@@ -197,11 +208,19 @@ def main():
         if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.path or parsed.query or parsed.fragment:
             parser.error("Origins must be exact HTTP(S) origins without paths, wildcards or credentials")
     with DesktopServer(args.port, origins) as server:
+        from .desktop_switch_window import SwitchPalette
+        palette = SwitchPalette(server.actions)
+        server.actions.palette = palette
         print(f"PowerPoint connector listening on 127.0.0.1:{server.server_port}", flush=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
         try:
-            server.serve_forever()
+            palette.run()
         except KeyboardInterrupt:
             pass
+        finally:
+            server.shutdown()
+            thread.join()
 
 
 if __name__ == "__main__":
