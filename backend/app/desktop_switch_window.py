@@ -353,7 +353,7 @@ class SwitchPalette:
         self.root.tk.call("tk", "scaling", dpi / 72.0)
         self.scale = max(1.0, dpi / 96.0)
         px = self.px = lambda value: round(value * self.scale)
-        self.palette_size = px(84)
+        self.palette_size = px(48)
         self.drag_threshold = px(6)
         self.root.title("WebGIS · PPT 悬浮球")
         self.root.resizable(False, False)
@@ -361,34 +361,39 @@ class SwitchPalette:
         self.root.configure(bg="#ff00ff")
         self.root.attributes("-transparentcolor", "#ff00ff")
         self.root.protocol("WM_DELETE_WINDOW", self.hide)
-        self.canvas = tk.Canvas(self.root, width=self.palette_size, height=self.palette_size, bg="#ff00ff", highlightthickness=0)
+        self.canvas = tk.Canvas(self.root, width=self.palette_size, height=self.palette_size, bg="#ff00ff", highlightthickness=0, cursor="hand2")
         self.canvas.pack()
-        self.canvas.create_oval(*[px(v) for v in (5, 7, 81, 83)], fill="#406276", outline="")
-        self.ring = self.canvas.create_oval(*[px(v) for v in (2, 2, 78, 78)], fill="#fff", outline="#d35230", width=px(3))
+        # Compact neutral shell; the application mark carries the colour.
+        self.canvas.create_oval(*[px(v) for v in (4, 7, 46, 48)], fill="#edf0f3", outline="")
+        self.canvas.create_oval(*[px(v) for v in (3, 5, 45, 47)], fill="#e3e8ed", outline="")
+        self.ring = self.canvas.create_oval(*[px(v) for v in (2, 2, 44, 44)], fill="#fff", outline="#e2e8ed", width=1)
         # A code-drawn presentation mark; no external image download or Office branding asset.
-        self.canvas.create_oval(*[px(v) for v in (26, 15, 64, 53)], fill="#f5ba9d", outline="", tags="ppt")
-        self.canvas.create_arc(*[px(v) for v in (26, 15, 64, 53)], start=0, extent=90, fill="#d35230", outline="", tags="ppt")
-        self.canvas.create_rectangle(*[px(v) for v in (14, 22, 43, 52)], fill="#c43e1c", outline="", tags="ppt")
-        self.canvas.create_text(px(28), px(37), text="P", fill="#fff", font=("Segoe UI", 20, "bold"), tags="ppt")
+        self.canvas.create_oval(*[px(v) for v in (17, 12, 35, 30)], fill="#f5ba9d", outline="", tags="ppt")
+        self.canvas.create_arc(*[px(v) for v in (17, 12, 35, 30)], start=0, extent=90, fill="#d35230", outline="", tags="ppt")
+        self.canvas.create_rectangle(*[px(v) for v in (10, 15, 26, 31)], fill="#c43e1c", outline="", tags="ppt")
+        self.canvas.create_text(px(18), px(23), text="P", fill="#fff", font=("Segoe UI", 11, "bold"), tags="ppt")
         logo = Path(__file__).resolve().parents[2] / "frontend/src/assets/brand/geobot-platform-logo.png"
         try:
             source = tk.PhotoImage(file=str(logo))
-            self.logo = source.subsample(max(1, (source.width() + px(52) - 1) // px(52)))
-            self.canvas.create_image(px(40), px(34), image=self.logo, tags="webgis")
+            self.logo = source.subsample(max(1, (source.width() + px(30) - 1) // px(30)))
+            self.canvas.create_image(px(23), px(23), image=self.logo, tags="webgis")
         except (tk.TclError, OSError):
-            self.canvas.create_text(px(40), px(31), text="Geo", fill="#17586d", font=("Microsoft YaHei UI", 14, "bold"), tags="webgis")
-        self.badge = self.canvas.create_text(px(40), px(64), text="PPT", fill="#a53520", font=("Microsoft YaHei UI", 8, "bold"))
+            self.canvas.create_text(px(23), px(23), text="Geo", fill="#17586d", font=("Microsoft YaHei UI", 9, "bold"), tags="webgis")
+        self.badge = self.canvas.create_oval(*[px(v) for v in (34, 34, 41, 41)], fill="#e4a334", outline="#fff", width=1, state="hidden")
         self._badge()
         self.canvas.bind("<ButtonPress-1>", self._drag_begin)
         self.canvas.bind("<B1-Motion>", self._drag)
         self.canvas.bind("<ButtonRelease-1>", self._release)
         self.canvas.bind("<Button-3>", self._menu)
+        self.canvas.bind("<Enter>", lambda _: self.canvas.itemconfigure(self.ring, fill="#f5f8fa", outline="#ccd8df"))
+        self.canvas.bind("<Leave>", lambda _: self.canvas.itemconfigure(self.ring, fill="#fff", outline="#e2e8ed"))
         self.root.bind("<Return>", lambda _: self._toggle())
         self.root.bind("<space>", lambda _: self._toggle())
-        self.root.geometry(f"{self.palette_size}x{self.palette_size}+80+80")
+        self.root.geometry(f"{self.palette_size}x{self.palette_size}")
         self.root.update_idletasks()
         self.desktop.configure_palette(self.root)
-        self._place(80, 80)
+        area = self.desktop.work_area(0, 0)
+        self._place(area[2] - self.palette_size - px(20), area[3] - self.palette_size - px(20))
         self.desktop.show_palette(self.root, True)
         self.root.after(75, self._tick)
 
@@ -441,8 +446,7 @@ class SwitchPalette:
         web = self.last_target == "ppt"
         self.canvas.itemconfigure("ppt", state="hidden" if web else "normal")
         self.canvas.itemconfigure("webgis", state="normal" if web else "hidden")
-        self.canvas.itemconfigure(self.ring, outline="#168c9f" if web else "#d35230")
-        self.canvas.itemconfigure(self.badge, text="WebGIS" if web else "PPT", fill="#17586d" if web else "#a53520")
+        self.canvas.itemconfigure(self.badge, state="normal" if self.operation else "hidden")
 
     def _notice(self, text):
         from tkinter import messagebox
@@ -532,7 +536,7 @@ class SwitchPalette:
             elif not self.chooser and allow_launch:
                 # Existing windows always win, including when COM/ROT is unavailable.
                 self.operation = self.actions.start("launch")
-                self.canvas.itemconfigure(self.badge, text="启动中")
+                self.canvas.itemconfigure(self.badge, state="normal")
             elif not self.chooser:
                 self._notice("PowerPoint 已启动但没有可预览的主窗口，请检查 Office 提示框。")
         except (ValueError, OSError, RuntimeError) as exc:
@@ -610,7 +614,7 @@ class SwitchPalette:
         dialog.bind("<Escape>", lambda _: self.close_preview())
         dialog.update_idletasks()
         width, height = dialog.winfo_width(), dialog.winfo_height()
-        x, y = self.root.winfo_x() + self.palette_size + px(12), self.root.winfo_y()
+        x, y = self.root.winfo_x() + self.palette_size - width, self.root.winfo_y() - height - px(12)
         x, y = clamp_position(x, y, width, height, self.desktop.work_area(x, y))
         self.desktop.move_palette(dialog, x, y, width, height)
         try:
