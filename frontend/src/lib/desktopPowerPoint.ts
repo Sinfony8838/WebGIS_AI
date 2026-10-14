@@ -1,7 +1,7 @@
 const DESKTOP_URL = "http://127.0.0.1:18998";
 
 export interface DesktopPptResult {
-  status: "opened" | "focused" | "cancelled";
+  status: "opened" | "focused" | "cancelled" | "shown";
   file_name?: string;
   foreground?: boolean;
 }
@@ -21,7 +21,7 @@ async function desktopRequest(path: string, init?: RequestInit): Promise<Record<
 }
 
 /** No project credentials, uploads or absolute local paths cross this boundary. */
-export async function openDesktopPowerPoint(action: "open" | "focus"): Promise<DesktopPptResult> {
+export async function openDesktopPowerPoint(action: "open" | "focus" | "switcher"): Promise<DesktopPptResult> {
   let connection: Record<string, unknown>;
   try {
     connection = await desktopRequest("/connection");
@@ -30,6 +30,9 @@ export async function openDesktopPowerPoint(action: "open" | "focus"): Promise<D
   }
   if (connection.service !== "webgis-desktop-powerpoint" || connection.protocol !== 1 || typeof connection.token !== "string") {
     throw new Error("本机连接器版本不匹配，请使用本项目提供的 PowerPoint 连接器。");
+  }
+  if (action === "switcher" && (!Array.isArray(connection.capabilities) || !connection.capabilities.includes("switcher"))) {
+    throw new Error("请重启新版本机连接器后使用切换小窗；已有课件不会被关闭。");
   }
   const accepted = await desktopRequest("/actions", {
     method: "POST", headers: { "Content-Type": "application/json", "X-WebGIS-Desktop": connection.token },
@@ -43,7 +46,7 @@ export async function openDesktopPowerPoint(action: "open" | "focus"): Promise<D
   for (let attempt = 0; attempt < 660; attempt += 1) {
     const result = await desktopRequest(`/actions/${id}`, { headers: { "X-WebGIS-Desktop": connection.token } });
     if (result.status === "failed") throw new Error(String(result.message || "PowerPoint 未能打开课件。"));
-    if (["opened", "focused", "cancelled"].includes(String(result.status))) return result as unknown as DesktopPptResult;
+    if (["opened", "focused", "cancelled", "shown"].includes(String(result.status))) return result as unknown as DesktopPptResult;
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
   throw new Error("本机操作仍在等待。请检查文件选择框或 PowerPoint 窗口，完成或取消后再操作；不会重复打开课件。");

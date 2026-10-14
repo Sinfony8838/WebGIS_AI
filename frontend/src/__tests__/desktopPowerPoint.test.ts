@@ -44,3 +44,19 @@ it("observes a late native completion without reopening the deck", async () => {
   expect(fetch.mock.calls.filter(([, init]) => init.method === "POST")).toHaveLength(1);
   expect(fetch.mock.calls.filter(([url]) => url.includes("/actions/")).every(([url]) => url.endsWith(id))).toBe(true);
 });
+
+it("asks for the native palette without a path or window handle", async () => {
+  const fetch = vi.fn().mockResolvedValueOnce(reply({ service: "webgis-desktop-powerpoint", protocol: 1, token: "nonce", capabilities: ["switcher"] }))
+    .mockResolvedValueOnce(reply({ action_id: "c".repeat(32) }))
+    .mockResolvedValueOnce(reply({ status: "shown" }));
+  vi.stubGlobal("fetch", fetch);
+  expect(await openDesktopPowerPoint("switcher")).toEqual({ status: "shown" });
+  expect(fetch.mock.calls[1][1].body).toBe('{"action":"switcher"}');
+});
+
+it("does not submit a palette action to the old connector", async () => {
+  const fetch = vi.fn().mockResolvedValue(reply({ service: "webgis-desktop-powerpoint", protocol: 1, token: "nonce" }));
+  vi.stubGlobal("fetch", fetch);
+  await expect(openDesktopPowerPoint("switcher")).rejects.toThrow("重启新版本机连接器");
+  expect(fetch).toHaveBeenCalledTimes(1);
+});

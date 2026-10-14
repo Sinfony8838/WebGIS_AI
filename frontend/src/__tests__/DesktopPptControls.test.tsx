@@ -42,3 +42,13 @@ it("does not claim cancellation or blocked foreground activation succeeded", asy
   fireEvent.click(screen.getByRole("button", { name: "切回 PPT" }));
   await waitFor(() => expect(onNotice).toHaveBeenCalledWith(expect.stringContaining("Windows 未允许")));
 });
+
+it("shows the desktop palette without selecting or rendering a deck", async () => {
+  const onNotice = vi.fn();
+  vi.mocked(openDesktopPowerPoint).mockResolvedValue({ status: "shown" });
+  render(<DesktopPptControls onNotice={onNotice} />);
+  fireEvent.click(screen.getByRole("button", { name: "PPT / WebGIS 悬浮切换" }));
+  await waitFor(() => expect(onNotice).toHaveBeenCalledWith(expect.stringContaining("圆形悬浮球已显示")));
+  expect(openDesktopPowerPoint).toHaveBeenCalledTimes(1);
+  expect(openDesktopPowerPoint).toHaveBeenCalledWith("switcher");
+});
