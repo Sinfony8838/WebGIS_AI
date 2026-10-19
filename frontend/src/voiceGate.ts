@@ -134,6 +134,15 @@ export function screenTranscript(
   return { accepted: true, command: commandText.trim(), matchedAlias: wake?.alias ?? "" };
 }
 
+/** During playback, only an exact wake-word stop phrase may interrupt.
+ * Negated, reported and compound utterances do not match this local control. */
+export function isSpeechInterrupt(transcript: string): boolean {
+  const wake = startsWithWakeWord((transcript || "").trim());
+  if (!wake) return false;
+  const command = wake.rest.replace(/[\s，。、,.!！？?：:；;~～]/g, "");
+  return /^(?:请)?(?:停止播报|暂停播报|停止说话|停一下|停下|别说了)(?:吧|谢谢)?$/.test(command);
+}
+
 /** Human label for the "ignored ambient speech" badge. */
 export function describeScreenRejection(reason: ScreenRejectionReason): string {
   switch (reason) {

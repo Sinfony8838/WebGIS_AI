@@ -1,8 +1,9 @@
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { CopilotWidget, exceedsDragThreshold, normalizePanelRect } from "../components/CopilotWidget";
 import * as voiceStream from "../voiceStream";
+import { cancelSpeech, speak } from "../speechSynthesis";
 
 class MockSpeechRecognition {
   static lastInstance: MockSpeechRecognition | null = null;
@@ -79,7 +80,8 @@ function renderWidget(overrides: Partial<ComponentProps<typeof CopilotWidget>> =
   const view = render(<CopilotWidget {...props} />);
 
   // The widget defaults to minimized; expand so tests can exercise the panel.
-  fireEvent.click(screen.getByLabelText("展开智能助教"));
+  const expand = screen.queryByLabelText("展开智能助教");
+  if (expand) fireEvent.click(expand);
 
   return {
     onSubmit,
@@ -105,6 +107,46 @@ describe("CopilotWidget", () => {
     setSpeechRecognitionSupport(false);
     vi.clearAllMocks();
     vi.restoreAllMocks();
+  });
+
+  it("停止当前播报后保持回复播报开关，且不提交额外指令", () => {
+    class Utterance {
+      lang = ""; rate = 1; pitch = 1;
+      constructor(public text: string) {}
+    }
+    const cancel = vi.fn();
+    vi.stubGlobal("SpeechSynthesisUtterance", Utterance);
+    vi.stubGlobal("speechSynthesis", { cancel, speak: vi.fn(), getVoices: () => [], pending: true, speaking: false });
+    try {
+      const { onVoiceSubmit } = renderWidget({ assistantTab: "interaction", ttsEnabled: true });
+      act(() => speak("已经打开人口密度图层。"));
+      expect(screen.getByRole("button", { name: "停止播报" })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "停止播报" }));
+      expect(cancel).toHaveBeenCalledTimes(2);
+      expect(screen.queryByRole("button", { name: "停止播报" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "关闭回复播报" })).toHaveAttribute("aria-pressed", "true");
+      expect(onVoiceSubmit).not.toHaveBeenCalled();
+    } finally {
+      act(() => cancelSpeech());
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("唤醒打断默认关闭，并保存教师的显式选择", async () => {
+    vi.spyOn(voiceStream, "audioWorkletSupported").mockReturnValue(true);
+    vi.spyOn(voiceStream, "createVoiceStream").mockImplementation(async (_apiBase, events) => {
+      events.onOpen?.();
+      return { abort: vi.fn(), stop: vi.fn(async () => null), state: () => "open" as const };
+    });
+    renderWidget({ assistantTab: "interaction", voiceStreamAvailable: true });
+    const toggle = screen.getByTestId("copilot-speech-interrupt-toggle");
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    expect(toggle).toBeChecked();
+    expect(localStorage.getItem("webgis.voice.speechInterrupt")).toBe("1");
+    cleanup();
+    renderWidget({ assistantTab: "interaction", voiceStreamAvailable: true });
+    expect(screen.getByTestId("copilot-speech-interrupt-toggle")).toBeChecked();
   });
 
   it("pausing a mid-utterance session aborts without flushing a partial command", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeScreenRejection, screenTranscript } from "../voiceGate";
+import { describeScreenRejection, isSpeechInterrupt, screenTranscript } from "../voiceGate";
 
 describe("screenTranscript（direct 模式，智能交互默认）", () => {
   it("无需唤醒词，明确指令直接通过", () => {
@@ -125,5 +125,14 @@ describe("describeScreenRejection", () => {
     expect(describeScreenRejection("too_short")).toContain("噪音");
     expect(describeScreenRejection("negated")).toContain("否定");
     expect(describeScreenRejection("not_directive")).toContain("不确定");
+  });
+});
+
+describe("播报期间的唤醒停止短句", () => {
+  it.each(["小智，停止播报", "小志请停一下。", "小智，别说了", "小知暂停播报吧"])("接受明确停止：%s", (text) => {
+    expect(isSpeechInterrupt(text)).toBe(true);
+  });
+  it.each(["停止播报", "请小智停止播报", "小智，不要停止播报", "小智刚才说停止播报", "小智停止播报然后打开图层", "小智，切换到三维地球", "小智，解释停止播报的意思", ""])("拒绝环境语音与复合操控：%s", (text) => {
+    expect(isSpeechInterrupt(text)).toBe(false);
   });
 });

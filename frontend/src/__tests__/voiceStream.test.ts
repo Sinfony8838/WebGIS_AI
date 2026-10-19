@@ -68,6 +68,36 @@ async function openStream() {
 }
 
 describe("voice stream lifecycle", () => {
+  it("cancels before requesting the microphone when the signal is already aborted", async () => {
+    const cancellation = new AbortController();
+    cancellation.abort();
+    await expect(createVoiceStream("http://localhost:8000", {}, cancellation.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("cancels a pending permission prompt and stops a late microphone grant", async () => {
+    const permission = deferred<MediaStream>();
+    getUserMedia.mockReturnValue(permission.promise);
+    const cancellation = new AbortController();
+    const onOpen = vi.fn();
+    const onFinal = vi.fn();
+    const pending = createVoiceStream("http://localhost:8000", { onOpen, onFinal }, cancellation.signal);
+    const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    FakeSocket.last.onopen?.();
+    cancellation.abort();
+    await rejected;
+    expect(FakeSocket.last.close).toHaveBeenCalledOnce();
+    permission.resolve(media);
+    await vi.advanceTimersByTimeAsync(0);
+    FakeSocket.last.onmessage?.({ data: JSON.stringify({ type: "final", text: "切换到三维地球" }) });
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(addModule).not.toHaveBeenCalled();
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(onFinal).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("stops a microphone granted after the connection has already closed", async () => {
     const permission = deferred<MediaStream>();
     getUserMedia.mockReturnValue(permission.promise);

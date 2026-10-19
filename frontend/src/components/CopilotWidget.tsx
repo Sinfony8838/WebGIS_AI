@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, DragEvent as ReactDragEvent, PointerEvent as ReactPointerEvent } from "react";
 import { getSpeechRecognitionConstructor, getSpeechRecognitionErrorMessage, type BrowserSpeechRecognition } from "../speechRecognition";
 import { audioWorkletSupported } from "../voiceStream";
-import { cancelSpeech } from "../speechSynthesis";
+import { cancelSpeech, onSpeechLifecycle } from "../speechSynthesis";
 import { UNAVAILABLE_MESSAGES, VoiceSessionController, type VoiceSessionSettings, type VoiceSessionSnapshot } from "../voiceSession";
 import { getApiBase } from "../api";
 import type { AssistantTab, ChatMessage, ImageAttachment, JobRecord } from "../types";
@@ -361,6 +361,7 @@ function initialVoiceText(supported: boolean): string {
 // ===== 智能交互默认聆听：本地持久化设置 =====
 const AUTO_LISTEN_STORAGE_KEY = "webgis.voice.autoListen";
 const WAKE_ONLY_STORAGE_KEY = "webgis.voice.wakeOnly";
+const SPEECH_INTERRUPT_STORAGE_KEY = "webgis.voice.speechInterrupt";
 
 function readVoiceSetting(key: string, fallback: boolean): boolean {
   if (typeof window === "undefined") {
@@ -478,9 +479,12 @@ export function CopilotWidget({
   });
   const [voiceSettings, setVoiceSettings] = useState<VoiceSessionSettings>(() => ({
     autoListenOnEnter: readVoiceSetting(AUTO_LISTEN_STORAGE_KEY, true),
-    requireWakeWord: readVoiceSetting(WAKE_ONLY_STORAGE_KEY, false)
+    requireWakeWord: readVoiceSetting(WAKE_ONLY_STORAGE_KEY, false),
+    allowSpeechInterrupt: readVoiceSetting(SPEECH_INTERRUPT_STORAGE_KEY, false)
   }));
   const [partialPreview, setPartialPreview] = useState("");
+  const [replySpeaking, setReplySpeaking] = useState(false);
+  useEffect(() => onSpeechLifecycle(({ speaking }) => setReplySpeaking(speaking)), []);
   const voiceSource: "local" | "browser" | "none" = useMemo(() => {
     if (voiceStreamAvailable && audioWorkletSupported()) {
       return "local";
@@ -532,7 +536,7 @@ export function CopilotWidget({
       case "executing":
         return "正在执行指令…";
       case "speaking":
-        return "正在播报回复…";
+        return voiceSettings.allowSpeechInterrupt ? "正在播报，可说“小智，停止播报”打断。" : "正在播报回复…";
       case "paused":
         return voiceSession.detail || "已暂停聆听，点击麦克风恢复。";
       case "unavailable":
@@ -1067,6 +1071,16 @@ export function CopilotWidget({
           </div>
         </div>
         <div className="copilot-widget-actions" onPointerDown={(event) => event.stopPropagation()}>
+          {interactionActive && replySpeaking ? (
+            <button
+              type="button"
+              className="mini-control copilot-tts-toggle"
+              onClick={() => cancelSpeech()}
+              data-testid="copilot-stop-speech"
+            >
+              停止播报
+            </button>
+          ) : null}
           {interactionActive ? (
             <button
               type="button"
@@ -1450,7 +1464,7 @@ export function CopilotWidget({
                       disabled={voiceSource === "none"}
                       data-testid="copilot-mic-button"
                     >
-                      <MicrophoneIcon active={voiceSession.phase === "listening" || voiceStatus === "listening"} />
+                      <MicrophoneIcon active={voiceSession.phase === "listening" || (voiceSession.phase === "speaking" && voiceSettings.allowSpeechInterrupt) || voiceStatus === "listening"} />
                       <span className="copilot-voice-label">
                         {voiceSource === "local"
                           ? voiceSession.phase === "paused"
@@ -1475,6 +1489,19 @@ export function CopilotWidget({
                             data-testid="copilot-auto-listen-toggle"
                           />
                           进入时自动聆听
+                        </label>
+                        <label className="copilot-voice-setting" title="播报期间保留收音，仅响应“小智，停止播报”；停止后可继续发指令。">
+                          <input
+                            type="checkbox"
+                            checked={voiceSettings.allowSpeechInterrupt}
+                            onChange={(event) => {
+                              const next = { ...voiceSettings, allowSpeechInterrupt: event.target.checked };
+                              writeVoiceSetting(SPEECH_INTERRUPT_STORAGE_KEY, next.allowSpeechInterrupt);
+                              setVoiceSettings(next);
+                            }}
+                            data-testid="copilot-speech-interrupt-toggle"
+                          />
+                          允许唤醒打断播报
                         </label>
                         <label className="copilot-voice-setting" title="开启后需说「小智，+指令」才会执行（嘈杂课堂推荐）">
                           <input
