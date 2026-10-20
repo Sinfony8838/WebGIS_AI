@@ -4114,14 +4114,6 @@ export default function App({
             数据库
           </button> : null}
           <DesktopPptControls onNotice={(message) => pushToast("info", "本机 PowerPoint", message)} />
-          <button
-            type="button"
-            className="toolbar-button"
-            disabled={pptLoading}
-            onClick={() => pptFileInputRef.current?.click()}
-          >
-            {pptLoading ? "渲染中…" : "页面预览 PPT"}
-          </button>
           <input ref={pptFileInputRef} type="file" accept=".pptx" hidden aria-label="选择页面预览 PPT 文件"
             onChange={(event) => {
               const file = event.currentTarget.files?.[0];

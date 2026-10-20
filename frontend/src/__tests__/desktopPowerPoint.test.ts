@@ -60,3 +60,29 @@ it("does not submit a palette action to the old connector", async () => {
   await expect(openDesktopPowerPoint("switcher")).rejects.toThrow("重启新版本机连接器");
   expect(fetch).toHaveBeenCalledTimes(1);
 });
+
+
+it("requests direct preview only from a capable connector", async () => {
+  const fetch = vi.fn().mockResolvedValueOnce(reply({ service: "webgis-desktop-powerpoint", protocol: 1, token: "nonce", capabilities: ["switcher", "preview"] }))
+    .mockResolvedValueOnce(reply({ action_id: "d".repeat(32) }))
+    .mockResolvedValueOnce(reply({ status: "shown", foreground: true }));
+  vi.stubGlobal("fetch", fetch);
+  expect(await openDesktopPowerPoint("preview")).toEqual({ status: "shown", foreground: true });
+  expect(fetch.mock.calls[1][1].body).toBe('{"action":"preview"}');
+  expect(fetch.mock.calls.filter(([, init]) => init.method === "POST")).toHaveLength(1);
+});
+
+it("asks to update a show-only connector before posting preview", async () => {
+  const fetch = vi.fn().mockResolvedValue(reply({ service: "webgis-desktop-powerpoint", protocol: 1, token: "nonce", capabilities: ["switcher"] }));
+  vi.stubGlobal("fetch", fetch);
+  await expect(openDesktopPowerPoint("preview")).rejects.toThrow("更新并重启");
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+it("does not repeat preview after a lost response", async () => {
+  const fetch = vi.fn().mockResolvedValueOnce(reply({ service: "webgis-desktop-powerpoint", protocol: 1, token: "nonce", capabilities: ["preview"] }))
+    .mockRejectedValueOnce(new Error("response lost"));
+  vi.stubGlobal("fetch", fetch);
+  await expect(openDesktopPowerPoint("preview")).rejects.toThrow("操作可能已经开始");
+  expect(fetch).toHaveBeenCalledTimes(2);
+});

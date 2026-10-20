@@ -53,9 +53,9 @@ class DesktopActions:
         self.palette = None
 
     def start(self, action: str) -> str:
-        if action not in {"open", "focus", "launch", "switcher"}:
+        if action not in {"open", "focus", "launch", "switcher", "preview", "open-preview"}:
             raise ValueError("只支持打开或切回 PowerPoint。")
-        if action == "switcher" and self.palette is None:
+        if action in {"switcher", "preview", "open-preview"} and self.palette is None:
             raise ValueError("本机连接器未启用切换小窗，请重启新版连接器。")
         with self.lock:
             if self.active:
@@ -71,12 +71,17 @@ class DesktopActions:
 
     def _run(self, key: str, action: str):
         try:
-            result = (self.palette.request_show() if action == "switcher"
-                      else self.runner(action, self.selected_path))
+            if action in {"preview", "open-preview"}:
+                # Keep the native picker inside this job's lock: no nested start().
+                result = self.palette.request_preview(lambda: self.runner("open", ""), force_open=action == "open-preview")
+            elif action == "switcher":
+                result = self.palette.request_show()
+            else:
+                result = self.runner(action, self.selected_path)
             if result.get("status") not in {"opened", "focused", "cancelled", "failed", "shown"}:
                 raise RuntimeError("本机 PowerPoint 返回了未知状态。")
             path = result.pop("selected_path", "")
-            if path and result["status"] in {"opened", "focused"}:
+            if path and result["status"] in {"opened", "focused", "shown"}:
                 self.selected_path = path
             # No raw worker errors or local paths are returned to the browser.
             public = {name: result[name] for name in ("status", "file_name", "foreground", "message") if name in result}
@@ -163,7 +168,7 @@ class DesktopHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/connection":
             self._reply(200, {"service": SERVICE, "protocol": 1, "token": self.server.actions.token,
-                              "capabilities": ["switcher"] if self.server.actions.palette else []})
+                              "capabilities": ["switcher", "preview"] if self.server.actions.palette else []})
         elif self.path.startswith("/actions/"):
             if not self._guard(token=True):
                 return
@@ -182,7 +187,7 @@ class DesktopHandler(BaseHTTPRequestHandler):
             if not 0 < length <= 256 or self.headers.get("Transfer-Encoding") or self.headers.get_content_type() != "application/json":
                 raise ValueError()
             body = json.loads(self.rfile.read(length))
-            if not isinstance(body, dict) or set(body) != {"action"} or body["action"] not in {"open", "focus", "switcher"}:
+            if not isinstance(body, dict) or set(body) != {"action"} or body["action"] not in {"open", "focus", "switcher", "preview"}:
                 raise ValueError()
         except (ValueError, TypeError):
             self._reply(400, {"message": "只接受打开或切回操作，不能提交路径或文件。"}); return
