@@ -305,7 +305,11 @@ def test_failed_backup_blocks_all_teaching_data_changes(isolated_migration, monk
     monkeypatch.setattr(migration, 'backup_original', fail_backup)
     with pytest.raises(OSError, match='backup failure'):
         run_isolated(isolated_migration, True)
-    assert tree_bytes(root) == before
+    after = tree_bytes(root)
+    # POSIX retains its lease inode by contract; Windows uses a named mutex.
+    # Only that empty coordination file is allowed, never teaching/auth data.
+    assert after.pop('state/.runtime-writer.lock', None) in (None, b'')
+    assert after == before
 
 
 def test_existing_writer_prevents_backup_and_apply(isolated_migration):

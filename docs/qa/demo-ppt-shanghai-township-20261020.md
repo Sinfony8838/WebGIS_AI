@@ -63,3 +63,5 @@ Validation after these corrections:
 - The supplied real PPTX currently has matching filename and presentation order; all 31 existing lesson text fields agree with relationship-ordered extraction. No real lesson rewrite is required.
 
 These corrections are source changes plus isolated rehearsal evidence. They do not establish distributed transactionality across JSON, SQLite and file copies: a later disk/permission failure can still leave partial new assets/grants, and must be recovered deliberately using the verified backup. Do not retry into an existing migration output directory. No real-data migration was run during this review repair, and unrelated workspaces remain untouched.
+
+The first Linux CI of the review correction reported 1431 passed / 1 failed / 9 skipped: the failure was the backup-failure test counting the intentionally retained empty POSIX lease file as teaching-data mutation. The assertion now permits only that exact empty coordination file while comparing every teaching/auth file byte-for-byte. Windows uses a named mutex and creates no lock file.
