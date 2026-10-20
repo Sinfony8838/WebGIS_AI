@@ -129,7 +129,7 @@ def test_switcher_stays_local_and_never_calls_office_or_returns_handles(connecto
     palette.request_show.return_value = {"status": "shown"}
     server.actions.palette = palette
     _, _, connection = request(server, "GET", "/connection")
-    assert connection["capabilities"] == ["switcher"]
+    assert connection["capabilities"] == ["switcher", "preview"]
     status, _, accepted = request(server, "POST", "/actions", '{"action":"switcher"}',
                                  **{"X-WebGIS-Desktop": connection["token"]})
     assert status == 202
@@ -149,3 +149,27 @@ def test_success_shows_palette_but_cancel_does_not():
     actions.runner = lambda *_: {"status": "cancelled"}
     assert wait_result(actions, actions.start("open"))["status"] == "cancelled"
     actions.palette.notify_show.assert_called_once()
+
+
+def test_direct_preview_is_one_job_and_only_returns_public_fields(connector):
+    from unittest.mock import Mock
+    server, calls = connector
+    palette = Mock()
+    def preview(opener, **kwargs):
+        assert server.actions.active
+        with pytest.raises(RuntimeError):
+            server.actions.start("open")
+        result = opener()
+        return {**result, "status": "shown", "handle": 123}
+    palette.request_preview.side_effect = preview
+    server.actions.palette = palette
+    status, _, accepted = request(server, "POST", "/actions", '{"action":"preview"}',
+                                 **{"X-WebGIS-Desktop": server.actions.token})
+    assert status == 202
+    result = wait_result(server.actions, accepted["action_id"])
+    assert result == {"status": "shown", "file_name": "验收课件.pptx", "foreground": True}
+    assert calls == [("open", "")]
+    assert not server.actions.active
+    assert server.actions.selected_path == "C:/private/验收课件.pptx"
+    assert request(server, "POST", "/actions", '{"action":"open-preview"}',
+                   **{"X-WebGIS-Desktop": server.actions.token})[0] == 400
