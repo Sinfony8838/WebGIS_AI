@@ -694,6 +694,10 @@ class AssistantService:
         # A keyword match cannot resolve negation, conditions or multiple
         # instructions. Let the existing planner see the complete request.
         complex_request = bool(re.search(r"然后|接着|同时|并且|并|再|如果|假如|要是|否则|而是|只|(?:和|及|、).*(?:底图|图层|地图|面板)", normalized))
+        # Punctuation may join a known control with an unknown goal or
+        # constraint. Resolve every clause before admitting the whole request.
+        clauses = [part.strip() for part in re.split(r"[，,；;。！？!?\n]+", message) if part.strip()]
+        complex_request = complex_request or len(clauses) > 1
         # Quoted speech / reported commands / hedging ("刚才说切换到三维",
         # "好像可以切换") must never hit the keyword fast path — the mention
         # of a command is not a command. Route them to the LLM planner which

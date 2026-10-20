@@ -23,9 +23,11 @@ class SequenceModel:
         self.responses = list(responses)
         self.calls = 0
         self.contexts = []
+        self.requests = []
 
     def chat_completion(self, messages, **kwargs):
         self.calls += 1
+        self.requests.append(copy.deepcopy(messages))
         self.contexts.append(json.loads(messages[-2]["content"]) if len(messages) >= 2 else {})
         response = self.responses.pop(0)
         if callable(response):
@@ -144,6 +146,17 @@ class InteractionAgentTests(unittest.TestCase):
         self.assertEqual(job["result"]["actions_executed"], [])
         self.assertIn("draft_teaching", [tool["name"] for tool in model.contexts[0]["webgis_tools"]])
         self.assertNotIn("generate_image", [tool["name"] for tool in model.contexts[0]["webgis_tools"]])
+
+    def test_punctuation_separated_goals_are_not_partially_executed_by_fast_rules(self):
+        runtime, _, pid = self.setup_project()
+        for message in ("切换三维，统计设施覆盖情况", "隐藏设施样本图层；比较各区域覆盖差异", "切换三维，保留原图，分析设施覆盖不足的区域"):
+            with self.subTest(message=message):
+                model = SequenceModel({"assistant_message": "请先明确需要统计的区域和指标。", "actions": []})
+                runtime.llm_planner.minimax_client = model
+                job = self.wait(runtime, self.submit(runtime, pid, message)["job_id"])
+                self.assertEqual(model.calls, 1)
+                self.assertEqual(job["result"]["actions_executed"], [])
+                self.assertIn(message, model.requests[0][-1]["content"])
 
     def test_generated_workflow_observed_then_saved_as_new_teaching_draft(self):
         runtime, store, pid = self.setup_project()
