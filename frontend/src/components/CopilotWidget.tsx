@@ -151,6 +151,14 @@ function roleLabel(role: string): string {
   return "系统";
 }
 
+function VoiceControlIcon({ kind, enabled = true }: { kind: "speaker" | "stop" | "settings"; enabled?: boolean }) {
+  return <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    {kind === "stop" ? <rect x="5" y="5" width="10" height="10" rx="2" fill="currentColor" stroke="none" /> : null}
+    {kind === "speaker" ? <><path d="M9 4 5 7H2v6h3l4 3V4Z" />{enabled ? <><path d="M12 7a5 5 0 0 1 0 6" /><path d="M15 4a9 9 0 0 1 0 12" /></> : <path d="m13 7 5 6m0-6-5 6" />}</> : null}
+    {kind === "settings" ? <><path d="M3 5h14M3 10h14M3 15h14" /><path d="M7 3v4m6 1v4m-6 1v4" strokeWidth="3" /></> : null}
+  </svg>;
+}
+
 function MicrophoneIcon({ active }: { active: boolean }) {
   if (active) {
     // Active state: filled square indicates "stop"
@@ -484,6 +492,7 @@ export function CopilotWidget({
   }));
   const [partialPreview, setPartialPreview] = useState("");
   const [replySpeaking, setReplySpeaking] = useState(false);
+  const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
   useEffect(() => onSpeechLifecycle(({ speaking }) => setReplySpeaking(speaking)), []);
   const voiceSource: "local" | "browser" | "none" = useMemo(() => {
     if (voiceStreamAvailable && audioWorkletSupported()) {
@@ -526,31 +535,38 @@ export function CopilotWidget({
   const sessionStatusText = (() => {
     switch (voiceSession.phase) {
       case "awaiting_permission":
-        return "等待麦克风授权：请在浏览器弹窗中选择允许。";
+        return "等待麦克风授权";
       case "connecting":
-        return voiceSession.detail || "正在连接本地语音识别…";
+        return voiceSession.detail || "正在连接…";
       case "listening":
-        return voiceSettings.requireWakeWord ? "正在聆听：请说“小智，+指令”。" : "正在聆听：直接说出指令即可。";
+        return voiceSettings.requireWakeWord ? "聆听中 · 请先说“小智”" : "聆听中";
       case "captured":
-        return `已识别：${voiceSession.detail}`;
+        return "已识别";
       case "executing":
         return "正在执行指令…";
       case "speaking":
-        return voiceSettings.allowSpeechInterrupt ? "正在播报，可说“小智，停止播报”打断。" : "正在播报回复…";
+        return "正在播报…";
       case "paused":
-        return voiceSession.detail || "已暂停聆听，点击麦克风恢复。";
+        return "已暂停";
       case "unavailable":
         return voiceSession.detail || UNAVAILABLE_MESSAGES.asr_unavailable;
       default:
-        return "进入即自动聆听：直接说出指令，例如“切换到三维地球”。";
+        return "准备聆听";
     }
   })();
+  const browserHasFeedback = voiceSource === "browser" && voiceStatusText !== VOICE_IDLE_TEXT && voiceStatusText !== VOICE_UNSUPPORTED_TEXT;
+  const usesLocalVoiceStatus = voiceSource === "local" || (voiceSource === "browser" && !browserHasFeedback && voiceSession.phase === "unavailable");
+  const interactionVoiceText = usesLocalVoiceStatus
+    ? partialPreview || sessionStatusText
+    : voiceStatusText === VOICE_IDLE_TEXT ? "点击麦克风说话"
+      : voiceStatusText === "语音识别完成，已提交指令。" ? "已提交指令" : voiceStatusText;
+  const interactionVoiceUnavailable = usesLocalVoiceStatus ? voiceSession.phase === "unavailable" : voiceStatus === "unsupported";
   const plannedActions = currentJob?.result?.actions_planned || [];
   const confirmationId = String(currentJob?.result?.confirmation_id || "");
   const requiresConfirmation = Boolean(currentJob?.result?.requires_confirmation && confirmationId);
   const compactLayout = panelRect.height < 560 || panelRect.width < 560;
   const inputPlaceholder = interactionActive
-    ? "智能交互：输入操控指令，例如“切换到三维地球”“把人口密度图层调到半透明”。"
+    ? "输入指令，或直接说话…"
     : "向专业教学智能体提问 - 例如：讲解当前视图的空间格局，或切换底图并说明原因。";
 
   useEffect(() => {
@@ -1054,37 +1070,34 @@ export function CopilotWidget({
             />
           </div>
           <div className="copilot-title-copy">
-            <h2>GeoBot 专业教学智能体</h2>
-            <div className="copilot-header-meta">
+            <h2>{interactionActive ? "GeoBot" : "GeoBot 专业教学智能体"}</h2>
+            {!interactionActive ? <div className="copilot-header-meta">
               <span className={`status-pill ${busy ? "busy" : "ready"}`}>{busy ? "执行中" : "在线"}</span>
               {phaseMeta && !interactionActive ? (
                 <span className={`copilot-phase-chip ${phaseMeta.cls}`} data-testid="copilot-phase-chip">
                   {phaseMeta.label}
                 </span>
               ) : null}
-              {interactionActive ? (
-                <span className="copilot-phase-chip phase-class" data-testid="copilot-mode-chip">
-                  语音操控
-                </span>
-              ) : null}
-            </div>
+            </div> : null}
           </div>
         </div>
         <div className="copilot-widget-actions" onPointerDown={(event) => event.stopPropagation()}>
           {interactionActive && replySpeaking ? (
             <button
               type="button"
-              className="mini-control copilot-tts-toggle"
+              className="mini-control copilot-icon-control"
+              aria-label="停止播报"
+              title="停止当前播报"
               onClick={() => cancelSpeech()}
               data-testid="copilot-stop-speech"
             >
-              停止播报
+              <VoiceControlIcon kind="stop" />
             </button>
           ) : null}
           {interactionActive ? (
             <button
               type="button"
-              className="mini-control copilot-tts-toggle"
+              className="mini-control copilot-icon-control"
               data-testid="copilot-tts-toggle"
               aria-pressed={ttsEnabled}
               aria-label={ttsEnabled ? "关闭回复播报" : "开启回复播报"}
@@ -1097,7 +1110,12 @@ export function CopilotWidget({
                 }
               }}
             >
-              {ttsEnabled ? "🔊 回复播报：开" : "🔇 回复播报：关"}
+              <VoiceControlIcon kind="speaker" enabled={ttsEnabled} />
+            </button>
+          ) : null}
+          {interactionActive && voiceSource === "local" ? (
+            <button type="button" className="mini-control copilot-icon-control" aria-label="语音设置" title="语音设置" aria-expanded={voiceSettingsOpen} aria-controls="copilot-voice-options" onClick={() => setVoiceSettingsOpen((open) => !open)}>
+              <VoiceControlIcon kind="settings" />
             </button>
           ) : null}
           <button
@@ -1170,7 +1188,11 @@ export function CopilotWidget({
 
           <div className="copilot-chat-log" data-testid="copilot-chat-log">
             {chatLog.map((message, index) => {
-              const body = message.text;
+              // Keep the legacy startup instructions out of the conversation
+              // surface; real replies and the stored conversation stay intact.
+              const startupIntro = interactionActive && index === 0 && message.role === "assistant"
+                && message.text.startsWith("智能交互模式已就绪：") && !message.actions_executed?.length;
+              const body = startupIntro ? "说出指令，我来操作地图。" : message.text;
               const badge = message.role === "assistant" ? intentBadge(message.intent) : null;
               const actions = message.actions_executed || [];
               const traceKey = `trace-${index}`;
@@ -1399,6 +1421,49 @@ export function CopilotWidget({
               </button>
             </div>
           ) : null}
+          {interactionActive && voiceSource === "local" && voiceSettingsOpen ? (
+            <div className="copilot-voice-settings copilot-voice-options" id="copilot-voice-options" role="group" aria-label="语音设置选项" data-testid="copilot-voice-settings">
+              <label className="copilot-voice-setting" title="进入智能交互时自动开始聆听">
+                <input
+                  type="checkbox"
+                  checked={voiceSettings.autoListenOnEnter}
+                  onChange={(event) => {
+                    const next = { ...voiceSettings, autoListenOnEnter: event.target.checked };
+                    writeVoiceSetting(AUTO_LISTEN_STORAGE_KEY, next.autoListenOnEnter);
+                    setVoiceSettings(next);
+                  }}
+                  data-testid="copilot-auto-listen-toggle"
+                />
+                自动聆听
+              </label>
+              <label className="copilot-voice-setting" title="播报期间保留收音，仅响应“小智，停止播报”；停止后可继续发指令。">
+                <input
+                  type="checkbox"
+                  checked={voiceSettings.allowSpeechInterrupt}
+                  onChange={(event) => {
+                    const next = { ...voiceSettings, allowSpeechInterrupt: event.target.checked };
+                    writeVoiceSetting(SPEECH_INTERRUPT_STORAGE_KEY, next.allowSpeechInterrupt);
+                    setVoiceSettings(next);
+                  }}
+                  data-testid="copilot-speech-interrupt-toggle"
+                />
+                语音打断
+              </label>
+              <label className="copilot-voice-setting" title="开启后需说「小智，+指令」才会执行（嘈杂课堂推荐）">
+                <input
+                  type="checkbox"
+                  checked={voiceSettings.requireWakeWord}
+                  onChange={(event) => {
+                    const next = { ...voiceSettings, requireWakeWord: event.target.checked };
+                    writeVoiceSetting(WAKE_ONLY_STORAGE_KEY, next.requireWakeWord);
+                    setVoiceSettings(next);
+                  }}
+                  data-testid="copilot-wake-only-toggle"
+                />
+                唤醒后执行
+              </label>
+            </div>
+          ) : null}
           <div className="copilot-composer">
             <textarea
               data-testid="copilot-input"
@@ -1475,97 +1540,32 @@ export function CopilotWidget({
                           : "说一条指令"}
                       </span>
                     </button>
-                    {voiceSource === "local" ? (
-                      <div className="copilot-voice-settings" data-testid="copilot-voice-settings">
-                        <label className="copilot-voice-setting">
-                          <input
-                            type="checkbox"
-                            checked={voiceSettings.autoListenOnEnter}
-                            onChange={(event) => {
-                              const next = { ...voiceSettings, autoListenOnEnter: event.target.checked };
-                              writeVoiceSetting(AUTO_LISTEN_STORAGE_KEY, next.autoListenOnEnter);
-                              setVoiceSettings(next);
-                            }}
-                            data-testid="copilot-auto-listen-toggle"
-                          />
-                          进入时自动聆听
-                        </label>
-                        <label className="copilot-voice-setting" title="播报期间保留收音，仅响应“小智，停止播报”；停止后可继续发指令。">
-                          <input
-                            type="checkbox"
-                            checked={voiceSettings.allowSpeechInterrupt}
-                            onChange={(event) => {
-                              const next = { ...voiceSettings, allowSpeechInterrupt: event.target.checked };
-                              writeVoiceSetting(SPEECH_INTERRUPT_STORAGE_KEY, next.allowSpeechInterrupt);
-                              setVoiceSettings(next);
-                            }}
-                            data-testid="copilot-speech-interrupt-toggle"
-                          />
-                          允许唤醒打断播报
-                        </label>
-                        <label className="copilot-voice-setting" title="开启后需说「小智，+指令」才会执行（嘈杂课堂推荐）">
-                          <input
-                            type="checkbox"
-                            checked={voiceSettings.requireWakeWord}
-                            onChange={(event) => {
-                              const next = { ...voiceSettings, requireWakeWord: event.target.checked };
-                              writeVoiceSetting(WAKE_ONLY_STORAGE_KEY, next.requireWakeWord);
-                              setVoiceSettings(next);
-                            }}
-                            data-testid="copilot-wake-only-toggle"
-                          />
-                          仅唤醒后执行
-                        </label>
-                      </div>
-                    ) : null}
+
                   </>
                 ) : null}
               </div>
               <div className="copilot-composer-send">
                 <span className="copilot-composer-hint" aria-hidden="true">
-                  ⌘ / Ctrl + Enter 发送
+                  {!interactionActive ? "⌘ / Ctrl + Enter 发送" : ""}
                 </span>
                 <button type="submit" className="copilot-send-button" disabled={busy || (!inputValue.trim() && (!pendingImage || interactionActive))}>
-                  发送给助教
+                  {interactionActive ? "发送" : "发送给助教"}
                 </button>
               </div>
             </div>
           </div>
-          {interactionActive && partialPreview ? (
-            <p className="copilot-voice-partial" data-testid="copilot-voice-partial" role="status">
-              实时识别：{partialPreview}
-            </p>
-          ) : null}
-          {interactionActive && (voiceSource === "local" || (voiceSession.phase === "unavailable" && voiceStatus !== "listening")) ? (
+          {interactionActive ? (
             <p
-              className={`copilot-voice-status ${voiceSession.phase === "listening" ? "listening" : voiceSession.phase === "unavailable" ? "unsupported" : voiceStatus}`}
+              className={'copilot-voice-status copilot-interaction-status ' + (interactionVoiceUnavailable ? "unsupported" : voiceSession.phase === "listening" || voiceStatus === "listening" ? "listening" : "")}
               role="status"
               data-testid="copilot-voice-status"
+              title={usesLocalVoiceStatus && voiceSession.ignoredCount > 0 ? "已忽略 " + voiceSession.ignoredCount + " 段环境声音" : undefined}
             >
-              {sessionStatusText}
-              {voiceSession.ignoredCount > 0 ? (
-                <span className="copilot-ignored-count">（已忽略 {voiceSession.ignoredCount} 段环境声音）</span>
+              <span className="copilot-status-dot" aria-hidden="true" />
+              <span className="copilot-interaction-status-text" data-testid={partialPreview ? "copilot-voice-partial" : undefined}>{interactionVoiceText}</span>
+              {usesLocalVoiceStatus && voiceSession.phase === "unavailable" ? (
+                <button type="button" className="copilot-voice-retry" data-testid="copilot-voice-retry" onClick={() => voiceSessionRef.current?.retry()}>重试</button>
               ) : null}
-              {voiceSession.phase === "unavailable" ? (
-                <button
-                  type="button"
-                  className="copilot-voice-retry"
-                  data-testid="copilot-voice-retry"
-                  onClick={() => voiceSessionRef.current?.retry()}
-                >
-                  重试
-                </button>
-              ) : null}
-            </p>
-          ) : null}
-          {interactionActive && voiceStatus === "unsupported" ? (
-            <p className="copilot-voice-status unsupported" role="status" data-testid="copilot-voice-unsupported">
-              {voiceStatusText}
-            </p>
-          ) : null}
-          {interactionActive && voiceStatusText && voiceStatus !== "unsupported" ? (
-            <p className={`copilot-voice-status ${voiceStatus}`} role="status" data-testid="copilot-voice-status">
-              {voiceStatusText}
             </p>
           ) : null}
           {!interactionActive && voiceStatusText ? (
@@ -1573,7 +1573,7 @@ export function CopilotWidget({
               {voiceStatusText}
             </p>
           ) : null}
-          {lastTranscript ? <p className="copilot-voice-transcript">最近转写：{lastTranscript}</p> : null}
+          {!interactionActive && lastTranscript ? <p className="copilot-voice-transcript">最近转写：{lastTranscript}</p> : null}
         </form>
       </div>
 

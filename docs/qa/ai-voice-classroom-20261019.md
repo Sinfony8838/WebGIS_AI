@@ -160,3 +160,29 @@ git diff --check
 
 - [Web Speech API：SpeechSynthesis.cancel](https://webaudio.github.io/web-speech-api/#dom-speechsynthesis-cancel)：取消队列并停止当前播报；超时保护据此先停止实际声音。
 - [Media Capture and Streams：echoCancellation](https://w3c.github.io/mediacapture-main/#dom-mediatrackconstraintset-echocancellation)：true 由浏览器决定处理哪些回声，配置该约束不能替代教室外放实测。
+
+
+## 2026-10-20：智能交互界面精简
+
+本轮起点：9af6e91f79a15770abc921948865da4f2bd0ac26；继续使用同一独立工作区和 codex/ai-voice-classroom-20261019 分支，更新同一 PR #87。开始时工作区干净，origin/main 仍为 c9136df。
+
+目标：解决默认视图文字堆叠和左下角两行重复提示。允许改动 CopilotWidget.tsx、styles.css、CopilotWidget.test.tsx 与本报告；禁止修改语音执行逻辑、共享集成入口、后端、运行数据和其他工作区。
+
+变更：
+- 智能交互头部缩为 GeoBot 与播报、停止、设置、最小化图标；图标保留可访问名称和开关状态。
+- 自动聆听、语音打断、唤醒后执行收进默认折叠的语音设置，展开/收起不会改变聆听选择。
+- 将既有系统初始说明的显示压缩为“说出指令，我来操作地图。”；原始对话记录和实际回复保持原样。
+- 缩短输入占位与发送按钮文案，减少输入区高度，工具和发送按钮保持同一行。
+- 本地 ASR、备用浏览器识别、实时转写共用一个状态区；实时转写替换当前状态，不再附加第二行。
+- 智能交互不再额外显示“最近转写”和常驻环境声音计数。错误原因和重试入口保留；教学助手界面保留原行为。
+- 简洁状态优先显示当前实际识别路线，避免本地识别可用时又显示浏览器识别不支持的错误提示。
+
+验证：
+- 在 frontend 执行 npm test：94 文件、743 tests passed，30.66 秒；其中 CopilotWidget 48 项通过。
+- npm run build：TypeScript 与 Vite PASS，8.02 秒；原有大 chunk 提示仍存在。
+- git diff --check：PASS。
+- 前端全量仍覆盖 3D 图层、TOP20、lesson-session-report；相关后端健康端点和共享入口未改。
+- 浏览器截图与窄屏实显：UNRUN。浏览器验收运行环境因 CreateProcessSecurityEnvironment / 0x80070020 启动失败，重置后重试仍失败，未把单元测试或历史截图视为本轮视觉验收。
+- 后端未改，本轮未重跑后端测试；此前后端结果仅适用于前一轮对应源码。
+
+未修改无关工作区内容、主目录已有改动、既有运行数据或生产配置；本轮未合并或部署。待跟进项为新的实屏截图与窄窗口验收。

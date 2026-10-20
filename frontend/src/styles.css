@@ -8039,3 +8039,69 @@ button {
 .tool-rail-grid .tool-rail-label,
 .tool-rail-grid .tool-rail-shortcut,
 .tool-rail-layers .tool-rail-label { display: none; }
+
+/* Compact voice interaction: conversation, controls and one status line. */
+.copilot-widget.interaction-active .copilot-widget-header {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "identity actions";
+  gap: 10px;
+  padding-bottom: 8px;
+}
+.copilot-widget.interaction-active .copilot-header-identity { gap: 8px; }
+.copilot-widget.interaction-active .copilot-avatar { width: 38px; height: 42px; }
+.copilot-widget.interaction-active .copilot-widget-actions { width: auto; gap: 6px; }
+.copilot-widget.interaction-active .copilot-icon-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+.copilot-widget.interaction-active .copilot-icon-control[aria-pressed="true"],
+.copilot-widget.interaction-active .copilot-icon-control[aria-expanded="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.copilot-widget.interaction-active .copilot-widget-form textarea {
+  min-height: 52px;
+  padding: 10px 12px 4px;
+}
+.copilot-widget.interaction-active .copilot-composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 8px;
+}
+.copilot-widget.interaction-active .copilot-composer-hint { display: none; }
+.copilot-widget.interaction-active .copilot-voice-options {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.copilot-widget.interaction-active .copilot-voice-options .copilot-voice-setting {
+  justify-content: space-between;
+  flex-direction: row-reverse;
+  font-size: 12px;
+}
+.copilot-widget.interaction-active .copilot-interaction-status {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  font-size: 11px;
+}
+.copilot-status-dot {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  align-self: center;
+}
+.copilot-interaction-status-text { min-width: 0; overflow-wrap: anywhere; }
