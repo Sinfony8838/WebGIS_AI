@@ -71,7 +71,8 @@ class InteractionRegressionTest(unittest.TestCase):
         result = self.wait_for_job(runtime, runtime.submit_assistant_message(pid, '处理目标xyz', assistant_mode='interaction')['job_id'])['result']
         self.assertEqual(store.get_project(pid).layers[0].opacity, 1.0)
         self.assertNotEqual(result['assistant_message'], '已经修改完成')
-        self.assertEqual(result['assistant_message'], result['actions_executed'][0]['result']['assistant_message'])
+        self.assertIn(result['actions_executed'][0]['result']['assistant_message'], result['assistant_message'])
+        self.assertNotEqual(result.get('outcome'), 'completed')
 
     def test_job_wait_wakes_on_change_and_handles_update_before_wait(self):
         runtime, store, pid = self.build_runtime()

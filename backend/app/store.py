@@ -776,6 +776,11 @@ class RuntimeStore:
             job.error = ("服务重启中断了练习卷生成，请重新导出。" if practice
                          else "服务重启中断了任务，请重新提交。")
             job.updated_at = now
+            for action in job.ui_actions:
+                if action.get("status") == "pending":
+                    action["status"] = "unconfirmed"
+            if job.activity:
+                job.activity = {**job.activity, "phase": "finished", "label": "任务已中断", "outcome": "interrupted"}
             for stage in job.stages.values():
                 if stage.get("status") == "running":
                     stage["status"] = "error"
@@ -880,6 +885,45 @@ class RuntimeStore:
             self._save()
             self._job_changed.notify_all()
             return job
+
+    @_requires_writer
+    def update_job_activity(self, job_id: str, activity: Optional[Dict[str, Any]] = None,
+                            usage: Optional[Dict[str, Any]] = None,
+                            ui_actions: Optional[List[Dict[str, Any]]] = None) -> JobRecord:
+        with self._lock:
+            job = self.jobs[job_id]
+            if activity is not None:
+                # Cancellation is sticky across late stage/usage updates.
+                cancelled = job.activity.get("cancel_requested", False)
+                job.activity = {**activity, **({"cancel_requested": True} if cancelled else {})}
+            if usage is not None:
+                job.usage = dict(usage)
+            if ui_actions is not None:
+                job.ui_actions = ui_actions
+            job.updated_at = utc_now()
+            self._save()
+            self._job_changed.notify_all()
+            return job
+
+    @_requires_writer
+    def observe_ui_action(self, job_id: str, action_id: str, observation: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            job = self.jobs[job_id]
+            item = next((action for action in job.ui_actions if action.get("action_id") == action_id), None)
+            if item is None:
+                raise KeyError("Unknown UI action")
+            if item.get("observation") is not None:
+                if item["observation"] != observation:
+                    raise ValueError("界面动作已有不同回执，不能覆盖。")
+                return dict(item)
+            if job.status not in {"running", "queued"} or item.get("status") != "pending" or job.activity.get("cancel_requested"):
+                raise ValueError("界面动作已过期或任务已停止。")
+            item["observation"] = dict(observation)
+            item["status"] = observation["status"]
+            job.updated_at = utc_now()
+            self._save()
+            self._job_changed.notify_all()
+            return dict(item)
 
     @_requires_writer
     def append_job_step(self, job_id: str, title: str, detail: str, status: str = "info") -> JobRecord:

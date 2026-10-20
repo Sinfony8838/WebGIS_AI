@@ -1,3 +1,4 @@
+import { interactionActivityLabel } from "../lib/interactionActivity";
 import { ThinkingIndicator } from "./ThinkingIndicator";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, DragEvent as ReactDragEvent, PointerEvent as ReactPointerEvent } from "react";
@@ -33,6 +34,8 @@ type Props = {
   /** 打开全屏教案设计工作台（教案设计快捷入口；不发送聊天消息）。 */
   onConfirm: (confirmationId: string, decision?: "approve" | "reject") => void;
   onVoiceSubmit: (transcript: string) => void;
+  onCancelTask?: () => void;
+  onOpenDesign?: (designId: string) => void;
   onVoiceNotice: (tone: "info" | "success" | "error", title: string, detail?: string) => void;
   busy: boolean;
   /** Current lesson-workflow phase; drives the header chip and chip ordering. */
@@ -417,6 +420,8 @@ export function CopilotWidget({
   onQuickPrompt = () => undefined,
   onConfirm = () => undefined,
   onVoiceSubmit,
+  onCancelTask,
+  onOpenDesign,
   onVoiceNotice,
   busy,
   teachingPhase = "",
@@ -504,8 +509,8 @@ export function CopilotWidget({
   const interactionActive = assistantTab === "interaction";
   // Voice-session callbacks are read through a ref so the controller (created
   // once) always calls the latest props without being recreated.
-  const voiceCallbacksRef = useRef({ onVoiceSubmit, onVoiceNotice, onListeningChange, onPartialTranscript, onCapturedCommand });
-  voiceCallbacksRef.current = { onVoiceSubmit, onVoiceNotice, onListeningChange, onPartialTranscript, onCapturedCommand };
+  const voiceCallbacksRef = useRef({ onVoiceSubmit, onCancelTask, onVoiceNotice, onListeningChange, onPartialTranscript, onCapturedCommand });
+  voiceCallbacksRef.current = { onVoiceSubmit, onCancelTask, onVoiceNotice, onListeningChange, onPartialTranscript, onCapturedCommand };
 
   const dragStateRef = useRef<
     | {
@@ -619,6 +624,7 @@ export function CopilotWidget({
       callbacks: {
         onSnapshot: (snapshot) => setVoiceSession(snapshot),
         onSubmitCommand: (command) => voiceCallbacksRef.current.onVoiceSubmit(command),
+        onCancelTask: voiceCallbacksRef.current.onCancelTask ? () => voiceCallbacksRef.current.onCancelTask?.() : undefined,
         onPartial: (text) => {
           setPartialPreview(text);
           voiceCallbacksRef.current.onPartialTranscript(text);
@@ -1082,6 +1088,11 @@ export function CopilotWidget({
           </div>
         </div>
         <div className="copilot-widget-actions" onPointerDown={(event) => event.stopPropagation()}>
+          {interactionActive && busy && onCancelTask ? (
+            <button type="button" className="mini-control copilot-icon-control" aria-label="停止操作" title="停止当前任务" onClick={onCancelTask} data-testid="copilot-stop-task">
+              <VoiceControlIcon kind="stop" />
+            </button>
+          ) : null}
           {interactionActive && replySpeaking ? (
             <button
               type="button"
@@ -1206,7 +1217,7 @@ export function CopilotWidget({
                         {badge.label}
                       </span>
                     ) : null}
-                    {message.role === "assistant" && message.planner && PLANNER_BADGES[message.planner] ? (
+                    {!interactionActive && message.role === "assistant" && message.planner && PLANNER_BADGES[message.planner] ? (
                       <span
                         className={`copilot-planner-badge ${PLANNER_BADGES[message.planner].cls}`}
                         data-testid="copilot-planner-badge"
@@ -1239,6 +1250,16 @@ export function CopilotWidget({
                       })}
                     </div>
                   ) : null}
+                  {actions.some((item) => typeof item.result?.design_id === "string") && onOpenDesign ? (
+                    <button type="button" className="mini-control" onClick={() => {
+                      const design = actions.find((item) => typeof item.result?.design_id === "string");
+                      if (design) onOpenDesign(String(design.result?.design_id));
+                    }}>查看教学草稿</button>
+                  ) : null}
+                  {actions.flatMap((item) => Array.isArray(item.result?.outputs) ? item.result.outputs : []).map((output: { artifact_id?: string; public_url?: string; title?: string }, outputIndex: number) => {
+                    const url = output.public_url || "";
+                    return url.startsWith("/workflow-files/") ? <a className="mini-control" key={output.artifact_id || outputIndex} href={`${getApiBase()}${url}`} target="_blank" rel="noopener noreferrer">{output.title || "查看产物"}</a> : null;
+                  })}
                   {actions.length ? (
                     <div className="copilot-tool-trace" data-testid={`copilot-tool-trace-${index}`}>
                       <button
@@ -1253,6 +1274,7 @@ export function CopilotWidget({
                       </button>
                       {traceOpen ? (
                         <ul className="copilot-tool-trace-items">
+                          {index === chatLog.length - 1 && currentJob?.usage ? <li className="copilot-tool-trace-item">模型 {currentJob.usage.model_calls}/{currentJob.usage.model_call_limit} 次 · {currentJob.usage.input_tokens === null ? "token 未知" : `${currentJob.usage.input_tokens + (currentJob.usage.output_tokens || 0)} token`} · {(currentJob.usage.elapsed_ms / 1000).toFixed(1)} 秒</li> : null}
                           {actions.map((item, idx) => (
                             <li
                               key={`${item.action.tool_name}_${idx}`}
@@ -1270,7 +1292,7 @@ export function CopilotWidget({
                 </article>
               );
             })}
-            {busy ? <ThinkingIndicator label={pickThinkingLabel(jobStages)} testId="copilot-thinking" /> : null}
+            {busy ? <ThinkingIndicator label={interactionActive ? interactionActivityLabel(currentJob) : pickThinkingLabel(jobStages)} testId="copilot-thinking" /> : null}
           </div>
         </div>
 
@@ -1529,7 +1551,7 @@ export function CopilotWidget({
                       disabled={voiceSource === "none"}
                       data-testid="copilot-mic-button"
                     >
-                      <MicrophoneIcon active={voiceSession.phase === "listening" || (voiceSession.phase === "speaking" && voiceSettings.allowSpeechInterrupt) || voiceStatus === "listening"} />
+                      <MicrophoneIcon active={voiceSession.phase === "listening" || (voiceSession.phase === "executing" && Boolean(onCancelTask)) || (voiceSession.phase === "speaking" && voiceSettings.allowSpeechInterrupt) || voiceStatus === "listening"} />
                       <span className="copilot-voice-label">
                         {voiceSource === "local"
                           ? voiceSession.phase === "paused"
@@ -1554,7 +1576,7 @@ export function CopilotWidget({
               </div>
             </div>
           </div>
-          {interactionActive ? (
+          {interactionActive && !busy ? (
             <p
               className={'copilot-voice-status copilot-interaction-status ' + (interactionVoiceUnavailable ? "unsupported" : voiceSession.phase === "listening" || voiceStatus === "listening" ? "listening" : "")}
               role="status"

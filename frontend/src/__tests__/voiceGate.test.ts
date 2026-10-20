@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeScreenRejection, isSpeechInterrupt, screenTranscript } from "../voiceGate";
+import { describeScreenRejection, isSpeechInterrupt, isTaskInterrupt, screenTranscript } from "../voiceGate";
 
 describe("screenTranscript（direct 模式，智能交互默认）", () => {
   it("无需唤醒词，明确指令直接通过", () => {
@@ -134,5 +134,34 @@ describe("播报期间的唤醒停止短句", () => {
   });
   it.each(["停止播报", "请小智停止播报", "小智，不要停止播报", "小智刚才说停止播报", "小智停止播报然后打开图层", "小智，切换到三维地球", "小智，解释停止播报的意思", ""])("拒绝环境语音与复合操控：%s", (text) => {
     expect(isSpeechInterrupt(text)).toBe(false);
+  });
+});
+
+describe("open goals and local task interruption", () => {
+  it.each(["放大", "缩小", "下一步", "设计三道探究题", "生成一套课堂练习", "把刚才的结果做成题目", "小智，构建一个新的分析流程"])("passes a directed goal intact: %s", (command) => {
+    expect(screenTranscript(command).accepted).toBe(true);
+  });
+  it("keeps negative constraints together with the positive goal", () => {
+    const command = "不要改原图，另生成一张对比图";
+    const result = screenTranscript(command);
+    expect(result.accepted && result.command).toBe(command);
+  });
+  it.each(["他说设计三道探究题", "刚才说生成一张地图", "好像可以设计探究题", "小智，不要停止操作"])("rejects reported and negated requests: %s", (text) => {
+    expect(screenTranscript(text).accepted).toBe(false);
+  });
+  it("only an exact wake-qualified stop can interrupt a busy task", () => {
+    expect(isTaskInterrupt("小智，停止操作")).toBe(true);
+    expect(isTaskInterrupt("小志，取消任务")).toBe(true);
+    for (const text of ["停止操作", "小智，不要停止操作", "小智，停止操作然后删除图层", "老师说小智停止操作"]) expect(isTaskInterrupt(text)).toBe(false);
+  });
+});
+
+describe("ambient classroom speech with creative verbs", () => {
+  it.each(["老师正在设计一张地图", "今天我们讨论如何生成探究题", "这张地图生成于去年"])("does not turn narration into a goal: %s", (text) => {
+    expect(screenTranscript(text).accepted).toBe(false);
+  });
+  it("accepts an addressed novel goal without depending on a fixed tool keyword", () => {
+    expect(screenTranscript("小智，帮我规划一次研学活动").accepted).toBe(true);
+    expect(screenTranscript("帮我规划一次研学活动").accepted).toBe(true);
   });
 });

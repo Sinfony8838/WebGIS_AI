@@ -39,6 +39,8 @@ export const COMMAND_KEYWORDS = [
   "为什么", "讲解", "解释", "读图", "查询", "搜索",
   // materials
   "素材", "材料", "地图", "底图", "影像",
+  // Directed open goals must reach the backend planner.
+  "设计", "生成", "制作", "比较", "对比", "构建", "出题", "题目", "做成", "探究", "撤销", "取消任务", "停止操作",
   // numbers spoken as opacity hints
   "一半", "百分之",
 ] as const;
@@ -100,7 +102,8 @@ export function screenTranscript(
   const minChars = options?.minChars ?? 4;
   const mode: GateMode = options?.mode ?? "direct";
   const text = (transcript || "").trim();
-  if (text.replace(/\s/g, "").length < minChars) {
+  const shortDirective = /^(?:请)?(?:放大|缩小|下一步|上一步|下一环节|上一环节|停止操作|取消任务)[。！!]?$/u.test(text);
+  if (text.replace(/\s/g, "").length < minChars && !shortDirective) {
     return { accepted: false, reason: "too_short" };
   }
 
@@ -118,17 +121,32 @@ export function screenTranscript(
   // speculation — check the full utterance, not just the post-wake rest,
   // so cues spoken before the wake word still count.
   const scanText = wake ? wake.rest : text;
-  if (containsAny(scanText, NEGATION_CUES)) {
+  const directedGoal = /^(?:请|帮我|替我|给我|设计|生成|制作|比较|对比|构建|分析|出题|规划|编写|创作|找出|优化)/u.test(commandText);
+  const clauses = scanText.split(/[，,；;。]|然后|接着|而是/u);
+  const hasPositiveGoal = clauses.some((clause) =>
+    !containsAny(clause, NEGATION_CUES) && /(?:设计|生成|制作|比较|对比|构建|分析|出题|打开|切换|显示)/u.test(clause)
+  );
+  if (containsAny(scanText, NEGATION_CUES) && !(hasPositiveGoal && clauses.length > 1)) {
     return { accepted: false, reason: "negated" };
   }
-  if (containsAny(scanText, QUOTE_CUES) || containsAny(scanText, HEDGE_CUES)) {
+  // A reference such as “把刚才的结果做成题目” is a new directive.
+  // Reported speech and speculation remain ambient even after a wake word.
+  const reported = /他说|她说|他们说|比如|例如|举个例子|刚才说|刚刚说|上次说/u.test(scanText);
+  const followup = /^(?:请)?(?:把|将|用|根据|基于).*(?:刚才|刚刚|上次|结果)/u.test(commandText);
+  if (reported || (!directedGoal && !followup && containsAny(scanText, QUOTE_CUES)) || containsAny(scanText, HEDGE_CUES)) {
+    return { accepted: false, reason: "not_directive" };
+  }
+
+  const openGoal = /设计|生成|制作|构建|出题|做成|编写|创作|规划|优化/u.test(commandText);
+  const explicitClause = clauses.some((clause) => /^(?:请|帮我|替我|给我|另(?:外)?|把|将|用|根据|基于|设计|生成|制作|构建|出题|编写|创作|规划|优化)/u.test(clause.trim()));
+  if (openGoal && !wake && !directedGoal && !followup && !explicitClause) {
     return { accepted: false, reason: "not_directive" };
   }
 
   const keywords = options?.keywords ?? COMMAND_KEYWORDS;
   const lowered = commandText.toLowerCase();
   const hit = keywords.some((keyword) => lowered.includes(keyword.toLowerCase()));
-  if (!hit) {
+  if (!hit && !(commandText.length >= 4 && ((Boolean(wake) && (directedGoal || followup)) || (openGoal && (directedGoal || explicitClause)) || followup))) {
     return { accepted: false, reason: "not_a_command" };
   }
   return { accepted: true, command: commandText.trim(), matchedAlias: wake?.alias ?? "" };
@@ -157,4 +175,12 @@ export function describeScreenRejection(reason: ScreenRejectionReason): string {
     case "not_directive":
       return "已忽略引用或不确定的表述";
   }
+}
+
+/** Busy-task control is always wake-word qualified, even in direct mode. */
+export function isTaskInterrupt(transcript: string): boolean {
+  const wake = startsWithWakeWord(transcript.trim());
+  if (!wake) return false;
+  const command = wake.rest.replace(/[\s，。、,.!！？?：:；;~～]/g, "");
+  return /^(?:请)?(?:停止操作|取消任务|停止任务|取消操作)(?:吧|谢谢)?$/u.test(command);
 }

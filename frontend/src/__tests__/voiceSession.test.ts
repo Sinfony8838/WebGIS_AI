@@ -51,7 +51,7 @@ import { VoiceSessionController, type VoiceSessionSnapshot } from "../voiceSessi
 
 let nowMs = 1_000_000;
 
-function makeController(overrides?: { requireWakeWord?: boolean; allowSpeechInterrupt?: boolean }) {
+function makeController(overrides?: { requireWakeWord?: boolean; allowSpeechInterrupt?: boolean }, onCancelTask?: () => void) {
   const snapshots: VoiceSessionSnapshot[] = [];
   const submitted: string[] = [];
   const controller = new VoiceSessionController({
@@ -60,6 +60,7 @@ function makeController(overrides?: { requireWakeWord?: boolean; allowSpeechInte
     now: () => nowMs,
     callbacks: {
       onSnapshot: (snapshot) => snapshots.push(snapshot),
+      onCancelTask,
       onSubmitCommand: (command) => submitted.push(command)
     }
   });
@@ -107,6 +108,29 @@ describe("VoiceSessionController", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("during execution, accepts only the local wake-word task stop and never queues map commands", async () => {
+    const onCancelTask = vi.fn();
+    const { controller, submitted } = makeController(undefined, onCancelTask);
+    controller.enterInteraction();
+    await vi.advanceTimersByTimeAsync(500);
+    handles[0].emit({ kind: "open" });
+    controller.setBusy(true);
+    expect(handles[0].abort).not.toHaveBeenCalled();
+    handles[0].emit({ kind: "final", text: "切换到三维地球" });
+    handles[0].emit({ kind: "final", text: "小智，不要停止操作" });
+    expect(onCancelTask).not.toHaveBeenCalled();
+    handles[0].emit({ kind: "final", text: "小智，停止操作" });
+    expect(onCancelTask).toHaveBeenCalledOnce();
+    expect(submitted).toEqual([]);
+    controller.setBusy(false);
+    handles[0].emit({ kind: "final", text: "切换到三维地球" });
+    expect(submitted).toEqual([]);
+    controller.togglePaused();
+    handles[0].emit({ kind: "final", text: "小智，停止操作" });
+    expect(onCancelTask).toHaveBeenCalledOnce();
+    controller.dispose();
   });
 
   it("连接未完成时暂停：立即取消启动，迟到的回调不能恢复聆听或提交", async () => {

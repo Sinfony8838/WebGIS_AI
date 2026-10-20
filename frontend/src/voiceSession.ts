@@ -15,7 +15,9 @@
  *   epoch token so results from a torn-down session are dropped.
  * - A final transcript is submitted at most once. Results that arrive while
  *   a job is executing or an announcement is playing are stale and dropped.
- * - Capture pauses (stream aborted, no flush) while a command executes.
+ * - While executing, capture pauses unless a local task-stop callback is
+ *   provided; then only exact wake-qualified cancellation is accepted. A
+ *   fresh capture epoch starts after execution, discarding late busy audio.
  *   Playback also pauses capture by default; an opt-in wake-word stop mode
  *   can keep capture open, but never submits map commands during playback.
  *   Real TTS end/error events release the playback guard.
@@ -28,7 +30,7 @@
  *   retry loop.
  */
 import { createVoiceStream, VoiceStreamError, type VoiceStreamHandle } from "./voiceStream";
-import { describeScreenRejection, isSpeechInterrupt, screenTranscript, type GateMode } from "./voiceGate";
+import { describeScreenRejection, isSpeechInterrupt, isTaskInterrupt, screenTranscript, type GateMode } from "./voiceGate";
 import { cancelSpeech, onSpeechLifecycle } from "./speechSynthesis";
 
 export type VoicePhase =
@@ -80,6 +82,8 @@ export type VoiceSessionCallbacks = {
   onSnapshot: (snapshot: VoiceSessionSnapshot) => void;
   /** A gated, de-duplicated command ready for the assistant. */
   onSubmitCommand: (command: string) => void;
+  /** When provided, execution keeps a wake-word-only local cancel listener. */
+  onCancelTask?: () => void;
   onPartial?: (text: string) => void;
   onListeningChange?: (listening: boolean) => void;
   onCapturedCommand?: (command: string) => void;
@@ -200,6 +204,14 @@ export class VoiceSessionController {
     this.busy = busy;
     if (!busy) {
       this.awaitingBusyUntil = 0;
+      if (this.options.callbacks.onCancelTask) {
+        // The busy capture only listened for a local stop. Its delayed finals
+        // must never become new commands when the previous task finishes.
+        this.teardownStream();
+        this.cancelTimers();
+        this.partial = "";
+        this.options.callbacks.onPartial?.("");
+      }
     }
     this.recompute();
   }
@@ -284,7 +296,7 @@ export class VoiceSessionController {
     return (
       this.interactionActive &&
       !this.userPaused &&
-      !this.busy &&
+      (!this.busy || Boolean(this.options.callbacks.onCancelTask)) &&
       (!this.speaking || this.settings.allowSpeechInterrupt) &&
       !this.docHidden &&
       !this.windowBlurred &&
@@ -336,7 +348,7 @@ export class VoiceSessionController {
       return;
     }
 
-    if (this.busy) {
+    if (this.busy && !this.options.callbacks.onCancelTask) {
       this.teardownStream();
       this.cancelTimers();
       this.setListening(false);
@@ -376,8 +388,9 @@ export class VoiceSessionController {
     // `speaking` before the mic opens (prevents the system hearing itself).
     if (this.handle) {
       const now = this.options.now?.() ?? Date.now();
-      if (!(this.phase === "captured" && now < this.capturedUntil) && this.phase !== "listening") {
-        this.phase = "listening";
+      const nextPhase = this.busy ? "executing" : "listening";
+      if (!(this.phase === "captured" && now < this.capturedUntil) && this.phase !== nextPhase) {
+        this.phase = nextPhase;
         this.phaseDetail = "";
         this.setListening(true);
         this.emit();
@@ -441,7 +454,7 @@ export class VoiceSessionController {
         onOpen: () => {
           if (myEpoch !== this.epoch || this.disposed) return;
           this.reconnectAttempt = 0;
-          this.phase = this.speaking ? "speaking" : "listening";
+          this.phase = this.speaking ? "speaking" : this.busy ? "executing" : "listening";
           this.phaseDetail = "";
           this.setListening(true);
           this.emit();
@@ -549,8 +562,18 @@ export class VoiceSessionController {
     if (myEpoch !== this.epoch) return; // stale session's result
     const clean = text.trim();
     if (!clean) return;
-    if (!this.interactionActive || this.disposed || this.userPaused || this.docHidden || this.windowBlurred || this.busy) {
+    if (!this.interactionActive || this.disposed || this.userPaused || this.docHidden || this.windowBlurred) {
       this.ignoredCount += 1;
+      return;
+    }
+    if (this.busy) {
+      this.partial = "";
+      this.options.callbacks.onPartial?.("");
+      if (isTaskInterrupt(clean)) {
+        this.options.callbacks.onCancelTask?.();
+      } else {
+        this.ignoredCount += 1;
+      }
       return;
     }
     if (this.speaking) {

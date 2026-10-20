@@ -200,6 +200,26 @@ class LessonDesignService:
         design.diff_summary = self._build_diff_summary(design)
         return self.store.upsert_lesson_design(design)
 
+    def create_generated_draft(self, project_id: str, owner_user_id: str, draft: Dict[str, Any],
+                               source_refs: List[Dict[str, Any]], requirements: Dict[str, Any]) -> tuple:
+        """Create a new draft atomically; never resume/publish/overwrite a teacher's work."""
+        allowed = {"title", "objectives", "core_questions", "stages", "homework", "board_design", "design_thinking"}
+        if not isinstance(draft, dict) or set(draft) - allowed or not str(draft.get("title") or "").strip():
+            raise ValueError("生成草稿的章节或标题无效。")
+        content = default_draft()
+        content.update(copy.deepcopy(draft))
+        content["requirements"] = copy.deepcopy(requirements)
+        content["topic"] = content["title"]
+        self._normalize_text_lists(content)
+        self._backfill_draft(content)
+        report = self.validate_plan(content, source_refs)
+        design = LessonDesignRecord.create(project_id=project_id, owner_user_id=owner_user_id,
+            requirements=copy.deepcopy(requirements), draft=content)
+        design.source_refs = copy.deepcopy(source_refs)
+        design.section_status = {key: "proposed" if self._section_has_content(content.get(key)) else "pending" for key in SECTION_KEYS}
+        design.diff_summary = self._build_diff_summary(design)
+        return self.store.upsert_lesson_design(design), report
+
     def get(self, design_id: str) -> LessonDesignRecord:
         design = self.store.get_lesson_design(design_id)
         if design is None:

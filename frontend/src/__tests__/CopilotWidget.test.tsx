@@ -485,7 +485,8 @@ describe("CopilotWidget", () => {
     // 执行指令期间停止采音，防止系统听到自己。
     rerender({ assistantTab: "interaction", voiceStreamAvailable: true, busy: true });
     await waitFor(() => expect(abort).toHaveBeenCalledOnce());
-    expect(screen.getByText("正在执行指令…")).toBeInTheDocument();
+    expect(screen.getByTestId("copilot-thinking")).toBeInTheDocument();
+    expect(screen.queryByTestId("copilot-voice-status")).not.toBeInTheDocument();
 
     // 执行结束后自动恢复聆听（短延迟防自听）。
     createVoiceStream.mockClear();
@@ -955,7 +956,7 @@ describe("CopilotWidget", () => {
     expect(screen.queryByTestId("copilot-tts-toggle")).toBeNull();
   });
 
-  it("shows the planner badge for interaction replies", () => {
+  it("keeps planner route badges out of compact interaction replies", () => {
     renderWidget({
       assistantTab: "interaction",
       chatLog: [
@@ -964,9 +965,8 @@ describe("CopilotWidget", () => {
       ]
     });
 
-    const badges = screen.getAllByTestId("copilot-planner-badge");
-    expect(badges).toHaveLength(2);
-    expect(badges[0]).toHaveTextContent("快速通道");
-    expect(badges[1]).toHaveTextContent("AI 规划");
+    expect(screen.queryByTestId("copilot-planner-badge")).not.toBeInTheDocument();
+    expect(screen.getByText("好的，切换到三维地球。")).toBeInTheDocument();
+    expect(screen.getByText("已提交分析。")).toBeInTheDocument();
   });
 });

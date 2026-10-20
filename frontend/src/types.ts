@@ -214,6 +214,7 @@ export type RecentAction = {
 
 export type ProjectRecord = {
   project_id: string;
+  updated_at?: string;
   name: string;
   metadata: Record<string, unknown>;
   view: {
@@ -344,6 +345,9 @@ export type JobRecord = {
   job_type: string;
   title: string;
   workflow_type: string;
+  activity?: { phase: string; label: string; route?: string; tool?: string; step?: number; cancel_requested?: boolean };
+  usage?: { model_calls: number; model_call_limit: number; input_tokens: number | null; output_tokens: number | null; model_ms: number; elapsed_ms: number; route: string };
+  ui_actions?: ObservedUiAction[];
   status: string;
   updated_at: string;
   steps: Array<{ title: string; detail: string; status: string; timestamp: string }>;
@@ -368,6 +372,7 @@ export type JobRecord = {
       tool_params: Record<string, unknown>;
     }>;
     actions_executed?: ExecutedAction[];
+    completed_actions?: ExecutedAction[];
     requires_confirmation?: boolean;
     confirmation_id?: string;
     confirmation_status?: string;
@@ -455,7 +460,17 @@ export type AssistantTab = "teaching" | "interaction";
 export type AssistantUiAction =
   | { type: "open_material"; title?: string; materials?: TeachingMaterial[] }
   | { type: "switch_view"; mode: "plane" | "globe" }
-  | { type: "open_panel"; panel: "layers" | "database" | "workflow"; open?: boolean };
+  | { type: "open_panel"; panel: "layers" | "database" | "workflow"; open?: boolean }
+  | { type: "sync_project"; project_updated_at?: string };
+
+export type ObservedUiAction = AssistantUiAction & {
+  action_id: string; project_id: string; session_id: string; expires_at?: number;
+  status: "pending" | "applied" | "failed" | "unconfirmed";
+};
+export type UiObservation = {
+  action_id: string; project_id: string; session_id: string;
+  status: "applied" | "failed" | "unconfirmed"; detail: string;
+};
 
 /**
  * Where the teacher currently is in the lesson workflow. Sent with every

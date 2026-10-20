@@ -361,7 +361,8 @@ class AgentRun:
         self.event("tool", tool_name, "error", attributes)
 
     def verify_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
-        self.check_deadline()
+        if not isinstance(result, dict) or result.get("outcome") not in {"partial", "cancelled", "budget_exhausted"}:
+            self.check_deadline()
         result_is_object = isinstance(result, dict)
         checks = {
             "result_is_object": result_is_object,
@@ -421,6 +422,8 @@ class AgentRun:
 def infer_stop_reason(result: Dict[str, Any]) -> str:
     if result.get("requires_confirmation"):
         return "approval_required"
+    if result.get("outcome") in {"partial", "cancelled", "budget_exhausted", "needs_clarification", "blocked"}:
+        return str(result["outcome"])
     planner = str(result.get("planner") or "")
     if planner in {"blocked", "harness_guardrail"}:
         return "policy_blocked"

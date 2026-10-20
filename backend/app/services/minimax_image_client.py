@@ -8,6 +8,7 @@ import urllib.request
 from typing import Any, Dict
 
 from ..config import AppConfig
+from .interaction_run import current_run, model_request_scope
 
 
 ALLOWED_IMAGE_MODELS = {"image-01", "image-01-live"}
@@ -39,7 +40,11 @@ class MiniMaxImageClient:
             raise MiniMaxImageError("MiniMax 图片生成尚未配置，请先设置 WEBGIS_AI_MINIMAX_API_KEY。")
 
         payload = {**validated, "response_format": "base64", "n": 1, "aigc_watermark": True}
-        return self._request_image(payload, timeout)
+        with model_request_scope():
+            run = current_run()
+            if run is not None:
+                timeout = min(timeout, run.remaining_seconds())
+            return self._request_image(payload, timeout)
 
     def validate_request(
         self, prompt: str, *, model: str = "", aspect_ratio: str = "16:9", prompt_optimizer: bool = True
@@ -80,7 +85,12 @@ class MiniMaxImageClient:
         )
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
-                body = response.read().decode("utf-8")
+                run = current_run()
+                if run is None:
+                    body = response.read().decode("utf-8")
+                else:
+                    with run.response_scope(response):
+                        body = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise MiniMaxImageError(self._http_error_message(exc.code, detail)) from exc

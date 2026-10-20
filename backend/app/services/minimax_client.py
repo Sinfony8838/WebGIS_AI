@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from ..config import AppConfig
 from .request_limits import AdmissionGate
+from .interaction_run import capture_model_usage, current_run, model_request_scope
 
 
 class LLMClient:
@@ -54,6 +55,7 @@ class LLMClient:
     #: generous headroom the response ends at the length limit with empty
     #: visible content.
     DEFAULT_MAX_COMPLETION_TOKENS = 2048
+    meters_interaction_requests = True
 
     def chat_completion(
         self,
@@ -82,9 +84,13 @@ class LLMClient:
                 f"{self._provider_label()} 并发请求已达上限（排队超时），请稍后重试。"
             )
         try:
-            return self._chat_completion_locked(
-                messages, temperature, model=model, extra_payload=extra_payload, timeout=timeout
-            )
+            with model_request_scope():
+                run = current_run()
+                if run is not None:
+                    timeout = min(timeout, run.remaining_seconds(), 12.0)
+                return self._chat_completion_locked(
+                    messages, temperature, model=model, extra_payload=extra_payload, timeout=timeout
+                )
         finally:
             self._admission.release()
 
@@ -129,7 +135,12 @@ class LLMClient:
 
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
-                body = response.read().decode("utf-8")
+                run = current_run()
+                if run is None:
+                    body = response.read().decode("utf-8")
+                else:
+                    with run.response_scope(response):
+                        body = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"{self._provider_label()} API error {exc.code}: {detail}") from exc
@@ -137,6 +148,7 @@ class LLMClient:
             raise RuntimeError(f"{self._provider_label()} API request failed: {exc.reason}") from exc
 
         parsed = json.loads(body)
+        capture_model_usage(parsed.get("usage"))
         choices = parsed.get("choices") or []
         if not choices:
             raise RuntimeError(f"{self._provider_label()} API returned no choices")
@@ -249,7 +261,12 @@ class LLMClient:
 
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
-                body = response.read().decode("utf-8")
+                run = current_run()
+                if run is None:
+                    body = response.read().decode("utf-8")
+                else:
+                    with run.response_scope(response):
+                        body = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"MiniMax API error {exc.code}: {detail}") from exc
@@ -257,6 +274,7 @@ class LLMClient:
             raise RuntimeError(f"MiniMax API request failed: {exc.reason}") from exc
 
         parsed = json.loads(body)
+        capture_model_usage(parsed.get("usage"))
         blocks = parsed.get("content") or []
         text = "".join(
             str(block.get("text", ""))

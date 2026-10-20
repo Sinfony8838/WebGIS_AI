@@ -476,6 +476,7 @@ class AssistantMessageRequest(BaseModel):
     history: list[Dict[str, Any]] = Field(default_factory=list)
     target: str = "webgis"
     input_mode: str = "text"
+    ui_observation_protocol: int = 0
     screen_snapshot: Dict[str, Any] = Field(default_factory=dict)
     teaching_context: Dict[str, Any] = Field(default_factory=dict)
     image_attachments: list[Dict[str, Any]] = Field(default_factory=list)
@@ -1549,7 +1550,7 @@ def submit_assistant_message(
             "教案" in assistant_message and any(token in assistant_message for token in ("共创", "设计", "生成", "备课", "规划"))
         )
         base_lesson_id = str((payload.teaching_context or {}).get("lesson_id") or "")
-        if wants_lesson_design and not assistant_message.lstrip().startswith("GeoBot 头脑风暴：") and base_lesson_id:
+        if wants_lesson_design and payload.assistant_mode != "interaction" and not assistant_message.lstrip().startswith("GeoBot 头脑风暴：") and base_lesson_id:
             _require_lesson_access(request, base_lesson_id)
         response = runtime.submit_assistant_message(
             payload.project_id,
@@ -1564,8 +1565,10 @@ def submit_assistant_message(
             payload.teaching_context,
             payload.image_attachments,
             actor_role=str(_current_auth(request).user.get("role") or ""),
+            actor_user_id=str(_current_auth(request).user.get("user_id") or ""),
+            ui_observation_protocol=payload.ui_observation_protocol,
         )
-        if wants_lesson_design and not assistant_message.lstrip().startswith("GeoBot 头脑风暴："):
+        if wants_lesson_design and payload.assistant_mode != "interaction" and not assistant_message.lstrip().startswith("GeoBot 头脑风暴："):
             context = _current_auth(request)
             response["lesson_design"] = runtime.classroom.create_lesson_design(
                 payload.project_id,
@@ -1695,6 +1698,7 @@ def confirm_assistant_action(
         return runtime.confirm_assistant_action(
             payload.confirmation_id, decision=payload.decision,
             actor_role=str(_current_auth(request).user.get("role") or ""),
+            actor_user_id=str(_current_auth(request).user.get("user_id") or ""),
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -3006,6 +3010,39 @@ def get_job(job_id: str, request: Request) -> Dict[str, Any]:
     _require_job_access(request, job_id)
     try:
         return runtime.get_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+class UiObservationRequest(BaseModel):
+    action_id: str
+    project_id: str
+    session_id: str = ""
+    status: str
+    detail: str = ""
+
+
+@app.post("/jobs/{job_id}/ui-observations")
+def observe_job_ui(job_id: str, payload: UiObservationRequest, request: Request) -> Dict[str, Any]:
+    _require_job_access(request, job_id)
+    try:
+        return runtime.interaction_operations.acknowledge(job_id, payload.model_dump(), str(_current_auth(request).user["user_id"]))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/jobs/{job_id}/cancel")
+def cancel_assistant_job(job_id: str, request: Request) -> Dict[str, Any]:
+    job = _require_job_access(request, job_id)
+    owner = str(job.request.get("actor_user_id") or "")
+    if owner and owner != str(_current_auth(request).user["user_id"]):
+        raise HTTPException(status_code=403, detail="只能停止自己发起的任务。")
+    try:
+        return runtime.interaction_operations.cancel(job_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
