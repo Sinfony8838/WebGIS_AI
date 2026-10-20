@@ -37,11 +37,29 @@ Private PPTX/XLSX inputs, extracted values, boundary archives, screenshots, back
 
 ## Limits and follow-up
 
-- These are population **counts**, not density. The workbook contains no township areas. Third-party historical boundaries are reference geometry: the 2019 Changhai/Wujiaochang boundary adjustment is not reconstructed. This limitation is stored on every mapped feature and in the legend title. Do not use the polygons for precise boundary/area analysis.
+- These are population **counts**, not density. The workbook contains no township areas. Third-party historical boundaries are reference geometry: the 2019 Changhai/Wujiaochang boundary adjustment is not reconstructed. This limitation is stored on every mapped feature and in the layer metadata; the short legend title is `2020街镇人口总量`. Do not use the polygons for precise boundary/area analysis.
 - Web preview uses native static page exports. PowerPoint animations, transitions and live handwriting were not verified by this browser check; the original deck is retained.
-- The external public domain returned HTTP 403 during verification. Local browser requests used an explicit domain-to-local-origin routing adapter. This is local authenticated browser evidence, not public-network acceptance or a password-login test.
+- During the initial verification, the external public domain returned HTTP 403. Local browser requests used an explicit domain-to-local-origin routing adapter. This is local authenticated browser evidence, not public-network acceptance or a password-login test.
 - At 1600 px width, the existing account dock overlaps the pointer target of the bottom previous-stage button. Keyboard previous navigation and the left stage list worked. No unrelated UI redesign was made.
 - The population layer is installed in the selected existing demo population classroom. A different/new classroom project needs its own layer import; lesson-image ownership remains account scoped.
 - Source-only PR remains for integration-owner review. Runtime data and backup locations are retained privately rather than published.
 
 No unrelated workspace changes were modified, staged or committed.
+
+
+## Review corrections before integration (2026-10-20)
+
+Integration was held after the three review findings; the migration was not rerun on real teaching data.
+
+- Loading and backup ordering: the migration no longer constructs RuntimeStore (even its read-only loader filters legacy layers in memory). It acquires StateWriterLease directly, verifies a backup of the original JSON, referenced external layer files and SQLite auth database, and writes `backup_manifest.json` with `complete=true` before creating assets, grants or replacing state. It appends to the raw snapshot with atomic JSON replacement, retaining existing legacy layers, query results, templates and external references. It does not change normal application startup behavior.
+- Slide order: ordered references in `ppt/presentation.xml` are resolved through `ppt/_rels/presentation.xml.rels`. Missing, external, duplicate or invalid slide relationships fail; reordered-slide text is paired with the native page-number preview.
+- Preflight: all stages and new records are built and serialized, and all required package files are checked, before dry-run success or any apply-side writes. Bad counts, lists, ordering, missing assets/CSV and missing relationships fail with state, auth, grants and outputs unchanged.
+- The requested legend title is exactly `2020街镇人口总量`; historical-boundary and count/density qualifications remain in feature/layer metadata.
+
+Validation after these corrections:
+
+- Import, lesson-presentation and Shanghai-data suites: **51 passed**, 4.13 seconds. New isolation tests include target/unrelated legacy rectangle and visual-query layers, external files, a held writer lease, failed/corrupt backups, preflight state changes, dry-run/apply rejection controls and actual reordered slides.
+- A new isolated instance was reconstructed from the retained pre-import state/auth backup and 11 referenced external layer files. The corrected script completed dry-run and apply against this copy using the private real package: **31 slides, 226 units, 24,870,895 people**. Removing only the added lesson/layer and the target timestamp reproduced every original record exactly. Original backup and external layer hashes were unchanged; the new backup manifest and all copied hashes passed. Real runtime JSON hashes before and after the rehearsal were identical.
+- The supplied real PPTX currently has matching filename and presentation order; all 31 existing lesson text fields agree with relationship-ordered extraction. No real lesson rewrite is required.
+
+These corrections are source changes plus isolated rehearsal evidence. They do not establish distributed transactionality across JSON, SQLite and file copies: a later disk/permission failure can still leave partial new assets/grants, and must be recovered deliberately using the verified backup. Do not retry into an existing migration output directory. No real-data migration was run during this review repair, and unrelated workspaces remain untouched.
