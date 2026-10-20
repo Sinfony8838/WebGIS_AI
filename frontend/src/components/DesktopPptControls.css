@@ -1,32 +1,19 @@
 .desktop-switch-launcher {
   position: relative;
+  align-self: center;
   display: inline-grid;
   place-items: center;
-  width: 42px;
-  height: 42px;
-  flex: 0 0 42px;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
   padding: 4px;
   border: 1px solid #8fc4cf;
   border-radius: 50%;
   background: #f7fdff;
-  box-shadow: 0 2px 7px #17495c18;
+  box-shadow: none;
   cursor: pointer;
 }
-.desktop-switch-launcher svg { width: 30px; height: 30px; }
-.desktop-switch-launcher span {
-  position: absolute;
-  right: -2px;
-  bottom: -2px;
-  display: grid;
-  place-items: center;
-  width: 17px;
-  height: 17px;
-  border-radius: 50%;
-  background: #147b90;
-  color: white;
-  font-size: 12px;
-  line-height: 1;
-}
+.desktop-switch-launcher svg { width: 28px; height: 28px; }
 .desktop-switch-launcher:hover { border-color: #147b90; background: white; }
 .desktop-switch-launcher:focus-visible { outline: 3px solid #32abbc; outline-offset: 3px; }
 .desktop-switch-launcher:disabled { cursor: wait; opacity: .55; }

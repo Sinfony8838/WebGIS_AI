@@ -258,14 +258,14 @@ def test_multiple_powerpoints_need_selection_and_never_start_another():
     palette.actions.start.assert_not_called()
 
 
-def test_only_absent_powerpoint_launches_once_until_result():
+def test_only_absent_powerpoint_selects_a_file_once_until_result():
     palette = make_palette()
     palette.desktop.powerpoints.return_value = []
     palette.actions.start.return_value = "pending"
     palette.canvas, palette.badge = Mock(), "badge"
     palette.focus_ppt()
     palette.focus_ppt()
-    palette.actions.start.assert_called_once_with("launch")
+    palette.actions.start.assert_called_once_with("preview")
 
 
 @pytest.mark.parametrize("kind", ["ppt", "webgis"])
@@ -519,3 +519,189 @@ def test_drag_can_return_to_start_without_latching_at_last_large_delta():
     palette.close_preview.assert_called_once()
     palette._release(None)
     palette._toggle.assert_not_called()
+
+
+@pytest.fixture
+def direct_palette():
+    import queue
+    from backend.app.desktop_powerpoint import DesktopActions
+    palette = make_palette()
+    palette.events = queue.Queue()
+    palette.preview_busy = False
+    palette.tick_count = 0
+    palette.canvas, palette.badge = Mock(), "badge"
+    palette._notice = Mock()
+    palette.show_preview = Mock()
+    palette.preview_status = Mock()
+    browser = window(handle=10)
+    palette.desktop.foreground.return_value = browser.handle
+    palette.desktop.describe.side_effect = lambda handle, kind="webgis": browser if handle == 10 and kind == "webgis" else None
+    palette.desktop.validate.side_effect = lambda item, kind="webgis": item
+    palette.desktop.activate_browser.return_value = True
+    palette.desktop.powerpoints.return_value = [window(executable="POWERPNT.EXE", title="课件.pptx - PowerPoint")]
+    palette.actions = DesktopActions(Mock(side_effect=AssertionError("Unexpected native picker")))
+    palette.actions.palette = palette
+    return palette
+
+
+def finish_direct_job(palette, action="preview", interact=None):
+    import time
+    key = palette.actions.start(action)
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        palette._tick()
+        if interact:
+            interact()
+        result = palette.actions.get(key)
+        if result["status"] != "pending":
+            return result
+        time.sleep(.002)
+    pytest.fail("Direct preview job did not finish")
+
+
+def test_direct_preview_reuses_native_window_without_opening_or_expanding(direct_palette):
+    palette = direct_palette
+    result = finish_direct_job(palette)
+    assert result == {"status": "shown", "foreground": True}
+    palette.show_preview.assert_called_once_with(palette.desktop.powerpoints.return_value[0], "ppt")
+    palette.actions.runner.assert_not_called()
+    palette.desktop.expand.assert_not_called()
+    assert not palette.preview_busy and not palette.actions.active
+
+
+@pytest.mark.parametrize("start_title", [None, "PowerPoint", "Microsoft PowerPoint", "开始 - PowerPoint", ""])
+def test_first_preview_selects_file_and_restores_map_before_display(direct_palette, start_title):
+    palette = direct_palette
+    palette.desktop.powerpoints.return_value = [] if start_title is None else [window(title=start_title)]
+    calls = []
+    target = window(executable="POWERPNT.EXE", title="新课件.pptx - PowerPoint")
+    def open_file(action, path):
+        assert palette.actions.active and palette.preview_busy
+        with pytest.raises(RuntimeError):
+            palette.actions.start("preview")
+        calls.append("picker")
+        palette.desktop.powerpoints.return_value = [target]
+        return {"status": "opened", "file_name": "新课件.pptx", "selected_path": "C:/private/new.pptx"}
+    palette.actions.runner = Mock(side_effect=open_file)
+    palette.desktop.activate_browser.side_effect = lambda _: calls.append("return") or True
+    palette.show_preview.side_effect = lambda *_: calls.append("preview")
+    result = finish_direct_job(palette)
+    assert calls == ["picker", "return", "preview"]
+    assert result == {"status": "shown", "file_name": "新课件.pptx", "foreground": True}
+    palette.actions.runner.assert_called_once_with("open", "")
+    palette.desktop.expand.assert_not_called()
+    assert not palette.actions.active and not palette.preview_busy
+
+
+def test_cancelling_first_file_picker_is_quiet_and_releases_busy_state(direct_palette):
+    palette = direct_palette
+    palette.desktop.powerpoints.return_value = []
+    palette.actions.runner = Mock(return_value={"status": "cancelled"})
+    assert finish_direct_job(palette) == {"status": "cancelled"}
+    palette.show_preview.assert_not_called()
+    palette._notice.assert_not_called()
+    palette.desktop.activate_browser.assert_called_once_with(window(handle=10))
+    assert not palette.actions.active and not palette.preview_busy
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_ambiguous_windows_wait_for_explicit_choice_without_a_picker(direct_palette, cancel):
+    palette = direct_palette
+    candidates = [window(handle=i, title=f"课件{i}.pptx") for i in (40, 41)]
+    palette.desktop.powerpoints.return_value = candidates
+    callbacks = {}
+    def choose(kind, on_selected, on_cancel):
+        assert kind == "ppt"
+        callbacks.update(selected=on_selected, cancel=on_cancel)
+    palette.choose_window = Mock(side_effect=choose)
+    def interact():
+        if callbacks:
+            assert palette.actions.active
+            palette.show_preview.assert_not_called()
+            callback = callbacks.pop("cancel" if cancel else "selected")
+            callbacks.clear()
+            callback() if cancel else callback(candidates[1])
+    result = finish_direct_job(palette, interact=interact)
+    assert result["status"] == ("cancelled" if cancel else "shown")
+    palette.actions.runner.assert_not_called()
+    if cancel:
+        palette.show_preview.assert_not_called()
+    else:
+        palette.show_preview.assert_called_once_with(candidates[1], "ppt")
+
+
+def test_new_preview_preserves_a_valid_binding_among_multiple_windows(direct_palette):
+    palette = direct_palette
+    palette.ppt_target = window(title="绑定的课件.pptx")
+    palette.desktop.powerpoints.return_value = [window(handle=41), window(handle=42)]
+    assert finish_direct_job(palette)["status"] == "shown"
+    palette.show_preview.assert_called_once_with(palette.ppt_target, "ppt")
+    palette.actions.runner.assert_not_called()
+
+
+def test_change_deck_opens_once_and_previews_the_new_deck(direct_palette):
+    palette = direct_palette
+    old = palette.ppt_target = palette.desktop.powerpoints.return_value[0]
+    new = window(handle=77, title="新课件.pptx - PowerPoint")
+    def open_file(*_):
+        palette.desktop.powerpoints.return_value = [old, new]
+        return {"status": "opened", "file_name": "新课件.pptx"}
+    palette.actions.runner = Mock(side_effect=open_file)
+    assert finish_direct_job(palette, "open-preview")["status"] == "shown"
+    palette.show_preview.assert_called_once_with(new, "ppt")
+    palette.actions.runner.assert_called_once_with("open", "")
+
+
+def test_failed_return_does_not_claim_the_map_is_foreground(direct_palette):
+    palette = direct_palette
+    palette.actions.runner = Mock(return_value={"status": "opened", "file_name": "课件.pptx"})
+    palette.desktop.activate_browser.return_value = False
+    assert finish_direct_job(palette, "open-preview")["foreground"] is False
+    palette.preview_status.configure.assert_called_once()
+
+
+@pytest.mark.parametrize("failure", ["picker", "window"])
+def test_direct_preview_failure_does_not_retry_and_clears_busy(direct_palette, failure):
+    palette = direct_palette
+    if failure == "picker":
+        palette.desktop.powerpoints.return_value = []
+        palette.actions.runner = Mock(side_effect=OSError("Synthetic picker failure"))
+    else:
+        palette.show_preview.side_effect = ValueError("Window closed")
+    assert finish_direct_job(palette)["status"] == "failed"
+    assert palette.actions.runner.call_count == (1 if failure == "picker" else 0)
+    assert not palette.actions.active and not palette.preview_busy
+
+
+def test_expired_ui_request_cannot_open_a_late_preview(direct_palette, monkeypatch):
+    from backend.app import desktop_switch_window as module
+    event = Mock()
+    event.wait.return_value = False
+    monkeypatch.setattr(module.threading, "Event", Mock(return_value=event))
+    callback = Mock()
+    with pytest.raises(RuntimeError, match="不会自动重复"):
+        direct_palette._on_ui(callback)
+    direct_palette._tick()
+    callback.assert_not_called()
+
+
+def test_preview_busy_blocks_native_clicks_and_change_deck(direct_palette):
+    palette = direct_palette
+    palette.preview_busy = True
+    palette.actions.start = Mock()
+    palette._toggle()
+    palette.focus_ppt()
+    palette.focus_webgis()
+    palette.change_ppt()
+    palette.actions.start.assert_not_called()
+    palette.show_preview.assert_not_called()
+
+
+def test_unbound_webgis_is_not_reported_as_successfully_restored(direct_palette):
+    palette = direct_palette
+    palette.desktop.describe.return_value = None
+    palette.desktop.describe.side_effect = None
+    palette.actions.runner = Mock(return_value={"status": "opened", "file_name": "课件.pptx"})
+    assert finish_direct_job(palette, "open-preview")["foreground"] is False
+    palette.desktop.activate_browser.assert_not_called()
+    palette.show_preview.assert_called_once()

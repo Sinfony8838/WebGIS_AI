@@ -21,7 +21,7 @@ async function desktopRequest(path: string, init?: RequestInit): Promise<Record<
 }
 
 /** No project credentials, uploads or absolute local paths cross this boundary. */
-export async function openDesktopPowerPoint(action: "open" | "focus" | "switcher"): Promise<DesktopPptResult> {
+export async function openDesktopPowerPoint(action: "open" | "focus" | "switcher" | "preview"): Promise<DesktopPptResult> {
   let connection: Record<string, unknown>;
   try {
     connection = await desktopRequest("/connection");
@@ -33,6 +33,9 @@ export async function openDesktopPowerPoint(action: "open" | "focus" | "switcher
   }
   if (action === "switcher" && (!Array.isArray(connection.capabilities) || !connection.capabilities.includes("switcher"))) {
     throw new Error("请重启新版本机连接器后使用切换小窗；已有课件不会被关闭。");
+  }
+  if (action === "preview" && (!Array.isArray(connection.capabilities) || !connection.capabilities.includes("preview"))) {
+    throw new Error("请更新并重启本机 PowerPoint 连接器后使用直接预览；已有课件不会被关闭。");
   }
   const accepted = await desktopRequest("/actions", {
     method: "POST", headers: { "Content-Type": "application/json", "X-WebGIS-Desktop": connection.token },

@@ -51,6 +51,15 @@ def fit_preview(width: int, height: int, source_width: int, source_height: int):
     return x, y, x + w, y + h
 
 
+def is_presentation_window(target: BrowserWindow) -> bool:
+    # Office's empty/start frame is also PPTFrameClass. Do not preview it as a deck.
+    title = target.title.strip().casefold()
+    return bool(title) and title not in {
+        "powerpoint", "microsoft powerpoint", "开始 - powerpoint", "start - powerpoint",
+        "主页 - powerpoint", "home - powerpoint",
+    }
+
+
 class WindowsDesktop:
     def __init__(self):
         self.user = ctypes.WinDLL("user32", use_last_error=True)
@@ -355,6 +364,7 @@ class SwitchPalette:
         self.target = None
         self.ppt_target = None
         self.operation = None
+        self.preview_busy = False
         self.chooser = None
         self.context_menu = None
         self.preview = None
@@ -424,6 +434,123 @@ class SwitchPalette:
             raise RuntimeError("桌面小窗未响应。")
         return {"status": "shown"}
 
+    def _on_ui(self, callback):
+        """Marshal short UI work; a timed-out queued call must never run later."""
+        call = {"callback": callback, "done": threading.Event(), "expired": False}
+        self.events.put(call)
+        if not call["done"].wait(3):
+            call["expired"] = True
+            raise RuntimeError("桌面预览未响应，请检查本机连接器；不会自动重复操作。")
+        if "error" in call:
+            raise call["error"]
+        return call.get("result")
+
+    def _begin_preview(self):
+        self.preview_busy = True
+        current = self.desktop.describe(self.desktop.foreground())
+        if current:
+            self.target = current
+        self._badge()
+        return self.target
+
+    def _end_preview(self):
+        self.preview_busy = False
+        if self.chooser:
+            self._dismiss_chooser()
+        self._badge()
+
+    def _presentation_windows(self):
+        return [item for item in self.desktop.powerpoints() if is_presentation_window(item)]
+
+    def _preview_selection(self, file_name=""):
+        self.desktop.show_palette(self.root, True)
+        choice = {"done": threading.Event(), "target": None, "cancelled": False}
+        if not file_name and self.ppt_target:
+            try:
+                target = self.desktop.validate(self.ppt_target, "ppt")
+                if is_presentation_window(target):
+                    choice["target"] = target
+                    choice["done"].set()
+                    return choice
+            except ValueError:
+                pass
+            self.ppt_target = None
+        candidates = self._presentation_windows()
+        matches = candidates
+        if file_name:
+            # Prefer the deck just picked, not a stale editor remembered earlier.
+            stem = ntpath.splitext(file_name)[0].casefold()
+            matches = [item for item in candidates if
+                       ntpath.splitext(item.title.removesuffix(" - PowerPoint"))[0].casefold() == stem]
+        if len(matches) == 1:
+            choice["target"] = matches[0]
+            choice["done"].set()
+        elif candidates:
+            def selected(target):
+                choice["target"] = target
+                choice["done"].set()
+            def cancelled():
+                choice["cancelled"] = True
+                choice["done"].set()
+            self.choose_window("ppt", on_selected=selected, on_cancel=cancelled)
+        else:
+            choice["done"].set()
+        return choice
+
+    def _await_selection(self, file_name="", *, timeout=600):
+        choice = self._on_ui(lambda: self._preview_selection(file_name))
+        if not choice["done"].wait(max(0, timeout)):
+            raise RuntimeError("课件窗口选择等待超时，请关闭选择框后重试。")
+        return choice
+
+    def _restore_webgis(self, target):
+        if not target:
+            return False
+        try:
+            return self.desktop.activate_browser(target)
+        except (ValueError, OSError):
+            return False
+
+    def request_preview(self, opener, *, force_open=False):
+        """One DesktopActions job owns discovery, picker and preview to completion."""
+        return_target = None
+        deadline = time.monotonic() + 630  # Complete before the browser's 660-second observation limit.
+        opened = False
+        try:
+            return_target = self._on_ui(self._begin_preview)
+            choice = None if force_open else self._await_selection()
+            if choice and choice["cancelled"]:
+                return {"status": "cancelled"}
+            result = {}
+            if force_open or not choice["target"]:
+                # Runs on the existing worker, never from Tk or nested start().
+                opened = True
+                result = opener()
+                if result.get("status") not in {"opened", "focused"}:
+                    self._on_ui(lambda: self._restore_webgis(return_target))
+                    return result
+                choice = self._await_selection(result.get("file_name", ""), timeout=deadline - time.monotonic())
+                if choice["cancelled"]:
+                    self._on_ui(lambda: self._restore_webgis(return_target))
+                    return {"status": "cancelled"}
+                if not choice["target"]:
+                    raise ValueError("课件已打开但没有可预览的窗口，请检查 PowerPoint 提示框。")
+            def display():
+                restored = self._restore_webgis(return_target) if opened else True
+                self.ppt_target = choice["target"]
+                self.show_preview(self.ppt_target, "ppt")
+                if not restored:
+                    self.preview_status.configure(text="预览已显示；请点击任务栏中的 WebGIS 返回地图")
+                return restored
+            restored = self._on_ui(display)
+            return {**result, "status": "shown", "foreground": restored}
+        except Exception:
+            if opened:
+                self._on_ui(lambda: self._restore_webgis(return_target))
+            raise
+        finally:
+            self._on_ui(self._end_preview)
+
     def notify_show(self):
         self.events.put(None)
 
@@ -431,9 +558,18 @@ class SwitchPalette:
         try:
             while True:
                 event = self.events.get_nowait()
-                self.desktop.show_palette(self.root, True)
-                if event:
-                    event.set()
+                if isinstance(event, dict):
+                    if not event["expired"]:
+                        try:
+                            event["result"] = event["callback"]()
+                        except Exception as exc:
+                            event["error"] = exc
+                        finally:
+                            event["done"].set()
+                else:
+                    self.desktop.show_palette(self.root, True)
+                    if event:
+                        event.set()
         except queue.Empty:
             pass
         if self.operation:
@@ -444,7 +580,7 @@ class SwitchPalette:
                     # Launch only when no existing native frame was found. COM
                     # results never choose/reopen a file for the preview flow.
                     self.focus_ppt(allow_launch=False)
-                else:
+                elif result.get("status") not in {"shown", "cancelled"}:
                     self._notice(result.get("message") or "PowerPoint 未能启动，请检查 Office 提示框。")
                 self._badge()
         self.tick_count += 1
@@ -466,7 +602,7 @@ class SwitchPalette:
         web = self.last_target == "ppt"
         self.canvas.itemconfigure("ppt", state="hidden" if web else "normal")
         self.canvas.itemconfigure("webgis", state="normal" if web else "hidden")
-        self.canvas.itemconfigure(self.badge, state="normal" if self.operation else "hidden")
+        self.canvas.itemconfigure(self.badge, state="normal" if self.operation or getattr(self, "preview_busy", False) else "hidden")
 
     def _notice(self, text):
         from tkinter import messagebox
@@ -481,10 +617,11 @@ class SwitchPalette:
             menu.add_separator()
             menu.add_command(label="选择 PowerPoint 窗口…", command=lambda: self.choose_window("ppt"))
             menu.add_command(label="选择 WebGIS 窗口…", command=self.choose_browser)
+            menu.add_command(label="更换课件…", command=self.change_ppt)
             menu.add_command(label="隐藏悬浮球", command=self.hide)
         menu = self.context_menu
-        for index in (0, 1, 3, 4):
-            menu.entryconfigure(index, state="disabled" if self.operation else "normal")
+        for index in (0, 1, 3, 4, 5):
+            menu.entryconfigure(index, state="disabled" if self.operation or getattr(self, "preview_busy", False) else "normal")
         try:
             menu.tk_popup(event.x_root, event.y_root)
         finally:
@@ -493,8 +630,7 @@ class SwitchPalette:
     def hide(self):
         self.close_preview()
         if self.chooser:
-            self.chooser.destroy()
-            self.chooser = None
+            self._dismiss_chooser()
         self.desktop.show_palette(self.root, False)
 
     def _place(self, x, y):
@@ -540,7 +676,7 @@ class SwitchPalette:
             self._toggle()
 
     def _toggle(self):
-        if self.operation:
+        if self.operation or getattr(self, "preview_busy", False):
             return
         kind = "webgis" if self.last_target == "ppt" else "ppt"
         if self.preview and self.preview_kind == kind:
@@ -555,10 +691,13 @@ class SwitchPalette:
         remembered = getattr(self, field)
         if remembered:
             try:
-                return self.desktop.validate(remembered, kind)
+                current = self.desktop.validate(remembered, kind)
+                if kind != "ppt" or is_presentation_window(current):
+                    return current
+                setattr(self, field, None)
             except ValueError:
                 setattr(self, field, None)
-        candidates = self.desktop.powerpoints() if kind == "ppt" else self.desktop.browsers()
+        candidates = self._presentation_windows() if kind == "ppt" else self.desktop.browsers()
         if len(candidates) == 1:
             setattr(self, field, candidates[0])
             return candidates[0]
@@ -567,7 +706,7 @@ class SwitchPalette:
         return None
 
     def focus_ppt(self, allow_launch=True):
-        if self.operation:
+        if self.operation or getattr(self, "preview_busy", False):
             return
         try:
             target = self._resolve("ppt")
@@ -575,7 +714,7 @@ class SwitchPalette:
                 self.show_preview(target, "ppt")
             elif not self.chooser and allow_launch:
                 # Existing windows always win, including when COM/ROT is unavailable.
-                self.operation = self.actions.start("launch")
+                self.operation = self.actions.start("preview")
                 self.canvas.itemconfigure(self.badge, state="normal")
             elif not self.chooser:
                 self._notice("PowerPoint 已启动但没有可预览的主窗口，请检查 Office 提示框。")
@@ -583,7 +722,7 @@ class SwitchPalette:
             self._notice(str(exc))
 
     def focus_webgis(self):
-        if self.operation:
+        if self.operation or getattr(self, "preview_busy", False):
             return
         try:
             target = self._resolve("webgis")
@@ -595,15 +734,34 @@ class SwitchPalette:
     def choose_browser(self):
         self.choose_window("webgis")
 
-    def choose_window(self, kind):
-        if self.operation:
+    def change_ppt(self):
+        if self.operation or getattr(self, "preview_busy", False):
             return
-        self.close_preview()
-        candidates = self.desktop.powerpoints() if kind == "ppt" else self.desktop.browsers()
+        try:
+            self.operation = self.actions.start("open-preview")
+            self._badge()
+        except (ValueError, RuntimeError) as exc:
+            self._notice(str(exc))
+
+    def _dismiss_chooser(self):
         if self.chooser:
             self.chooser.destroy()
+            self.chooser = None
+        cancel = getattr(self, "chooser_cancel", None)
+        self.chooser_cancel = None
+        if cancel:
+            cancel()
+
+    def choose_window(self, kind, on_selected=None, on_cancel=None):
+        if (self.operation or getattr(self, "preview_busy", False)) and not on_selected:
+            return
+        self.close_preview()
+        candidates = self._presentation_windows() if kind == "ppt" else self.desktop.browsers()
+        if self.chooser:
+            self._dismiss_chooser()
         dialog = self.tk.Toplevel(self.root)
         self.chooser = dialog
+        self.chooser_cancel = on_cancel
         label = "PowerPoint" if kind == "ppt" else "WebGIS"
         dialog.title(f"选择 {label} 窗口")
         dialog.attributes("-topmost", True)
@@ -617,14 +775,17 @@ class SwitchPalette:
                 setattr(self, "ppt_target" if kind == "ppt" else "target", item)
                 dialog.destroy()
                 self.chooser = None
+                self.chooser_cancel = None
+                if on_selected:
+                    on_selected(item)
+                    return
                 try:
                     self.show_preview(item, kind)
                 except (ValueError, OSError) as exc:
                     self._notice(str(exc))
             self.tk.Button(dialog, text=candidate.title[:100], command=select, padx=12, pady=10).pack(fill="x", padx=12, pady=4)
         def dismiss():
-            dialog.destroy()
-            self.chooser = None
+            self._dismiss_chooser()
         self.tk.Button(dialog, text="取消", command=dismiss).pack(pady=10)
         dialog.protocol("WM_DELETE_WINDOW", dismiss)
 
