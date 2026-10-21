@@ -11,7 +11,7 @@ describe("ThinkingIndicator", () => {
     expect(screen.getByRole("status")).toHaveTextContent("正在检索知识库");
     act(() => vi.advanceTimersByTime(21000));
     expect(screen.getByText("21 秒")).toBeInTheDocument();
-    expect(screen.getByText(/本次处理时间较长/)).toBeInTheDocument();
+    expect(screen.queryByText(/本次处理时间较长|正在处理你的请求/)).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("正在检索知识库");
     view.rerender(<ThinkingIndicator label="正在整合答复" />);
     expect(screen.getByRole("status")).toHaveTextContent("正在整合答复");

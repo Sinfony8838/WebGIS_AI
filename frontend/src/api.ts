@@ -561,6 +561,7 @@ export async function sendAssistantMessage(
       history: options?.history || [],
       target,
       input_mode: inputMode,
+      ui_observation_protocol: options?.assistantMode === "interaction" ? 1 : 0,
       screen_snapshot: options?.screenSnapshot || {},
       teaching_context: options?.teachingContext || mapContext.teaching_context || {},
       image_attachments: options?.imageAttachments || []
@@ -1669,4 +1670,14 @@ export async function presentClassroomScene(sessionId: string, stageId: string, 
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ stage_id: stageId, target })
     });
+}
+
+export async function acknowledgeUiAction(jobId: string, observation: import("./types").UiObservation): Promise<unknown> {
+  return requestJson(`/jobs/${encodeURIComponent(jobId)}/ui-observations`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(observation)
+  });
+}
+
+export async function cancelAssistantJob(jobId: string): Promise<unknown> {
+  return requestJson(`/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
 }

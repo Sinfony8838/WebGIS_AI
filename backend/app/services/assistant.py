@@ -24,9 +24,9 @@ ASSISTANT_TOOL_SCHEMA = [
     {"name": "switch_basemap", "description": "切换课堂底图风格。", "parameters": {"basemap_id": "string"}, "modes": ["teaching", "tool", "interaction"]},
     {"name": "search_poi", "description": "在当前视域或手绘区域内检索 POI。", "parameters": {"keyword": "string", "mode": "string?", "extent": "number[4]?", "geometry": "object?"}, "modes": ["teaching", "tool", "interaction"]},
     {"name": "run_visual_query", "description": "运行人口等结构化指标查询并生成可高亮地图图层。", "parameters": {"dataset": "string?", "year": "number?", "geo_level": "string?", "metric": "string?", "operation": "string?", "order": "string?", "limit": "number?"}, "modes": ["teaching", "tool", "interaction"]},
-    {"name": "toggle_teaching_map", "description": "叠加或隐藏教学地图（课本插图）。", "parameters": {"map_id": "string", "visible": "boolean?"}, "modes": ["teaching"]},
-    {"name": "open_material", "description": "打开课堂素材或外部教学资料。", "parameters": {"material_id": "string?", "material": "object?"}, "modes": ["teaching"]},
-    {"name": "generate_image", "description": "使用 MiniMax 生成一张 AI 教学素材并保存到项目图片库。该操作会消耗 API 余额；管理员直接执行，其他账号需确认，权限由服务端判断。文字和地理机制需教师核对。", "parameters": {"prompt": "string", "model": "string?", "aspect_ratio": "string?"}, "modes": ["teaching"]},
+    {"name": "toggle_teaching_map", "description": "叠加或隐藏教学地图（课本插图）。", "parameters": {"map_id": "string", "visible": "boolean?"}, "modes": ["teaching", "interaction"]},
+    {"name": "open_material", "description": "打开课堂素材或外部教学资料。", "parameters": {"material_id": "string?", "material": "object?"}, "modes": ["teaching", "interaction"]},
+    {"name": "generate_image", "description": "使用 MiniMax 生成一张 AI 教学素材并保存到项目图片库。该操作会消耗 API 余额；管理员直接执行，其他账号需确认，权限由服务端判断。文字和地理机制需教师核对。", "parameters": {"prompt": "string", "model": "string?", "aspect_ratio": "string?"}, "modes": ["teaching", "interaction"]},
     {"name": "record_observation", "description": "记录课堂学情观察到正在进行的班课（verdict 取值 correct/partial/misconception），供课后报告统计。仅在进行中的班课可用。", "parameters": {"verdict": "string", "tag": "string?", "note": "string?", "question_id": "string?"}, "modes": ["teaching"]},
     {"name": "launch_question", "description": "在教师课堂工作台呈现一道口头提问并记录为课堂证据（question_id 指教案题目，或用 text/options 现场出题）。不进入投屏。仅在进行中的班课可用。", "parameters": {"question_id": "string?", "text": "string?", "options": "string[]?", "answer_index": "number?"}, "modes": ["teaching"]},
     {"name": "switch_view_mode", "description": "在二维平面地图与三维地球之间切换投影模式。", "parameters": {"mode": "plane|globe"}, "modes": ["interaction"]},
@@ -34,7 +34,9 @@ ASSISTANT_TOOL_SCHEMA = [
     {"name": "focus_layer", "description": "定位并缩放到指定图层范围（layer_id 精确或 layer_name 模糊匹配）。", "parameters": {"layer_id": "string?", "layer_name": "string?"}, "modes": ["interaction"]},
     {"name": "set_layer_opacity", "description": "调整图层不透明度（0 全透明 - 1 不透明），适合“调到半透明”这类口语指令。", "parameters": {"layer_id": "string?", "layer_name": "string?", "opacity": "number"}, "modes": ["interaction"]},
     {"name": "enter_lesson_stage", "description": "进入指定教学环节（stage_id 或 stage_title 精确/模糊，offset 支持 next/previous 相对移动）。", "parameters": {"stage_id": "string?", "stage_title": "string?", "offset": "next|previous"}, "modes": ["interaction"]},
-    {"name": "run_workflow", "description": "提交一个 GIS 分析工作流（限白名单模板：人口密度分级设色 population_choropleth、胡焕庸线对比 hu_line_compare、字段分级 classify_field）。", "parameters": {"template_id": "string?", "description": "string?", "parameters": "object?"}, "modes": ["interaction"]},
+    {"name": "run_workflow", "description": "执行 workflow_templates 中已有的校验模板；parameters 中可用 dataset=layer:<id> 引用项目图层，缺数据或参数时先澄清。", "parameters": {"template_id": "string?", "description": "string?", "parameters": "object?"}, "modes": ["interaction"]},
+    {"name": "build_workflow", "description": "构建并执行新的 GIS 工作流。最多8步，使用 workflow_operations；引用真实项目数据。", "parameters": {"workflow": "object", "title": "string?"}, "modes": ["interaction"]},
+    {"name": "draft_teaching", "description": "保存新的独立教学草稿或探究题，引用已观察结果；不会发布或覆盖现有教案。", "parameters": {"draft": "object", "evidence_ids": "string[]?"}, "modes": ["interaction"]},
     {"name": "start_class_session", "description": "开始上课：为当前教案创建进行中的班课。已有进行中的班课时会被拒绝。", "parameters": {"lesson_id": "string?", "lesson_title": "string?"}, "modes": ["interaction"]},
     {"name": "end_class_session", "description": "结束上课：结束当前进行中的班课。高风险操作，需要教师确认后执行。", "parameters": {}, "modes": ["interaction"]},
 ]
@@ -210,6 +212,10 @@ ASSISTANT_TOOL_INPUT_SCHEMAS.update({
     "end_class_session": {"type": "object", "properties": {}, "additionalProperties": False},
 })
 # Match the existing visual-query endpoint's supported limit.
+ASSISTANT_TOOL_INPUT_SCHEMAS.update({
+    "build_workflow": {"type": "object", "required": ["workflow"], "properties": {"workflow": {"type": "object"}, "title": {"type": "string", "maxLength": 150}}, "additionalProperties": False},
+    "draft_teaching": {"type": "object", "required": ["draft"], "properties": {"draft": {"type": "object", "minProperties": 1}, "evidence_ids": {"type": "array", "maxItems": 8, "items": {"type": "string"}}}, "additionalProperties": False},
+})
 ASSISTANT_TOOL_INPUT_SCHEMAS["run_visual_query"]["properties"]["limit"]["maximum"] = 200
 
 for _tool_descriptor in ASSISTANT_TOOL_SCHEMA:
@@ -688,6 +694,10 @@ class AssistantService:
         # A keyword match cannot resolve negation, conditions or multiple
         # instructions. Let the existing planner see the complete request.
         complex_request = bool(re.search(r"然后|接着|同时|并且|并|再|如果|假如|要是|否则|而是|只|(?:和|及|、).*(?:底图|图层|地图|面板)", normalized))
+        # Punctuation may join a known control with an unknown goal or
+        # constraint. Resolve every clause before admitting the whole request.
+        clauses = [part.strip() for part in re.split(r"[，,；;。！？!?\n]+", message) if part.strip()]
+        complex_request = complex_request or len(clauses) > 1
         # Quoted speech / reported commands / hedging ("刚才说切换到三维",
         # "好像可以切换") must never hit the keyword fast path — the mention
         # of a command is not a command. Route them to the LLM planner which
@@ -701,12 +711,15 @@ class AssistantService:
             clauses = re.split(r"[，,；;。]|然后|接着|同时|并且|而是|只|再", message)
             has_positive_action = any(
                 not re.search(negation, clause)
-                and re.search(r"打开|关闭|切换|显示|隐藏|开始|结束|进入|调到|调成|设置|定位|转到", clause)
+                and re.search(r"打开|关闭|切换|显示|隐藏|开始|结束|进入|调到|调成|设置|定位|转到|设计|制作|生成|构建|另做|出题|探究", clause)
                 for clause in clauses
             )
             if not has_positive_action:
                 return {"assistant_message": "好的，保持当前状态，不执行该操作。", "actions": [], "stop_planning": True}
             complex_request = True
+        creative = bool(re.search(r"设计|制作|构建|出题|探究|做成|编写|创作|另做|生成.*(?:题|教案|对比图|新图|地图|工作流)", normalized))
+        if creative:
+            return {"assistant_message": "需要根据目标构建方案，暂未执行操作。", "actions": []}
         if complex_request:
             # 多步操控指令优先做确定性顺序分解；任何一步无法确定时才交给
             # LLM 完整规划，绝不能只执行最后一步或漏掉中间步骤。
@@ -715,6 +728,12 @@ class AssistantService:
                 if sequential_plan is not None:
                     return sequential_plan
             return {"assistant_message": "这条指令需要完整规划，暂未执行任何操作。", "actions": []}
+
+        zoom_command = re.fullmatch(r"(?:请)?(放大|缩小)(?:一点|一些|一级)?", normalized)
+        if zoom_command:
+            current_zoom = float(project.view.get("zoom", 4))
+            zoom = max(1, min(20, current_zoom + (1 if zoom_command[1] == "放大" else -1)))
+            return {"assistant_message": "好的，调整地图比例尺。", "actions": [{"tool_name": "set_view", "tool_params": {"zoom": zoom}}]}
 
         # --- 班课控制（短语最具体，优先判定）---
         if any(keyword in normalized for keyword in INTERACTION_SESSION_END_KEYWORDS):
@@ -892,12 +911,14 @@ class AssistantService:
             if template_id and template_id in INTERACTION_ALLOWED_TEMPLATES:
                 wants_analysis = any(keyword in normalized for keyword in INTERACTION_WORKFLOW_TRIGGER_KEYWORDS) or "分析" in normalized
                 if wants_analysis:
+                    if template_id == "facility_buffer" and not any(layer.name and layer.name in message for layer in project.layers) and not any(word in message for word in ("当前图层", "活动图层", "这个图层")):
+                        return {"assistant_message": "需要对哪个项目图层做缓冲分析，距离是多少？", "actions": [], "stop_planning": True}
                     template_title = next(
                         (item["title"] for item in list_templates() if item["id"] == template_id), template_id
                     )
                     return {
                         "assistant_message": f"好的，已提交「{template_title}」分析，完成后结果图层会自动加载。",
-                        "actions": [{"tool_name": "run_workflow", "tool_params": {"template_id": template_id}}],
+                        "actions": [{"tool_name": "run_workflow", "tool_params": {"template_id": template_id, "description": message}}],
                     }
             if template_id is None and "分析" in normalized and any(
                 keyword in normalized for keyword in INTERACTION_WORKFLOW_TRIGGER_KEYWORDS
@@ -972,6 +993,8 @@ class AssistantService:
 
     def _resolve_interaction_clause(self, clause: str, project: ProjectRecord) -> Optional[Tuple[Dict[str, Any], str]]:
         """解析单个操控子句为 (action, narrative)；无法确定时返回 None。"""
+        if re.search(r"不要|别|不用|无需|设计|制作|构建|出题|探究|做成|编写|创作|另做", clause):
+            return None
         # 1) 2D/3D 投影
         wants_globe = any(keyword in clause for keyword in INTERACTION_GLOBE_KEYWORDS)
         wants_plane = any(keyword in clause for keyword in INTERACTION_PLANE_KEYWORDS)
@@ -1023,7 +1046,7 @@ class AssistantService:
                 if any(keyword in clause for keyword in INTERACTION_WORKFLOW_TRIGGER_KEYWORDS) or "分析" in clause:
                     template_title = next((item["title"] for item in list_templates() if item["id"] == template_id), template_id)
                     return (
-                        {"tool_name": "run_workflow", "tool_params": {"template_id": template_id}},
+                        {"tool_name": "run_workflow", "tool_params": {"template_id": template_id, "description": clause}},
                         f"提交「{template_title}」分析",
                     )
         # 7) 地名定位 / 图层定位
