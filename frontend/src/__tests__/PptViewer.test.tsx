@@ -17,9 +17,9 @@ describe("PptViewer keyboard ownership", () => {
     const pending = new Promise<void>(resolve => { finish = resolve; });
     vi.spyOn(pptSession, "preloadPptImage").mockImplementation(url => url.endsWith("2.png") ? pending : Promise.resolve());
     render(<PptViewer {...base} staticOnly slides={slides.map((slide, index) => ({ ...slide, imageUrl: `/page${index + 1}.png` }))} />);
-    fireEvent.click(screen.getByRole("button", { name: "2", exact: true }));
+    fireEvent.change(screen.getByRole("combobox", { name: "跳转幻灯片" }), { target: { value: "1" } });
     expect(screen.getByRole("img", { name: "幻灯片 1" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "3", exact: true }));
+    fireEvent.change(screen.getByRole("combobox", { name: "跳转幻灯片" }), { target: { value: "2" } });
     await waitFor(() => expect(screen.getByRole("img", { name: "幻灯片 3" })).toBeInTheDocument());
     await act(async () => finish());
     expect(screen.getByRole("img", { name: "幻灯片 3" })).toBeInTheDocument();
@@ -28,7 +28,7 @@ describe("PptViewer keyboard ownership", () => {
   it("keeps the current image on a failed page and retries without losing the deck", async () => {
     const preload = vi.spyOn(pptSession, "preloadPptImage").mockRejectedValue(new Error("image failed"));
     render(<PptViewer {...base} staticOnly slides={slides.map((slide, index) => ({ ...slide, imageUrl: `/page${index + 1}.png` }))} />);
-    fireEvent.click(screen.getByRole("button", { name: "2", exact: true }));
+    fireEvent.change(screen.getByRole("combobox", { name: "跳转幻灯片" }), { target: { value: "1" } });
     await screen.findByRole("alert");
     expect(screen.getByRole("img", { name: "幻灯片 1" })).toBeInTheDocument();
     preload.mockResolvedValue(undefined);
@@ -52,6 +52,35 @@ describe("PptViewer keyboard ownership", () => {
     expect(base.onCollapse).not.toHaveBeenCalled();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(base.onCollapse).toHaveBeenCalledTimes(1);
+  });
+
+  it("jumps through the compact pager and leaves its focused keys with the select", () => {
+    render(<PptViewer {...base} staticOnly />);
+    const pager = screen.getByRole("combobox", { name: "跳转幻灯片" });
+    expect(screen.getByRole("button", { name: "上一页" })).toBeDisabled();
+    fireEvent.change(pager, { target: { value: "2" } });
+    expect(screen.getByText("第3页")).toBeInTheDocument();
+    expect(pager).toHaveValue("2");
+    expect(screen.getByRole("button", { name: "下一页" })).toBeDisabled();
+    pager.focus();
+    for (const key of ["ArrowLeft", "Home", " ", "Escape"]) fireEvent.keyDown(pager, { key });
+    expect(screen.getByText("第3页")).toBeInTheDocument();
+    expect(base.onCollapse).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "上一页" }));
+    expect(screen.getByText("第2页")).toBeInTheDocument();
+    expect(pager).toHaveValue("1");
+  });
+
+  it("fits the whole page between the controls without changing its aspect ratio", () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
+    vi.spyOn(window, "getComputedStyle").mockReturnValue({
+      paddingLeft: "14px", paddingRight: "14px", paddingTop: "56px", paddingBottom: "56px"
+    } as CSSStyleDeclaration);
+    const { container } = render(<PptViewer {...base} staticOnly />);
+    const frame = container.querySelector<HTMLElement>(".ppt-viewer-slide-frame")!;
+    expect(parseFloat(frame.style.height)).toBeCloseTo(288);
+    expect(parseFloat(frame.style.width)).toBeCloseTo(512);
   });
 
   it("does not collapse a drawing deck when an older owner handles brush exit globally", () => {

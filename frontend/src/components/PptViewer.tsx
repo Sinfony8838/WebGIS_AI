@@ -82,8 +82,9 @@ export function PptViewer({
   const recalcScale = useCallback(() => {
     if (!stageRef.current || !slide) return;
     const { clientWidth, clientHeight } = stageRef.current;
-    const padX = 32;
-    const padY = 32;
+    const padding = window.getComputedStyle(stageRef.current);
+    const padX = (parseFloat(padding.paddingLeft) || 0) + (parseFloat(padding.paddingRight) || 0);
+    const padY = (parseFloat(padding.paddingTop) || 0) + (parseFloat(padding.paddingBottom) || 0);
     const scaleX = (clientWidth - padX) / slideW;
     const scaleY = (clientHeight - padY) / slideH;
     setScale(Math.max(0.01, Math.min(1, scaleX, scaleY)));
@@ -204,7 +205,7 @@ export function PptViewer({
   }
 
   return (
-    <div className={`ppt-viewer-backdrop ${fullscreen ? "ppt-viewer-fullscreen" : "ppt-viewer-split"} ${brushActive ? "ppt-viewer-backdrop--brush" : ""}`}
+    <div className={`ppt-viewer-backdrop ${fullscreen ? "ppt-viewer-fullscreen" : "ppt-viewer-split"}${staticOnly ? " ppt-viewer--static" : ""} ${brushActive ? "ppt-viewer-backdrop--brush" : ""}`}
       style={fullscreen ? undefined : { width: `clamp(320px, ${widthPercent}vw, 70vw)` }} role="region" aria-label="PPT 放映">
       {!fullscreen ? <div className="ppt-viewer-resizer" role="separator" aria-label="调整 PPT 分栏宽度"
         aria-orientation="vertical" aria-valuemin={22} aria-valuemax={70} aria-valuenow={widthPercent} tabIndex={0}
@@ -217,10 +218,10 @@ export function PptViewer({
           setWidthPercent(value => event.key === "Home" ? 22 : event.key === "End" ? 70 : Math.max(22, Math.min(70, value + (event.key === "ArrowLeft" ? 2 : -2))));
         }} /> : null}
       <div className="ppt-viewer-header">
-        <span className="ppt-viewer-filename">{fileName}</span>
-        <span className="ppt-viewer-counter">
+        <span className="ppt-viewer-filename" title={fileName}>{fileName}</span>
+        {!staticOnly ? <span className="ppt-viewer-counter">
           {currentIndex + 1} / {slides.length}
-        </span>
+        </span> : null}
         <div className="ppt-viewer-controls">
           {onToggleBrush ? <button type="button" aria-pressed={brushActive} onClick={onToggleBrush}>{brushActive ? "结束画笔" : "画笔"}</button> : null}
           <button type="button" onClick={() => setFullscreen(value => !value)}>{fullscreen ? "地图同屏" : "全屏"}</button>
@@ -283,12 +284,17 @@ export function PptViewer({
       <div className="ppt-viewer-nav">
         <button
           type="button"
+          aria-label="上一页"
+          title="上一页"
           disabled={currentIndex === 0}
           onClick={() => goToSlide(currentIndex - 1)}
         >
-          上一页
+          {staticOnly ? <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="m12 5-5 5 5 5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg> : "上一页"}
         </button>
-        <div className="ppt-viewer-thumbs">
+        {staticOnly ? <select className="ppt-viewer-page-select" aria-label="跳转幻灯片" title="跳转到指定页"
+          value={currentIndex} onChange={event => goToSlide(Number(event.target.value))}>
+          {slides.map((_, index) => <option key={index} value={index}>{index + 1} / {slides.length}</option>)}
+        </select> : <div className="ppt-viewer-thumbs">
           {slides.map((_, i) => (
             <button
               key={i}
@@ -299,13 +305,15 @@ export function PptViewer({
               {i + 1}
             </button>
           ))}
-        </div>
+        </div>}
         <button
           type="button"
+          aria-label="下一页"
+          title="下一页"
           disabled={currentIndex === slides.length - 1}
           onClick={() => goToSlide(currentIndex + 1)}
         >
-          下一页
+          {staticOnly ? <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="m8 5 5 5-5 5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg> : "下一页"}
         </button>
       </div>
     </div>

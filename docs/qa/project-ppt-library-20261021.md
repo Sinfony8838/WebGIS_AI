@@ -41,6 +41,14 @@
 - Follow-up checks: the four affected frontend suites passed (25 tests); the QA frontend build and `git diff --check` passed. The first test invocation used nonexistent test paths and found no tests; the corrected invocation exercised all four suites.
 - The local acceptance page was rebuilt. Browser automation could not initialize (`failed to write kernel assets`, OS error 3), so device verification of this layout change remains pending. No fresh screenshot or visual pass is claimed.
 
+## Compact player follow-up
+
+- Continued from `507de5c7d22b1056fee408f0aa03727a252af068` in the same dedicated branch/worktree. Scope is limited to `PptViewer.tsx`, `PptViewer.css`, its existing test file and this note; original assets, runtime state and the primary checkout remain untouched.
+- Static playback replaces the full-width light header/footer with floating controls on a consistent dark canvas. A compact previous/page-select/next pager replaces the scrolling number strip. Fullscreen, collapse, brush controls and native aspect ratio remain available; the legacy HTML viewer keeps its existing controls.
+- Scale calculation now reads the stage's actual padding so the entire page fits between the floating controls. New tests cover direct page jumps, focused select keyboard ownership, page-boundary buttons and aspect-ratio/safe-area fitting. Existing pending-load cancellation and failed-page retry tests exercise the new pager.
+- `npm test -- --maxWorkers=1 --minWorkers=1 src/__tests__/PptViewer.test.tsx src/__tests__/ProjectPptLibrary.test.tsx src/__tests__/pptSession.test.ts src/__tests__/brushHistory.test.ts src/__tests__/PptBrushFloat.test.tsx`: **5 files / 32 tests passed**. QA `npm run build` passed (existing chunk-size advisory); `git diff --check` passed.
+- The loopback acceptance frontend was rebuilt. The browser tool again failed to initialize (`failed to write kernel assets`, OS error 3), so fresh screenshots and the device layout matrix remain pending; automated geometry tests do not replace visual acceptance.
+
 ## Local recovery and handoff
 
 - Disk exhaustion interrupted one new test-file write; the zero-length file was restored and retested. No incomplete test file is intended for commit.
