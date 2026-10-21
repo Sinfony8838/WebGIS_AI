@@ -34,6 +34,13 @@
 - **UNRUN**: all-31-page visual comparison, real multi-deck/ink/refresh walkthrough, native new-import conversion smoke test, the 1920/1366/1280 × 100/125/150% matrix, and measured ≤1 s deck/≤100 ms page targets. Automated cases cover the corresponding state/error paths, not device rendering or timing.
 - **RELEASE HELD**: keep the PR draft and production unchanged until those device gates pass. Existing connector availability is no longer a client prerequisite, but the server-side renderer still needs an operational Windows/PowerPoint import environment.
 
+## Split-view header follow-up
+
+- The user confirmed that the displayed PPT looks correct and supplied a split-view screenshot showing the global header overlapping the narrow map/PPT layout. This is human confirmation of that displayed slide, not completion of the full visual matrix above.
+- Split playback now hides the global header and removes the viewer's reserved header offset at desktop and narrow widths. Collapsing the viewer restores the header through the existing split-mode state. The PPT's own controls remain available.
+- Follow-up checks: the four affected frontend suites passed (25 tests); the QA frontend build and `git diff --check` passed. The first test invocation used nonexistent test paths and found no tests; the corrected invocation exercised all four suites.
+- The local acceptance page was rebuilt. Browser automation could not initialize (`failed to write kernel assets`, OS error 3), so device verification of this layout change remains pending. No fresh screenshot or visual pass is claimed.
+
 ## Local recovery and handoff
 
 - Disk exhaustion interrupted one new test-file write; the zero-length file was restored and retested. No incomplete test file is intended for commit.

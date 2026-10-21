@@ -3,8 +3,12 @@
   z-index: 80;
 }
 
+.screen-shell.ppt-map-split > .app-header {
+  display: none;
+}
+
 .screen-shell .ppt-viewer-split {
-  inset: 58px 0 0 auto;
+  inset: 0 0 0 auto;
   border-left: 1px solid #cad6df;
   box-shadow: -4px 0 20px #0b162833;
 }
@@ -28,7 +32,7 @@
 .ppt-import-failure > div { display: flex; gap: 8px; flex-wrap: wrap; }
 .ppt-import-failure button { min-height: 34px; padding: 5px 10px; border: 1px solid #bcac82; border-radius: 6px; background: #fff; color: inherit; cursor: pointer; }
 @media (max-width: 760px) {
-  .screen-shell .ppt-viewer-split { inset: 58px 0 0; width: auto !important; }
+  .screen-shell .ppt-viewer-split { inset: 0; width: auto !important; }
   .ppt-viewer-resizer { display: none; }
   .screen-shell.ppt-map-split .map-canvas, .screen-shell.ppt-map-split .map-3d-globe { right: 0; }
   .screen-shell.ppt-map-split .right-rail { right: 12px; }
