@@ -23,6 +23,16 @@ export class BrushHistory {
   canUndo(key: string): boolean { return this.page(key).undo.length > 0; }
   get retainedSteps(): number { return this.order.length; }
 
+  snapshot(): Record<string, string | null> {
+    return Object.fromEntries([...this.pages].map(([key, page]) => [key, page.image]));
+  }
+
+  static restore(pages: Record<string, string | null>): BrushHistory {
+    const history = new BrushHistory(30);
+    for (const [key, image] of Object.entries(pages)) history.replace(key, image);
+    return history;
+  }
+
   commit(key: string, image: string | null): void {
     const page = this.page(key);
     if (page.image === image) return;

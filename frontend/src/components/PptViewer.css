@@ -3,8 +3,12 @@
   z-index: 80;
 }
 
+.screen-shell.ppt-map-split > .app-header {
+  display: none;
+}
+
 .screen-shell .ppt-viewer-split {
-  inset: 58px 0 0 auto;
+  inset: 0 0 0 auto;
   border-left: 1px solid #cad6df;
   box-shadow: -4px 0 20px #0b162833;
 }
@@ -17,17 +21,130 @@
 .ppt-viewer-source { padding: 6px 14px; font-size: 12px; color: #c7d9e5; background: #173046; }
 .ppt-viewer-source--simple { background: #fff3d4; color: #73520d; }
 .ppt-viewer-image-error { padding: 8px 14px; background: #ffe2e2; color: #922c2c; }
+.ppt-page-loading { position: absolute; top: 72px; right: 16px; z-index: 2; padding: 7px 12px; border-radius: 8px; background: #fffffff0; color: #29465b; font-size: 12px; box-shadow: 0 2px 12px #0002; }
 .ppt-viewer-nav { min-width: 0; }
 .ppt-viewer-nav > button { flex-shrink: 0; }
 .ppt-viewer-thumbs { min-width: 0; overflow-x: auto; }
 .screen-shell.ppt-map-split .map-canvas, .screen-shell.ppt-map-split .map-3d-globe { right: var(--ppt-pane-width); }
 .screen-shell.ppt-map-split .right-rail { right: calc(var(--ppt-pane-width) + 12px); }
+
+/* Static playback keeps the page prominent, with compact controls in its safe area. */
+.screen-shell .ppt-viewer-backdrop.ppt-viewer--static {
+  --text-main: #dce6f0;
+  --text-soft: #b8c7d6;
+  --input-bg: transparent;
+  --panel-border-strong: transparent;
+  background: #101720;
+  border-left-color: #293646;
+  backdrop-filter: none;
+}
+.screen-shell .ppt-viewer--static .ppt-viewer-stage {
+  box-sizing: border-box;
+  padding: 56px 14px;
+}
+.screen-shell .ppt-viewer--static .ppt-viewer-image-error {
+  --text-main: #922c2c;
+  position: absolute;
+  z-index: 3;
+  top: 56px;
+  left: 14px;
+  right: 14px;
+  border-radius: 8px;
+}
+.screen-shell .ppt-viewer-backdrop.ppt-viewer--static .ppt-viewer-header {
+  position: absolute;
+  z-index: 2;
+  inset: 12px 14px auto;
+  flex-wrap: nowrap;
+  gap: 12px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+.screen-shell .ppt-viewer--static .ppt-viewer-filename {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+  color: #b8c7d6;
+  font-size: 12px;
+  letter-spacing: normal;
+}
+.screen-shell .ppt-viewer--static .ppt-viewer-controls {
+  flex-shrink: 0;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 12px;
+  background: #1c2938;
+}
+.screen-shell .ppt-viewer--static .ppt-viewer-controls button {
+  min-height: 32px;
+  padding: 4px 9px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #dce6f0;
+  font-size: 12px;
+}
+.screen-shell .ppt-viewer--static .ppt-viewer-controls button:hover,
+.screen-shell .ppt-viewer--static .ppt-viewer-controls button[aria-pressed="true"] {
+  background: #31465b;
+}
+.screen-shell .ppt-viewer-backdrop.ppt-viewer--static .ppt-viewer-nav {
+  position: absolute;
+  z-index: 2;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100% - 28px);
+  box-sizing: border-box;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid #ffffff14;
+  border-radius: 24px;
+  background: #1c2938;
+  box-shadow: 0 4px 16px #0003;
+}
+.screen-shell .ppt-viewer--static .ppt-viewer-nav > button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #dce6f0;
+}
+.screen-shell .ppt-viewer--static .ppt-viewer-nav > button:not(:disabled):hover {
+  background: #31465b;
+  color: #fff;
+}
+.screen-shell .ppt-viewer--static .ppt-viewer-page-select {
+  min-width: 84px;
+  height: 32px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #dce6f0;
+  color-scheme: dark;
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.screen-shell .ppt-viewer--static :is(button, select):focus-visible {
+  outline: 2px solid #71c7e9;
+  outline-offset: 2px;
+}
 .ppt-import-failure { position: fixed; z-index: 100; right: 16px; top: 72px; width: min(480px, calc(100vw - 32px)); box-sizing: border-box; padding: 18px; border: 1px solid #dcb762; border-radius: 12px; background: #fffbef; color: #3c321a; box-shadow: 0 5px 20px #0002; }
 .ppt-import-failure p { font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
 .ppt-import-failure > div { display: flex; gap: 8px; flex-wrap: wrap; }
 .ppt-import-failure button { min-height: 34px; padding: 5px 10px; border: 1px solid #bcac82; border-radius: 6px; background: #fff; color: inherit; cursor: pointer; }
 @media (max-width: 760px) {
-  .screen-shell .ppt-viewer-split { inset: 58px 0 0; width: auto !important; }
+  .screen-shell .ppt-viewer-split { inset: 0; width: auto !important; }
   .ppt-viewer-resizer { display: none; }
   .screen-shell.ppt-map-split .map-canvas, .screen-shell.ppt-map-split .map-3d-globe { right: 0; }
   .screen-shell.ppt-map-split .right-rail { right: 12px; }

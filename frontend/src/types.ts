@@ -549,6 +549,22 @@ export type TeachingMaterial = {
   created_at: string;
 };
 
+export type ProjectPresentation = {
+  id: string;
+  title: string;
+  file_name: string;
+  source_hash?: string;
+  render_version: string;
+  status: "pending" | "queued" | "running" | "ready" | "failed";
+  renderer: string;
+  job_id: string;
+  error: string;
+  page_count?: number;
+  cover_url?: string;
+  import_request_id?: string;
+  slides?: { index: number; image_url: string; width: number; height: number }[];
+};
+
 export type KnowledgeDatasetRef = {
   project_id?: string;
   layer_id?: string;

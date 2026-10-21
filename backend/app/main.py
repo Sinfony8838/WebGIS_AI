@@ -7,6 +7,7 @@ import secrets
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from threading import RLock
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
@@ -22,6 +23,7 @@ from .services.minimax_image_client import ALLOWED_ASPECT_RATIOS, ALLOWED_IMAGE_
 from .services import request_limits, resource_access
 from .services.ppt_renderer import PptRenderError, render_pptx_to_images
 from .services.bounded_executor import BoundedExecutor, ExecutorBusy
+from .services.project_presentations import ProjectPresentations
 from .services.map_profiles import ProfileError, preview as preview_map_profile
 from .services.auth import AuthContext, AuthError, AuthService
 
@@ -53,6 +55,9 @@ async def _lifespan(application: FastAPI):
     finally:
         # Join outside the event loop; existing converter subprocess deadlines
         # and cleanup still own running native work. Queued work is cancelled.
+        library = getattr(application.state, "presentation_library", None)
+        if library is not None:
+            await library.close()
         await executor.aclose()
 
 
@@ -60,6 +65,7 @@ app = FastAPI(title="WebGIS-AI Runtime", version="1.1.0", lifespan=_lifespan)
 # Also supports direct route/TestClient use without a lifespan. No thread is
 # created until a conversion is admitted; real ASGI startup owns a fresh pool.
 app.state.ppt_executor = BoundedExecutor()
+_presentation_library_lock = RLock()
 
 # Outermost byte budget for JSON bodies: rejects oversized payloads while the
 # bytes are still being received, before any request-model deserialization.
@@ -2014,6 +2020,71 @@ async def render_ppt(request: Request, file: UploadFile = File(...)) -> Dict[str
         ) from exc
     except PptRenderError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.to_dict()) from exc
+
+
+def _presentation_library() -> ProjectPresentations:
+    with _presentation_library_lock:
+        library = getattr(app.state, "presentation_library", None)
+        if library is None or library.config is not config or library.store is not runtime.store:
+            library = ProjectPresentations(config, runtime.store, getattr(runtime, "knowledge_base_service", None))
+            app.state.presentation_library = library
+        return library
+
+
+def _presentation_response(request, project_id, result):
+    # KB sources are never sent to the client. All resulting pages must belong
+    # to the already authorized project's output/upload trees.
+    _grant_response_files(request, result, allowed_roots=_project_grant_roots(project_id))
+    return result
+
+
+@app.get("/projects/{project_id}/presentations")
+def list_project_presentations(project_id: str, request: Request):
+    _require_project_access(request, project_id)
+    return _presentation_response(request, project_id, _presentation_library().list(project_id))
+
+
+@app.get("/projects/{project_id}/presentations/{presentation_id}")
+def get_project_presentation(project_id: str, presentation_id: str, request: Request):
+    _require_project_access(request, project_id)
+    try:
+        return _presentation_response(request, project_id, _presentation_library().get(project_id, presentation_id))
+    except KeyError as exc:
+        raise HTTPException(404, "课件不存在") from exc
+
+
+@app.post("/projects/{project_id}/presentations")
+async def import_project_presentation(project_id: str, request: Request, file: UploadFile = File(...),
+                                      request_id: str = Form(...)):
+    _require_project_access(request, project_id)
+    try:
+        raw = await request_limits.read_upload_limited(file, config.max_ppt_upload_bytes)
+        library = _presentation_library()
+        presentation_id = library.import_file(project_id, file.filename or "课件.pptx", raw, request_id)
+        try:
+            library.start(project_id, presentation_id, app.state.ppt_executor)
+        except ExecutorBusy:
+            pass  # Import remains registered as pending; preparation is explicit.
+        return _presentation_response(request, project_id, library.get(project_id, presentation_id))
+    except request_limits.PayloadTooLarge:
+        raise HTTPException(413, "演示文稿超过大小限制") from None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/projects/{project_id}/presentations/{presentation_id}/render")
+async def prepare_project_presentation(project_id: str, presentation_id: str, request: Request,
+                                       retry: bool = Query(False)):
+    _require_project_access(request, project_id)
+    try:
+        result = _presentation_library().start(project_id, presentation_id, app.state.ppt_executor, retry=retry)
+        return _presentation_response(request, project_id, result)
+    except KeyError as exc:
+        raise HTTPException(404, "课件不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except ExecutorBusy as exc:
+        raise HTTPException(503, str(exc)) from exc
 
 
 @app.post("/search/poi")

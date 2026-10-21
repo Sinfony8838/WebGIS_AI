@@ -76,7 +76,6 @@ import {
   deleteLayer,
   patchLayer,
   registerKbLayer,
-  renderPptx,
   runTemplate,
   searchKb,
   searchPoi,
@@ -118,8 +117,9 @@ import { VisualMapPanel } from "./components/VisualMapPanel";
 import { WorkflowDock } from "./components/WorkflowDock";
 import { UserMenu } from "./components/UserMenu";
 import { PptViewer } from "./components/PptViewer";
-import { PptImportFailure } from "./components/PptImportFailure";
-import { DesktopPptControls } from "./components/DesktopPptControls";
+import { ProjectPptLibrary } from "./components/ProjectPptLibrary";
+import { savePptSession, type PptSession } from "./lib/pptSession";
+import type { ProjectPresentation } from "./types";
 import { type BrushOverlayHandle, type BrushSettings } from "./components/BrushOverlay";
 import { BrushToolbar } from "./components/BrushToolbar";
 import { PptBrushFloat } from "./components/PptBrushFloat";
@@ -129,7 +129,6 @@ import {
   altitudeToZoom,
   zoomToAltitude
 } from "./lib/altitudeZoom";
-import { parsePptxFile, releaseSlideObjectUrls } from "./lib/pptxRenderer";
 import { decideLessonGlobeScene } from "./lib/lessonGlobeScene";
 import { MapBrushOverlay } from "./components/MapBrushOverlay";
 import type { MapInkProjection } from "./lib/mapInk";
@@ -655,10 +654,17 @@ export default function App({
   const [pptViewerOpen, setPptViewerOpen] = useState(false);
   const [pptSlides, setPptSlides] = useState<SlideContent[]>([]);
   const [pptFileName, setPptFileName] = useState("");
-  const [pptLoading, setPptLoading] = useState(false);
-  const [pptImportFailure, setPptImportFailure] = useState<{ file: File; message: string } | null>(null);
+  const [pptPresentationId, setPptPresentationId] = useState("");
+  const [pptSessionKey, setPptSessionKey] = useState("");
+  const [pptSession, setPptSession] = useState<PptSession>();
+  const pptStorageWarned = useRef(false);
+  const pptScope = `${currentUser.user_id}:${project?.project_id || ""}`;
+  useEffect(() => {
+    setPptViewerOpen(false); setPptSlides([]); setPptFileName(""); setPptPresentationId("");
+    setPptSession(undefined); setPptSessionKey(""); setPptBrushHasContent(false); setPptBrushCanUndo(false);
+    pptStorageWarned.current = false;
+  }, [pptScope]);
   const [pptSplitWidth, setPptSplitWidth] = useState<number | null>(null);
-  const pptFileInputRef = useRef<HTMLInputElement | null>(null);
   const pptPresentationReady = pptSlides.length > 0;
   const brushTargetRef = pptViewerOpen && pptPresentationReady ? pptBrushRef : brushRef;
   const brushTargetHasContent = pptViewerOpen && pptPresentationReady ? pptBrushHasContent : mapBrushHasContent;
@@ -1993,52 +1999,24 @@ export default function App({
     }
   }, [currentUser.role, handleAttachImage, imageGenerationLoading, project, pushToast, refreshProjectState]);
 
-  const handleRenderedPptImport = useCallback(async (file: File) => {
-    setPptLoading(true);
-    setPptImportFailure(null);
-    try {
-      const rendered = await renderPptx(file);
-      if (!rendered.slides.length) throw new Error("渲染器未返回幻灯片，请检查课件后重新导入。");
-      const slides = rendered.slides.map((slide) => ({
-        index: slide.index,
-        html: "",
-        imageUrl: slide.image_url,
-        images: {},
-        width: slide.width,
-        height: slide.height,
-        renderer: rendered.renderer
-      }));
-      setPptSlides((previousSlides) => {
-        releaseSlideObjectUrls(previousSlides);
-        return slides;
-      });
-      setPptFileName(rendered.file_name || file.name);
-      setPptBrushHasContent(false);
-      setPptBrushCanUndo(false);
-      setInteractionMode("browse");
-      setPptViewerOpen(true);
-      pushToast("success", "PPT 已导入", `已使用 ${rendered.renderer} 渲染 ${rendered.slides.length} 张幻灯片`);
-    } catch (err) {
-      setPptImportFailure({ file, message: err instanceof Error ? err.message : String(err) });
-    } finally {
-      setPptLoading(false);
-    }
-  }, [pushToast]);
+  const handleProjectPptSelect = useCallback((deck: ProjectPresentation, session: PptSession, key: string) => {
+    pptBrushRef.current?.exportImage();
+    setPptSlides((deck.slides || []).map(slide => ({ index: slide.index, html: "", images: {},
+      imageUrl: buildPublicFileUrl(slide.image_url), width: slide.width, height: slide.height, renderer: deck.renderer })));
+    setPptFileName(deck.file_name); setPptPresentationId(deck.id); setPptSession(session); setPptSessionKey(key);
+    setPptBrushHasContent(Boolean(session.history.image(String(session.currentIndex))));
+    setPptBrushCanUndo(session.history.canUndo(String(session.currentIndex)));
+    setInteractionMode("browse"); setPptViewerOpen(true);
+  }, []);
 
-  const handleSimplePptImport = useCallback(async () => {
-    if (!pptImportFailure) return;
-    setPptLoading(true);
-    try {
-      const result = await parsePptxFile(pptImportFailure.file);
-      if (!result.slides.length) throw new Error("课件中没有可预览的幻灯片。");
-      setPptSlides(previous => { releaseSlideObjectUrls(previous); return result.slides; });
-      setPptFileName(result.fileName);
-      setPptBrushHasContent(false); setPptBrushCanUndo(false);
-      setInteractionMode("browse"); setPptViewerOpen(true); setPptImportFailure(null);
-    } catch (err) {
-      setPptImportFailure(previous => previous ? { ...previous, message: err instanceof Error ? err.message : String(err) } : null);
-    } finally { setPptLoading(false); }
-  }, [pptImportFailure]);
+  const handlePptSessionChange = useCallback((session: PptSession) => {
+    if (!pptSessionKey) return;
+    void savePptSession(pptSessionKey, session).catch(() => {
+      if (pptStorageWarned.current) return;
+      pptStorageWarned.current = true;
+      pushToast("info", "批注保存在当前页面", "浏览器存储不可用，刷新前请保留当前页面。");
+    });
+  }, [pptSessionKey, pushToast]);
 
   const handlePptCollapse = useCallback(() => {
     setInteractionMode("browse");
@@ -2051,10 +2029,7 @@ export default function App({
     setPptBrushHasContent(false);
     setPptBrushCanUndo(false);
     setPptFileName("");
-    setPptSlides((previousSlides) => {
-      releaseSlideObjectUrls(previousSlides);
-      return [];
-    });
+    setPptSlides([]); setPptPresentationId(""); setPptSession(undefined); setPptSessionKey("");
   }, []);
 
   const handleUploadDataset = useCallback(
@@ -4113,13 +4088,8 @@ export default function App({
           >
             数据库
           </button> : null}
-          <DesktopPptControls onNotice={(message) => pushToast("info", "本机 PowerPoint", message)} />
-          <input ref={pptFileInputRef} type="file" accept=".pptx" hidden aria-label="选择页面预览 PPT 文件"
-            onChange={(event) => {
-              const file = event.currentTarget.files?.[0];
-              event.currentTarget.value = "";
-              if (file) void handleRenderedPptImport(file);
-            }} />
+          <ProjectPptLibrary key={pptScope} projectId={project?.project_id || ""} userId={currentUser.user_id}
+            currentId={pptPresentationId} viewerOpen={pptViewerOpen} onSelect={handleProjectPptSelect} />
           <button
             type="button"
             className="toolbar-button"
@@ -4714,10 +4684,9 @@ export default function App({
           onSaveResource={(item) => void handleSaveResourceResult(item)}
           onOpenResource={handleOpenResourceResult}
         />
-        {pptImportFailure ? <PptImportFailure fileName={pptImportFailure.file.name} message={pptImportFailure.message} busy={pptLoading}
-          onRetry={() => void handleRenderedPptImport(pptImportFailure.file)} onSimplePreview={() => void handleSimplePptImport()}
-          onClose={() => setPptImportFailure(null)} /> : null}
-        <PptViewer
+        <PptViewer key={pptSessionKey || "empty-ppt"}
+          imageScope={pptScope}
+          initialSession={pptSession} onSessionChange={handlePptSessionChange} hideDock staticOnly
           open={pptViewerOpen}
           slides={pptSlides}
           fileName={pptFileName}
