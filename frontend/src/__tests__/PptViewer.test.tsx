@@ -1,15 +1,40 @@
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { PptViewer } from "../components/PptViewer";
 import type { SlideContent } from "../types";
+import * as pptSession from "../lib/pptSession";
 
 const slides = [1, 2, 3].map(index => ({ width: 9144000, height: 5143500, html: `<p>第${index}页</p>` })) as SlideContent[];
 const base = { open: true, fileName: "课堂.pptx", slides, onExpand: vi.fn(), onCollapse: vi.fn(), onRemove: vi.fn() };
 
 describe("PptViewer keyboard ownership", () => {
   beforeEach(() => vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} }));
-  afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
+  afterEach(() => { cleanup(); vi.clearAllMocks(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+  it("keeps the previous image until loaded and ignores a superseded page load", async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>(resolve => { finish = resolve; });
+    vi.spyOn(pptSession, "preloadPptImage").mockImplementation(url => url.endsWith("2.png") ? pending : Promise.resolve());
+    render(<PptViewer {...base} staticOnly slides={slides.map((slide, index) => ({ ...slide, imageUrl: `/page${index + 1}.png` }))} />);
+    fireEvent.click(screen.getByRole("button", { name: "2", exact: true }));
+    expect(screen.getByRole("img", { name: "幻灯片 1" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "3", exact: true }));
+    await waitFor(() => expect(screen.getByRole("img", { name: "幻灯片 3" })).toBeInTheDocument());
+    await act(async () => finish());
+    expect(screen.getByRole("img", { name: "幻灯片 3" })).toBeInTheDocument();
+  });
+
+  it("keeps the current image on a failed page and retries without losing the deck", async () => {
+    const preload = vi.spyOn(pptSession, "preloadPptImage").mockRejectedValue(new Error("image failed"));
+    render(<PptViewer {...base} staticOnly slides={slides.map((slide, index) => ({ ...slide, imageUrl: `/page${index + 1}.png` }))} />);
+    fireEvent.click(screen.getByRole("button", { name: "2", exact: true }));
+    await screen.findByRole("alert");
+    expect(screen.getByRole("img", { name: "幻灯片 1" })).toBeInTheDocument();
+    preload.mockResolvedValue(undefined);
+    fireEvent.click(screen.getByRole("button", { name: "重试页面" }));
+    await waitFor(() => expect(screen.getByRole("img", { name: "幻灯片 2" })).toBeInTheDocument());
+  });
 
   it("uses the first Escape only to end drawing, ignores key-repeat and collapses on a second press", () => {
     const onExitBrush = vi.fn();

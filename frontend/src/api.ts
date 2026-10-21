@@ -54,6 +54,7 @@ import type {
   PopulationSourceCard,
   PopulationSourceVersion,
   PptRenderResponse,
+  ProjectPresentation,
   ProjectRecord,
   QgisStatusResponse,
   QuestionBankGroup,
@@ -83,6 +84,23 @@ import type {
 import { fetchReadRequest } from "./lib/readRequest";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:18999";
+
+export function listProjectPresentations(projectId: string, signal?: AbortSignal) {
+  return requestJson<{ items: ProjectPresentation[] }>(`/projects/${encodeURIComponent(projectId)}/presentations`, { signal });
+}
+
+export function getProjectPresentation(projectId: string, id: string, signal?: AbortSignal) {
+  return requestJson<ProjectPresentation>(`/projects/${encodeURIComponent(projectId)}/presentations/${encodeURIComponent(id)}`, { signal });
+}
+
+export function prepareProjectPresentation(projectId: string, id: string, retry = false, signal?: AbortSignal) {
+  return requestJson<ProjectPresentation>(`/projects/${encodeURIComponent(projectId)}/presentations/${encodeURIComponent(id)}/render?retry=${retry}`, { method: "POST", signal });
+}
+
+export function importProjectPresentation(projectId: string, file: File, requestId: string, signal?: AbortSignal) {
+  const body = new FormData(); body.set("file", file); body.set("request_id", requestId);
+  return requestJson<ProjectPresentation>(`/projects/${encodeURIComponent(projectId)}/presentations`, { method: "POST", body, signal });
+}
 let csrfToken = "";
 let authGeneration = 0;
 let unauthorizedHandler: (() => void) | null = null;

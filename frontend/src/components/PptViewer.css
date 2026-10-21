@@ -17,6 +17,7 @@
 .ppt-viewer-source { padding: 6px 14px; font-size: 12px; color: #c7d9e5; background: #173046; }
 .ppt-viewer-source--simple { background: #fff3d4; color: #73520d; }
 .ppt-viewer-image-error { padding: 8px 14px; background: #ffe2e2; color: #922c2c; }
+.ppt-page-loading { position: absolute; top: 72px; right: 16px; z-index: 2; padding: 7px 12px; border-radius: 8px; background: #fffffff0; color: #29465b; font-size: 12px; box-shadow: 0 2px 12px #0002; }
 .ppt-viewer-nav { min-width: 0; }
 .ppt-viewer-nav > button { flex-shrink: 0; }
 .ppt-viewer-thumbs { min-width: 0; overflow-x: auto; }

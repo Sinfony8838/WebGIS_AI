@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import zipfile
+import xml.etree.ElementTree as ET
 from copy import copy
 from pathlib import Path
 from typing import Any, Dict, List, Sequence
@@ -34,7 +35,8 @@ class PptRenderError(Exception):
         }
 
 
-def render_pptx_to_images(config: AppConfig, filename: str, raw_bytes: bytes) -> Dict[str, Any]:
+def render_pptx_to_images(config: AppConfig, filename: str, raw_bytes: bytes, *,
+                          powerpoint_only: bool = False, output_root: Path | None = None) -> Dict[str, Any]:
     if not raw_bytes:
         raise PptRenderError("EMPTY_PPTX", "Uploaded PPT file is empty.", status_code=400)
 
@@ -45,7 +47,7 @@ def render_pptx_to_images(config: AppConfig, filename: str, raw_bytes: bytes) ->
 
     config.ensure_dirs()
     render_id = f"ppt_{uuid4().hex}"
-    output_dir = config.outputs_dir / "ppt_previews" / render_id
+    output_dir = (output_root or config.outputs_dir / "ppt_previews") / render_id
     output_dir.mkdir(parents=True, exist_ok=True)
     source_path = output_dir / safe_name
     source_path.write_bytes(raw_bytes)
@@ -58,13 +60,14 @@ def render_pptx_to_images(config: AppConfig, filename: str, raw_bytes: bytes) ->
     if sys.platform.startswith("win"):
         result = _attempt_powerpoint(render_source, output_dir, attempts)
 
-    if result is None:
+    if result is None and not powerpoint_only:
         result = _attempt_libreoffice(render_source, output_dir, expected_count, attempts)
 
     if result is None:
         raise PptRenderError(
             "PPT_RENDERER_UNAVAILABLE",
-            "课件无法由服务端渲染器正常打开或导出。请确认已安装 PowerPoint 或 LibreOffice，并检查原课件能否在该软件中打开。",
+            ("课件暂时无法生成保真页面，请联系管理员检查导入服务，并确认原课件可正常打开。" if powerpoint_only else
+             "课件无法由服务端渲染器正常打开或导出。请确认已安装 PowerPoint 或 LibreOffice，并检查原课件能否在该软件中打开。"),
             {"attempts": attempts},
             status_code=503,
         )
@@ -95,7 +98,28 @@ def render_pptx_to_images(config: AppConfig, filename: str, raw_bytes: bytes) ->
         "slide_height": int(result["height_px"] * EMU_PER_PX),
         "slides": slides,
         "attempts": attempts,
+        "font_dependencies": _font_dependencies(render_source),
     }
+
+
+def _font_dependencies(source_path: Path) -> List[str]:
+    """Record authored typefaces for review; image playback never substitutes fonts."""
+    if source_path.suffix.lower() != ".pptx":
+        return []
+    names = set()
+    try:
+        with zipfile.ZipFile(source_path) as package:
+            for info in package.infolist():
+                member = info.filename
+                if (member.startswith(("ppt/slides/", "ppt/slideMasters/", "ppt/theme/"))
+                        and member.endswith(".xml") and info.file_size <= 8 * 1024 * 1024):
+                    for element in ET.fromstring(package.read(info)).iter():
+                        face = element.attrib.get("typeface", "").strip()
+                        if face and not face.startswith("+"):
+                            names.add(face)
+    except (OSError, zipfile.BadZipFile, ET.ParseError):
+        pass
+    return sorted(names)
 
 
 def _prepare_render_source(source_path: Path, attempts: List[Dict[str, str]]) -> Path:
@@ -284,6 +308,7 @@ def _attempt_powerpoint_pywin32(source_path: Path, output_dir: Path, attempts: L
     pythoncom.CoInitialize()
     try:
         app = win32com.client.DispatchEx("PowerPoint.Application")
+        app.AutomationSecurity = 3  # Disable macros in this owned conversion instance.
         app.Visible = 1
         presentation = app.Presentations.Open(str(source_path), True, False, False)
         slide_width_pt = float(presentation.PageSetup.SlideWidth)
@@ -340,6 +365,7 @@ def _attempt_powerpoint_comtypes(source_path: Path, output_dir: Path, attempts: 
     comtypes.CoInitialize()
     try:
         app = comtypes.client.CreateObject("PowerPoint.Application")
+        app.AutomationSecurity = 3
         app.Visible = 1
         presentation = app.Presentations.Open(str(source_path), True, False, False)
         slide_width_pt = float(presentation.PageSetup.SlideWidth)
