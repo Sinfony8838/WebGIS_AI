@@ -2803,10 +2803,9 @@ class WebGISRuntime:
             # 2D/3D 投影是客户端状态：后端只广播 ui_action，
             # 由前端 transitionToGlobe/transitionToPlane 执行平滑切换。
             summary = "已切换到三维地球。" if mode == "globe" else "已切换到二维平面地图。"
-            self.store.add_recent_action(project_id, "切换视图模式", summary, status="success")
             return {
                 "assistant_message": summary,
-                "ui_actions": [{"type": "switch_view", "mode": "globe" if mode == "globe" else "plane"}],
+                "ui_actions": [{"type": "switch_view", "mode": mode, **({"view": params.get("view", "overview")} if mode == "globe" else {})}],
                 "artifacts": [],
             }
         if tool_name == "open_panel":

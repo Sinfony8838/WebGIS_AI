@@ -1,3 +1,4 @@
+import type { GlobeRenderEvidence } from "../lib/globeViewCommand";
 import type { UrbanSource, UrbanStatus } from "./UrbanStudyPanel";
 /**
  * Cesium-based 3D digital globe view.
@@ -53,6 +54,8 @@ export type Map3DGlobeHandle = {
   inkToClient: (world: [number,number]) => [number,number] | null;
   subscribeInkRender: (render: () => void) => (() => void) | undefined;
   getCameraState: () => CameraState | null;
+  getRenderEvidence: () => GlobeRenderEvidence | null;
+  cancelFlight: () => void;
   captureImage: () => string;
   getCanvasRect: () => { left: number; top: number; width: number; height: number } | null;
 };
@@ -138,6 +141,9 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
   urbanActiveRef.current = Boolean(urbanSource);
   const altitudeArmedRef = useRef(true);
   const lastCameraStateRef = useRef<CameraState | null>(null);
+  const renderEvidenceRef = useRef<GlobeRenderEvidence | null>(null);
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   const rafIdRef = useRef<number | null>(null);
   const callbacksRef = useRef({
     onCameraChange,
@@ -261,6 +267,18 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
       }
     });
 
+    // Capture evidence from completed Cesium frames, not React's requested mode.
+    const recordRenderedCamera = () => {
+      const position = Cesium.Cartographic.fromCartesian(viewer.camera.positionWC);
+      renderEvidenceRef.current = {
+        frame: (renderEvidenceRef.current?.frame ?? 0) + 1,
+        visible: visibleRef.current && viewer.canvas.clientWidth > 0 && viewer.canvas.clientHeight > 0,
+        scene3D: viewer.scene.mode === Cesium.SceneMode.SCENE3D,
+        lon: Cesium.Math.toDegrees(position.longitude), lat: Cesium.Math.toDegrees(position.latitude),
+        altitudeMeters: position.height, pitchDeg: Cesium.Math.toDegrees(viewer.camera.pitch)
+      };
+    };
+    viewer.scene.postRender.addEventListener(recordRenderedCamera);
     // Camera change subscription (throttled via rAF).
     const dispatchCameraState = () => {
       rafIdRef.current = null;
@@ -383,6 +401,8 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
       try {
         viewer.scene.preRender.removeEventListener(syncLight);
         viewer.camera.changed.removeEventListener(onCameraMoved);
+        viewer.scene.postRender.removeEventListener(recordRenderedCamera);
+        renderEvidenceRef.current = null;
       } catch {
         /* viewer already torn down */
       }
@@ -649,6 +669,8 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
         return viewer.scene.postRender.addEventListener(render);
       },
       getCameraState: () => lastCameraStateRef.current,
+      getRenderEvidence: () => renderEvidenceRef.current,
+      cancelFlight: () => viewerRef.current?.camera.cancelFlight(),
       captureImage: () => {
         const viewer = viewerRef.current;
         if (!viewer) {

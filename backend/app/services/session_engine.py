@@ -2316,6 +2316,9 @@ class ToolExecutor:
         mode = str(params.get("mode") or "").strip().lower()
         if mode not in {"plane", "globe"}:
             return "切换视图需要 mode 取 plane 或 globe"
+        view = params.get("view", "overview")
+        if not isinstance(view, str) or view not in {"overview", "default", "preserve"} or (mode == "plane" and "view" in params):
+            return "三维视角 view 仅支持 overview、default 或 preserve"
         return ""
 
     def _require_panel_param(self, params: Dict[str, Any], project_state: Dict[str, Any], map_context: Dict[str, Any]) -> str:
