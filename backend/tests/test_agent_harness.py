@@ -1,4 +1,5 @@
 from __future__ import annotations
+from backend.tests import test_interaction_agent as agent_fixtures
 
 import json
 import tempfile
@@ -99,13 +100,7 @@ class AgentHarnessRuntimeTest(unittest.TestCase):
         project = runtime.create_project()
         return runtime, project["project_id"]
 
-    def wait_for_job(self, runtime: WebGISRuntime, job_id: str) -> dict:
-        for _ in range(200):
-            payload = runtime.get_job(job_id)
-            if payload["status"] in {"completed", "failed"}:
-                return payload
-            time.sleep(0.05)
-        self.fail(f"Job did not finish in time: {job_id}")
+    wait_for_job = agent_fixtures.InteractionAgentTests.wait
 
     def test_completed_job_exposes_trace_without_raw_prompt(self) -> None:
         runtime, project_id = self.build_runtime()
@@ -117,7 +112,7 @@ class AgentHarnessRuntimeTest(unittest.TestCase):
             "planner": "test_stub",
         }
 
-        accepted = runtime.submit_assistant_message(project_id, private_prompt, assistant_mode="tool")
+        accepted = runtime.submit_assistant_message(project_id, private_prompt, assistant_mode="operate", ui_observation_protocol=1)
         job = self.wait_for_job(runtime, accepted["job_id"])
         harness = job["result"]["harness"]
 
@@ -138,15 +133,15 @@ class AgentHarnessRuntimeTest(unittest.TestCase):
             "planner": "test_stub",
         }
 
-        accepted = runtime.submit_assistant_message(project_id, "隐藏图层", assistant_mode="tool")
+        accepted = runtime.submit_assistant_message(project_id, "隐藏图层", assistant_mode="operate", ui_observation_protocol=1)
         job = self.wait_for_job(runtime, accepted["job_id"])
         result = job["result"]
 
         self.assertEqual(job["status"], "completed")
-        self.assertEqual(result["planner"], "blocked")
+        self.assertEqual(result["outcome"], "blocked")
         self.assertEqual(result["actions_executed"], [])
         self.assertIn("boolean", result["assistant_message"])
-        self.assertEqual(result["harness"]["stop_reason"], "policy_blocked")
+        self.assertEqual(result["harness"]["stop_reason"], "blocked")
         self.assertTrue(
             any(
                 event["type"] == "guardrail" and event["name"] == "tool_input_contract"
@@ -166,15 +161,15 @@ class AgentHarnessRuntimeTest(unittest.TestCase):
             RuntimeError("private tool failure detail")
         )
 
-        accepted = runtime.submit_assistant_message(project_id, "切换底图", assistant_mode="tool")
+        accepted = runtime.submit_assistant_message(project_id, "切换底图", assistant_mode="operate", ui_observation_protocol=1)
         job = self.wait_for_job(runtime, accepted["job_id"])
         harness = job["result"]["harness"]
 
-        self.assertEqual(job["status"], "failed")
-        self.assertEqual(harness["status"], "failed")
+        self.assertEqual(job["result"]["outcome"], "blocked")
+        self.assertEqual(harness["status"], "blocked")
         self.assertEqual(harness["usage"]["tool_failures"], 1)
         self.assertNotIn("private tool failure detail", json.dumps(harness, ensure_ascii=False))
-        self.assertTrue(harness["error"]["fingerprint"])
+        self.assertTrue(any(event["status"] == "error" for event in harness["events"]))
 
 
 if __name__ == "__main__":

@@ -171,3 +171,18 @@ it("shows the restyled population legend with its original density thresholds", 
   rerender(<MapEvidenceLegend {...props} basemapId="amap_imagery" layers={[raster]} globe/>);
   expect(screen.queryByText(/紫红越深/)).not.toBeInTheDocument();
 });
+
+
+describe("recolored thematic legends", () => {
+  it("keeps numeric rank values and renders the red scale, not a uniform-color disclaimer", () => {
+    const ranked={layer_id:"ranked",name:"TOP20",visible:true,opacity:.5,metadata:{style_overrides:{fillColor:"#ef4444"},visualization:{items:[{rank:1,name:"重庆",value:32054159,unit:"人"},{rank:2,name:"上海",value:24870895,unit:"人"}]}}} as unknown as LayerRecord;
+    render(<MapEvidenceLegend {...props} basemapId="amap_light" layers={[ranked]} />);
+    expect(screen.queryByText(/颜色不再表示数值分级/)).not.toBeInTheDocument();
+    expect(screen.getByText(/第1名.*32,054,159/)).toBeVisible();
+    const scale=screen.getByLabelText("排名分级色带");
+    expect(scale.children).toHaveLength(2);
+    expect((scale.children[0] as HTMLElement).style.background).not.toBe((scale.children[1] as HTMLElement).style.background);
+    fireEvent.click(screen.getByText("查看全部 2 级数值"));
+    expect(screen.getByText(/上海.*24,870,895/)).toBeVisible();
+  });
+});

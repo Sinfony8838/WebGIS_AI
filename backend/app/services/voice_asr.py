@@ -23,6 +23,7 @@ Readiness states (``status()["state"]``):
     ready         recognizer loaded (or loadable) and usable right now
 """
 from __future__ import annotations
+from uuid import uuid4
 
 import threading
 from pathlib import Path
@@ -207,6 +208,9 @@ class VoiceAsrSession:
         self._recognizer = engine._ensure_recognizer()
         self.stream = self._recognizer.create_stream()
         self._last_partial = ""
+        self._utterance_id = uuid4().hex
+        self._segment_seconds = 0.0
+        self._silence_seconds = 0.0
 
     def feed(self, pcm16: bytes) -> List[Dict[str, Any]]:
         """Feed a PCM16/16kHz mono chunk; return transcript events to send back.
@@ -218,14 +222,20 @@ class VoiceAsrSession:
         if not pcm16:
             return []
         samples = _numpy.frombuffer(pcm16, dtype=_numpy.int16).astype(_numpy.float32) / 32768.0
+        duration = len(samples) / 16000
+        self._segment_seconds += duration
+        self._silence_seconds = self._silence_seconds + duration if float(_numpy.sqrt(_numpy.mean(samples ** 2))) < 0.012 else 0.0
         self.stream.accept_waveform(16000, samples)
         while self._recognizer.is_ready(self.stream):
             self._recognizer.decode_stream(self.stream)
         text = (self._recognizer.get_result(self.stream) or "").strip()
         events: List[Dict[str, Any]] = []
         if self._recognizer.is_endpoint(self.stream):
-            if text:
-                events.append({"type": "final", "text": text})
+            reason = "segment" if self._segment_seconds >= 20 and self._silence_seconds < 0.8 else "silence"
+            events.append({"type": "final", "text": text, "utterance_id": self._utterance_id, "segment_id": uuid4().hex, "end_reason": reason})
+            if reason == "silence":
+                self._utterance_id = uuid4().hex
+            self._segment_seconds = 0.0
             self._recognizer.reset(self.stream)
             self._last_partial = ""
             return events
@@ -243,7 +253,7 @@ class VoiceAsrSession:
         while self._recognizer.is_ready(self.stream):
             self._recognizer.decode_stream(self.stream)
         text = (self._recognizer.get_result(self.stream) or "").strip()
-        return {"type": "final", "text": text} if text else None
+        return {"type": "final", "text": text, "utterance_id": self._utterance_id, "segment_id": uuid4().hex, "end_reason": "stop"}
 
     def close(self) -> None:
         # Streams are owned by the recognizer's internal pool after reset;

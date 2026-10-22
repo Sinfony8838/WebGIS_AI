@@ -17,7 +17,7 @@ vi.mock("../api", () => ({
     enabled: false,
     configured: false,
     provider: "minimax",
-    model: "MiniMax-M2.5"
+    model: "MiniMax-M3.1-Flash"
   }),
   fetchQgisStatus: vi.fn().mockResolvedValue({
     status: "success",
@@ -99,7 +99,7 @@ describe("QgisProfessionalPage", () => {
       enabled: false,
       configured: false,
       provider: "minimax",
-      model: "MiniMax-M2.5",
+      model: "MiniMax-M3.1-Flash",
       error: "未检测到 MiniMax API Key，请设置 WEBGIS_AI_MINIMAX_API_KEY 并重启后端。"
     });
 

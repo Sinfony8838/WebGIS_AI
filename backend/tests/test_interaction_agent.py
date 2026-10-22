@@ -144,7 +144,7 @@ class InteractionAgentTests(unittest.TestCase):
         job = self.wait(runtime, self.submit(runtime, pid, "设计一套三维地图探究题")["job_id"])
         self.assertEqual(model.calls, 1)
         self.assertEqual(job["result"]["actions_executed"], [])
-        self.assertIn("draft_teaching", [tool["name"] for tool in model.contexts[0]["webgis_tools"]])
+        self.assertNotIn("draft_teaching", [tool["name"] for tool in model.contexts[0]["webgis_tools"]])
         self.assertNotIn("generate_image", [tool["name"] for tool in model.contexts[0]["webgis_tools"]])
 
     def test_punctuation_separated_goals_are_not_partially_executed_by_fast_rules(self):
@@ -158,7 +158,7 @@ class InteractionAgentTests(unittest.TestCase):
                 self.assertEqual(job["result"]["actions_executed"], [])
                 self.assertIn(message, model.requests[0][-1]["content"])
 
-    def test_generated_workflow_observed_then_saved_as_new_teaching_draft(self):
+    def test_generated_workflow_preserved_but_implicit_teaching_draft_is_blocked(self):
         runtime, store, pid = self.setup_project()
         worker = self.install_worker(runtime)
         original = copy.deepcopy(store.get_project(pid).layers[0].data)
@@ -176,19 +176,14 @@ class InteractionAgentTests(unittest.TestCase):
             "actions": [{"tool_name": "build_workflow", "tool_params": {"workflow": self.workflow()}}]}, teaching)
         runtime.llm_planner.minimax_client = model
         job = self.wait(runtime, self.submit(runtime, pid, "分析设施样本中的高值，生成对比结果，再设计探究题")["job_id"])
-        self.assertEqual(job["result"]["outcome"], "completed", job["result"].get("assistant_message"))
-        self.assertEqual(model.calls, 2)
+        self.assertNotEqual(job["result"]["outcome"], "completed")
+        self.assertLessEqual(model.calls, 3)
         entries = job["result"]["actions_executed"]
-        self.assertEqual([item["action"]["tool_name"] for item in entries], ["build_workflow", "draft_teaching"])
+        self.assertEqual([item["action"]["tool_name"] for item in entries], ["build_workflow"])
         self.assertEqual(worker.calls, ["load_layer", "filter_features", "aggregate_stats", "export_geojson"])
         self.assertEqual(store.get_project(pid).layers[0].data, original)
         self.assertEqual(len(store.get_project(pid).layers), 2)
-        design = store.get_lesson_design(entries[-1]["result"]["design_id"])
-        self.assertNotEqual(design.design_id, previous.design_id)
         self.assertEqual(store.get_lesson_design(previous.design_id).to_dict(), previous_copy)
-        self.assertEqual(design.owner_user_id, "teacher")
-        self.assertEqual(design.source_refs[0]["evidence"]["facts"][2]["outputs"]["statistics"]["summary"]["value_mean"], 30)
-        self.assertFalse(design.final_lesson_id)
 
     def test_failed_preflight_can_be_repaired_without_replaying_successful_work(self):
         runtime, _, pid = self.setup_project()

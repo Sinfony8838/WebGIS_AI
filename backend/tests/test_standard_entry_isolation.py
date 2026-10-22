@@ -68,6 +68,7 @@ def test_collection_refuses_when_live_instance_markers_exist(tmp_path: None = No
         result = subprocess.run(
             [sys.executable, "-m", "pytest", "backend/tests/test_phase1_data_isolation.py", "--collect-only", "-q"],
             cwd=str(REPO_ROOT),
+            env={key:value for key,value in os.environ.items() if key != "WEBGIS_AI_ALLOW_EXISTING_DATA"},
             capture_output=True,
             text=True,
             timeout=120,
@@ -95,6 +96,7 @@ def test_collection_refuses_when_live_instance_markers_exist(tmp_path: None = No
         clean = subprocess.run(
             [sys.executable, "-m", "pytest", "backend/tests/test_phase1_data_isolation.py", "--collect-only", "-q"],
             cwd=str(REPO_ROOT),
+            env={key:value for key,value in os.environ.items() if key != "WEBGIS_AI_ALLOW_EXISTING_DATA"},
             capture_output=True,
             text=True,
             timeout=120,

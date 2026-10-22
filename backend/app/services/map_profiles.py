@@ -8,7 +8,8 @@ import os
 import threading
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from contextvars import copy_context
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from uuid import uuid4
@@ -28,6 +29,7 @@ TERRAIN_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium"
 TERRAIN_ZOOM = 10
 MAX_LENGTH_M = 2_000_000
 TERRAIN_CACHE_WRITE_LOCK = threading.Lock()
+TERRAIN_TILE_LOCKS: Dict[str, Any] = {}
 
 
 class ProfileError(Exception):
@@ -79,10 +81,37 @@ def _sample_points(vertices: List[Tuple[float, float]], distances: List[float], 
             for m in positions for lon, lat in [_at(vertices, distances, m)]]
 
 
-def _fetch(url: str, max_bytes: int = 600_000) -> bytes:
+def _parallel_values(function, samples):
+    from .interaction_run import current_run
+    control = current_run()
+    def invoke(point):
+        if control: control.check()
+        value = function(point)
+        if control: control.check()
+        return value
+    pool = ThreadPoolExecutor(max_workers=8)
+    futures = [pool.submit(copy_context().run, invoke, point) for point in samples]
+    pending = set(futures)
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "WebGIS-AI/1.0"}), timeout=12) as response:
-            data = response.read(max_bytes + 1)
+        while pending:
+            if control: control.check()
+            done, pending = wait(pending, timeout=0.1, return_when=FIRST_COMPLETED)
+            for future in done: future.result()  # fail fast; do not dispatch the remaining source requests
+        return [f.result() for f in futures]
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _fetch(url: str, max_bytes: int = 600_000) -> bytes:
+    from .interaction_run import current_run
+    from contextlib import nullcontext
+    run = current_run()
+    if run: run.check()
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "WebGIS-AI/1.0"}), timeout=min(12, run.remaining_seconds()) if run else 12) as response:
+            with run.response_scope(response) if run else nullcontext():
+                data = response.read(max_bytes + 1)
+            if run: run.check()
             if len(data) > max_bytes:
                 raise ProfileError("SOURCE_ERROR", "公开数据响应过大，已停止读取。", 503)
             return data
@@ -112,6 +141,8 @@ def _terrain_value(point: Dict[str, Any], cache_root: Path) -> float | None:
     path = cache_root / "terrain" / str(TERRAIN_ZOOM) / str(x) / f"{y}.png"
     if not path.exists():
         with TERRAIN_CACHE_WRITE_LOCK:
+            tile_lock = TERRAIN_TILE_LOCKS.setdefault(str(path), threading.Lock())
+        with tile_lock:
             if not path.exists():
                 data = _fetch(f"{TERRAIN_URL}/{TERRAIN_ZOOM}/{x}/{y}.png")
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -223,6 +254,7 @@ def preview(
     source_id: str,
     cache_root: Path,
     population_root: Optional[Path] = None,
+    sample_count: Optional[int] = None,
 ) -> Dict[str, Any]:
     vertices, distances = _line(coordinates)
     if kind == "population" and source_id == "shanghai_worldpop_2020":
@@ -240,9 +272,8 @@ def preview(
         details = _raster_population_profile(vertices, distances, package)
         unit = "人/km²"
     elif kind == "population" and source_id == "gpw_2020":
-        samples = _sample_points(vertices, distances, 121)
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            values = list(pool.map(_gpw_value, samples))
+        samples = _sample_points(vertices, distances, sample_count or 121)
+        values = _parallel_values(_gpw_value, samples)
         for point, value in zip(samples, values):
             point["value"] = value
         details = {"samples": samples, "source_name": "NASA SEDAC GPWv4.11 人口密度", "source_year": "2020",
@@ -253,9 +284,8 @@ def preview(
         details = _polygon_profile(project, source_id, vertices, distances)
         unit = "人/km²"
     elif kind == "terrain" and source_id == "mapzen_terrain":
-        samples = _sample_points(vertices, distances, 241)
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            values = list(pool.map(lambda point: _terrain_value(point, cache_root), samples))
+        samples = _sample_points(vertices, distances, sample_count or 241)
+        values = _parallel_values(lambda point: _terrain_value(point, cache_root), samples)
         for point, value in zip(samples, values):
             point["value"] = value
         details = {"samples": samples, "source_name": "Mapzen Terrain Tiles（多源全球 DEM）",
@@ -270,3 +300,65 @@ def preview(
             "total_distance_km": round(distances[-1] / 1_000, 4),
             "sample_spacing_m": None if kind == "population" and source_id not in {"gpw_2020", "shanghai_worldpop_2020"} else round(distances[-1] / max(1, len(samples) - 1), 1),
             "no_data_count": sum(point["value"] is None for point in samples), **details}
+
+
+def cached_preview(project, coordinates, kind, source_id, cache_root, *, sample_count=121):
+    """Cache verified source results, never synthesized fixture data. Project-scoped."""
+    import hashlib
+    import json
+    from datetime import datetime, timezone
+    from .interaction_run import current_run
+    control = current_run()
+    if control:
+        control.check()
+    _line(coordinates)
+    scope = None if source_id in {"gpw_2020", "mapzen_terrain"} else [project.project_id, [(layer.layer_id, layer.data_rev, layer.visible) for layer in project.layers]]
+    key = hashlib.sha256(json.dumps(["v1", scope, coordinates, kind, source_id, sample_count], sort_keys=True).encode()).hexdigest()
+    path = cache_root / "profiles" / (key + ".json")
+    if path.exists():
+        try:
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            canonical = json.dumps(saved["result"], sort_keys=True, ensure_ascii=False).encode()
+            if hashlib.sha256(canonical).hexdigest() == saved["sha256"]:
+                return {**saved["result"], "provenance": {"cached": True, "fetched_at": saved["fetched_at"], "sha256": saved["sha256"]}}
+        except (ValueError, KeyError, OSError):
+            pass
+    result = preview(project, coordinates, kind, source_id, cache_root, sample_count=sample_count)
+    if control:
+        control.check()
+    saved = {"result": result, "fetched_at": datetime.now(timezone.utc).isoformat(),
+             "sha256": hashlib.sha256(json.dumps(result, sort_keys=True, ensure_ascii=False).encode()).hexdigest()}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(key + "-" + uuid4().hex + ".tmp")
+    try:
+        temp.write_text(json.dumps(saved, ensure_ascii=False), encoding="utf-8")
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
+    return {**result, "provenance": {"cached": False, "fetched_at": saved["fetched_at"], "sha256": saved["sha256"]}}
+
+
+def compare_results(population, terrain):
+    if [p["distance_km"] for p in population["samples"]] != [p["distance_km"] for p in terrain["samples"]]:
+        raise ProfileError("GRID_MISMATCH", "两条曲线的采样位置不一致，请按共同测线重新采样。")
+    summary = {}
+    for kind, result in (("population", population), ("terrain", terrain)):
+        valid = [p for p in result["samples"] if p["value"] is not None]
+        summary[kind] = {"valid_count": len(valid), "sample_count": len(result["samples"]),
+            "coverage": len(valid) / max(1, len(result["samples"])), "unit": result["unit"],
+            "min": min(valid, key=lambda p: p["value"]) if valid else None,
+            "max": max(valid, key=lambda p: p["value"]) if valid else None}
+    pairs = sum(a["value"] is not None and b["value"] is not None for a, b in zip(population["samples"], terrain["samples"]))
+    return {"population": population, "terrain": terrain, "summary": summary, "paired_valid_count": pairs,
+            "status": "success" if pairs else "partial", "total_distance_km": population["total_distance_km"],
+            "interpretation_note": "沿线空间变化，不是历年人口变化；相关性不能证明因果。缺失值不插值。"}
+
+
+def compare(project, coordinates, cache_root, population_source_id="gpw_2020", terrain_source_id="mapzen_terrain"):
+    if population_source_id != "gpw_2020" or terrain_source_id != "mapzen_terrain":
+        raise ProfileError("INVALID_SOURCE", "双曲线对比使用 GPW 2020 与 Mapzen 地形；其他数据源请使用独立剖面。")
+    population = cached_preview(project, coordinates, "population", population_source_id, cache_root)
+    terrain = cached_preview(project, coordinates, "terrain", terrain_source_id, cache_root)
+    result = compare_results(population, terrain)
+    result["result_id"] = "comparison_" + uuid4().hex
+    return result

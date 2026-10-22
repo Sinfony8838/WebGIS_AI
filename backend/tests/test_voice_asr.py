@@ -107,11 +107,7 @@ class VoiceAsrSessionLogicTest(unittest.TestCase):
         fake = FakeRecognizer()
         engine = mock.Mock(spec=VoiceAsrEngine)
         engine._ensure_recognizer.return_value = fake
-        session = VoiceAsrSession.__new__(VoiceAsrSession)
-        session._engine = engine
-        session._recognizer = fake
-        session.stream = fake.create_stream()
-        session._last_partial = ""
+        session = VoiceAsrSession(engine)
         return session, fake
 
     def test_feed_emits_partial_then_final_on_endpoint(self) -> None:
@@ -144,13 +140,15 @@ class VoiceAsrSessionLogicTest(unittest.TestCase):
         fake.endpoint_after_chunks = 99  # 永不触发 endpoint
         fake.chunks = 1
         final = session.flush()
-        self.assertEqual(final, {"type": "final", "text": "切换到三维地球"})
+        self.assertEqual(final["text"], "切换到三维地球")
+        self.assertEqual(final["end_reason"], "stop")
+        self.assertTrue(final["utterance_id"])
 
     def test_flush_without_utterance_returns_none(self) -> None:
         session, fake = self._session()
         fake.endpoint_after_chunks = 99
         fake.chunks = 0
-        self.assertIsNone(session.flush())
+        self.assertEqual(session.flush()["text"], "")
 
     def test_flush_decodes_audio_made_ready_by_input_finished(self) -> None:
         session, fake = self._session()
@@ -166,7 +164,7 @@ class VoiceAsrSessionLogicTest(unittest.TestCase):
         fake.decode_stream = mock.Mock(side_effect=decode)
         fake.get_result = mock.Mock(side_effect=lambda stream: result[0])
 
-        self.assertEqual(session.flush(), {"type": "final", "text": "完整尾句"})
+        self.assertEqual(session.flush()["text"], "完整尾句")
         self.assertEqual(fake.decode_stream.call_count, 2)
 
     def test_numpy_missing_keeps_engine_unavailable(self) -> None:

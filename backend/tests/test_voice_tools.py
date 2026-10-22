@@ -346,7 +346,7 @@ class InteractionToolsTest(unittest.TestCase):
         result = job["result"]
         self.assertEqual(job["status"], "completed")
         self.assertEqual(result["planner"], "voice_clarification")
-        self.assertIn("没有直接听懂", result["assistant_message"])
+        self.assertIn("模型请求失败或服务未配置", result["assistant_message"])
 
     def test_interaction_e2e_end_class_session_requires_confirmation_flow(self) -> None:
         runtime, _store, project_id = self.build_runtime()

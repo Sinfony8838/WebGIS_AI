@@ -1,3 +1,7 @@
+import { fetchConversation } from "./api";
+import { applyMeasurement } from "./lib/measurementCommands";
+import { ProfileComparison } from "./components/ProfileComparison";
+import type { MapProfileComparison } from "./types";
 import { UiActionReceiver } from "./lib/uiActionReceiver";
 import { interactionActivityLabel } from "./lib/interactionActivity";
 import Polygon from "ol/geom/Polygon";
@@ -498,12 +502,12 @@ export default function App({
   const [project, setProject] = useState<(ProjectRecord & { status: string }) | null>(null);
   const [layerState, setLayerState] = useState<LayersResponse | null>(null);
   const [outputs, setOutputs] = useState<ArtifactRecord[]>([]);
-  const assistantMode: AssistantMode = "teaching";
+  const assistantMode: AssistantMode = "chat";
   const [currentJob, setCurrentJob] = useState<JobRecord | null>(null);
   const [chatLog, setChatLog] = useState<ChatMessage[]>([
     {
       role: "assistant",
-      text: "这里是专业教学智能体，可以讲解地理概念、判读当前地图、设计课堂追问、执行课堂地图操作，并在操作后给出教学解释。",
+      text: "有什么想了解的？可以提问、上传图片或生成一张示意图。",
       timestamp: timestamp()
     }
   ]);
@@ -515,7 +519,7 @@ export default function App({
   const [interactionChatLog, setInteractionChatLog] = useState<ChatMessage[]>([
     {
       role: "assistant",
-      text: "智能交互模式已就绪：进入本页即自动聆听，直接说出指令（如“切换到三维地球”），无需每次加唤醒词；嘈杂环境可在下方开启「仅唤醒后执行」。高频指令走快速通道，秒级响应。",
+      text: "可以操作地图、图层与课堂，也可以组合分析工具完成任务。",
       timestamp: timestamp()
     }
   ]);
@@ -530,7 +534,16 @@ export default function App({
   const [overlayPulse, setOverlayPulse] = useState(0);
   const transitionToPlaneRef = useRef<((opts: { lon: number; lat: number; zoom?: number; reason: "manual" | "altitude" | "dblclick" }) => void) | null>(null);
   const transitionToGlobeRef = useRef<((opts: { lon?: number; lat?: number; zoom?: number; reason: "manual" | "zoom" }) => void) | null>(null);
-  const [assistantInput, setAssistantInput] = useState("");
+  const [assistantDrafts, setAssistantDrafts] = useState<Record<AssistantTab, string>>({teaching:"",interaction:""});
+  const assistantInput = assistantDrafts[assistantTab];
+  const setAssistantInput = useCallback((value: string | ((old: string) => string)) => {
+    const tab = assistantTabRef.current;
+    setAssistantDrafts(old => ({...old,[tab]:typeof value === "function" ? value(old[tab]) : value}));
+  }, []);
+  const [assistantJobs, setAssistantJobs] = useState<Partial<Record<AssistantTab, JobRecord>>>({});
+  const activeAssistantJobRef = useRef("");
+  const switchingAssistantRef = useRef(false);
+
   const [pendingImage, setPendingImage] = useState<ImageAttachment | null>(null);
   const [imageGenerationLoading, setImageGenerationLoading] = useState(false);
   const [screenshotSource, setScreenshotSource] = useState("");
@@ -976,7 +989,8 @@ export default function App({
       imageAttachment?: ImageAttachment | null,
       planner?: string | null,
       targetTab?: AssistantTab,
-      citations?: CitationRecord[]
+      citations?: CitationRecord[],
+      execution?: ChatMessage["execution"]
     ) => {
       if (!text.trim() && !imageAttachment) {
         return;
@@ -990,7 +1004,8 @@ export default function App({
         actions_executed: actionsExecuted ?? undefined,
         image_attachment: imageAttachment ?? undefined,
         planner: planner ?? undefined,
-        citations: citations?.map((item) => ({ ...item }))
+        citations: citations?.map((item) => ({ ...item })),
+        execution
       };
       if (targetTab === "interaction") {
         setInteractionChatLog((previous) => [...previous, message]);
@@ -1532,6 +1547,19 @@ export default function App({
     return wasTracked;
   }, []);
 
+  const [profileComparison, setProfileComparison] = useState<{record: MeasureRecord; result: MapProfileComparison} | null>(null);
+  const profileComparisonRef = useRef(profileComparison);
+  profileComparisonRef.current = profileComparison;
+  const applyMeasureRecord = useCallback((record: MeasureRecord, drawnFeature?: Feature) => {
+    const source = measureSourceRef.current;
+    if (!source) throw new Error("测距图层尚未就绪");
+    const feature = applyMeasurement(source, record, drawnFeature);
+    setMeasureRecords(previous => previous.some(item => item.id === record.id) ? previous : [...previous, record]);
+    setMeasureTotalKm(record.totalKm);
+    setMeasureText(`${record.name} · ${record.totalKm.toFixed(2)} 千米`);
+    setProfilesCollapsed(false);
+    return feature;
+  }, []);
   const uiActionReceiverRef = useRef(new UiActionReceiver());
   const cancelledUiJobsRef = useRef(new Set<string>());
   const pendingInteractionStopRef = useRef(false);
@@ -1547,6 +1575,13 @@ export default function App({
       });
       for (const action of uiActions) {
         if (!action || typeof action !== "object") {
+          continue;
+        }
+        if (action.type === "create_measurement" || action.type === "show_profile_comparison") {
+          transitionToPlaneRef.current?.({lon: action.record.coordinates[0][0], lat: action.record.coordinates[0][1], reason: "manual"});
+          const feature = applyMeasureRecord(action.record);
+          if (action.type === "create_measurement") mapRef.current?.getView().fit(feature.getGeometry()!.getExtent(), {padding: [80, 480, 100, 60], duration: 350});
+          else setProfileComparison({record: action.record, result: action.comparison});
           continue;
         }
         if (action.type === "open_material") {
@@ -1584,7 +1619,7 @@ export default function App({
         }
       }
     },
-    [project]
+    [project, applyMeasureRecord]
   );
 
   const subscribeToJob = useCallback(
@@ -1616,6 +1651,7 @@ export default function App({
           if (!jobStreamsRef.current.has(source)) return;
           if (scopeEpoch !== jobScopeEpochRef.current || payload.project_id !== projectId) return;
           setCurrentJob(payload);
+          setAssistantJobs(old => ({...old, [submittedTab]: payload}));
           if (payload.activity?.cancel_requested) cancelledUiJobsRef.current.add(payload.job_id);
           if (payload.ui_actions?.some((action) => action.status === "pending")) {
             await uiActionReceiverRef.current.receive(payload, {
@@ -1634,7 +1670,9 @@ export default function App({
                   const check = () => {
                     if (scopeEpoch !== jobScopeEpochRef.current || cancelledUiJobsRef.current.has(payload.job_id) || submittedSessionId !== (teachingContextRef.current?.session_id || "")) return reject(new Error("项目或课堂已变化"));
                     const state = observedUiStateRef.current;
-                    const applied = action.type === "switch_view" ? state.viewMode === action.mode
+                    const applied = action.type === "create_measurement" ? state.viewMode === "plane" && Boolean(measureSourceRef.current?.getFeatures().some(f => f.get("measure_record_id") === action.record.id))
+                      : action.type === "show_profile_comparison" ? profileComparisonRef.current?.result.result_id === action.comparison.result_id
+                      : action.type === "switch_view" ? state.viewMode === action.mode
                       : action.type === "open_panel" ? (action.panel === "layers" ? state.layerManagerOpen : action.panel === "database" ? state.databaseViewerOpen : state.workflowDockOpen) === (action.open !== false)
                       : action.type === "open_material" ? state.materialViewerOpen
                       : state.project?.project_id === projectId && (!action.project_updated_at || Boolean(state.project.updated_at && state.project.updated_at >= action.project_updated_at));
@@ -1652,6 +1690,7 @@ export default function App({
               return;
             }
             subscribedJobIdsRef.current.delete(jobId);
+            if(activeAssistantJobRef.current === jobId) activeAssistantJobRef.current = "";
             const uiOnly = Boolean(payload.result?.actions_executed?.length) && payload.result!.actions_executed!.every(
               (entry) => ["switch_view_mode", "open_panel"].includes(entry.action.tool_name)
             );
@@ -1683,15 +1722,13 @@ export default function App({
               undefined,
               payload.result?.planner,
               submittedTab,
-              payload.result?.citations ?? payload.result?.knowledge?.citations ?? []
+              payload.result?.citations ?? payload.result?.knowledge?.citations ?? [],
+              {job_id:payload.job_id,status:payload.status,activity:payload.activity,usage:payload.usage}
             );
             forgetPendingJob(userId, projectId, jobId);
             if (submittedTab === "interaction") {
               setInteractionBusy(false);
-              // 语音发起的交互回合：播报结果（可关）。新回合开始时会先 cancel。
-              if (payload.status === "completed" && ttsEnabled && submittedInputMode === "voice" && message && !studentDisplayRef.current) {
-                speak(message);
-              }
+
             }
             const isAssistantAnswer = Boolean(payload.result?.assistant_message || payload.result?.conversation_id);
             if (payload.status === "failed") {
@@ -1713,7 +1750,11 @@ export default function App({
     setBusy(false);
     setMapBusy(false);
     setInteractionBusy(false);
+    setConversationId("");setInteractionConversationId("");setAssistantJobs({});
+    setChatLog([]);setInteractionChatLog([]);setAssistantDrafts({teaching:"",interaction:""});setProfileComparison(null);
     return () => {
+      if(activeAssistantJobRef.current) void cancelAssistantJob(activeAssistantJobRef.current).catch(() => undefined);
+      activeAssistantJobRef.current="";
       jobScopeEpochRef.current += 1;
       jobStreamsRef.current.closeAll((source) => source.close());
       subscribedJobIdsRef.current.clear();
@@ -1744,12 +1785,12 @@ export default function App({
         return false;
       }
       const effectiveMessage = message.trim() || (imageAttachment ? "请识别并分析这张图片中的地理信息。" : "");
-      if (!effectiveMessage || assistantSubmittingRef.current || jobStreamsRef.current.busy) return false;
+      if (!effectiveMessage || switchingAssistantRef.current || assistantSubmittingRef.current || jobStreamsRef.current.busy) return false;
       assistantSubmittingRef.current = true;
-      // 智能交互 Tab 走 interaction 模式（独立会话、直达工具规划）；
-      // 教学助手 Tab 保持 teaching 模式与既有行为完全一致。
+      const submissionEpoch = jobScopeEpochRef.current;
+      // Mode-local conversations share transport, never execution permissions.
       const submittedTab: AssistantTab = submittedTabOverride || (assistantTabRef.current === "interaction" ? "interaction" : "teaching");
-      const requestMode: AssistantMode = submittedTab === "interaction" ? "interaction" : assistantMode;
+      const requestMode: AssistantMode = submittedTab === "interaction" ? "operate" : assistantMode;
       lastInputModeRef.current = inputMode;
       lastSubmittedTabRef.current = submittedTab;
       cancelSpeech();
@@ -1771,6 +1812,12 @@ export default function App({
           imageAttachments: imageAttachment ? [{ artifact_id: imageAttachment.artifact_id }] : [],
           teachingContext: teachingContextRef.current || undefined
         });
+        if (submissionEpoch !== jobScopeEpochRef.current) {
+          cancelledUiJobsRef.current.add(response.job_id);
+          void cancelAssistantJob(response.job_id).catch(() => undefined);
+          return false;
+        }
+        activeAssistantJobRef.current = response.job_id;
         appendChat("user", displayMessage || effectiveMessage, null, null, null, imageAttachment, undefined, submittedTab);
         if (response.conversation_id) {
           if (submittedTab === "interaction") {
@@ -1782,12 +1829,7 @@ export default function App({
         if (submittedTab === "interaction") {
           setInteractionBusy(true);
         }
-        if (response.lesson_design) {
-          // 助教识别到整节课设计请求：直接打开全屏教案设计工作台并续上该会话。
-          const designId = String((response.lesson_design as { design_id?: string }).design_id || "");
-          openLessonDesignWorkspace(designId);
-        }
-        if (submittedTab === "interaction" && pendingInteractionStopRef.current) {
+        if (pendingInteractionStopRef.current) {
           pendingInteractionStopRef.current = false;
           cancelledUiJobsRef.current.add(response.job_id);
           void cancelAssistantJob(response.job_id).catch(() => pushToast("error", "停止失败", "请使用停止操作按钮重试。"));
@@ -1836,6 +1878,36 @@ export default function App({
   const snapshotViewRef = useRef({projectId: project?.project_id, basemap: layerState?.base_map, mode: viewMode});
   snapshotViewRef.current = {projectId: project?.project_id, basemap: layerState?.base_map, mode: viewMode};
 
+  const cancelAssistantTurn = async () => {
+    cancelSpeech();
+    const deadline = Date.now() + 15000;
+    if(assistantSubmittingRef.current) pendingInteractionStopRef.current = true;
+    while(assistantSubmittingRef.current && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
+    if(assistantSubmittingRef.current) throw new Error("请求尚未返回，暂时无法切换模式，请稍后重试。");
+    const id = activeAssistantJobRef.current;
+    if(!id) return;
+    cancelledUiJobsRef.current.add(id);
+    await cancelAssistantJob(id);
+    while(Date.now() < deadline) {
+      const job = await fetchJob(id);
+      if(["completed", "failed"].includes(job.status)) return;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    throw new Error("正在等待当前任务停止，尚未切换模式。");
+  };
+  const switchAssistantMode = async (tab: AssistantTab) => {
+    switchingAssistantRef.current = true;
+    try {await cancelAssistantTurn();setAssistantTab(tab);assistantTabRef.current=tab;}
+    catch(error) {pushToast("error", "模式切换未完成", error instanceof Error ? error.message : "请重试");throw error;}
+    finally {switchingAssistantRef.current=false;}
+  };
+  const handleProfileHover = (sample: import("./types").MapProfileSample | null) => {
+    const source = measureSourceRef.current;
+    if(!source) return;
+    if(measureHoverFeatureRef.current) source.removeFeature(measureHoverFeatureRef.current);
+    measureHoverFeatureRef.current=null;
+    if(sample) {const feature=new Feature({geometry:new Point(fromLonLat([sample.lon,sample.lat]))});feature.set("profile_hover",true);source.addFeature(feature);measureHoverFeatureRef.current=feature;}
+  };
   const clearScreenshotDraft = useCallback(() => {
     pendingEvidenceSnapshotRef.current = null;
     screenshotDocumentRef.current = null;
@@ -3468,7 +3540,7 @@ export default function App({
       const signature = isRaster
         ? rasterSourceKey(assetUrl, bounds as [number, number, number, number], record.metadata.image_crs, hasPopulationOverlayStyle(record))
         : `vector|${record.data_rev ?? 0}|${record.layer_id === "builtin_population_density" ? regions?.data_rev ?? "none" : ""}`;
-      const styleKey = JSON.stringify([record.style || {}, showTeachingFit]);
+      const styleKey = JSON.stringify([record.style || {}, record.metadata?.style_overrides, record.metadata?.visualization, showTeachingFit]);
 
       let entry = cache.get(record.layer_id);
       if (entry && entry.signature !== signature) {
@@ -3607,7 +3679,7 @@ export default function App({
         drawInteractionRef.current = null;
       }
     };
-  }, [interactionMode, pushToast]);
+  }, [interactionMode, pushToast, applyMeasureRecord]);
 
   // Measurement mode — interactive multi-segment polyline with running total.
   useEffect(() => {
@@ -3675,18 +3747,9 @@ export default function App({
       if (geometry instanceof LineString) {
         const coordinates = geometry.getCoordinates().map(point => toLonLat(point) as [number, number]);
         const recordId = `msr_${Date.now().toString(36)}_${(measureSeqRef.current += 1)}`;
-        event.feature.set("measure_record_id", recordId);
-        setMeasureRecords(previous => [
-          ...previous,
-          {
-            id: recordId,
-            name: `测线 ${previous.length + 1}`,
-            coordinates,
-            totalKm: lengthKm,
-            color: MEASURE_COLORS[previous.length % MEASURE_COLORS.length]
-          }
-        ]);
-        setProfilesCollapsed(false);
+        applyMeasureRecord({id: recordId, name: `测线 ${measureSeqRef.current}`, coordinates, totalKm: lengthKm,
+          color: MEASURE_COLORS[measureSeqRef.current % MEASURE_COLORS.length]}, event.feature);
+
       }
       setMeasureText(`测量完成：${pretty}`);
       pushToast("success", "测距完成", `本段共 ${pretty}`);
@@ -4431,27 +4494,35 @@ export default function App({
 
       {project && !studentDisplay ? (
         <>
-        <AgentControlOverlay
-          active={interactionBusy}
-          listening={overlayListening}
-          partialTranscript={overlayPartial}
-          capturedCommand={overlayCaptured}
-          workingDetail={
-            interactionBusy
-              ? interactionActivityLabel(currentJob)
-              : ""
-          }
-          pulseSignal={overlayPulse}
-        />
+        {profileComparison && <ProfileComparison record={profileComparison.record} result={profileComparison.result}
+          onClose={() => setProfileComparison(null)} onHover={handleProfileHover} />}
         <CopilotWidget
           chatLog={assistantTab === "interaction" ? interactionChatLog : chatLog}
-          currentJob={currentJob}
+          currentJob={assistantJobs[assistantTab] || null}
+          scopeKey={`${currentUser.user_id}:${project?.project_id || ""}`}
           inputValue={assistantInput}
           onInputChange={setAssistantInput}
           assistantTab={assistantTab}
-          onTabChange={(tab) => {
-            setAssistantTab(tab);
-            assistantTabRef.current = tab;
+          onTabChange={switchAssistantMode}
+          projectId={project.project_id}
+          conversationId={assistantTab === "interaction" ? interactionConversationId : conversationId}
+          onSelectConversation={async id => {
+            const tab=assistantTabRef.current;
+            await switchAssistantMode(tab);
+            const epoch=jobScopeEpochRef.current;
+            const saved=await fetchConversation(id);
+            if(epoch!==jobScopeEpochRef.current || saved.project_id!==project.project_id || saved.assistant_mode!==(tab==="interaction"?"operate":"chat"))return;
+            const messages: ChatMessage[]=saved.messages.map(item=>({role:item.role,text:item.text,timestamp:item.created_at,
+              execution:item.role==="assistant"?item.execution:undefined,...(item.result || {})}));
+            if(tab==="interaction"){setInteractionConversationId(id);setInteractionChatLog(messages);}
+            else {setConversationId(id);setChatLog(messages);}
+            setAssistantJobs(old=>({...old,[tab]:undefined}));setAssistantInput("");setPendingImage(null);
+          }}
+          onNewConversation={async () => {
+            await switchAssistantMode(assistantTabRef.current);
+            if(assistantTabRef.current === "interaction") {setInteractionConversationId("");setInteractionChatLog([]);}
+            else {setConversationId("");setChatLog([]);}
+            setAssistantJobs(old => ({...old,[assistantTabRef.current]:undefined}));setAssistantInput("");
           }}
           ttsEnabled={ttsEnabled}
           onTtsToggle={(enabled) => setTtsEnabled(enabled)}
@@ -4487,15 +4558,7 @@ export default function App({
             });
           }}
           onOpenDesign={openLessonDesignWorkspace}
-          onCancelTask={() => {
-            cancelSpeech();
-            if (currentJob && interactionBusy && ["queued", "running"].includes(currentJob.status)) {
-              cancelledUiJobsRef.current.add(currentJob.job_id);
-              void cancelAssistantJob(currentJob.job_id).catch((error) => pushToast("error", "停止失败", error instanceof Error ? error.message : "请重试"));
-            } else if (assistantSubmittingRef.current) {
-              pendingInteractionStopRef.current = true;
-            }
-          }}
+          onCancelTask={() => {void cancelAssistantTurn().catch(error => pushToast("error","停止失败",String(error)));}}
           onConfirm={(confirmationId, decision = "approve") => {
             void confirmAssistantAction(confirmationId, decision).then((response) => subscribeToJob(response.job_id));
           }}
@@ -4505,8 +4568,9 @@ export default function App({
               return;
             }
             const image = assistantTabRef.current === "interaction" ? null : pendingImage;
-            void submitAssistantText(transcript, undefined, "webgis", "voice", image).then((sent) => {
+            return submitAssistantText(transcript, undefined, "webgis", "voice", image).then((sent) => {
               if (sent) setPendingImage((current) => (current?.artifact_id === image?.artifact_id ? null : current));
+              return sent;
             });
           }}
           onVoiceNotice={(tone, title, detail) => {

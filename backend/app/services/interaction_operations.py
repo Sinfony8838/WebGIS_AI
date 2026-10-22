@@ -120,10 +120,22 @@ class InteractionOperations:
         self._lock = RLock()
 
     def create_run(self, job_id: str) -> InteractionRun:
-        run = InteractionRun(job_id=job_id,
+        job = self.store.get_job(job_id)
+        run = InteractionRun(job_id=job_id, mode=str(job.request.get("assistant_mode") or ""),
             max_seconds=HarnessPolicy.from_config(self.runtime.config).max_seconds,
             cancelled=lambda: bool(self.store.get_job(job_id).activity.get("cancel_requested")),
             publish=lambda activity, usage: self.store.update_job_activity(job_id, activity, usage))
+        if job.job_type == "assistant_confirmation":
+            confirmation = self.store.get_confirmation(job.request.get("confirmation_id", ""))
+            parent = self.store.get_job(confirmation.job_id) if confirmation else None
+            if parent:
+                usage = parent.usage or {}
+                run.calls = int(usage.get("model_calls") or 0)
+                run.input_tokens = int(usage.get("input_tokens") or 0)
+                run.output_tokens = int(usage.get("output_tokens") or 0)
+                run.unknown_usage = usage.get("input_tokens") is None or usage.get("output_tokens") is None
+                run.model_ms = float(usage.get("model_ms") or 0)
+                run.started -= float(usage.get("elapsed_ms") or 0) / 1000
         run.observe_ui = lambda actions: self.observe_ui(run, actions)
         with self._lock:
             self._active[job_id] = run

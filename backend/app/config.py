@@ -49,8 +49,8 @@ MINIMAX_TOKEN_PLAN_KEY_ENV_KEYS = (
 # 客户端会退回 OpenAI Chat Completions 格式（兼容旧配置）。
 # 文档: https://platform.minimaxi.com/docs/api-reference/text-anthropic-api
 DEFAULT_LLM_PROVIDER = "minimax"
-DEFAULT_MINIMAX_BASE_URL = "https://api.minimaxi.com/anthropic"
-DEFAULT_MINIMAX_MODEL = "MiniMax-M2.7-highspeed"
+DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.cn/anthropic"
+DEFAULT_MINIMAX_MODEL = "MiniMax-M3.1-Flash"
 DEFAULT_MINIMAX_IMAGE_BASE_URL = "https://api.minimaxi.com"
 DEFAULT_MINIMAX_IMAGE_MODEL = "image-01"
 
@@ -361,6 +361,11 @@ class AppConfig:
         self.llm_provider = normalized_provider
         self.minimax_base_url = (self.minimax_base_url or DEFAULT_MINIMAX_BASE_URL).strip() or DEFAULT_MINIMAX_BASE_URL
         self.minimax_model = (self.minimax_model or DEFAULT_MINIMAX_MODEL).strip() or DEFAULT_MINIMAX_MODEL
+        if self.minimax_model.startswith("MiniMax-M2"):
+            self.minimax_model = DEFAULT_MINIMAX_MODEL
+            self.minimax_model_source = "migrated_retired_model"
+        if self.minimax_base_url in {"https://api.minimaxi.com/anthropic", "https://api.minimaxi.com/v1"}:
+            self.minimax_base_url = self.minimax_base_url.replace("api.minimaxi.com", "api.minimax.cn")
         self.minimax_image_base_url = (
             (self.minimax_image_base_url or DEFAULT_MINIMAX_IMAGE_BASE_URL).strip().rstrip("/")
             or DEFAULT_MINIMAX_IMAGE_BASE_URL

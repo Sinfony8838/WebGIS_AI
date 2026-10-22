@@ -7,6 +7,7 @@ from uuid import uuid4
 from .interaction_run import InteractionRun, ModelBudgetExceeded, RunStopped
 
 TOOL_LABELS = {
+ "create_measurement": "创建测线", "generate_profile": "剖面采样", "compare_profiles": "叠加曲线",
  "switch_view_mode": "切换视图", "switch_basemap": "切换底图", "open_panel": "打开面板",
  "toggle_layer": "调整图层显隐", "set_layer_opacity": "调整透明度", "focus_layer": "定位图层",
  "set_view": "调整视角", "run_workflow": "空间分析", "build_workflow": "空间分析",
@@ -93,6 +94,7 @@ def run_goal(engine: Any, *, project: Any, conversation: Any, message: str,
                     control.check()
                     tool = action["tool_name"]
                     label = TOOL_LABELS.get(tool, "执行操作")
+                    if tool == "generate_profile": label = "人口密度采样" if action.get("tool_params", {}).get("kind") == "population" else "地形采样"
                     control.emit("tool_running", ("正在执行 · " if control.route == "direct" else "智能体调用工具中 · ") + label, tool=label)
                     stage_callback("execution", "running", control.activity["label"], "")
                     try:
@@ -151,7 +153,7 @@ def run_goal(engine: Any, *, project: Any, conversation: Any, message: str,
                 stage_callback("execution", "success" if not issues else "error", "操作结果已返回", "")
             elif not should_continue:
                 answer = str(plan.get("assistant_message") or "请补充目标或选择数据。")
-                if not plan.get("goal_completed") or issues or not executed:
+                if not plan.get("goal_completed") or issues or (not executed and not control.observations):
                     outcome = "partial" if executed else "needs_clarification"
                 break
             if not should_continue:
@@ -178,14 +180,14 @@ def run_goal(engine: Any, *, project: Any, conversation: Any, message: str,
         answer = issues[-1]
     if not messages and not answer:
         answer = issues[-1] if issues else "没有执行操作，请补充目标或数据。"
-    if executed and outcome == "completed":
+    if executed and outcome == "completed" and not plan.get("goal_completed"):
         # A corrected error may have been followed by an actual successful result.
         answer = ""
     parts = list(dict.fromkeys(text for text in messages + ([answer] if answer else []) if text))
-    assistant_message = "\n".join(parts)
+    assistant_message = answer if outcome == "completed" and plan.get("goal_completed") and answer else "\n".join(parts)
     remembered = [item for item in control.observations if item.get("status") == "success"][-8:]
     engine.memory.append(conversation.conversation_id, "assistant", assistant_message, "interaction",
-                         metadata={"intent": "interaction", "planner": plan.get("planner"), "outcome": outcome})
+                         metadata={"job_id": control.job_id, "intent": "interaction", "planner": plan.get("planner"), "outcome": outcome})
     engine.memory.update_task_memory(conversation, {"last_intent": "interaction"}, map_context,
         pinned_state_updates={"last_route": route, "interaction_executions": remembered,
                               "active_plan_fingerprint": "", "last_pending_confirmation": {},

@@ -2191,6 +2191,8 @@ class ToolExecutor:
             "start_class_session": {"target": "webgis", "category": "classroom", "risk_level": "medium", "reversible": False, "requires_confirmation": False, "visible_in_mode": ["interaction"], "validator": self._require_no_active_session},
             "end_class_session": {"target": "webgis", "category": "classroom", "risk_level": "high", "reversible": False, "requires_confirmation": True, "visible_in_mode": ["interaction"], "validator": self._require_active_session},
         }
+        for name in ("create_measurement", "generate_profile", "compare_profiles"):
+            registry[name] = {"target": "webgis", "category": "analysis", "risk_level": "low", "reversible": True, "requires_confirmation": False, "visible_in_mode": ["interaction"]}
         # Keep interaction visibility aligned with the tool table given to the
         # planner, while preserving the existing permissions in other modes.
         for tool in ASSISTANT_TOOL_SCHEMA:
@@ -2241,6 +2243,12 @@ class ToolExecutor:
             validation_error = f"工具 {tool_name} 的 tool_params 必须是对象"
         else:
             validation_error = validate_json_contract(tool_params, input_schema)
+        from .assistant_profiles import active_mode, tool_allowed
+        profile = active_mode()
+        if not tool_allowed(tool_name):
+            validation_error = f"{profile} 模式不允许调用 {tool_name}"
+        if profile and tool_allowed(tool_name):
+            metadata["visible_in_mode"] = [assistant_mode]
         if not validation_error:
             if metadata.get("target") not in {target, "auto"}:
                 validation_error = f"Tool target mismatch for {tool_name}: expected {metadata.get('target')}, got {target}"
@@ -2629,7 +2637,7 @@ class AssistantSessionEngine:
                 "assistant",
                 assistant_message,
                 normalized_mode,
-                metadata={"intent": intent, "planner": plan.get("planner", "clarification")},
+                metadata={"job_id": job_id, "intent": intent, "planner": plan.get("planner", "clarification")},
             )
             self.memory.update_task_memory(
                 conversation,
@@ -2661,7 +2669,7 @@ class AssistantSessionEngine:
                 "assistant",
                 assistant_message,
                 normalized_mode,
-                metadata={"intent": intent, "planner": "blocked"},
+                metadata={"job_id": job_id, "intent": intent, "planner": "blocked"},
             )
             self.memory.update_task_memory(
                 conversation,
@@ -3229,6 +3237,8 @@ class AssistantSessionEngine:
                 project_id=project_id,
                 artifact_id=attachment["artifact_id"],
             )
+        except RunStopped:
+            raise
         except Exception as exc:  # pragma: no cover - defensive runtime branch
             result = {"used_vision": False, "reason": f"图片识别失败：{exc}"}
 
@@ -3281,6 +3291,8 @@ class AssistantSessionEngine:
                 focus=message,
                 screen_snapshot=screen_snapshot,
             )
+        except RunStopped:
+            raise
         except Exception as exc:  # pragma: no cover - defensive runtime branch
             reason = f"地图图片识别服务暂时不可用：{exc}"
             stage_callback("grounding", "success", "截图识别暂不可用", reason)

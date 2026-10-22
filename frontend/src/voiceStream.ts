@@ -62,9 +62,11 @@ export class VoiceStreamError extends Error {
 
 export type VoiceStreamCloseInfo = { code: number; reason: string };
 
+export type VoiceFinalMetadata = {segment_id?: string; utterance_id?: string; end_reason?: "silence" | "segment" | "stop"};
+
 export type VoiceStreamEvents = {
   onPartial?: (text: string) => void;
-  onFinal?: (text: string) => void;
+  onFinal?: (text: string, metadata?: VoiceFinalMetadata) => void;
   onOpen?: () => void;
   /** Fatal setup/transport failure (typed, with an actionable message). */
   onError?: (error: VoiceStreamError) => void;
@@ -167,9 +169,9 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents, si
     };
 
     const handleEvent = (data: string) => {
-      let parsed: { type?: string; text?: string; reason?: string; detail?: string } | null = null;
+      let parsed: { type?: string; text?: string; reason?: string; detail?: string; segment_id?: string; utterance_id?: string; end_reason?: string } | null = null;
       try {
-        parsed = JSON.parse(data) as { type?: string; text?: string; reason?: string; detail?: string };
+        parsed = JSON.parse(data) as { type?: string; text?: string; reason?: string; detail?: string; segment_id?: string; utterance_id?: string; end_reason?: string };
       } catch {
         return;
       }
@@ -177,12 +179,13 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents, si
       const text = String(parsed.text || "");
       if (parsed.type === "final") {
         if (flushResolver) {
-          flushResolver(text || null);
+          flushResolver(text);
           flushResolver = null;
           finish();
           closeSocket();
         } else {
-          events.onFinal?.(text);
+          if (parsed.segment_id || parsed.utterance_id || parsed.end_reason) events.onFinal?.(text, parsed as VoiceFinalMetadata);
+          else events.onFinal?.(text);
         }
       } else if (parsed.type === "partial") {
         events.onPartial?.(text);

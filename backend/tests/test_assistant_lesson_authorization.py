@@ -218,7 +218,10 @@ def test_http_private_lesson_rejection_has_no_job_or_design(fixture, monkeypatch
 def test_http_confirmation_uses_current_server_role_not_stored_role(fixture, monkeypatch, role):
     from backend.app import main
     runtime, a, _, _, foreign, _ = fixture
-    pending = runtime.store.create_confirmation(a, "", "", "tool", "fixture", "fixture", payload={
+    conversation = runtime.store.create_conversation(a, "operate")
+    conversation.owner_user_id = "teacher-A"
+    runtime.store.save_conversation(conversation)
+    pending = runtime.store.create_confirmation(a, conversation.conversation_id, "", "operate", "fixture", "fixture", payload={
         "actor_role": "admin", "frozen_plan": {"actor_role": "admin", "map_context": context(foreign)},
     })
     monkeypatch.setattr(main, "config", runtime.config)

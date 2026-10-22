@@ -305,8 +305,9 @@ class ImageGenerationRuntimeTest(unittest.TestCase):
 
         self.assertEqual(approve_job["status"], "completed")
         self.assertIn("图片已生成", approve_job["result"]["assistant_message"])
-        generated = [item for item in runtime.list_outputs(project_id)["items"] if item["artifact_type"] == "generated_image"]
+        generated = [item for item in runtime.store.list_outputs(project_id) if item["artifact_type"] == "assistant_image_preview"]
         self.assertEqual(len(generated), 1)
+        self.assertNotIn(generated[0]["artifact_id"], {item["artifact_id"] for item in runtime.list_outputs(project_id)["items"]})
 
 
 if __name__ == "__main__":

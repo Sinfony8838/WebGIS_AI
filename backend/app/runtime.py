@@ -41,6 +41,8 @@ from .services.session_engine import AssistantSessionEngine
 from .services.teaching_maps import TeachingMapService
 from .services.workflow_executor import WorkflowExecutor
 from .services.interaction_operations import InteractionOperations
+from .services.assistant_profiles import normalize_mode, bind_conversation, require_tool
+from .services.chat_assistant import ChatAssistant
 from .services.interaction_run import current_run, interaction_scope, RunStopped
 from .services.workflow_templates import INTERACTION_ALLOWED_TEMPLATES, detect_template, expand_template, list_templates
 from .services.templates import DISABLED_TEMPLATE_IDS, TemplateService
@@ -988,7 +990,7 @@ class WebGISRuntime:
         project_id: str,
         message: str,
         map_context: Optional[Dict[str, Any]] = None,
-        assistant_mode: str = "teaching",
+        assistant_mode: str = "chat",
         conversation_id: str = "",
         history: Optional[List[Dict[str, Any]]] = None,
         target: str = "webgis",
@@ -1007,12 +1009,22 @@ class WebGISRuntime:
         require_context_lesson(self.store, project_id, {"teaching_context": teaching_context}, actor_role=actor_role)
         normalized_target = "webgis"
         normalized_input_mode = input_mode if input_mode in {"text", "voice"} else "text"
-        normalized_mode = assistant_mode if assistant_mode in {"teaching", "knowledge", "tool", "interaction"} else "teaching"
+        normalized_mode = normalize_mode(assistant_mode)
+        if conversation_id:
+            bind_conversation(self.store, project_id, normalized_mode, conversation_id, actor_user_id)
+        history = []
+        if normalized_mode == "chat":
+            map_context = {key: value for key, value in (map_context or {}).items() if key in {"image_attachment", "image_attachments", "screen_snapshot"}}
+            teaching_context = {}
+        elif image_attachments or (map_context or {}).get("image_attachment") or (map_context or {}).get("image_attachments"):
+            raise ValueError("图片问答请使用 Chat 模式")
         resolved_attachments = self.resolve_image_attachments(project_id, image_attachments or [])
         map_context = resolve_image_context(self.config, self.store, project_id, map_context)
         if resolved_attachments:
             map_context = {**map_context, "image_attachments": resolved_attachments, "image_attachment": resolved_attachments[0]}
         map_context = self.session_engine.prepare_image_context(project_id, message, conversation_id, map_context)
+        conversation = bind_conversation(self.store, project_id, normalized_mode, conversation_id, actor_user_id)
+        conversation_id = conversation.conversation_id
         # One assistant entry point, one safety boundary.  The v2 feature flag
         # remains readable for deployment compatibility, but no request may
         # bypass the session harness through the former legacy worker.
@@ -1062,9 +1074,7 @@ class WebGISRuntime:
             "project_id": project_id,
             "conversation_id": conversation_id,
             "assistant_mode": normalized_mode,
-            "read_only": normalized_mode == "knowledge" or (
-                normalized_mode == "teaching" and message.lstrip().startswith("GeoBot 头脑风暴：")
-            ),
+            "read_only": normalized_mode == "chat",
         }
 
     def confirm_assistant_action(self, confirmation_id: str, decision: str = "approve", *, actor_role: str = "", actor_user_id: str = "") -> Dict[str, Any]:
@@ -1075,6 +1085,9 @@ class WebGISRuntime:
         self.session_engine.memory.require_project_conversation(
             confirmation.project_id, confirmation.conversation_id
         )
+        conversation = self.store.get_conversation(confirmation.conversation_id)
+        if conversation and conversation.assistant_mode in {"chat", "operate"}:
+            bind_conversation(self.store, confirmation.project_id, conversation.assistant_mode, conversation.conversation_id, actor_user_id)
         normalized_decision = "reject" if str(decision).strip().lower() == "reject" else "approve"
         require_confirmation_classroom(self.store, confirmation.project_id, confirmation.payload or {})
         require_confirmation_lessons(self.store, confirmation.project_id, confirmation.payload or {}, actor_role=actor_role)
@@ -1085,6 +1098,7 @@ class WebGISRuntime:
             title=confirmation.title or ("Reject assistant action" if normalized_decision == "reject" else "Confirm assistant action"),
             workflow_type="assistant_confirmation",
             request={"confirmation_id": confirmation_id, "conversation_id": confirmation.conversation_id, "decision": normalized_decision,
+                     "assistant_mode": conversation.assistant_mode if conversation else "",
                      "actor_user_id": actor_user_id, "teaching_context": confirmation.payload.get("map_context", {}).get("teaching_context", {}),
                      "ui_observation_protocol": (self.store.get_job(confirmation.job_id).request.get("ui_observation_protocol", 0) if self.store.get_job(confirmation.job_id) else 0)},
             stages=build_assistant_v2_stages(),
@@ -1104,6 +1118,41 @@ class WebGISRuntime:
         if conversation is None:
             raise KeyError(f"Unknown conversation: {conversation_id}")
         messages = [item.to_dict() for item in self.store.list_conversation_messages(conversation_id)]
+        recorded = {str(item.get("metadata", {}).get("job_id", "")) for item in messages if item["role"] in {"assistant", "system"}}
+        project = self.store.get_project(conversation.project_id)
+        for job_id in project.job_ids if project else []:
+            job = self.store.get_job(job_id)
+            if not job or job.job_id in recorded or job.request.get("conversation_id") != conversation_id:
+                continue
+            if job.request.get("actor_user_id", "") != conversation.owner_user_id:
+                continue
+            if job.status not in {"completed", "failed"}:
+                continue
+            answer = job.result.get("assistant_message") or job.error
+            if answer:
+                # Older clarification messages lack a job id. Associate only a matching
+                # answer inside this run's timestamps, without merging repeated turns.
+                legacy = next((item for item in messages if item["role"] == "assistant"
+                    and not item.get("metadata", {}).get("job_id") and item.get("text") == answer
+                    and job.created_at <= item["created_at"] <= job.updated_at), None)
+                if legacy is not None:
+                    legacy.setdefault("metadata", {})["job_id"] = job.job_id
+                    continue
+                messages.append({"message_id": "result_" + job.job_id, "conversation_id": conversation_id,
+                    "role": "assistant", "text": answer, "assistant_mode": conversation.assistant_mode,
+                    "metadata": {"job_id": job.job_id}, "created_at": job.updated_at})
+        messages.sort(key=lambda item: item["created_at"])
+        for message in messages:
+            job = self.store.get_job(str(message.get("metadata", {}).get("job_id", "")))
+            if message["role"] in {"assistant", "system"} and job and job.project_id == conversation.project_id and job.request.get("conversation_id") == conversation_id:
+                # Read-only display data: never return executable UI actions for replay.
+                message["execution"] = {"job_id": job.job_id, "status": job.status, "activity": job.activity, "usage": job.usage}
+                message["result"] = json.loads(json.dumps({key: job.result.get(key) for key in ("citations", "actions_executed", "planner")}))
+                for entry in message["result"].get("actions_executed") or []:
+                    artifact = (entry.get("result") or {}).get("generated_artifact") or {}
+                    current = self.store.get_artifact(str(artifact.get("artifact_id", "")))
+                    if current and current.project_id == conversation.project_id:
+                        entry["result"]["generated_artifact"] = current.to_dict()
         return {"status": "success", **conversation.to_dict(), "messages": messages}
 
     def upload_image_asset(
@@ -1265,6 +1314,11 @@ class WebGISRuntime:
         params = self.image_generation_service.validate_request(
             prompt, model=model, aspect_ratio=aspect_ratio, prompt_optimizer=prompt_optimizer,
         )
+        control = current_run()
+        if control and control.mode == "chat":
+            parent = self.store.get_job(control.job_id)
+            params["assistant_preview"] = {"owner_user_id": parent.request.get("actor_user_id", ""),
+                                           "conversation_id": parent.request.get("conversation_id", "")}
         return self.store.create_job(
             project_id=project_id,
             job_type="image_generation",
@@ -1309,7 +1363,7 @@ class WebGISRuntime:
             artifact = self.store.register_artifact(
                 project_id=project_id,
                 job_id=job.job_id,
-                artifact_type="generated_image",
+                artifact_type="assistant_image_preview" if "assistant_preview" in params else "generated_image",
                 title=job.title,
                 path=str(output_path),
                 metadata={
@@ -1325,11 +1379,14 @@ class WebGISRuntime:
                     "aigc_watermark": True,
                     "prompt_optimizer": params["prompt_optimizer"],
                     "teaching_review": "required",
+                    "saved_to_library": "assistant_preview" not in params,
+                    **params.get("assistant_preview", {}),
                 },
             )
             artifact_registered = True
-            self.store.add_recent_action(project_id, "AI生成图片", artifact.title, status="success")
-            self.store.update_job_stage(job.job_id, "artifacts", "success", "图片已保存到项目图片库。")
+            if "assistant_preview" not in params:
+                self.store.add_recent_action(project_id, "AI生成图片", artifact.title, status="success")
+            self.store.update_job_stage(job.job_id, "artifacts", "success", "图片已生成，可预览并选择保存。" if "assistant_preview" in params else "图片已保存到项目图片库。")
             self.store.set_job_status(
                 job.job_id,
                 "completed",
@@ -2172,14 +2229,15 @@ class WebGISRuntime:
             def update_stage(stage_name: str, status: str, summary: str = "", detail: str = "") -> None:
                 self.store.update_job_stage(job_id, stage_name, status, summary, detail)
 
-            control = self.interaction_operations.create_run(job_id) if assistant_mode == "interaction" else None
+            control = self.interaction_operations.create_run(job_id)
             try:
                 with interaction_scope(control):
-                    result = self.session_engine.handle(
+                    handler = ChatAssistant(self).handle if assistant_mode == "chat" else self.session_engine.handle
+                    result = handler(
                         job_id=job_id,
                         project=project,
                         message=message,
-                        assistant_mode=assistant_mode,
+                        assistant_mode="interaction" if assistant_mode == "operate" else assistant_mode,
                         conversation_id=conversation_id,
                         history=history,
                         map_context=map_context,
@@ -2238,6 +2296,11 @@ class WebGISRuntime:
                     "stages": self.store.get_job(job_id).stages,
                 },
             )
+        except RunStopped as exc:
+            from .services.interaction_run import ModelBudgetExceeded
+            outcome = "budget_exhausted" if isinstance(exc, ModelBudgetExceeded) else "cancelled" if control.cancelled() else "partial"
+            self.store.set_job_status(job_id, "completed", result={"status": outcome, "outcome": outcome,
+                "assistant_message": str(exc), "conversation_id": conversation_id, "usage": control.usage(), "actions_executed": []})
         except HarnessExecutionError as exc:
             self._fail_job(job_id, "assistant_message_v2", str(exc), {"harness": exc.report})
         except Exception as exc:  # pragma: no cover - defensive runtime branch
@@ -2335,7 +2398,7 @@ class WebGISRuntime:
             if decision == "reject":
                 result = self.session_engine.reject_confirmation(confirmation_id, job_id=job_id, actor_role=actor_role)
             else:
-                control = self.interaction_operations.create_run(job_id) if confirmation and confirmation.assistant_mode == "interaction" else None
+                control = self.interaction_operations.create_run(job_id)
                 try:
                     with interaction_scope(control):
                         result = self.session_engine.execute_confirmation(
@@ -2420,10 +2483,14 @@ class WebGISRuntime:
         require_classroom_context(self.store, project_id, map_context)
         require_context_lesson(self.store, project_id, map_context)
         tool_name = action["tool_name"]
+        require_tool(tool_name)
         params = action.get("tool_params", {})
         control = current_run()
         if control is not None:
             control.check()
+        if tool_name in {"create_measurement", "generate_profile", "compare_profiles"}:
+            from .services.profile_operations import ProfileOperations
+            return ProfileOperations(self).execute(project_id, action, map_context)
         if tool_name in {"build_workflow", "draft_teaching"}:
             return self.interaction_operations.execute(project_id, action, map_context)
         if tool_name == "set_view":
@@ -2608,7 +2675,7 @@ class WebGISRuntime:
             )
             artifact = generated["artifact"]
             return {
-                "assistant_message": "图片已生成并保存到项目图片库，已标记为 AI 生成示意图。你可以把它加入助教继续提问。",
+                "assistant_message": "图片已生成。你可以保存到素材库，也可以仅留在本次会话中。" if artifact["artifact_type"] == "assistant_image_preview" else "图片已生成并保存到项目图片库。",
                 "generated_artifact": artifact,
                 "artifacts": [],
             }

@@ -18,6 +18,7 @@ from .state_writer import StateWriterLease
 
 from .models import (
     ArtifactRecord,
+    AssistantFolderRecord,
     ClassSessionRecord,
     ConfirmationRecord,
     ConversationRecord,
@@ -69,6 +70,7 @@ class RuntimeStore:
         self.lesson_designs: Dict[str, LessonDesignRecord] = {}
         self.lesson_rehearsals: Dict[str, LessonRehearsalRecord] = {}
         self.class_sessions: Dict[str, ClassSessionRecord] = {}
+        self.assistant_folders: Dict[str, AssistantFolderRecord] = {}
         self.conversations: Dict[str, ConversationRecord] = {}
         self.messages: Dict[str, MessageRecord] = {}
         self.confirmations: Dict[str, ConfirmationRecord] = {}
@@ -172,7 +174,7 @@ class RuntimeStore:
             "projects": ProjectRecord, "jobs": JobRecord, "artifacts": ArtifactRecord,
             "lessons": LessonRecord, "lesson_designs": LessonDesignRecord,
             "lesson_rehearsals": LessonRehearsalRecord, "class_sessions": ClassSessionRecord,
-            "conversations": ConversationRecord, "messages": MessageRecord,
+            "assistant_folders": AssistantFolderRecord, "conversations": ConversationRecord, "messages": MessageRecord,
             "confirmations": ConfirmationRecord, "workflows": WorkflowRecord,
         }
         records: Dict[str, Dict[str, Any]] = {}
@@ -376,6 +378,8 @@ class RuntimeStore:
             "confirmations": self.confirmations,
             "workflows": self.workflows,
         }
+        if self.assistant_folders:
+            payload["assistant_folders"] = self.assistant_folders
         # Runtime state can include large GeoJSON coordinate arrays.  Pretty
         # printing multiplies that hot-path payload and every mutation rewrites
         # the complete file, so retain readable Unicode but use compact JSON.
@@ -479,6 +483,82 @@ class RuntimeStore:
             self.conversations[conversation.conversation_id] = conversation
             self._save()
             return conversation
+
+    def list_assistant_conversations(self, project_id: str, owner: str, mode: str, deleted: bool = False) -> List[Dict[str, Any]]:
+        with self._lock:
+            rows = []
+            for conversation in self.conversations.values():
+                if (conversation.project_id, conversation.owner_user_id, conversation.assistant_mode) != (project_id, owner, mode):
+                    continue
+                if bool(conversation.deleted_at) != deleted:
+                    continue
+                messages = self.list_conversation_messages(conversation.conversation_id)
+                title = next((m.text.strip() for m in messages if m.role == "user" and m.text.strip()), "新会话")
+                rows.append({"conversation_id": conversation.conversation_id, "title": title[:80],
+                             "updated_at": conversation.updated_at, "assistant_mode": mode, "folder_id": conversation.folder_id,
+                             "pinned": conversation.pinned, "deleted_at": conversation.deleted_at})
+            return sorted(rows, key=lambda row: (row["pinned"], row["updated_at"]), reverse=True)
+
+    def list_assistant_folders(self, project_id: str, owner: str) -> List[Dict[str, Any]]:
+        with self._lock:
+            rows = [f.to_dict() for f in self.assistant_folders.values() if (f.project_id, f.owner_user_id) == (project_id, owner)]
+            return sorted(rows, key=lambda row: (row["pinned"], row["updated_at"]), reverse=True)
+
+    @_requires_writer
+    def create_assistant_folder(self, project_id: str, owner: str, name: str) -> AssistantFolderRecord:
+        if project_id not in self.projects:
+            raise KeyError("Unknown project")
+        name = name.strip()
+        if not name or len(name) > 80:
+            raise ValueError("项目文件夹名称须为1至80个字符")
+        folder = AssistantFolderRecord(f"folder_{uuid4().hex}", project_id, owner, name)
+        self.assistant_folders[folder.folder_id] = folder
+        self._save()
+        return folder
+
+    @_requires_writer
+    def update_assistant_folder(self, project_id: str, owner: str, folder_id: str, patch: Dict[str, Any], *, delete: bool = False):
+        folder = self.assistant_folders.get(folder_id)
+        if folder is None or (folder.project_id, folder.owner_user_id) != (project_id, owner):
+            raise KeyError("Unknown assistant folder")
+        if delete:
+            for conversation in self.conversations.values():
+                if (conversation.project_id, conversation.owner_user_id, conversation.folder_id) == (project_id, owner, folder_id):
+                    conversation.folder_id = ""
+            del self.assistant_folders[folder_id]
+        else:
+            if "name" in patch:
+                name = patch["name"].strip()
+                if not name or len(name) > 80:
+                    raise ValueError("项目文件夹名称须为1至80个字符")
+                folder.name = name
+            if "pinned" in patch:
+                folder.pinned = patch["pinned"]
+            folder.updated_at = utc_now()
+        self._save()
+        return folder.to_dict()
+
+    @_requires_writer
+    def update_assistant_conversation(self, conversation_id: str, owner: str, patch: Dict[str, Any]):
+        conversation = self.conversations.get(conversation_id)
+        if conversation is None or conversation.owner_user_id != owner:
+            raise KeyError("Unknown assistant conversation")
+        if "folder_id" in patch and patch["folder_id"]:
+            folder = self.assistant_folders.get(patch["folder_id"])
+            if folder is None or (folder.project_id, folder.owner_user_id) != (conversation.project_id, owner):
+                raise ValueError("项目文件夹不属于当前用户或地图项目")
+        if patch.get("deleted"):
+            if any(job.request.get("conversation_id") == conversation_id and job.status in {"queued", "running", "pending"} for job in self.jobs.values()):
+                raise ValueError("请先停止当前会话的任务，再删除会话")
+            conversation.deleted_at = utc_now()
+        elif patch.get("deleted") is False:
+            conversation.deleted_at = ""
+        for field in ("folder_id", "pinned"):
+            if field in patch:
+                setattr(conversation, field, patch[field])
+        conversation.updated_at = utc_now()
+        self._save()
+        return conversation.to_dict()
 
     def get_conversation(self, conversation_id: str) -> Optional[ConversationRecord]:
         with self._lock:
@@ -611,6 +691,7 @@ class RuntimeStore:
                     layer.z_index = int(patch["z_index"])
                 if "style" in patch and isinstance(patch["style"], dict):
                     layer.style = {**layer.style, **patch["style"]}
+                    layer.metadata["style_overrides"] = {**layer.metadata.get("style_overrides", {}), **patch["style"]}
                 if "metadata" in patch and isinstance(patch["metadata"], dict):
                     layer.metadata = {**layer.metadata, **patch["metadata"]}
                 if "data" in patch and isinstance(patch["data"], dict):
@@ -1002,6 +1083,19 @@ class RuntimeStore:
             project = self.projects[project_id]
             project.artifact_ids.append(artifact.artifact_id)
             project.updated_at = utc_now()
+            self._save()
+            return artifact
+
+    @_requires_writer
+    def save_assistant_image(self, artifact_id: str, owner: str) -> ArtifactRecord:
+        with self._lock:
+            artifact = self.artifacts.get(artifact_id)
+            if artifact is None or artifact.artifact_type not in {"assistant_image_preview", "generated_image"}:
+                raise KeyError("Unknown assistant image")
+            if artifact.metadata.get("owner_user_id", owner) != owner:
+                raise PermissionError("Image belongs to another user")
+            artifact.artifact_type = "generated_image"
+            artifact.metadata["saved_to_library"] = True
             self._save()
             return artifact
 

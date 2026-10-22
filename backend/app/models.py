@@ -167,12 +167,30 @@ class MessageRecord:
 
 
 @dataclass
+class AssistantFolderRecord:
+    folder_id: str
+    project_id: str
+    owner_user_id: str
+    name: str
+    pinned: bool = False
+    created_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class ConversationRecord:
     conversation_id: str
     project_id: str
     assistant_mode: str
+    owner_user_id: str = ""
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
+    folder_id: str = ""
+    pinned: bool = False
+    deleted_at: str = ""
     raw_messages: List[Dict[str, Any]] = field(default_factory=list)
     running_summary: str = ""
     task_memory: Dict[str, Any] = field(default_factory=dict)

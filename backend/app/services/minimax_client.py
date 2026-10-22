@@ -54,7 +54,7 @@ class LLMClient:
     #: spend part of the budget on thinking before the visible answer; without
     #: generous headroom the response ends at the length limit with empty
     #: visible content.
-    DEFAULT_MAX_COMPLETION_TOKENS = 2048
+    DEFAULT_MAX_COMPLETION_TOKENS = 4096
     meters_interaction_requests = True
 
     def chat_completion(
@@ -87,10 +87,78 @@ class LLMClient:
             with model_request_scope():
                 run = current_run()
                 if run is not None:
-                    timeout = min(timeout, run.remaining_seconds(), 12.0)
+                    timeout = min(timeout, run.remaining_seconds(), 45.0 if run.mode == "chat" else 12.0)
                 return self._chat_completion_locked(
                     messages, temperature, model=model, extra_payload=extra_payload, timeout=timeout
                 )
+        finally:
+            self._admission.release()
+
+    def stream_chat_completion(self, messages, on_delta, temperature=0.2, timeout=45.0):
+        """Stream only public text deltas; never expose reasoning blocks."""
+        from contextlib import nullcontext
+        if not self.config.llm_enabled():
+            raise RuntimeError(self._provider_unconfigured_message())
+        if not self._admission.acquire():
+            raise RuntimeError("模型并发请求已满，请稍后重试。")
+        try:
+            with model_request_scope():
+                run = current_run()
+                if run: timeout = min(timeout, run.remaining_seconds())
+                anthropic = self._uses_anthropic_format()
+                payload = {"model": self.config.active_llm_model(), "temperature": temperature, "stream": True}
+                if payload["model"] == "MiniMax-M3.1-Flash":
+                    payload.update({"output_config": {"effort": "low"}} if anthropic else {"reasoning_effort": "low"})
+                headers = self._auth_headers()
+                if anthropic:
+                    converted, system = [], []
+                    for message in messages:
+                        text = self._content_to_text(message.get("content"))
+                        if message.get("role") == "system": system.append(text); continue
+                        role = "assistant" if message.get("role") == "assistant" else "user"
+                        if converted and converted[-1]["role"] == role: converted[-1]["content"] += "\n\n" + text
+                        else: converted.append({"role": role, "content": text})
+                    if not converted or converted[0]["role"] != "user": converted.insert(0, {"role": "user", "content": "继续"})
+                    payload.update(messages=converted, system="\n\n".join(system), max_tokens=self.DEFAULT_MAX_COMPLETION_TOKENS)
+                    headers.update({"x-api-key": self.config.active_llm_api_key(), "anthropic-version": "2023-06-01"})
+                    endpoint = self.config.active_llm_base_url().rstrip("/") + "/v1/messages"
+                else:
+                    payload.update(messages=messages, max_completion_tokens=self.DEFAULT_MAX_COMPLETION_TOKENS, reasoning_split=True, stream_options={"include_usage": True})
+                    endpoint = self.config.active_llm_base_url().rstrip("/") + "/chat/completions"
+                request = urllib.request.Request(endpoint, data=json.dumps(payload).encode(), headers=headers, method="POST")
+                parts, usage, finished, truncated = [], {}, False, False
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    with run.response_scope(response) if run else nullcontext():
+                        for raw in response:
+                            if run: run.check()
+                            line = raw.decode("utf-8").strip()
+                            if not line.startswith("data:"): continue
+                            body = line[5:].strip()
+                            if body == "[DONE]": finished = True; break
+                            event = json.loads(body)
+                            if event.get("type") == "error" or event.get("error"):
+                                raise RuntimeError("模型流返回错误，回答未完成。")
+                            if anthropic:
+                                usage.update((event.get("message") or {}).get("usage") or {})
+                                usage.update(event.get("usage") or {})
+                                delta = event.get("delta") or {}
+                                text = delta.get("text", "") if delta.get("type") == "text_delta" else ""
+                                if delta.get("stop_reason") == "max_tokens": truncated = True
+                                if event.get("type") == "message_stop": finished = True
+                            else:
+                                usage.update(event.get("usage") or {})
+                                choices = event.get("choices") or []
+                                text = str((choices[0].get("delta") or {}).get("content") or "") if choices else ""
+                                if choices and choices[0].get("finish_reason") == "length": truncated = True
+                                if choices and choices[0].get("finish_reason") == "stop": finished = True
+                            if text:
+                                parts.append(text)
+                                on_delta(text)
+                            if usage: capture_model_usage(dict(usage))
+                if run: run.check()
+                if not finished or not parts or truncated:
+                    raise RuntimeError("模型流中断或未返回回答；未自动重试。")
+                return "".join(parts)
         finally:
             self._admission.release()
 
@@ -118,6 +186,8 @@ class LLMClient:
             "messages": messages,
             "temperature": temperature,
         }
+        if payload["model"] == "MiniMax-M3.1-Flash":
+            payload.update(reasoning_effort="low", reasoning_split=True)
         if extra_payload:
             payload.update(extra_payload)
         # Apply our default budget only if the caller did not specify one,
@@ -240,6 +310,8 @@ class LLMClient:
             "temperature": temperature,
             "max_tokens": int(max_tokens) if max_tokens else self.DEFAULT_MAX_COMPLETION_TOKENS,
         }
+        if payload["model"] == "MiniMax-M3.1-Flash":
+            payload["output_config"] = {"effort": "low"}
         if system_parts:
             payload["system"] = "\n\n".join(system_parts)
         payload.update(extra)

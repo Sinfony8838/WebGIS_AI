@@ -345,7 +345,7 @@ export type JobRecord = {
   job_type: string;
   title: string;
   workflow_type: string;
-  activity?: { phase: string; label: string; route?: string; tool?: string; step?: number; cancel_requested?: boolean };
+  activity?: { timeline?: Array<{phase:string;label:string;started_ms:number;ended_ms?:number;tool?:string;step?:number;outcome?:string}>; answer_text?: string; phase: string; label: string; route?: string; tool?: string; step?: number; cancel_requested?: boolean };
   usage?: { model_calls: number; model_call_limit: number; input_tokens: number | null; output_tokens: number | null; model_ms: number; elapsed_ms: number; route: string };
   ui_actions?: ObservedUiAction[];
   status: string;
@@ -389,7 +389,10 @@ export type JobRecord = {
   error?: string;
 };
 
+export type ConversationSummary = {conversation_id: string; title: string; updated_at: string; assistant_mode: "chat" | "operate"; folder_id?: string; pinned?: boolean; deleted_at?: string};
+export type AssistantExecution = Pick<JobRecord, "job_id" | "status" | "activity" | "usage">;
 export type ChatMessage = {
+  execution?: AssistantExecution;
   role: "assistant" | "user" | "system";
   text: string;
   timestamp: string;
@@ -443,7 +446,7 @@ export type TeachingContract = {
   summary: string;
 };
 
-export type AssistantMode = "teaching" | "knowledge" | "tool" | "interaction";
+export type AssistantMode = "chat" | "operate" | "teaching" | "knowledge" | "tool" | "interaction";
 export type AssistantTarget = "webgis" | "qgis";
 export type AssistantInputMode = "text" | "voice";
 
@@ -461,7 +464,9 @@ export type AssistantUiAction =
   | { type: "open_material"; title?: string; materials?: TeachingMaterial[] }
   | { type: "switch_view"; mode: "plane" | "globe" }
   | { type: "open_panel"; panel: "layers" | "database" | "workflow"; open?: boolean }
-  | { type: "sync_project"; project_updated_at?: string };
+  | { type: "sync_project"; project_updated_at?: string }
+  | { type: "create_measurement"; record: MeasurementRecord }
+  | { type: "show_profile_comparison"; record: MeasurementRecord; comparison: MapProfileComparison };
 
 export type ObservedUiAction = AssistantUiAction & {
   action_id: string; project_id: string; session_id: string; expires_at?: number;
@@ -1558,6 +1563,8 @@ export type ConversationResponse = {
   pinned_state: Record<string, unknown>;
   last_map_grounding: Record<string, unknown>;
   messages: Array<{
+    execution?: AssistantExecution;
+    result?: Pick<ChatMessage, "citations" | "actions_executed" | "planner">;
     message_id: string;
     conversation_id: string;
     role: "assistant" | "user" | "system";
@@ -1806,3 +1813,16 @@ export type TimelineSaveResponse = {
   status: string;
   timeline: TimelineData;
 };
+
+export type MeasurementRecord = {
+  id: string; name: string; coordinates: [number, number][]; totalKm: number; color: string;
+  displayCoordinates?: [number, number][];
+};
+export type MapProfileComparison = {
+  result_id: string; measurement_id?: string; status: string; total_distance_km: number;
+  population: MapProfileResult & {provenance?: {cached: boolean; fetched_at: string; sha256: string}};
+  terrain: MapProfileResult & {provenance?: {cached: boolean; fetched_at: string; sha256: string}};
+  paired_valid_count: number; interpretation_note: string;
+};
+
+export type AssistantFolder = {folder_id: string; name: string; pinned: boolean; updated_at: string};

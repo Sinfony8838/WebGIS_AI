@@ -561,7 +561,7 @@ export async function sendAssistantMessage(
       history: options?.history || [],
       target,
       input_mode: inputMode,
-      ui_observation_protocol: options?.assistantMode === "interaction" ? 1 : 0,
+      ui_observation_protocol: ["interaction", "operate"].includes(options?.assistantMode || "") ? 1 : 0,
       screen_snapshot: options?.screenSnapshot || {},
       teaching_context: options?.teachingContext || mapContext.teaching_context || {},
       image_attachments: options?.imageAttachments || []
@@ -1680,4 +1680,25 @@ export async function acknowledgeUiAction(jobId: string, observation: import("./
 
 export async function cancelAssistantJob(jobId: string): Promise<unknown> {
   return requestJson(`/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
+}
+
+export async function fetchAssistantConversations(projectId: string, mode: "chat" | "operate", deleted = false): Promise<{items: import("./types").ConversationSummary[]; folders?: import("./types").AssistantFolder[]}> {
+  return requestJson(`/projects/${encodeURIComponent(projectId)}/assistant/conversations?mode=${mode}&deleted=${deleted}`);
+}
+
+export function saveAssistantImage(artifactId: string): Promise<{artifact: ArtifactRecord}> {
+  return requestJson(`/artifacts/${encodeURIComponent(artifactId)}/save-image`, {method:"POST"});
+}
+
+export function updateAssistantConversation(id: string, patch: {pinned?: boolean; folder_id?: string; deleted?: boolean}) {
+  return requestJson(`/assistant/conversations/${encodeURIComponent(id)}`, {method:"PATCH", headers:{"Content-Type":"application/json"}, body:JSON.stringify(patch)});
+}
+export function createAssistantFolder(projectId: string, name: string) {
+  return requestJson(`/projects/${encodeURIComponent(projectId)}/assistant/folders`, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name})});
+}
+export function updateAssistantFolder(projectId: string, id: string, patch: {name?: string; pinned?: boolean}) {
+  return requestJson(`/projects/${encodeURIComponent(projectId)}/assistant/folders/${encodeURIComponent(id)}`, {method:"PATCH", headers:{"Content-Type":"application/json"}, body:JSON.stringify(patch)});
+}
+export function removeAssistantFolder(projectId: string, id: string) {
+  return requestJson(`/projects/${encodeURIComponent(projectId)}/assistant/folders/${encodeURIComponent(id)}`, {method:"DELETE"});
 }

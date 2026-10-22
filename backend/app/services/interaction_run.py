@@ -25,6 +25,7 @@ class ModelBudgetExceeded(RunStopped):
 @dataclass
 class InteractionRun:
     job_id: str
+    mode: str = ""
     max_model_calls: int = 3
     max_seconds: float = 180.0
     cancelled: Callable[[], bool] = lambda: False
@@ -39,6 +40,8 @@ class InteractionRun:
     model_ms: float = 0.0
     activity: Dict[str, Any] = field(default_factory=dict)
     observations: list = field(default_factory=list)
+    timeline: list = field(default_factory=list)
+    resources: dict = field(default_factory=dict)
     _lock: Any = field(default_factory=RLock, repr=False)
     _closers: list = field(default_factory=list, repr=False)
 
@@ -58,10 +61,18 @@ class InteractionRun:
                 "output_tokens": None if self.unknown_usage else self.output_tokens,
                 "model_ms": round(self.model_ms, 2),
                 "elapsed_ms": round((time.monotonic() - self.started) * 1000, 2),
-                "route": self.route, "asr_tts": "accounted_separately"}
+                "route": self.route, "mode": self.mode, "asr_tts": "accounted_separately"}
 
     def emit(self, phase: str, label: str, **details: Any) -> None:
-        self.activity = {"phase": phase, "label": label, "route": self.route, **details}
+        elapsed = round((time.monotonic() - self.started) * 1000, 2)
+        signature = (phase, label, details.get("step"), details.get("tool"))
+        previous = self.timeline[-1] if self.timeline else {}
+        if signature != (previous.get("phase"), previous.get("label"), previous.get("step"), previous.get("tool")):
+            if previous: previous["ended_ms"] = elapsed
+            self.timeline.append({"phase": phase, "label": label, "started_ms": elapsed,
+                                  **{key: details[key] for key in ("step", "tool", "outcome") if key in details}})
+            self.timeline = self.timeline[-32:]
+        self.activity = {"phase": phase, "label": label, "route": self.route, **details, "timeline": [dict(item) for item in self.timeline]}
         self.publish(dict(self.activity), self.usage())
 
     def before_model(self) -> float:
@@ -70,7 +81,10 @@ class InteractionRun:
             if self.calls >= self.max_model_calls:
                 raise ModelBudgetExceeded("已用完本回合 3 次模型请求预算；未继续调用模型。")
             self.calls += 1
-            self.emit("thinking", "智能体思考中", step=self.calls)
+            if self.activity.get("phase") == "tool_running":
+                self.emit("tool_running", self.activity["label"], tool=self.activity.get("tool", ""), step=self.calls)
+            else:
+                self.emit("thinking", "智能体思考中", step=self.calls)
             return time.monotonic()
 
     def after_model(self, started: float, usage: Optional[Dict[str, Any]] = None) -> None:

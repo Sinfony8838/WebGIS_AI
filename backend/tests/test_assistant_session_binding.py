@@ -87,7 +87,7 @@ def test_same_project_memory_retains_history_and_accepts_new_grounding(runtime):
 @pytest.mark.parametrize("reuse", [False, True])
 def test_legal_message_finishes_with_new_or_same_project_conversation(runtime, reuse):
     a, _ = projects(runtime)
-    conversation = runtime.store.create_conversation(a, "knowledge") if reuse else None
+    conversation = runtime.store.create_conversation(a, "chat") if reuse else None
     with patch.object(runtime.minimax_client, "chat_completion", side_effect=AssertionError("No model calls")):
         accepted = runtime.submit_assistant_message(
             a, "你是谁", assistant_mode="knowledge",

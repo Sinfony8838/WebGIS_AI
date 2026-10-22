@@ -31,6 +31,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from ..models import ProjectRecord
 from .assistant import ASSISTANT_TOOL_SCHEMA, AssistantService
+from .assistant_profiles import tool_allowed
 from .minimax_client import MiniMaxClient
 from .interaction_run import complete, current_run, RunStopped
 from .agent_capabilities import OP_PARAMS, layer_catalog, select_catalog
@@ -52,7 +53,7 @@ def _tools_for_mode(assistant_mode: str) -> List[Dict[str, Any]]:
     return [
         item
         for item in ASSISTANT_TOOL_SCHEMA
-        if assistant_mode in item.get("modes", ["teaching", "tool", "knowledge", "interaction"])
+        if assistant_mode in item.get("modes", ["teaching", "tool", "knowledge", "interaction"]) and tool_allowed(item["name"])
     ]
 
 CORE_TOOL_NAMES = {
@@ -185,8 +186,6 @@ class LLMPlanner:
             return rule_plan
 
         plan = self.plan_interaction_step(message, project, map_context, normalized_input_mode)
-        if plan.get("llm_fallback_reason") and rule_plan.get("assistant_message"):
-            plan["assistant_message"] = rule_plan["assistant_message"]
         return plan
 
     def plan_interaction_step(self, message: str, project: ProjectRecord,
@@ -220,6 +219,10 @@ class LLMPlanner:
             fallback["planner"] = "voice_clarification" if is_voice else "interaction_clarification"
             fallback["llm_fallback_reason"] = str(exc)
             fallback["retryable_plan_error"] = isinstance(exc, (ValueError, json.JSONDecodeError))
+            reason = str(exc)
+            if not fallback["retryable_plan_error"]:
+                detail = "模型接口返回 404，请检查供应商接口地址。" if "404" in reason else "模型请求失败或服务未配置，请检查连接与模型配置。"
+                fallback["assistant_message"] = detail + "未执行本次操作；无需改写这条指令。"
             return fallback
 
     # ------------------------------------------------------------------
@@ -340,7 +343,7 @@ class LLMPlanner:
             context["workflow_contract"] = {"steps": [{"id": "load", "op": "load_layer", "params": {"source": "layer:<actual layer_id>"}}, {"id": "stats", "op": "aggregate_stats", "params": {"input": "${load.layer}", "fields": ["actual_field"]}}]}
             context["workflow_outputs"] = {"load_layer": ["layer", "path"], "inspect_layer": ["layer", "fields", "feature_count"], "aggregate_stats": ["stats"], "choropleth": ["layer", "style"], "export_geojson": ["geojson"], "export_map_png": ["png"], "export_style_json": ["style"], "other_analysis_ops": ["layer", "path"]}
         system = (
-            "You are the voice-control brain of a classroom WebGIS platform (智能交互模式). "
+            "You are the Operate agent of a classroom WebGIS platform. Input may be typed or spoken. "
             "The teacher gives goals. Use direct tools for simple tasks, existing templates for known workflows, "
             "or compose a NEW declarative workflow for open goals. Never emit Python, SQL or nested workflows. "
             "A generated workflow has 1..8 steps with unique ids, op and params; references use ${stepId.outputKey}. "
@@ -350,9 +353,18 @@ class LLMPlanner:
             "only emit the executable prefix, then observe and plan the remainder. Do not repeat completed steps. "
             "After observation, an empty actions list is a clarification unless goal_completed:true explicitly indicates the observed goal is done. "
             "On a failed observation, correct the issue or ask for missing inputs. Limit model requests to 3 total. "
-            "draft_teaching.draft accepts title,objectives,core_questions,stages,homework,board_design,design_thinking. "
-            "stages entries use id,title,minutes,teacher_activity,student_activity,questions; homework uses basic/inquiry arrays. "
-            "Pass observation_id values in evidence_ids when drafting from results. "
+            "Never generate images or lesson designs; these belong to Chat and the independent lesson-design module. "
+            "For a measured population/terrain comparison: create_measurement(locations), generate_profile(kind=population), "
+            "generate_profile(kind=terrain), compare_profiles(). Omitted ids refer to the current successful measurement/profiles. "
+            "All four profile tools can be submitted in ONE ordered actions array: the executor resolves omitted ids "
+            "after each preceding tool succeeds. Do not split this chain merely to obtain result ids. "
+            "continue_after_observation is a TOP-LEVEL plan field, NEVER a tool_params field. "
+            "Example structure: {\"actions\":[{\"tool_name\":\"create_measurement\",\"tool_params\":{\"locations\":[\"北京\",\"上海\"]}},"
+            "{\"tool_name\":\"generate_profile\",\"tool_params\":{\"kind\":\"population\"}},"
+            "{\"tool_name\":\"generate_profile\",\"tool_params\":{\"kind\":\"terrain\"}},"
+            "{\"tool_name\":\"compare_profiles\",\"tool_params\":{}}],\"continue_after_observation\":true}. "
+            "Then explain the ACTUAL returned comparison summary with actions:[] and goal_completed:true. "
+            "Population means spatial density along the line, not historical population. Never invent coordinates or values. "
             "If details of another capability group are needed, return request_capabilities:[group_id] and no actions. "
             "Return only valid JSON: {\"assistant_message\": string, \"actions\": "
             "[{\"tool_name\": string, \"tool_params\": object}]}. "
@@ -467,7 +479,7 @@ class LLMPlanner:
             if active_session and any(hint in lowered for hint in CLASSROOM_TOOL_HINTS):
                 visible_names.update({"record_observation", "launch_question"})
 
-        return [item for item in ASSISTANT_TOOL_SCHEMA if item["name"] in visible_names]
+        return [item for item in ASSISTANT_TOOL_SCHEMA if item["name"] in visible_names and tool_allowed(item["name"])]
 
     @staticmethod
     def _extract_json_object(content: str) -> str:

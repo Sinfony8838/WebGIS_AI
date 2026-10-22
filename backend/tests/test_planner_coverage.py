@@ -440,6 +440,7 @@ class PlannerRuleCoverageMatrixTest(unittest.TestCase):
     }
     # 规则层刻意不产出、交给 LLM 完整规划（或属于其他模式）的能力。
     RULE_ESCALATED_TOOLS = {
+        "create_measurement", "generate_profile", "compare_profiles",
         "query_features", "draw_annotation", "measure", "export_snapshot", "search_poi",
         # Validated goal construction (test_interaction_agent) and existing
         # material adapters retain permission/paid-confirmation boundaries.

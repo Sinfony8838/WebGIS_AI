@@ -34,7 +34,7 @@ export const COMMAND_KEYWORDS = [
   // lesson flow
   "环节", "下一步", "上一步", "下一", "上一", "进入", "开始上课", "上课", "下课", "结束",
   // analysis
-  "分析", "胡焕庸", "密度", "缓冲", "分级",
+  "测距", "测线", "连线", "剖面", "曲线", "地形", "连接", "分析", "胡焕庸", "密度", "缓冲", "分级",
   // query / explain
   "为什么", "讲解", "解释", "读图", "查询", "搜索",
   // materials
@@ -122,9 +122,9 @@ export function screenTranscript(
   // so cues spoken before the wake word still count.
   const scanText = wake ? wake.rest : text;
   const directedGoal = /^(?:请|帮我|替我|给我|设计|生成|制作|比较|对比|构建|分析|出题|规划|编写|创作|找出|优化)/u.test(commandText);
-  const clauses = scanText.split(/[，,；;。]|然后|接着|而是/u);
+  const clauses = scanText.split(/[，,；;。]|然后|接着|而是|(?=另(?:外)?(?:做|生成|画|制作|创建))/u);
   const hasPositiveGoal = clauses.some((clause) =>
-    !containsAny(clause, NEGATION_CUES) && /(?:设计|生成|制作|比较|对比|构建|分析|出题|打开|切换|显示)/u.test(clause)
+    !containsAny(clause, NEGATION_CUES) && /(?:设计|生成|制作|比较|对比|构建|分析|出题|打开|切换|显示|另做|另画)/u.test(clause)
   );
   if (containsAny(scanText, NEGATION_CUES) && !(hasPositiveGoal && clauses.length > 1)) {
     return { accepted: false, reason: "negated" };

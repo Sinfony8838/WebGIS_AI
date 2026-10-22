@@ -41,7 +41,7 @@ def resolve_project_image(
         raise KeyError(f"Unknown artifact: {artifact_id}")
     if artifact.project_id != project_id:
         raise ValueError("不能使用其他项目的图片。")
-    if artifact.artifact_type not in {"map_snapshot", "uploaded_image", "generated_image"}:
+    if artifact.artifact_type not in {"map_snapshot", "uploaded_image", "generated_image", "assistant_image_preview"}:
         raise ValueError("该产物不是可识别的图片。")
     # Never resolve, stat or open a client-supplied path. Resolve the registry
     # path against physical data roots, then retain the project component so

@@ -17,6 +17,9 @@ ASSISTANT_TOOL_SCHEMA = [
     {"name": "style_layer", "description": "修改图层颜色、透明度、标注等样式。", "parameters": {"layer_id": "string", "style": "object"}, "modes": ["teaching", "tool", "interaction"]},
     {"name": "query_features", "description": "查询当前图层或关注要素的属性摘要。", "parameters": {"layer_id": "string?", "limit": "number?"}, "modes": ["teaching", "tool", "interaction"]},
     {"name": "draw_annotation", "description": "在当前课堂地图上写入标注。", "parameters": {"text": "string", "position": "number[2]?"}, "modes": ["teaching", "tool", "interaction"]},
+    {"name": "create_measurement", "description": "在两个省级城市中心之间创建实际测距线。locations 例如 [北京,上海]，不得用模型猜坐标。", "parameters": {"locations": "string[2]"}, "modes": ["interaction"]},
+    {"name": "generate_profile", "description": "采样测线的人口密度或地形，保存真实结果。measurement_id=current 引用本轮刚创建的测线。", "parameters": {"measurement_id": "string?", "kind": "population|terrain"}, "modes": ["interaction"]},
+    {"name": "compare_profiles", "description": "叠加同一测线已采样的人口与地形曲线，返回实际统计量。各 id 可省略引用本轮结果。分析需 continue_after_observation=true 后依据统计值回答。", "parameters": {"measurement_id": "string?", "population_id": "string?", "terrain_id": "string?"}, "modes": ["interaction"]},
     {"name": "measure", "description": "输出当前视域或选中对象的距离/尺度说明。", "parameters": {"mode": "string", "extent": "number[4]?"}, "modes": ["teaching", "tool", "interaction"]},
     {"name": "apply_template", "description": "加载或切换教学模板。", "parameters": {"template_id": "string"}, "modes": ["teaching", "tool", "interaction"]},
     {"name": "export_snapshot", "description": "触发课堂截图导出。", "parameters": {"title": "string?"}, "modes": ["teaching", "tool", "interaction"]},
@@ -46,6 +49,9 @@ ASSISTANT_TOOL_SCHEMA = [
 # execution-time input guard.  The older ``parameters`` summaries above stay
 # in place for compatibility with existing prompt snapshots.
 ASSISTANT_TOOL_INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
+    "create_measurement": {"type": "object", "properties": {"locations": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 2, "maxItems": 2}}, "required": ["locations"], "additionalProperties": False},
+    "generate_profile": {"type": "object", "properties": {"measurement_id": {"type": "string"}, "kind": {"enum": ["population", "terrain"]}}, "required": ["kind"], "additionalProperties": False},
+    "compare_profiles": {"type": "object", "properties": {"measurement_id": {"type": "string"}, "population_id": {"type": "string"}, "terrain_id": {"type": "string"}}, "additionalProperties": False},
     "set_view": {
         "type": "object",
         "properties": {
