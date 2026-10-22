@@ -255,6 +255,9 @@ class JobRecord:
     steps: List[Dict[str, Any]] = field(default_factory=list)
     artifact_ids: List[str] = field(default_factory=list)
     stages: Dict[str, Dict[str, str]] = field(default_factory=build_workflow_stages)
+    activity: Dict[str, Any] = field(default_factory=dict)
+    usage: Dict[str, Any] = field(default_factory=dict)
+    ui_actions: List[Dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def create(

@@ -3,7 +3,6 @@
 .assistant-thinking-row { display: flex; gap: 12px; align-items: baseline; justify-content: space-between; }
 .assistant-thinking-label { font-size: 13px; font-weight: 600; }
 .assistant-thinking-time { flex-shrink: 0; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--text-soft, #a9c0cf); }
-.assistant-thinking-copy small { display: block; margin-top: 5px; font-size: 11px; line-height: 1.6; color: var(--text-soft, #a9c0cf); }
 .assistant-thinking-orbit { display: flex; gap: 3px; align-items: center; flex: 0 0 24px; height: 24px; }
 .assistant-thinking-orbit i { display: block; width: 5px; height: 5px; border-radius: 50%; background: var(--accent, #74d8cd); animation: assistant-thinking-wave 1.4s ease-in-out infinite; }
 .assistant-thinking-orbit i:nth-child(2) { animation-delay: .16s; }

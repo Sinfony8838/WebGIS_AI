@@ -19,7 +19,6 @@ export function ThinkingIndicator({ label = "正在思考", testId = "assistant-
           <span className="assistant-thinking-label" role="status" aria-live="polite">{label}</span>
           <span className="assistant-thinking-time" aria-hidden="true">{elapsed} 秒</span>
         </div>
-        <small>{elapsed >= 20 ? "本次处理时间较长，请稍候。结果返回后会显示在这里。" : "正在处理你的请求，完成后会显示结果。"}</small>
       </div>
     </div>
   );

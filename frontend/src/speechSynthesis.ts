@@ -2,9 +2,9 @@
  * Browser TTS for voice-initiated assistant turns (智能交互语音播报).
  *
  * zh-CN utterance, markdown stripped before speaking, and a `cancel()` so a
- * new command can interrupt the previous announcement (barge-in). Falls back
- * to a no-op when the browser has no speechSynthesis or no Chinese voice is
- * available — the text answer is always on screen anyway.
+ * new turn or an explicit stop can interrupt the previous announcement.
+ * Uses a Chinese voice when available, otherwise the browser default.
+ * Without speechSynthesis the text answer remains available on screen.
  *
  * The voice session must resume listening the moment playback actually
  * ends (and never resume while it is still running), so `speak` exposes
@@ -15,7 +15,7 @@
  */
 
 const SPEAK_LANG = "zh-CN";
-/** No real announcement runs longer than this; guards hung utterances. */
+/** Bound a playback slot; cancel sound before releasing it on expiry. */
 const SPEAK_HARD_LIMIT_MS = 30_000;
 
 export type SpeechHandlers = {
@@ -27,16 +27,20 @@ export type SpeechHandlers = {
 type LifecycleListener = (state: { speaking: boolean }) => void;
 
 const lifecycleListeners = new Set<LifecycleListener>();
+let speechActive = false;
+let clearActiveTimer: (() => void) | null = null;
 
 /** Subscribe to playback start/end (used to pause/resume mic capture). */
 export function onSpeechLifecycle(listener: LifecycleListener): () => void {
   lifecycleListeners.add(listener);
+  listener({ speaking: speechActive });
   return () => {
     lifecycleListeners.delete(listener);
   };
 }
 
 function notifyLifecycle(speaking: boolean): void {
+  speechActive = speaking;
   lifecycleListeners.forEach((listener) => {
     try {
       listener({ speaking });
@@ -67,34 +71,44 @@ let generation = 0;
 
 /** Speak text in Chinese; cancels anything already queued. */
 export function speak(text: string, handlers?: SpeechHandlers): void {
+  // Supersede before cancel(): some engines synchronously dispatch the old
+  // utterance's error event while clearing their queue.
+  stopSpeech(false);
+  const myGeneration = generation;
   if (!speechSynthesisSupported()) {
+    notifyLifecycle(false);
     handlers?.onError?.();
     return;
   }
   const clean = stripMarkdown(String(text || ""));
   if (!clean) {
+    notifyLifecycle(false);
     handlers?.onEnd?.();
     return;
   }
   const synth = window.speechSynthesis;
-  synth.cancel();
-  const myGeneration = ++generation;
   let settled = false;
+  let hardLimitTimer: number | null = null;
+  let emptyQueueTimer: number | null = null;
+  const clearTimers = () => {
+    if (hardLimitTimer !== null) window.clearTimeout(hardLimitTimer);
+    if (emptyQueueTimer !== null) window.clearTimeout(emptyQueueTimer);
+    hardLimitTimer = null;
+    emptyQueueTimer = null;
+  };
+  clearActiveTimer = clearTimers;
 
-  const settle = (outcome: "end" | "error") => {
+  const settle = (outcome: "end" | "error", stopPlayback = false) => {
     if (settled) return;
     settled = true;
-    if (hardLimitTimer !== null) {
-      window.clearTimeout(hardLimitTimer);
-      hardLimitTimer = null;
-    }
+    clearTimers();
     if (myGeneration !== generation) return;
-    if (outcome === "end") {
-      handlers?.onEnd?.();
-    } else {
-      handlers?.onError?.();
-    }
+    clearActiveTimer = null;
+    // A watchdog must stop actual sound before the microphone resumes.
+    if (stopPlayback) synth.cancel();
     notifyLifecycle(false);
+    if (outcome === "end") handlers?.onEnd?.();
+    else handlers?.onError?.();
   };
 
   const utterance = new SpeechSynthesisUtterance(clean.slice(0, 500));
@@ -102,40 +116,43 @@ export function speak(text: string, handlers?: SpeechHandlers): void {
   utterance.rate = 1.05;
   utterance.pitch = 1.0;
   const zhVoice = synth.getVoices().find((voice) => voice.lang && voice.lang.toLowerCase().startsWith("zh"));
-  if (zhVoice) {
-    utterance.voice = zhVoice;
-  }
+  if (zhVoice) utterance.voice = zhVoice;
   utterance.onstart = () => {
-    if (myGeneration !== generation) return;
+    if (myGeneration !== generation || settled) return;
     handlers?.onStart?.();
-    notifyLifecycle(true);
   };
   utterance.onend = () => settle("end");
   utterance.onerror = () => settle("error");
-  // Some engines never fire onend (Chrome tab suspension, missing voices);
-  // the hard limit keeps the microphone from staying muted forever.
-  let hardLimitTimer: number | null = window.setTimeout(() => settle("end"), SPEAK_HARD_LIMIT_MS);
-  synth.speak(utterance);
-  // Chrome populates voices asynchronously; if nothing actually started
-  // because the queue is empty, surface the end so listeners resume.
-  if (!synth.speaking && !synth.pending) {
-    window.setTimeout(() => {
-      if (myGeneration === generation && !settled && !synth.speaking) {
-        settle("end");
+  hardLimitTimer = window.setTimeout(() => settle("error", true), SPEAK_HARD_LIMIT_MS);
+  // Own the microphone exclusion from queue time, including delayed onstart.
+  notifyLifecycle(true);
+  try {
+    synth.speak(utterance);
+  } catch {
+    settle("error", true);
+    return;
+  }
+  if (!synth.speaking && !synth.pending && !settled) {
+    emptyQueueTimer = window.setTimeout(() => {
+      if (myGeneration === generation && !settled && !synth.speaking && !synth.pending) {
+        settle("error", true);
       }
     }, 300);
   }
 }
 
+function stopSpeech(notify: boolean): void {
+  generation += 1;
+  clearActiveTimer?.();
+  clearActiveTimer = null;
+  if (speechSynthesisSupported()) window.speechSynthesis.cancel();
+  if (notify) notifyLifecycle(false);
+}
+
 /** Stop any in-flight announcement (called when a new turn starts or the
  * user turns 回复播报 off). Invalidates pending speak() handlers. */
 export function cancelSpeech(): void {
-  generation += 1;
-  if (!speechSynthesisSupported()) {
-    return;
-  }
-  window.speechSynthesis.cancel();
-  notifyLifecycle(false);
+  stopSpeech(true);
 }
 
 /** Whether an announcement is currently playing (used to pause the mic). */
@@ -143,5 +160,5 @@ export function isSpeaking(): boolean {
   if (!speechSynthesisSupported()) {
     return false;
   }
-  return window.speechSynthesis.speaking || window.speechSynthesis.pending;
+  return speechActive || window.speechSynthesis.speaking || window.speechSynthesis.pending;
 }

@@ -182,7 +182,7 @@ class PlannerCoverageTest(unittest.TestCase):
             with self.subTest(text=text):
                 plan = self.service.plan_interaction_actions(text, project, {})
                 self.assertEqual([item["tool_name"] for item in plan["actions"]], ["run_workflow"])
-                self.assertEqual(plan["actions"][0]["tool_params"], {"template_id": template_id})
+                self.assertEqual(plan["actions"][0]["tool_params"], {"template_id": template_id, "description": text})
 
         self.assertEqual(
             self.service.plan_interaction_actions("进入下一环节", project, {})["actions"][0]["tool_params"],
@@ -294,7 +294,7 @@ class PlannerCoverageTest(unittest.TestCase):
     def test_b_unsupported_requests_return_no_action(self) -> None:
         project = build_project()
         cases = [
-            "做一个缓冲区分析",       # 工作流白名单之外
+            "做一个缓冲区分析",       # 新模板缺少明确数据目标，应先澄清
             "把当前地图变成热力图",   # 无对应工具
             "切换到四维空间",         # 视图模式取值不支持
             "刚才说切换到三维地球",   # 转述/时秽指令不得执行
@@ -441,6 +441,9 @@ class PlannerRuleCoverageMatrixTest(unittest.TestCase):
     # 规则层刻意不产出、交给 LLM 完整规划（或属于其他模式）的能力。
     RULE_ESCALATED_TOOLS = {
         "query_features", "draw_annotation", "measure", "export_snapshot", "search_poi",
+        # Validated goal construction (test_interaction_agent) and existing
+        # material adapters retain permission/paid-confirmation boundaries.
+        "build_workflow", "draft_teaching", "toggle_teaching_map", "open_material", "generate_image",
     }
 
     def test_every_interaction_tool_is_classified(self) -> None:

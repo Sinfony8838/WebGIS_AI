@@ -1,8 +1,9 @@
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { CopilotWidget, exceedsDragThreshold, normalizePanelRect } from "../components/CopilotWidget";
 import * as voiceStream from "../voiceStream";
+import { cancelSpeech, speak } from "../speechSynthesis";
 
 class MockSpeechRecognition {
   static lastInstance: MockSpeechRecognition | null = null;
@@ -79,7 +80,8 @@ function renderWidget(overrides: Partial<ComponentProps<typeof CopilotWidget>> =
   const view = render(<CopilotWidget {...props} />);
 
   // The widget defaults to minimized; expand so tests can exercise the panel.
-  fireEvent.click(screen.getByLabelText("展开智能助教"));
+  const expand = screen.queryByLabelText("展开智能助教");
+  if (expand) fireEvent.click(expand);
 
   return {
     onSubmit,
@@ -105,6 +107,100 @@ describe("CopilotWidget", () => {
     setSpeechRecognitionSupport(false);
     vi.clearAllMocks();
     vi.restoreAllMocks();
+  });
+
+  it("停止当前播报后保持回复播报开关，且不提交额外指令", () => {
+    class Utterance {
+      lang = ""; rate = 1; pitch = 1;
+      constructor(public text: string) {}
+    }
+    const cancel = vi.fn();
+    vi.stubGlobal("SpeechSynthesisUtterance", Utterance);
+    vi.stubGlobal("speechSynthesis", { cancel, speak: vi.fn(), getVoices: () => [], pending: true, speaking: false });
+    try {
+      const { onVoiceSubmit } = renderWidget({ assistantTab: "interaction", ttsEnabled: true });
+      act(() => speak("已经打开人口密度图层。"));
+      expect(screen.getByRole("button", { name: "停止播报" })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "停止播报" }));
+      expect(cancel).toHaveBeenCalledTimes(2);
+      expect(screen.queryByRole("button", { name: "停止播报" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "关闭回复播报" })).toHaveAttribute("aria-pressed", "true");
+      expect(onVoiceSubmit).not.toHaveBeenCalled();
+    } finally {
+      act(() => cancelSpeech());
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("唤醒打断默认关闭，并保存教师的显式选择", async () => {
+    vi.spyOn(voiceStream, "audioWorkletSupported").mockReturnValue(true);
+    vi.spyOn(voiceStream, "createVoiceStream").mockImplementation(async (_apiBase, events) => {
+      events.onOpen?.();
+      return { abort: vi.fn(), stop: vi.fn(async () => null), state: () => "open" as const };
+    });
+    renderWidget({ assistantTab: "interaction", voiceStreamAvailable: true });
+    fireEvent.click(screen.getByRole("button", { name: "语音设置" }));
+    const toggle = screen.getByTestId("copilot-speech-interrupt-toggle");
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    expect(toggle).toBeChecked();
+    expect(localStorage.getItem("webgis.voice.speechInterrupt")).toBe("1");
+    cleanup();
+    renderWidget({ assistantTab: "interaction", voiceStreamAvailable: true });
+    fireEvent.click(screen.getByRole("button", { name: "语音设置" }));
+    expect(screen.getByTestId("copilot-speech-interrupt-toggle")).toBeChecked();
+  });
+
+  it("本地语音只显示一处状态，设置默认折叠且展开不会改变聆听选择", () => {
+    localStorage.setItem("webgis.voice.autoListen", "0");
+    setSpeechRecognitionSupport(false);
+    vi.spyOn(voiceStream, "audioWorkletSupported").mockReturnValue(true);
+    const { onVoiceSubmit } = renderWidget({ assistantTab: "interaction", voiceStreamAvailable: true, inputValue: "" });
+    expect(screen.getAllByTestId("copilot-voice-status")).toHaveLength(1);
+    expect(screen.getByTestId("copilot-voice-status")).toHaveTextContent("已暂停");
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(screen.queryByText(/点击麦克风开始语音控制|当前浏览器不支持语音控制/)).toBeNull();
+    expect(screen.getByTestId("copilot-input")).toHaveAttribute("placeholder", "输入指令，或直接说话…");
+    expect(screen.queryByTestId("copilot-voice-settings")).toBeNull();
+    const settings = screen.getByRole("button", { name: "语音设置" });
+    fireEvent.click(settings);
+    expect(settings).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("copilot-auto-listen-toggle")).not.toBeChecked();
+    fireEvent.click(settings);
+    expect(screen.queryByTestId("copilot-voice-settings")).toBeNull();
+    expect(screen.getByTestId("copilot-voice-status")).toHaveTextContent("已暂停");
+    expect(onVoiceSubmit).not.toHaveBeenCalled();
+  });
+
+  it("只压缩系统初始说明，保留后续真实对话内容", () => {
+    const intro = "智能交互模式已就绪：进入本页即自动聆听，直接说出指令。";
+    const reply = "这是根据当前地图得到的操作说明。";
+    renderWidget({ assistantTab: "interaction", chatLog: [
+      { role: "assistant", text: intro, timestamp: "1" },
+      { role: "user", text: "打开人口图层", timestamp: "2" },
+      { role: "assistant", text: reply, timestamp: "3" }
+    ] });
+    expect(screen.queryByText(intro)).toBeNull();
+    expect(screen.getByText("说出指令，我来操作地图。")).toBeInTheDocument();
+    expect(screen.getByText(reply)).toBeInTheDocument();
+  });
+
+  it("实时转写复用同一状态区，不叠加第二行提示", async () => {
+    vi.spyOn(voiceStream, "audioWorkletSupported").mockReturnValue(true);
+    let streamEvents!: Parameters<typeof voiceStream.createVoiceStream>[1];
+    vi.spyOn(voiceStream, "createVoiceStream").mockImplementation(async (_base, events) => {
+      streamEvents = events;
+      events.onOpen?.();
+      return { abort: vi.fn(), stop: vi.fn(async () => null), state: () => "open" as const };
+    });
+    renderWidget({ assistantTab: "interaction", voiceStreamAvailable: true });
+    await screen.findByText("聆听中");
+    act(() => streamEvents.onPartial?.("打开人口密度图层"));
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    expect(screen.getByTestId("copilot-voice-status")).toHaveTextContent("打开人口密度图层");
+    expect(screen.queryByText("聆听中")).toBeNull();
+    act(() => streamEvents.onPartial?.(""));
+    expect(screen.getByTestId("copilot-voice-status")).toHaveTextContent("聆听中");
   });
 
   it("pausing a mid-utterance session aborts without flushing a partial command", async () => {
@@ -335,7 +431,7 @@ describe("CopilotWidget", () => {
 
     // 无需任何点击：进入交互即建立采音会话并进入聆听态。
     await waitFor(() => expect(createVoiceStream).toHaveBeenCalledOnce());
-    expect(await screen.findByText("正在聆听：直接说出指令即可。")).toBeInTheDocument();
+    expect(await screen.findByText("聆听中")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "暂停语音聆听" })).toBeInTheDocument();
     expect(onVoiceSubmit).not.toHaveBeenCalled();
   });
@@ -358,7 +454,7 @@ describe("CopilotWidget", () => {
     fireEvent.click(screen.getByRole("button", { name: "暂停语音聆听" }));
     expect(abort).toHaveBeenCalledOnce();
     expect(stop).not.toHaveBeenCalled();
-    expect(await screen.findByText("已暂停聆听，点击麦克风恢复。")).toBeInTheDocument();
+    expect(await screen.findByText("已暂停")).toBeInTheDocument();
     expect(onVoiceSubmit).not.toHaveBeenCalled();
 
     // 重渲染 / 健康刷新不会擅自重新打开。
@@ -366,7 +462,7 @@ describe("CopilotWidget", () => {
     rerender({ assistantTab: "interaction", voiceStreamAvailable: true });
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(createVoiceStream).not.toHaveBeenCalled();
-    expect(screen.getByText("已暂停聆听，点击麦克风恢复。")).toBeInTheDocument();
+    expect(screen.getByText("已暂停")).toBeInTheDocument();
 
     // 恢复聆听：重建会话。
     fireEvent.click(screen.getByRole("button", { name: "恢复语音聆听" }));
@@ -389,19 +485,22 @@ describe("CopilotWidget", () => {
     // 执行指令期间停止采音，防止系统听到自己。
     rerender({ assistantTab: "interaction", voiceStreamAvailable: true, busy: true });
     await waitFor(() => expect(abort).toHaveBeenCalledOnce());
-    expect(screen.getByText("正在执行指令…")).toBeInTheDocument();
+    expect(screen.getByTestId("copilot-thinking")).toBeInTheDocument();
+    expect(screen.queryByTestId("copilot-voice-status")).not.toBeInTheDocument();
 
     // 执行结束后自动恢复聆听（短延迟防自听）。
     createVoiceStream.mockClear();
     rerender({ assistantTab: "interaction", voiceStreamAvailable: true, busy: false });
     await waitFor(() => expect(createVoiceStream).toHaveBeenCalledOnce(), { timeout: 3000 });
-    expect(await screen.findByText("正在聆听：直接说出指令即可。")).toBeInTheDocument();
+    expect(await screen.findByText("聆听中")).toBeInTheDocument();
   });
 
   it("renders the settings row with auto-listen default on and wake-only default off", () => {
     vi.spyOn(voiceStream, "audioWorkletSupported").mockReturnValue(true);
     renderWidget({ assistantTab: "interaction", voiceStreamAvailable: true });
 
+    expect(screen.queryByTestId("copilot-voice-settings")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "语音设置" }));
     const autoListen = screen.getByTestId("copilot-auto-listen-toggle") as HTMLInputElement;
     const wakeOnly = screen.getByTestId("copilot-wake-only-toggle") as HTMLInputElement;
     expect(autoListen.checked).toBe(true);
@@ -434,7 +533,8 @@ describe("CopilotWidget", () => {
     await waitFor(() => {
       expect(onVoiceSubmit).toHaveBeenCalledWith("我们把目光转向上海区域");
     });
-    expect(screen.getByText("最近转写：我们把目光转向上海区域")).toBeInTheDocument();
+    expect(screen.getByTestId("copilot-voice-status")).toHaveTextContent("已提交指令");
+    expect(screen.queryByText(/最近转写：/)).toBeNull();
   });
 
   it("hides the microphone on the teaching tab and shows it on the interaction tab", () => {
@@ -840,7 +940,7 @@ describe("CopilotWidget", () => {
     });
 
     expect(screen.queryByTestId("copilot-image-preview")).toBeNull();
-    expect(screen.getByRole("button", { name: "发送给助教" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
   });
 
   it("toggles TTS from the interaction tab header", () => {
@@ -856,7 +956,7 @@ describe("CopilotWidget", () => {
     expect(screen.queryByTestId("copilot-tts-toggle")).toBeNull();
   });
 
-  it("shows the planner badge for interaction replies", () => {
+  it("keeps planner route badges out of compact interaction replies", () => {
     renderWidget({
       assistantTab: "interaction",
       chatLog: [
@@ -865,9 +965,8 @@ describe("CopilotWidget", () => {
       ]
     });
 
-    const badges = screen.getAllByTestId("copilot-planner-badge");
-    expect(badges).toHaveLength(2);
-    expect(badges[0]).toHaveTextContent("快速通道");
-    expect(badges[1]).toHaveTextContent("AI 规划");
+    expect(screen.queryByTestId("copilot-planner-badge")).not.toBeInTheDocument();
+    expect(screen.getByText("好的，切换到三维地球。")).toBeInTheDocument();
+    expect(screen.getByText("已提交分析。")).toBeInTheDocument();
   });
 });

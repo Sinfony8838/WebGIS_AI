@@ -1,3 +1,5 @@
+import { UiActionReceiver } from "./lib/uiActionReceiver";
+import { interactionActivityLabel } from "./lib/interactionActivity";
 import Polygon from "ol/geom/Polygon";
 import MultiPolygon from "ol/geom/MultiPolygon";
 import type { UrbanSource, UrbanStatus } from "./components/UrbanStudyPanel";
@@ -54,6 +56,8 @@ import {
   buildPublicFileUrl,
   createKbMaterialLink,
   confirmAssistantAction,
+  acknowledgeUiAction,
+  cancelAssistantJob,
   createProject,
   exportSnapshot,
   fetchDatasetCatalog,
@@ -1528,6 +1532,12 @@ export default function App({
     return wasTracked;
   }, []);
 
+  const uiActionReceiverRef = useRef(new UiActionReceiver());
+  const cancelledUiJobsRef = useRef(new Set<string>());
+  const pendingInteractionStopRef = useRef(false);
+  const observedUiStateRef = useRef({ viewMode, layerManagerOpen, databaseViewerOpen, workflowDockOpen, materialViewerOpen, project });
+  observedUiStateRef.current = { viewMode, layerManagerOpen, databaseViewerOpen, workflowDockOpen, materialViewerOpen, project };
+
   const handleAssistantUiActions = useCallback(
     (payload: JobRecord) => {
       const executed = payload.result?.actions_executed || [];
@@ -1583,6 +1593,7 @@ export default function App({
       const projectId = project.project_id;
       const userId = currentUser.user_id;
       const scopeEpoch = jobScopeEpochRef.current;
+      const submittedSessionId = teachingContextRef.current?.session_id || "";
       const submittedTab = recovered?.tab || lastSubmittedTabRef.current;
       // A recovered voice result must not start speaking during a new lesson.
       const submittedInputMode = recovered ? "text" : lastInputModeRef.current;
@@ -1603,7 +1614,39 @@ export default function App({
         onRecovering: () => pushToast("info", "正在恢复任务结果", "连接中断，正在按原任务编号续查。无需重复提交，任务完成后会显示结果。"),
         onJob: async (payload) => {
           if (!jobStreamsRef.current.has(source)) return;
+          if (scopeEpoch !== jobScopeEpochRef.current || payload.project_id !== projectId) return;
           setCurrentJob(payload);
+          if (payload.activity?.cancel_requested) cancelledUiJobsRef.current.add(payload.job_id);
+          if (payload.ui_actions?.some((action) => action.status === "pending")) {
+            await uiActionReceiverRef.current.receive(payload, {
+              isCurrent: () => scopeEpoch === jobScopeEpochRef.current && !cancelledUiJobsRef.current.has(payload.job_id),
+              recovered: Boolean(recovered), sessionId: teachingContextRef.current?.session_id || "",
+              acknowledge: acknowledgeUiAction,
+              apply: async (action) => {
+                if (submittedSessionId !== (teachingContextRef.current?.session_id || "")) throw new Error("课堂已变化，未应用旧动作");
+                if (action.type === "sync_project") {
+                  await refreshProjectState(projectId);
+                } else {
+                  handleAssistantUiActions({ ...payload, result: { actions_executed: [{ action: { tool_name: "ui", tool_params: {} }, result: { ui_actions: [action] }, risk_level: "low" }] } });
+                }
+                await new Promise<void>((resolve, reject) => {
+                  const deadline = Date.now() + 2500;
+                  const check = () => {
+                    if (scopeEpoch !== jobScopeEpochRef.current || cancelledUiJobsRef.current.has(payload.job_id) || submittedSessionId !== (teachingContextRef.current?.session_id || "")) return reject(new Error("项目或课堂已变化"));
+                    const state = observedUiStateRef.current;
+                    const applied = action.type === "switch_view" ? state.viewMode === action.mode
+                      : action.type === "open_panel" ? (action.panel === "layers" ? state.layerManagerOpen : action.panel === "database" ? state.databaseViewerOpen : state.workflowDockOpen) === (action.open !== false)
+                      : action.type === "open_material" ? state.materialViewerOpen
+                      : state.project?.project_id === projectId && (!action.project_updated_at || Boolean(state.project.updated_at && state.project.updated_at >= action.project_updated_at));
+                    if (applied) return resolve();
+                    if (Date.now() >= deadline) return reject(new Error("界面状态尚未完成应用"));
+                    window.requestAnimationFrame(check);
+                  };
+                  window.requestAnimationFrame(check);
+                });
+              }
+            });
+          }
           if (payload.status === "completed" || payload.status === "failed") {
             if (!closeJobStream(source)) {
               return;
@@ -1621,7 +1664,7 @@ export default function App({
             }
             // Keep the saved ID if navigation interrupted result delivery.
             if (scopeEpoch !== jobScopeEpochRef.current) return;
-            if (!readOnly) handleAssistantUiActions(payload);
+            if (!readOnly && !payload.ui_actions?.length && !payload.result?.route && !payload.activity?.cancel_requested) handleAssistantUiActions(payload);
             const message = payload.result?.assistant_message || payload.result?.summary || payload.error || "";
             const nextConversationId = String(payload.result?.conversation_id || "");
             if (nextConversationId) {
@@ -1636,7 +1679,7 @@ export default function App({
               message,
               payload.result?.teaching_contract,
               payload.result?.intent,
-              payload.result?.actions_executed,
+              [...(payload.result?.completed_actions || []), ...(payload.result?.actions_executed || [])],
               undefined,
               payload.result?.planner,
               submittedTab,
@@ -1743,6 +1786,11 @@ export default function App({
           // 助教识别到整节课设计请求：直接打开全屏教案设计工作台并续上该会话。
           const designId = String((response.lesson_design as { design_id?: string }).design_id || "");
           openLessonDesignWorkspace(designId);
+        }
+        if (submittedTab === "interaction" && pendingInteractionStopRef.current) {
+          pendingInteractionStopRef.current = false;
+          cancelledUiJobsRef.current.add(response.job_id);
+          void cancelAssistantJob(response.job_id).catch(() => pushToast("error", "停止失败", "请使用停止操作按钮重试。"));
         }
         subscribeToJob(response.job_id, response.read_only === true);
         return true;
@@ -4390,7 +4438,7 @@ export default function App({
           capturedCommand={overlayCaptured}
           workingDetail={
             interactionBusy
-              ? Object.values(currentJob?.stages || {}).find((stage) => stage?.status === "running")?.summary || ""
+              ? interactionActivityLabel(currentJob)
               : ""
           }
           pulseSignal={overlayPulse}
@@ -4437,6 +4485,16 @@ export default function App({
             void submitAssistantText(message, undefined, "webgis", "text", image).then((sent) => {
               if (sent) setPendingImage((current) => (current?.artifact_id === image?.artifact_id ? null : current));
             });
+          }}
+          onOpenDesign={openLessonDesignWorkspace}
+          onCancelTask={() => {
+            cancelSpeech();
+            if (currentJob && interactionBusy && ["queued", "running"].includes(currentJob.status)) {
+              cancelledUiJobsRef.current.add(currentJob.job_id);
+              void cancelAssistantJob(currentJob.job_id).catch((error) => pushToast("error", "停止失败", error instanceof Error ? error.message : "请重试"));
+            } else if (assistantSubmittingRef.current) {
+              pendingInteractionStopRef.current = true;
+            }
           }}
           onConfirm={(confirmationId, decision = "approve") => {
             void confirmAssistantAction(confirmationId, decision).then((response) => subscribeToJob(response.job_id));
