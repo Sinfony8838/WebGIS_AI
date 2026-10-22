@@ -18,6 +18,7 @@ class GeographyImageTests(unittest.TestCase):
         self.runtime.config.minimax_api_key="fixture"
         self.runtime.config.minimax_token_plan_key="fixture"
         self.runtime.config.vision_provider="minimax_mcp"
+        self.runtime.config.vision_enabled=True
         self.policy=GeographyImagePolicy(self.runtime)
     def text_model(self,obj):
         self.runtime.session_engine.knowledge.minimax_client=type("FixtureModel",(),{"chat_completion":lambda _self,*args,**kwargs:json.dumps(obj,ensure_ascii=False)})()
