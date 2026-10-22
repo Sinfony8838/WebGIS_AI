@@ -9,12 +9,15 @@ type Options = {
   onRecovering: () => void;
   projectId?: string;
   reconcileImmediately?: boolean;
+  /** Shorter than UI action expiry for interactive assistant jobs. */
+  reconcileIntervalMs?: number;
   onUnavailable?: (error: Error) => void;
 };
 
 /** Recover observation of the same job; never resubmit an operation after a lost stream. */
 export function subscribeJob(jobId: string, options: Options): JobSubscription {
   const source = options.createSource();
+  const interval = Math.max(500, Math.min(options.reconcileIntervalMs ?? 15000, 15000));
   let closed = false;
   let polling = false;
   let revision = 0;
@@ -70,14 +73,14 @@ export function subscribeJob(jobId: string, options: Options): JobSubscription {
     } finally {
       clearTimeout(requestTimeout);
       controller = undefined;
-      schedule(polling ? Math.min(3000 * 2 ** Math.min(failures, 3), 15000) : 15000);
+      schedule(polling ? Math.min(3000 * 2 ** Math.min(failures, 3), 15000) : interval);
     }
   }
   source.addEventListener("job", (event) => {
     if (closed || polling) return;
     try {
       if (!accept(JSON.parse((event as MessageEvent).data))) throw new Error("Invalid job event");
-      if (!controller) schedule(15000);
+      if (!controller) schedule(interval);
     } catch {
       recover();
       schedule(0);
@@ -89,6 +92,6 @@ export function subscribeJob(jobId: string, options: Options): JobSubscription {
     schedule(0);
   });
   // A silent stream can miss its terminal event without dispatching onerror.
-  schedule(options.reconcileImmediately ? 0 : 15000);
+  schedule(options.reconcileImmediately ? 0 : interval);
   return { close };
 }

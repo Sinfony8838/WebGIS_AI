@@ -3221,7 +3221,8 @@ def stream_job(job_id: str, request: Request):
                 return
             runtime.store.wait_for_job_update(job_id, str(version), timeout=1.0)
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(event_stream(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no"})
 
 
 @app.get("/artifacts/{artifact_id}")

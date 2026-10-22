@@ -1639,7 +1639,8 @@ export default function App({
         createSource: () => new EventSource(`${getApiBase()}/jobs/${jobId}/stream`, { withCredentials: true }),
         fetchJob,
         projectId,
-        reconcileImmediately: Boolean(recovered),
+        reconcileImmediately: true,
+        reconcileIntervalMs: 1000,
         onUnavailable: () => {
           if (!closeJobStream(source)) return;
           subscribedJobIdsRef.current.delete(jobId);
