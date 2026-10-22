@@ -852,12 +852,9 @@ def list_templates() -> List[Dict[str, Any]]:
     ]
 
 
-# Templates the voice-interaction `run_workflow` tool may launch. All of them
-# run with fully defaulted parameters (built-in population dataset), which is
-# what makes them safe to expose to spoken commands; anything requiring
-# explicit dataset/field wiring stays out until the LLM layer grows parameter
-# grounding.
-INTERACTION_ALLOWED_TEMPLATES = ("population_choropleth", "hu_line_compare", "classify_field")
+# Existing validated templates are reusable from voice. Dataset references and
+# parameters pass the same project binding and preflight as generated workflows.
+INTERACTION_ALLOWED_TEMPLATES = tuple(TEMPLATES)
 
 
 def detect_template(message: str) -> Optional[str]:

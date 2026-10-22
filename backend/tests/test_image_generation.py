@@ -107,6 +107,9 @@ class ImageGenerationRuntimeTest(unittest.TestCase):
         config.assistant_v2_enabled = True
         config.ensure_dirs()
         runtime = WebGISRuntime(config=config, store=RuntimeStore(config.state_file))
+        self.addCleanup(patch.stopall)
+        patch("backend.app.services.geography_image_policy.GeographyImagePolicy.prepare", return_value={"prompt":"水循环概念示意图", "checks":["径流向下"], "generation_method":"text_to_image"}).start()
+        patch("backend.app.services.geography_image_policy.GeographyImagePolicy.review", return_value={"status":"pass", "summary":"fixture visual review"}).start()
         project_id = runtime.create_project()["project_id"]
         return runtime, project_id
 
@@ -305,8 +308,9 @@ class ImageGenerationRuntimeTest(unittest.TestCase):
 
         self.assertEqual(approve_job["status"], "completed")
         self.assertIn("图片已生成", approve_job["result"]["assistant_message"])
-        generated = [item for item in runtime.list_outputs(project_id)["items"] if item["artifact_type"] == "generated_image"]
+        generated = [item for item in runtime.store.list_outputs(project_id) if item["artifact_type"] == "assistant_image_preview"]
         self.assertEqual(len(generated), 1)
+        self.assertNotIn(generated[0]["artifact_id"], {item["artifact_id"] for item in runtime.list_outputs(project_id)["items"]})
 
 
 if __name__ == "__main__":

@@ -62,6 +62,9 @@ def instance_marker_labels(data_root: Path) -> list[str]:
 
 def run_preflight() -> None:
     scrub_inherited_overrides()
+    # Unit tests must opt in with fixture credentials; never inherit paid keys.
+    for key in ("WEBGIS_AI_MINIMAX_API_KEY", "MINIMAX_API_KEY", "WEBGIS_AI_MINIMAX_TOKEN_PLAN_KEY", "MINIMAX_TOKEN_PLAN_KEY"):
+        os.environ.pop(key, None)
     if os.environ.get("WEBGIS_AI_ALLOW_EXISTING_DATA", "").strip() in {"1", "true", "yes", "on"}:
         return
     # The guard protects the moment the app modules are first imported. Once

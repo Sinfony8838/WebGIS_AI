@@ -22,7 +22,7 @@ function geometryKey(layer: LayerRecord): string {
 }
 function styleKey(layer: LayerRecord): string {
   const visualization = layer.metadata?.visualization as { items?: unknown[] } | undefined;
-  return JSON.stringify([layer.style, layer.opacity, layer.metadata?.catalog_id,
+  return JSON.stringify([layer.style, layer.opacity, layer.metadata?.style_overrides, layer.metadata?.catalog_id,
     !!visualization, visualization?.items?.length, layer.data.features instanceof Array ? layer.data.features.length : 0]);
 }
 function eligible(layer: LayerRecord) {

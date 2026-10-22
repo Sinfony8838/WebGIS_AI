@@ -36,6 +36,7 @@ const handles: FakeHandle[] = [];
 let speakingListener: ((state: { speaking: boolean }) => void) | null = null;
 
 vi.mock("../speechSynthesis", () => ({
+  cancelSpeech: vi.fn(() => speakingListener?.({ speaking: false })),
   onSpeechLifecycle: (listener: (state: { speaking: boolean }) => void) => {
     speakingListener = listener;
     return () => {
@@ -45,11 +46,12 @@ vi.mock("../speechSynthesis", () => ({
 }));
 
 import { createVoiceStream } from "../voiceStream";
+import { cancelSpeech } from "../speechSynthesis";
 import { VoiceSessionController, type VoiceSessionSnapshot } from "../voiceSession";
 
 let nowMs = 1_000_000;
 
-function makeController(overrides?: { requireWakeWord?: boolean }) {
+function makeController(overrides?: { requireWakeWord?: boolean; allowSpeechInterrupt?: boolean }, onCancelTask?: () => void) {
   const snapshots: VoiceSessionSnapshot[] = [];
   const submitted: string[] = [];
   const controller = new VoiceSessionController({
@@ -58,12 +60,11 @@ function makeController(overrides?: { requireWakeWord?: boolean }) {
     now: () => nowMs,
     callbacks: {
       onSnapshot: (snapshot) => snapshots.push(snapshot),
+      onCancelTask,
       onSubmitCommand: (command) => submitted.push(command)
     }
   });
-  if (overrides?.requireWakeWord) {
-    controller.setSettings({ requireWakeWord: true });
-  }
+  if (overrides) controller.setSettings(overrides);
   return { controller, snapshots, submitted };
 }
 
@@ -107,6 +108,93 @@ describe("VoiceSessionController", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("during execution, accepts only the local wake-word task stop and never queues map commands", async () => {
+    const onCancelTask = vi.fn();
+    const { controller, submitted } = makeController(undefined, onCancelTask);
+    controller.enterInteraction();
+    await vi.advanceTimersByTimeAsync(500);
+    handles[0].emit({ kind: "open" });
+    controller.setBusy(true);
+    expect(handles[0].abort).not.toHaveBeenCalled();
+    handles[0].emit({ kind: "final", text: "切换到三维地球" });
+    handles[0].emit({ kind: "final", text: "小智，不要停止操作" });
+    expect(onCancelTask).not.toHaveBeenCalled();
+    handles[0].emit({ kind: "final", text: "小智，停止操作" });
+    expect(onCancelTask).toHaveBeenCalledOnce();
+    expect(submitted).toEqual([]);
+    controller.setBusy(false);
+    handles[0].emit({ kind: "final", text: "切换到三维地球" });
+    expect(submitted).toEqual([]);
+    controller.togglePaused();
+    handles[0].emit({ kind: "final", text: "小智，停止操作" });
+    expect(onCancelTask).toHaveBeenCalledOnce();
+    controller.dispose();
+  });
+
+  it("连接未完成时暂停：立即取消启动，迟到的回调不能恢复聆听或提交", async () => {
+    let resolveConnection!: (handle: Awaited<ReturnType<typeof createVoiceStream>>) => void;
+    let pendingEvents!: Parameters<typeof createVoiceStream>[1];
+    let pendingSignal: AbortSignal | undefined;
+    const abort = vi.fn();
+    vi.mocked(createVoiceStream).mockImplementationOnce((_base, events, signal) => {
+      pendingEvents = events;
+      pendingSignal = signal;
+      return new Promise((resolve) => { resolveConnection = resolve; });
+    });
+    const { controller, submitted } = makeController();
+    controller.enterInteraction();
+    await vi.advanceTimersByTimeAsync(500);
+    controller.togglePaused();
+    expect(pendingSignal?.aborted).toBe(true);
+    pendingEvents.onOpen?.();
+    pendingEvents.onFinal?.("切换到三维地球");
+    pendingEvents.onClose?.({ code: 1006, reason: "" });
+    expect(controller.snapshot().phase).toBe("paused");
+    expect(submitted).toEqual([]);
+    resolveConnection({ abort, stop: vi.fn(async () => null), state: () => "open" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(abort).toHaveBeenCalledOnce();
+    expect(createVoiceStream).toHaveBeenCalledOnce();
+    controller.dispose();
+  });
+
+  it("等待权限查询时离开又返回：只为当前交互建立一次连接", async () => {
+    let resolvePermission!: (status: { state: string }) => void;
+    const permission = new Promise<{ state: string }>((resolve) => { resolvePermission = resolve; });
+    Object.defineProperty(navigator, "permissions", {
+      configurable: true, value: { query: () => permission }
+    });
+    const { controller } = makeController();
+    controller.enterInteraction();
+    await vi.advanceTimersByTimeAsync(500);
+    controller.exitInteraction();
+    controller.enterInteraction();
+    await vi.advanceTimersByTimeAsync(500);
+    resolvePermission({ state: "granted" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(createVoiceStream).toHaveBeenCalledOnce();
+    controller.dispose();
+  });
+
+  it("唤醒词和不带唤醒词的重复投递按实际指令去重", async () => {
+    const { controller, submitted } = makeController();
+    controller.enterInteraction();
+    await vi.advanceTimersByTimeAsync(500);
+    handles[0].emit({ kind: "open" });
+    handles[0].emit({ kind: "final", text: "小智，切换到三维地球" });
+    controller.setBusy(true);
+    controller.setBusy(false);
+    nowMs += 500;
+    await vi.advanceTimersByTimeAsync(500);
+    handles[1].emit({ kind: "open" });
+    handles[1].emit({ kind: "final", text: "小智，切换到三维地球" });
+    expect(submitted).toEqual(["切换到三维地球"]);
+    nowMs += 3_000;
+    handles[1].emit({ kind: "final", text: "小智，切换到三维地球" });
+    expect(submitted).toEqual(["切换到三维地球", "切换到三维地球"]);
+    controller.dispose();
   });
 
   it("进入智能交互默认自动开始聆听（无需任何点击）", async () => {
@@ -214,6 +302,92 @@ describe("VoiceSessionController", () => {
     expect(vi.mocked(createVoiceStream)).toHaveBeenCalledTimes(2);
     handles[1].emit({ kind: "open" });
     expect(lastPhase(controller)).toBe("listening");
+  });
+
+  it("开启唤醒打断后：播报中只响应停止短句，随后继续接收地图指令", async () => {
+    const { controller, submitted } = makeController({ allowSpeechInterrupt: true });
+    controller.enterInteraction();
+    await vi.advanceTimersByTimeAsync(500);
+    handles[0].emit({ kind: "open" });
+    speakingListener?.({ speaking: true });
+    expect(handles[0].abort).not.toHaveBeenCalled();
+    expect(controller.snapshot().phase).toBe("speaking");
+    for (const text of ["切换到三维地球", "小智，切换到三维地球", "停止播报", "小智，不要停止播报", "刚才说小智停止播报"]) {
+      handles[0].emit({ kind: "final", text });
+    }
+    expect(cancelSpeech).not.toHaveBeenCalled();
+    expect(submitted).toEqual([]);
+    handles[0].emit({ kind: "final", text: "小智，停止播报" });
+    expect(cancelSpeech).toHaveBeenCalledOnce();
+    expect(handles[0].abort).toHaveBeenCalledOnce();
+    expect(submitted).toEqual([]);
+    handles[0].emit({ kind: "final", text: "切换到三维地球" });
+    expect(submitted).toEqual([]);
+    await vi.advanceTimersByTimeAsync(500);
+    handles[1].emit({ kind: "open" });
+    handles[1].emit({ kind: "final", text: "切换到三维地球" });
+    expect(submitted).toEqual(["切换到三维地球"]);
+    controller.dispose();
+  });
+
+  it("允许打断时自然播报结束，也丢弃播报期间延迟返回的 ASR 结果", async () => {
+    const { controller, submitted } = makeController({ allowSpeechInterrupt: true });
+    controller.enterInteraction();
+    await vi.advanceTimersByTimeAsync(500);
+    handles[0].emit({ kind: "open" });
+    speakingListener?.({ speaking: true });
+    speakingListener?.({ speaking: false });
+    expect(handles[0].abort).toHaveBeenCalledOnce();
+    handles[0].emit({ kind: "final", text: "打开图层管理器" });
+    expect(submitted).toEqual([]);
+    await vi.advanceTimersByTimeAsync(500);
+    handles[1].emit({ kind: "open" });
+    handles[1].emit({ kind: "final", text: "打开图层管理器" });
+    expect(submitted).toEqual(["打开图层管理器"]);
+    controller.dispose();
+  });
+
+  it("唤醒打断开关不能覆盖手动暂停、后台页面或正在执行的任务", async () => {
+    const { controller, submitted } = makeController({ allowSpeechInterrupt: true });
+    controller.enterInteraction();
+    await vi.advanceTimersByTimeAsync(500);
+    handles[0].emit({ kind: "open" });
+    speakingListener?.({ speaking: true });
+    controller.togglePaused();
+    handles[0].emit({ kind: "final", text: "小智，停止播报" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(controller.snapshot().phase).toBe("paused");
+    expect(cancelSpeech).not.toHaveBeenCalled();
+    controller.togglePaused();
+    await vi.advanceTimersByTimeAsync(500);
+    handles[1].emit({ kind: "open" });
+    controller.setDocumentHidden(true);
+    handles[1].emit({ kind: "final", text: "小智，停止播报" });
+    expect(cancelSpeech).not.toHaveBeenCalled();
+    controller.setDocumentHidden(false);
+    await vi.advanceTimersByTimeAsync(500);
+    handles[2].emit({ kind: "open" });
+    controller.setBusy(true);
+    handles[2].emit({ kind: "final", text: "小智，停止播报" });
+    expect(cancelSpeech).not.toHaveBeenCalled();
+    expect(submitted).toEqual([]);
+    controller.dispose();
+  });
+
+  it("播报中关闭唤醒打断立即停采音，默认模式仍等待真实播报结束", async () => {
+    const { controller } = makeController({ allowSpeechInterrupt: true });
+    controller.enterInteraction();
+    await vi.advanceTimersByTimeAsync(500);
+    handles[0].emit({ kind: "open" });
+    speakingListener?.({ speaking: true });
+    controller.setSettings({ allowSpeechInterrupt: false });
+    expect(handles[0].abort).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(createVoiceStream).toHaveBeenCalledOnce();
+    speakingListener?.({ speaking: false });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(createVoiceStream).toHaveBeenCalledTimes(2);
+    controller.dispose();
   });
 
   it("播报互斥：TTS 期间停采音并丢弃旧结果，真实 end 事件后恢复", async () => {

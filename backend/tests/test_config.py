@@ -223,8 +223,8 @@ class AppConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(os.environ, {}, clear=True):
             config = AppConfig(root_dir=Path(temp_dir))
             self.assertEqual(config.llm_provider, "minimax")
-            self.assertEqual(config.minimax_base_url, "https://api.minimaxi.com/anthropic")
-            self.assertEqual(config.minimax_model, "MiniMax-M2.7-highspeed")
+            self.assertEqual(config.minimax_base_url, "https://api.minimax.cn/anthropic")
+            self.assertEqual(config.minimax_model, "MiniMax-M3.1-Flash")
             # No key set → provider chosen but unconfigured.
             status = config.llm_status()
             self.assertFalse(status["configured"])

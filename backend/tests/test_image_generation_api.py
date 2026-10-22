@@ -22,6 +22,9 @@ class ImageGenerationApiTest(unittest.TestCase):
         app_main.config = AppConfig(root_dir=Path(self.temp.name), auth_mode="users", minimax_api_key="test-key")
         app_main.config.ensure_dirs()
         app_main.runtime = WebGISRuntime(app_main.config)
+        self.addCleanup(patch.stopall)
+        patch("backend.app.services.geography_image_policy.GeographyImagePolicy.prepare", return_value={"prompt":"水循环概念示意图", "checks":["径流向下"], "generation_method":"text_to_image"}).start()
+        patch("backend.app.services.geography_image_policy.GeographyImagePolicy.review", return_value={"status":"pass", "summary":"fixture visual review"}).start()
         app_main.auth_service = AuthService(app_main.config.auth_db_path)
         self.client = TestClient(app_main.app)
         auth = self.client.post("/auth/bootstrap", json={

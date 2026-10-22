@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
@@ -27,6 +27,8 @@ from .knowledge_retrieval import RetrievalDoc, RetrievalEngine
 from .llm_planner import LLMPlanner
 from .map_layer_evidence import build_layer_evidence, visible_project_layers
 from .workflow_templates import INTERACTION_ALLOWED_TEMPLATES
+from .interaction_run import InteractionRun, RunStopped, current_run, interaction_scope
+from .interaction_agent import run_goal, remembered_executions
 
 
 GEOGRAPHY_ALLOWLIST = (
@@ -2079,6 +2081,9 @@ class ToolExecutor:
         highest = "low"
         requires_confirmation = False
         for action in actions:
+            control = current_run()
+            if control is not None:
+                control.check()
             descriptor = self._describe_tool(target, action, assistant_mode, project_state or {}, map_context or {})
             descriptor["permission_decision"] = permission_context.decision_for(descriptor["risk_level"], descriptor["name"])
             if allow_image_generation and descriptor["name"] == "generate_image" and descriptor["permission_decision"] != "deny":
@@ -2129,6 +2134,9 @@ class ToolExecutor:
         permission_context = ToolPermissionContext.from_pinned_state(pinned_state)
         executed = []
         for action in actions:
+            control = current_run()
+            if control is not None:
+                control.check()
             descriptor = self._describe_tool(target, action, assistant_mode, project_state or {}, map_context)
             decision = permission_context.decision_for(descriptor["risk_level"], descriptor["name"])
             if descriptor.get("validation_error"):
@@ -2177,10 +2185,14 @@ class ToolExecutor:
             "focus_layer": {"target": "webgis", "category": "layer", "risk_level": "low", "reversible": True, "requires_confirmation": False, "visible_in_mode": ["interaction"], "validator": self._require_layer_ref},
             "set_layer_opacity": {"target": "webgis", "category": "layer", "risk_level": "low", "reversible": True, "requires_confirmation": False, "visible_in_mode": ["interaction"], "validator": self._require_layer_opacity},
             "enter_lesson_stage": {"target": "webgis", "category": "classroom", "risk_level": "medium", "reversible": True, "requires_confirmation": False, "visible_in_mode": ["interaction"], "validator": self._require_active_session},
+            "build_workflow": {"target": "webgis", "category": "analysis", "risk_level": "medium", "reversible": True, "requires_confirmation": False, "visible_in_mode": ["interaction"]},
+            "draft_teaching": {"target": "webgis", "category": "teaching_draft", "risk_level": "medium", "reversible": True, "requires_confirmation": False, "visible_in_mode": ["interaction"]},
             "run_workflow": {"target": "webgis", "category": "analysis", "risk_level": "medium", "reversible": True, "requires_confirmation": False, "visible_in_mode": ["interaction"], "validator": self._require_workflow_template},
             "start_class_session": {"target": "webgis", "category": "classroom", "risk_level": "medium", "reversible": False, "requires_confirmation": False, "visible_in_mode": ["interaction"], "validator": self._require_no_active_session},
             "end_class_session": {"target": "webgis", "category": "classroom", "risk_level": "high", "reversible": False, "requires_confirmation": True, "visible_in_mode": ["interaction"], "validator": self._require_active_session},
         }
+        for name in ("create_measurement", "generate_profile", "compare_profiles"):
+            registry[name] = {"target": "webgis", "category": "analysis", "risk_level": "low", "reversible": True, "requires_confirmation": False, "visible_in_mode": ["interaction"]}
         # Keep interaction visibility aligned with the tool table given to the
         # planner, while preserving the existing permissions in other modes.
         for tool in ASSISTANT_TOOL_SCHEMA:
@@ -2231,6 +2243,12 @@ class ToolExecutor:
             validation_error = f"工具 {tool_name} 的 tool_params 必须是对象"
         else:
             validation_error = validate_json_contract(tool_params, input_schema)
+        from .assistant_profiles import active_mode, tool_allowed
+        profile = active_mode()
+        if not tool_allowed(tool_name):
+            validation_error = f"{profile} 模式不允许调用 {tool_name}"
+        if profile and tool_allowed(tool_name):
+            metadata["visible_in_mode"] = [assistant_mode]
         if not validation_error:
             if metadata.get("target") not in {target, "auto"}:
                 validation_error = f"Tool target mismatch for {tool_name}: expected {metadata.get('target')}, got {target}"
@@ -2427,6 +2445,10 @@ class AssistantSessionEngine:
             },
         )
 
+        control = (current_run() or InteractionRun(job_id)) if assistant_mode == "interaction" else None
+        if assistant_mode == "interaction":
+            run_context.policy = replace(run_context.policy, max_tool_failures=3)
+
         def traced_stage(stage_name: str, status: str, summary: str = "", detail: str = "") -> None:
             # The UI keeps its human-readable stage summaries.  The persisted
             # harness trace records only names/status/durations so prompts,
@@ -2435,7 +2457,7 @@ class AssistantSessionEngine:
             stage_callback(stage_name, status, summary, detail)
 
         try:
-            with assistant_actor_scope(actor_role):
+            with assistant_actor_scope(actor_role), interaction_scope(control):
                 result = self._handle_once(
                     job_id=job_id,
                     project=project,
@@ -2450,14 +2472,27 @@ class AssistantSessionEngine:
                     run_context=run_context,
                     actor_role=actor_role,
                 )
+            if control is not None:
+                if control.cancelled() and not result.get("requires_confirmation"):
+                    result["outcome"] = "cancelled"
+                    result["assistant_message"] = (str(result.get("assistant_message") or "") + "\n操作已停止；已完成的结果已保留。").strip()
+                result["usage"] = control.usage()
+                result["route"] = control.route
             verification = run_context.verify_result(result)
             result["harness"] = run_context.finish(
-                status="waiting_for_approval" if result.get("requires_confirmation") else "completed",
+                status="waiting_for_approval" if result.get("requires_confirmation") else str(result.get("outcome") or "completed"),
                 stop_reason=infer_stop_reason(result),
                 conversation_id=str(result.get("conversation_id") or conversation_id),
                 verification=verification,
             )
             return result
+        except RunStopped as exc:
+            from .interaction_run import ModelBudgetExceeded
+            outcome = "budget_exhausted" if isinstance(exc, ModelBudgetExceeded) else ("cancelled" if control and control.cancelled() else "partial")
+            return {"intent": "interaction", "assistant_message": str(exc), "actions_planned": [], "actions_executed": [],
+                    "requires_confirmation": False, "confirmation_id": "", "conversation_id": conversation_id,
+                    "outcome": outcome, "planner": "interaction_stopped", "usage": control.usage() if control else {},
+                    "harness": run_context.finish(status=outcome, stop_reason=outcome, conversation_id=conversation_id)}
         except Exception as exc:
             report = run_context.finish(
                 status="failed",
@@ -2501,7 +2536,8 @@ class AssistantSessionEngine:
         normalized_target = "webgis"
         effective_target = "webgis"
         del target  # ignored (kept for API back-compat)
-        map_context = map_context or {}
+        map_context = {key: value for key, value in (map_context or {}).items()
+                       if key not in {"agent_observations", "interaction_memory", "requested_capabilities", "recent_messages"}}
         require_classroom_context(self.store, project.project_id, map_context)
         require_context_lesson(self.store, project.project_id, map_context, actor_role=actor_role)
         map_context = self.prepare_image_context(project.project_id, message, conversation_id, map_context)
@@ -2540,6 +2576,9 @@ class AssistantSessionEngine:
         context = self.memory.build_context(conversation)
         route = self.router.route(normalized_mode, message, context["raw_messages"], map_context, {"project_id": project.project_id})
         intent = route["intent"]
+        if intent == "interaction":
+            map_context = {**map_context, "interaction_memory": remembered_executions(project, context, map_context),
+                           "recent_messages": [{"role": item.get("role"), "content": item.get("content", "")} for item in context["raw_messages"][-6:]]}
         if image_attachment is not None:
             intent = "knowledge" if normalized_mode == "knowledge" else "teaching_explain"
             route = {**route, "intent": intent, "reason": "image attachment requires visual understanding"}
@@ -2577,9 +2616,15 @@ class AssistantSessionEngine:
             project_state={"project_id": project.project_id},
             map_context=map_context,
             run_context=run_context,
-            allow_image_generation=actor_role == "admin",
+            allow_image_generation=actor_role == "admin" and intent != "interaction",
         )
         prompt_parts = self.prompt_registry.build(intent, map_context, retrieval=None, conversation_context=context)
+
+        if intent == "interaction" and not assessment["requires_confirmation"] and (actions or plan.get("retryable_plan_error") or plan.get("request_capabilities")):
+            return run_goal(self, project=project, conversation=conversation, message=message, map_context=map_context,
+                context=context, plan=plan, assessment=assessment, route=route, prompt_parts=prompt_parts,
+                run_context=run_context, control=current_run(), job_id=job_id, input_mode=input_mode,
+                stage_callback=stage_callback, actor_role=actor_role)
 
         if not actions:
             if normalized_mode == "teaching":
@@ -2592,7 +2637,7 @@ class AssistantSessionEngine:
                 "assistant",
                 assistant_message,
                 normalized_mode,
-                metadata={"intent": intent, "planner": plan.get("planner", "clarification")},
+                metadata={"job_id": job_id, "intent": intent, "planner": plan.get("planner", "clarification")},
             )
             self.memory.update_task_memory(
                 conversation,
@@ -2602,6 +2647,7 @@ class AssistantSessionEngine:
             )
             return {
                 "intent": intent,
+                **({"outcome": "needs_clarification"} if intent == "interaction" else {}),
                 "assistant_message": assistant_message,
                 "knowledge": None,
                 "citations": [],
@@ -2623,7 +2669,7 @@ class AssistantSessionEngine:
                 "assistant",
                 assistant_message,
                 normalized_mode,
-                metadata={"intent": intent, "planner": "blocked"},
+                metadata={"job_id": job_id, "intent": intent, "planner": "blocked"},
             )
             self.memory.update_task_memory(
                 conversation,
@@ -2648,126 +2694,13 @@ class AssistantSessionEngine:
             }
 
         if assessment["requires_confirmation"]:
-            run_context.event(
-                "approval",
-                "human_confirmation",
-                "required",
-                {"action_count": len(actions)},
-            )
-            previous_confirmation = str((context.get("pinned_state") or {}).get("last_pending_confirmation", {}).get("confirmation_id") or "")
-            if previous_confirmation:
-                previous = self.store.get_confirmation(previous_confirmation)
-                if previous and previous.status == "pending":
-                    self.store.resolve_confirmation(previous_confirmation, "orphaned")
-            frozen_plan = {
-                "target": effective_target,
-                "actions": actions,
-                "assistant_message": plan.get("assistant_message", ""),
-                "intent": intent,
-                "message": message,
-                "map_context": map_context,
-                "planner": plan.get("planner", "unknown"),
-                "prompt_fingerprint": prompt_parts["context_fingerprint"],
-                "harness_run_id": run_context.run_id,
-            }
-            plan_fingerprint = _fingerprint(frozen_plan)
-            expires_at = _utc_timestamp(minutes_from_now=15)
-            stage_callback("confirmation", "running", "Waiting for user confirmation", "")
-            confirm_title = "High-risk GIS action"
-            confirm_reason = "One or more planned actions are high risk and require confirmation."
-            launch_action = next((item for item in actions if str(item.get("tool_name") or "") == "launch_question"), None)
-            if launch_action is not None:
-                launch_params = launch_action.get("tool_params") or {}
-                question_text = str(launch_params.get("text") or launch_params.get("question_id") or "").strip()
-                confirm_title = "课堂投屏提问"
-                confirm_reason = (
-                    f"即将把题目投屏到课堂大屏：{question_text}。发送后开始计时，请确认。"
-                    if question_text
-                    else "即将把题目投屏到课堂大屏，发送后开始计时，请确认。"
-                )
-            image_action = next((item for item in actions if str(item.get("tool_name") or "") == "generate_image"), None)
-            if image_action is not None:
-                image_params = image_action.get("tool_params") or {}
-                image_prompt = str(image_params.get("prompt") or "").strip()
-                confirm_title = "使用 MiniMax 生成图片"
-                confirm_reason = (
-                    f"即将使用普通余额 API 生成并保存一张 AI 示意图：{image_prompt[:120]}。此操作会产生 API 费用，请确认。"
-                    if image_prompt
-                    else "即将使用普通余额 API 生成并保存一张 AI 示意图。此操作会产生 API 费用，请确认。"
-                )
-            end_session_action = next((item for item in actions if str(item.get("tool_name") or "") == "end_class_session"), None)
-            if end_session_action is not None:
-                confirm_title = "结束本节课"
-                confirm_reason = "即将结束当前进行中的班课并生成课堂小结。结束后课堂工具将不可用，请确认。"
-            confirmation = self.store.create_confirmation(
-                project.project_id,
-                conversation.conversation_id,
-                job_id,
-                normalized_mode,
-                title=confirm_title,
-                reason=confirm_reason,
-                plan_fingerprint=plan_fingerprint,
-                payload={
-                    "frozen_plan": frozen_plan,
-                    "target": effective_target,
-                    "actions": actions,
-                    "assistant_message": plan.get("assistant_message", ""),
-                    "intent": intent,
-                    "map_context": map_context,
-                    "message": message,
-                    "prompt_parts": prompt_parts,
-                    "planner": plan.get("planner", "unknown"),
-                    "plan_fingerprint": plan_fingerprint,
-                },
-                expires_at=expires_at,
-            )
-            stage_callback("confirmation", "success", "Confirmation created", confirmation.confirmation_id)
-            assistant_message = (
-                f"{plan.get('assistant_message', '').strip()}\n\n"
-                "该操作会产生外部影响，正在等待你确认后执行。"
-            ).strip()
-            self.memory.append(
-                conversation.conversation_id,
-                "assistant",
-                assistant_message,
-                normalized_mode,
-                metadata={"intent": intent, "confirmation_id": confirmation.confirmation_id},
-            )
-            permission_context = ToolPermissionContext.from_pinned_state(context.get("pinned_state"))
-            if previous_confirmation:
-                permission_context.mark_orphaned(previous_confirmation)
-            self.memory.update_task_memory(
-                conversation,
-                {"last_intent": intent, "pending_confirmation_id": confirmation.confirmation_id},
-                map_context,
-                pinned_state_updates={
-                    "last_route": route,
-                    "active_plan_fingerprint": plan_fingerprint,
-                    "last_pending_confirmation": {
-                        "confirmation_id": confirmation.confirmation_id,
-                        "plan_fingerprint": plan_fingerprint,
-                        "expires_at": expires_at,
-                    },
-                    "orphaned_confirmation": permission_context.orphaned_confirmation,
-                },
-            )
-            return {
-                "intent": intent,
-                "assistant_message": assistant_message,
-                "knowledge": None,
-                "citations": [],
-                "actions_planned": assessment["actions_planned"],
-                "actions_executed": [],
-                "requires_confirmation": True,
-                "confirmation_id": confirmation.confirmation_id,
-                "confirmation_expires_at": expires_at,
-                "plan_fingerprint": plan_fingerprint,
-                "planner": plan.get("planner", "unknown"),
-                "retrieval_trace": [],
-                "conversation_id": conversation.conversation_id,
-                "prompt_parts": prompt_parts,
-                "permission_context": permission_context.to_dict(),
-            }
+            control = current_run()
+            if control is not None:
+                control.emit("waiting_user", "等待确认")
+            return self._request_tool_confirmation(project=project, conversation=conversation, message=message,
+                normalized_mode=normalized_mode, effective_target=effective_target, map_context=map_context,
+                plan=plan, actions=actions, assessment=assessment, route=route, prompt_parts=prompt_parts,
+                context=context, run_context=run_context, job_id=job_id, stage_callback=stage_callback)
 
         executed = self._execute_actions(
             project.project_id,
@@ -2846,6 +2779,131 @@ class AssistantSessionEngine:
             "prompt_parts": prompt_parts,
             "teaching_contract": teaching_contract,
             "permission_context": assessment["permission_context"],
+        }
+
+    def _request_tool_confirmation(self, *, project, conversation, message, normalized_mode,
+                                   effective_target, map_context, plan, actions, assessment, route,
+                                   prompt_parts, context, run_context, job_id, stage_callback):
+        intent = str(route.get("intent") or normalized_mode)
+        run_context.event(
+            "approval",
+            "human_confirmation",
+            "required",
+            {"action_count": len(actions)},
+        )
+        previous_confirmation = str((context.get("pinned_state") or {}).get("last_pending_confirmation", {}).get("confirmation_id") or "")
+        if previous_confirmation:
+            previous = self.store.get_confirmation(previous_confirmation)
+            if previous and previous.status == "pending":
+                self.store.resolve_confirmation(previous_confirmation, "orphaned")
+        frozen_plan = {
+            "target": effective_target,
+            "actions": actions,
+            "assistant_message": plan.get("assistant_message", ""),
+            "intent": intent,
+            "message": message,
+            "map_context": map_context,
+            "planner": plan.get("planner", "unknown"),
+            "prompt_fingerprint": prompt_parts["context_fingerprint"],
+            "harness_run_id": run_context.run_id,
+        }
+        plan_fingerprint = _fingerprint(frozen_plan)
+        expires_at = _utc_timestamp(minutes_from_now=15)
+        stage_callback("confirmation", "running", "Waiting for user confirmation", "")
+        confirm_title = "High-risk GIS action"
+        confirm_reason = "One or more planned actions are high risk and require confirmation."
+        launch_action = next((item for item in actions if str(item.get("tool_name") or "") == "launch_question"), None)
+        if launch_action is not None:
+            launch_params = launch_action.get("tool_params") or {}
+            question_text = str(launch_params.get("text") or launch_params.get("question_id") or "").strip()
+            confirm_title = "课堂投屏提问"
+            confirm_reason = (
+                f"即将把题目投屏到课堂大屏：{question_text}。发送后开始计时，请确认。"
+                if question_text
+                else "即将把题目投屏到课堂大屏，发送后开始计时，请确认。"
+            )
+        image_action = next((item for item in actions if str(item.get("tool_name") or "") == "generate_image"), None)
+        if image_action is not None:
+            image_params = image_action.get("tool_params") or {}
+            image_prompt = str(image_params.get("prompt") or "").strip()
+            confirm_title = "使用 MiniMax 生成图片"
+            confirm_reason = (
+                f"即将使用普通余额 API 生成并保存一张 AI 示意图：{image_prompt[:120]}。此操作会产生 API 费用，请确认。"
+                if image_prompt
+                else "即将使用普通余额 API 生成并保存一张 AI 示意图。此操作会产生 API 费用，请确认。"
+            )
+        end_session_action = next((item for item in actions if str(item.get("tool_name") or "") == "end_class_session"), None)
+        if end_session_action is not None:
+            confirm_title = "结束本节课"
+            confirm_reason = "即将结束当前进行中的班课并生成课堂小结。结束后课堂工具将不可用，请确认。"
+        confirmation = self.store.create_confirmation(
+            project.project_id,
+            conversation.conversation_id,
+            job_id,
+            normalized_mode,
+            title=confirm_title,
+            reason=confirm_reason,
+            plan_fingerprint=plan_fingerprint,
+            payload={
+                "frozen_plan": frozen_plan,
+                "target": effective_target,
+                "actions": actions,
+                "assistant_message": plan.get("assistant_message", ""),
+                "intent": intent,
+                "map_context": map_context,
+                "message": message,
+                "prompt_parts": prompt_parts,
+                "planner": plan.get("planner", "unknown"),
+                "plan_fingerprint": plan_fingerprint,
+            },
+            expires_at=expires_at,
+        )
+        stage_callback("confirmation", "success", "Confirmation created", confirmation.confirmation_id)
+        assistant_message = (
+            f"{plan.get('assistant_message', '').strip()}\n\n"
+            "该操作会产生外部影响，正在等待你确认后执行。"
+        ).strip()
+        self.memory.append(
+            conversation.conversation_id,
+            "assistant",
+            assistant_message,
+            normalized_mode,
+            metadata={"intent": intent, "confirmation_id": confirmation.confirmation_id},
+        )
+        permission_context = ToolPermissionContext.from_pinned_state(context.get("pinned_state"))
+        if previous_confirmation:
+            permission_context.mark_orphaned(previous_confirmation)
+        self.memory.update_task_memory(
+            conversation,
+            {"last_intent": intent, "pending_confirmation_id": confirmation.confirmation_id},
+            map_context,
+            pinned_state_updates={
+                "last_route": route,
+                "active_plan_fingerprint": plan_fingerprint,
+                "last_pending_confirmation": {
+                    "confirmation_id": confirmation.confirmation_id,
+                    "plan_fingerprint": plan_fingerprint,
+                    "expires_at": expires_at,
+                },
+                "orphaned_confirmation": permission_context.orphaned_confirmation,
+            },
+        )
+        return {
+            "intent": intent,
+            "assistant_message": assistant_message,
+            "knowledge": None,
+            "citations": [],
+            "actions_planned": assessment["actions_planned"],
+            "actions_executed": [],
+            "requires_confirmation": True,
+            "confirmation_id": confirmation.confirmation_id,
+            "confirmation_expires_at": expires_at,
+            "plan_fingerprint": plan_fingerprint,
+            "planner": plan.get("planner", "unknown"),
+            "retrieval_trace": [],
+            "conversation_id": conversation.conversation_id,
+            "prompt_parts": prompt_parts,
+            "permission_context": permission_context.to_dict(),
         }
 
     def execute_confirmation(
@@ -3179,6 +3237,8 @@ class AssistantSessionEngine:
                 project_id=project_id,
                 artifact_id=attachment["artifact_id"],
             )
+        except RunStopped:
+            raise
         except Exception as exc:  # pragma: no cover - defensive runtime branch
             result = {"used_vision": False, "reason": f"图片识别失败：{exc}"}
 
@@ -3231,6 +3291,8 @@ class AssistantSessionEngine:
                 focus=message,
                 screen_snapshot=screen_snapshot,
             )
+        except RunStopped:
+            raise
         except Exception as exc:  # pragma: no cover - defensive runtime branch
             reason = f"地图图片识别服务暂时不可用：{exc}"
             stage_callback("grounding", "success", "截图识别暂不可用", reason)

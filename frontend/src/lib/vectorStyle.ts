@@ -4,6 +4,8 @@ import * as Cesium from "cesium";
 import type { LayerRecord } from "../types";
 import { densityColor, densityRadius, rankColor, shanghaiAgeColor, shanghaiDensityColor } from "./populationVisual";
 
+import { hasThematicScale, thematicColor } from "./thematicPalette";
+
 type PropertyGetter = (key: string) => unknown;
 export type StyledFeature = { getGeometry: () => { getType: () => string } | undefined; get: PropertyGetter };
 
@@ -53,6 +55,14 @@ export function resolveVectorStyle(record: LayerRecord, get: PropertyGetter) {
     strokeColor = get("line_type") === "dynamic" ? "#d88a26" : "#07575f";
     strokeWidth = get("line_type") === "dynamic" ? 2 : 3;
   }
+  // A thematic fill edit changes the hue of the whole scale, never its classification.
+  const overrides=(record.metadata?.style_overrides || {}) as Record<string,unknown>;
+  if (record.metadata?.workflow_style) fillColor = colorValue(fillColor, get("__fillColor"));
+  fillColor=hasThematicScale(record) ? thematicColor(record, fillColor) : colorValue(fillColor,overrides.fillColor);
+  fillOpacity=unit(numberValue(fillOpacity,overrides.fillOpacity));
+  strokeColor=colorValue(strokeColor,overrides.strokeColor);
+  strokeWidth=numberValue(strokeWidth,overrides.strokeWidth);
+  radius=numberValue(radius,overrides.radius);
   return {
     fillColor, fillOpacity, strokeColor, strokeWidth, radius, densityTemplate,
     // Preserve the existing point boost while respecting an explicitly transparent fill.

@@ -98,7 +98,7 @@ class TeachingContextIntegrationTest(unittest.TestCase):
     # P0-2 / P0-4: teaching_context passthrough + assistant_exchange writeback
     # ------------------------------------------------------------------
 
-    def test_assistant_exchange_logged_for_running_session(self) -> None:
+    def test_chat_does_not_write_into_running_classroom(self) -> None:
         runtime, store, project_id = self.build_runtime()
         session_id = self.start_session(runtime, project_id)
         runtime.classroom.enter_session_stage(session_id, "s2")
@@ -110,19 +110,9 @@ class TeachingContextIntegrationTest(unittest.TestCase):
             teaching_context=self.teaching_context(session_id=session_id, stage_id="s2", phase="in_class"),
         )
         job = self.wait_for_job(runtime, response["job_id"])
-        self.assertEqual(job["status"], "completed")
-
-        job_record = store.get_job(response["job_id"])
-        self.assertEqual(job_record.request["teaching_context"]["session_id"], session_id)
-
+        self.assertEqual(runtime.store.get_job(response["job_id"]).request["teaching_context"], {})
         record = store.get_class_session(session_id)
-        exchanges = [event for event in record.events if event["type"] == "assistant_exchange"]
-        self.assertEqual(len(exchanges), 1)
-        payload = exchanges[0]["payload"]
-        self.assertEqual(payload["phase"], "in_class")
-        self.assertEqual(payload["intent"], job["result"]["intent"])
-        self.assertIn("胡焕庸线", payload["user_message"])
-        self.assertEqual(exchanges[0]["stage_id"], "s2")
+        self.assertEqual([event for event in record.events if event["type"] == "assistant_exchange"], [])
 
     def test_assistant_exchange_not_logged_without_session_or_after_end(self) -> None:
         runtime, store, project_id = self.build_runtime()
@@ -144,7 +134,7 @@ class TeachingContextIntegrationTest(unittest.TestCase):
         record = store.get_class_session(session_id)
         self.assertEqual([e for e in record.events if e["type"] == "assistant_exchange"], [])
 
-    def test_report_statistics_count_assistant_exchanges(self) -> None:
+    def test_chat_is_excluded_from_classroom_report_statistics(self) -> None:
         runtime, store, project_id = self.build_runtime()
         session_id = self.start_session(runtime, project_id)
         for message in ("什么是胡焕庸线", "东部为什么人口多"):
@@ -158,7 +148,7 @@ class TeachingContextIntegrationTest(unittest.TestCase):
         session = store.get_class_session(session_id)
         lesson = runtime.classroom.lesson_service.get_lesson(BUILTIN_LESSON_ID)
         statistics = runtime.classroom.report_service.build_statistics(session, lesson)
-        self.assertEqual(statistics["assistant_exchange_count"], 2)
+        self.assertEqual(statistics["assistant_exchange_count"], 0)
 
     # ------------------------------------------------------------------
     # P1-1: phase-differentiated routing + in-class retrieval skip
@@ -233,7 +223,7 @@ class TeachingContextIntegrationTest(unittest.TestCase):
     # P1-2: real session records ground reflection
     # ------------------------------------------------------------------
 
-    def test_reflection_prompt_quotes_real_session_records(self) -> None:
+    def test_chat_does_not_implicitly_load_classroom_records(self) -> None:
         runtime, _store, project_id = self.build_runtime(minimax_api_key="fake-key-for-tests")
         session_id = self.start_session(runtime, project_id)
         runtime.classroom.enter_session_stage(session_id, "s2")
@@ -253,17 +243,11 @@ class TeachingContextIntegrationTest(unittest.TestCase):
             teaching_context=self.teaching_context(session_id=session_id, stage_id="s2", phase="post_class"),
         )
         job = self.wait_for_job(runtime, response["job_id"])
-        self.assertEqual(job["result"]["intent"], "teaching_reflect")
+        self.assertEqual(job["result"]["intent"], "knowledge")
         self.assertTrue(fake_llm.calls)
         user_content = fake_llm.calls[-1][-1]["content"]
-        self.assertIn("课堂真实记录", user_content)
-        self.assertIn("混淆数量与密度", user_content)
-        self.assertIn('"response_data_collected": false', user_content)
-
-        public_answer = job["result"]["assistant_message"]
-        self.assertIn("未采集课堂作答数据", public_answer)
-        self.assertIn("误区 1", public_answer)
-        self.assertNotIn("整体表现稳定", public_answer)
+        self.assertNotIn("课堂真实记录", user_content)
+        self.assertNotIn("混淆数量与密度", user_content)
 
     # ------------------------------------------------------------------
     # P1-3: record_observation tool
@@ -347,7 +331,7 @@ class TeachingContextIntegrationTest(unittest.TestCase):
         self.assertEqual(record.active_question, {})
         self.assertEqual(record.events[-1]["type"], "teacher_question_presented")
 
-    def test_v1_tool_mode_refuses_classroom_tools(self) -> None:
+    def test_legacy_tool_alias_operates_teacher_question_without_student_publish(self) -> None:
         runtime, store, project_id = self.build_runtime()
         session_id = self.start_session(runtime, project_id)
 
@@ -367,7 +351,7 @@ class TeachingContextIntegrationTest(unittest.TestCase):
             job = self.wait_for_job(runtime, response["job_id"])
 
         self.assertEqual(job["status"], "completed")
-        self.assertIn("专业教学智能体", job["result"]["assistant_message"])
+        self.assertIn("已在教师工作台呈现口头提问", job["result"]["assistant_message"])
         record = store.get_class_session(session_id)
         self.assertEqual(record.active_question, {})
         self.assertNotIn("question_launched", [event["type"] for event in record.events])
@@ -400,7 +384,7 @@ class TeachingContextIntegrationTest(unittest.TestCase):
             response = runtime.submit_assistant_message(
                 project_id,
                 "把这道题呈现在教师工作台",
-                assistant_mode="teaching",
+                assistant_mode="operate",
                 teaching_context=self.teaching_context(session_id=session_id, stage_id="s3", phase="in_class"),
             )
             job = self.wait_for_job(runtime, response["job_id"])

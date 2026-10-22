@@ -15,9 +15,12 @@
  *   epoch token so results from a torn-down session are dropped.
  * - A final transcript is submitted at most once. Results that arrive while
  *   a job is executing or an announcement is playing are stale and dropped.
- * - Capture pauses (stream aborted, no flush) while a command executes or
- *   the assistant speaks, so the system never hears itself; after real TTS
- *   end/error events — not a fixed delay — capture resumes.
+ * - While executing, capture pauses unless a local task-stop callback is
+ *   provided; then only exact wake-qualified cancellation is accepted. A
+ *   fresh capture epoch starts after execution, discarding late busy audio.
+ *   Playback also pauses capture by default; an opt-in wake-word stop mode
+ *   can keep capture open, but never submits map commands during playback.
+ *   Real TTS end/error events release the playback guard.
  * - Manual pause survives re-renders and health refreshes; leaving the tab,
  *   hiding the page or losing window focus pauses, and returning follows the
  *   user's settings (re-entering the tab re-enables by default).
@@ -27,8 +30,8 @@
  *   retry loop.
  */
 import { createVoiceStream, VoiceStreamError, type VoiceStreamHandle } from "./voiceStream";
-import { describeScreenRejection, screenTranscript, type GateMode } from "./voiceGate";
-import { onSpeechLifecycle } from "./speechSynthesis";
+import { describeScreenRejection, isSpeechInterrupt, isTaskInterrupt, screenTranscript, type GateMode } from "./voiceGate";
+import { cancelSpeech, onSpeechLifecycle } from "./speechSynthesis";
 
 export type VoicePhase =
   | "idle"
@@ -63,6 +66,8 @@ export type VoiceSessionSettings = {
   autoListenOnEnter: boolean;
   /** 仅唤醒后执行：说「小智，+指令」才响应（嘈杂课堂用）。 */
   requireWakeWord: boolean;
+  /** 播报期间只接受带唤醒词的停止播报短句，默认关闭。 */
+  allowSpeechInterrupt: boolean;
 };
 
 export type VoiceSessionSnapshot = {
@@ -77,6 +82,8 @@ export type VoiceSessionCallbacks = {
   onSnapshot: (snapshot: VoiceSessionSnapshot) => void;
   /** A gated, de-duplicated command ready for the assistant. */
   onSubmitCommand: (command: string) => void;
+  /** When provided, execution keeps a wake-word-only local cancel listener. */
+  onCancelTask?: () => void;
   onPartial?: (text: string) => void;
   onListeningChange?: (listening: boolean) => void;
   onCapturedCommand?: (command: string) => void;
@@ -102,7 +109,7 @@ const AWAITING_BUSY_WINDOW_MS = 2500;
 
 export class VoiceSessionController {
   private readonly options: VoiceSessionOptions;
-  private settings: VoiceSessionSettings = { autoListenOnEnter: true, requireWakeWord: false };
+  private settings: VoiceSessionSettings = { autoListenOnEnter: true, requireWakeWord: false, allowSpeechInterrupt: false };
 
   private interactionActive = false;
   private userPaused = false;
@@ -115,6 +122,7 @@ export class VoiceSessionController {
 
   private epoch = 0;
   private handle: VoiceStreamHandle | null = null;
+  private connectionAbort: AbortController | null = null;
   private phase: VoicePhase = "idle";
   private phaseDetail = "";
   private unavailableKind: UnavailableKind | null = null;
@@ -181,9 +189,10 @@ export class VoiceSessionController {
 
   setSettings(patch: Partial<VoiceSessionSettings>): void {
     this.settings = { ...this.settings, ...patch };
-    // Changing settings mid-session must not silently start or stop capture;
-    // autoListenOnEnter applies the next time the tab is entered.
-    this.emit();
+    // Auto-listen is latched on the next entry. The explicit interruption
+    // setting takes effect now, without overriding pause/visibility/busy.
+    if (patch.allowSpeechInterrupt !== undefined) this.recompute();
+    else this.emit();
   }
 
   settingsValue(): VoiceSessionSettings {
@@ -195,6 +204,14 @@ export class VoiceSessionController {
     this.busy = busy;
     if (!busy) {
       this.awaitingBusyUntil = 0;
+      if (this.options.callbacks.onCancelTask) {
+        // The busy capture only listened for a local stop. Its delayed finals
+        // must never become new commands when the previous task finishes.
+        this.teardownStream();
+        this.cancelTimers();
+        this.partial = "";
+        this.options.callbacks.onPartial?.("");
+      }
     }
     this.recompute();
   }
@@ -202,6 +219,12 @@ export class VoiceSessionController {
   setSpeaking(speaking: boolean): void {
     if (this.speaking === speaking) return;
     this.speaking = speaking;
+    if (!speaking) {
+      // ASR finals may lag behind playback. Discard audio captured during
+      // speech before accepting another command, including wake-word stops.
+      this.teardownStream();
+      this.cancelTimers();
+    }
     this.recompute();
   }
 
@@ -273,8 +296,8 @@ export class VoiceSessionController {
     return (
       this.interactionActive &&
       !this.userPaused &&
-      !this.busy &&
-      !this.speaking &&
+      (!this.busy || Boolean(this.options.callbacks.onCancelTask)) &&
+      (!this.speaking || this.settings.allowSpeechInterrupt) &&
       !this.docHidden &&
       !this.windowBlurred &&
       this.asrAvailable &&
@@ -325,17 +348,7 @@ export class VoiceSessionController {
       return;
     }
 
-    if (this.speaking) {
-      this.teardownStream();
-      this.cancelTimers();
-      this.setListening(false);
-      this.phase = "speaking";
-      this.phaseDetail = "";
-      this.emit();
-      return;
-    }
-
-    if (this.busy) {
+    if (this.busy && !this.options.callbacks.onCancelTask) {
       this.teardownStream();
       this.cancelTimers();
       this.setListening(false);
@@ -355,14 +368,29 @@ export class VoiceSessionController {
       return;
     }
 
+    if (this.speaking) {
+      if (!this.settings.allowSpeechInterrupt) {
+        this.teardownStream();
+        this.cancelTimers();
+        this.setListening(false);
+      } else if (!this.handle) {
+        this.scheduleStart();
+      }
+      this.phase = "speaking";
+      this.phaseDetail = "";
+      this.emit();
+      return;
+    }
+
     // Everything is clear: keep the live stream listening (unless the
     // transient 已识别 phase is still showing), or (re)start capture after a
     // short settle delay so a just-started announcement can still flip
     // `speaking` before the mic opens (prevents the system hearing itself).
     if (this.handle) {
       const now = this.options.now?.() ?? Date.now();
-      if (!(this.phase === "captured" && now < this.capturedUntil) && this.phase !== "listening") {
-        this.phase = "listening";
+      const nextPhase = this.busy ? "executing" : "listening";
+      if (!(this.phase === "captured" && now < this.capturedUntil) && this.phase !== nextPhase) {
+        this.phase = nextPhase;
         this.phaseDetail = "";
         this.setListening(true);
         this.emit();
@@ -391,8 +419,10 @@ export class VoiceSessionController {
   }
 
   private async startStream(): Promise<void> {
-    if (this.disposed || this.handle) return;
+    if (this.disposed || this.handle || this.connectionAbort) return;
     const myEpoch = ++this.epoch;
+    const connectionAbort = new AbortController();
+    this.connectionAbort = connectionAbort;
     this.partial = "";
     this.phase = "connecting";
     this.phaseDetail = "";
@@ -406,7 +436,7 @@ export class VoiceSessionController {
     } catch {
       /* Permissions API unavailable (older browser / test env) */
     }
-    if (myEpoch !== this.epoch) return;
+    if (myEpoch !== this.epoch || this.disposed || !this.shouldListen()) return;
     if (permissionState === "denied") {
       this.unavailableKind = "permission_denied";
       this.recompute();
@@ -424,7 +454,7 @@ export class VoiceSessionController {
         onOpen: () => {
           if (myEpoch !== this.epoch || this.disposed) return;
           this.reconnectAttempt = 0;
-          this.phase = "listening";
+          this.phase = this.speaking ? "speaking" : this.busy ? "executing" : "listening";
           this.phaseDetail = "";
           this.setListening(true);
           this.emit();
@@ -466,13 +496,14 @@ export class VoiceSessionController {
           }
           this.recompute();
         }
-      });
+      }, connectionAbort.signal);
       if (myEpoch !== this.epoch || this.disposed || !this.shouldListen()) {
         // The user paused / a job started / the tab closed while the
         // connection and permission were still being set up.
         handle.abort();
         return;
       }
+      this.connectionAbort = null;
       this.handle = handle;
       // The stream may already be open; if onOpen fired before this line the
       // phase is listening and we leave it alone.
@@ -482,6 +513,7 @@ export class VoiceSessionController {
       }
     } catch (error) {
       if (myEpoch !== this.epoch || this.disposed) return;
+      this.connectionAbort = null;
       this.handle = null;
       this.setListening(false);
       const kind = error instanceof VoiceStreamError ? error.kind : "unknown";
@@ -530,20 +562,37 @@ export class VoiceSessionController {
     if (myEpoch !== this.epoch) return; // stale session's result
     const clean = text.trim();
     if (!clean) return;
-    if (this.busy || this.speaking) {
-      // A result surfacing during execution/announcement is an old leftover.
+    if (!this.interactionActive || this.disposed || this.userPaused || this.docHidden || this.windowBlurred) {
       this.ignoredCount += 1;
       return;
     }
-    const now = this.options.now?.() ?? Date.now();
-    if (clean === this.lastSubmittedText && now - this.lastSubmittedAt < DUPLICATE_FINAL_WINDOW_MS) {
-      return; // duplicate delivery of the same utterance
-    }
-    if (now < this.awaitingBusyUntil) {
-      this.ignoredCount += 1; // a second final before busy latched: stale burst
+    if (this.busy) {
+      this.partial = "";
+      this.options.callbacks.onPartial?.("");
+      if (isTaskInterrupt(clean)) {
+        this.options.callbacks.onCancelTask?.();
+      } else {
+        this.ignoredCount += 1;
+      }
       return;
     }
-
+    if (this.speaking) {
+      // Listening during playback is opt-in and only permits a local stop.
+      // Ordinary map commands/echo must never become a tool request here.
+      if (this.settings.allowSpeechInterrupt && isSpeechInterrupt(clean)) {
+        this.partial = "";
+        this.options.callbacks.onPartial?.("");
+        cancelSpeech();
+        this.options.callbacks.onNotice?.("info", "已停止播报", "可以继续说下一条指令。");
+      } else {
+        this.ignoredCount += 1;
+        this.partial = "";
+        this.options.callbacks.onPartial?.("");
+        this.emit();
+      }
+      return;
+    }
+    const now = this.options.now?.() ?? Date.now();
     const mode: GateMode = this.settings.requireWakeWord ? "wake_word" : "direct";
     const gate = screenTranscript(clean, { mode });
     if (!gate.accepted) {
@@ -552,6 +601,15 @@ export class VoiceSessionController {
       this.options.callbacks.onPartial?.("");
       this.phaseDetail = describeScreenRejection(gate.reason);
       this.emit();
+      return;
+    }
+
+    if (gate.command === this.lastSubmittedText && now - this.lastSubmittedAt < DUPLICATE_FINAL_WINDOW_MS) {
+      return; // compare the gated command, with the wake-word alias removed
+    }
+
+    if (now < this.awaitingBusyUntil) {
+      this.ignoredCount += 1;
       return;
     }
 
@@ -576,14 +634,16 @@ export class VoiceSessionController {
   }
 
   private teardownStream(): void {
-    if (!this.handle) {
-      this.partial = "";
-      return;
-    }
-    // Invalidate every callback of the discarded session before closing it.
+    // Invalidate callbacks even when permission/connection setup has not
+    // returned a handle. Cancelling only an acquired handle leaves a gap.
     this.epoch += 1;
-    this.handle.abort();
+    const connectionAbort = this.connectionAbort;
+    const handle = this.handle;
+    this.connectionAbort = null;
     this.handle = null;
+    connectionAbort?.abort();
+    handle?.abort();
+    if (this.partial) this.options.callbacks.onPartial?.("");
     this.partial = "";
   }
 

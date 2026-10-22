@@ -143,7 +143,7 @@ export function QgisProfessionalPage({
         status: "error",
         enabled: false,
         provider: "minimax",
-        model: "MiniMax-M2.5",
+        model: "MiniMax-M3.1-Flash",
         error: llm.reason instanceof Error ? llm.reason.message : "LLM status request failed"
       });
     }

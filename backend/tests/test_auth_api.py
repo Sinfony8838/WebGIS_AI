@@ -327,7 +327,7 @@ class AuthApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json(), expected)
 
-    def test_assistant_whole_lesson_request_returns_design_session(self) -> None:
+    def test_assistant_whole_lesson_request_does_not_create_design_session(self) -> None:
         _admin, csrf = self.bootstrap_admin()
         project = self.client.post(
             "/projects",
@@ -345,8 +345,8 @@ class AuthApiTest(unittest.TestCase):
                 headers={"X-WebGIS-CSRF": csrf},
             )
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["lesson_design"]["project_id"], project["project_id"])
-        self.assertEqual(response.json()["lesson_design"]["current_step"], "requirements")
+        self.assertNotIn("lesson_design", response.json())
+        self.assertEqual(response.json()["job_id"], "job_test")
 
 
 if __name__ == "__main__":

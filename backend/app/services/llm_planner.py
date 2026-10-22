@@ -31,7 +31,10 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from ..models import ProjectRecord
 from .assistant import ASSISTANT_TOOL_SCHEMA, AssistantService
+from .assistant_profiles import tool_allowed
 from .minimax_client import MiniMaxClient
+from .interaction_run import complete, current_run, RunStopped
+from .agent_capabilities import OP_PARAMS, layer_catalog, select_catalog
 from .workflow_templates import INTERACTION_ALLOWED_TEMPLATES, list_templates
 
 
@@ -50,7 +53,7 @@ def _tools_for_mode(assistant_mode: str) -> List[Dict[str, Any]]:
     return [
         item
         for item in ASSISTANT_TOOL_SCHEMA
-        if assistant_mode in item.get("modes", ["teaching", "tool", "knowledge", "interaction"])
+        if assistant_mode in item.get("modes", ["teaching", "tool", "knowledge", "interaction"]) and tool_allowed(item["name"])
     ]
 
 CORE_TOOL_NAMES = {
@@ -149,12 +152,14 @@ class LLMPlanner:
 
         try:
             tool_catalog = self._tool_catalog(message, map_context)
-            raw_content = self.minimax_client.chat_completion(
+            raw_content = complete(self.minimax_client,
                 self._messages(message, project, map_context, tool_catalog=tool_catalog),
                 temperature=0.15,
             )
             parsed = self._parse_json(raw_content)
             return self._validate_plan(parsed, allowed_tools={item["name"] for item in tool_catalog})
+        except RunStopped:
+            raise
         except Exception as exc:
             fallback = dict(rule_plan)
             fallback["target"] = normalized_target
@@ -180,14 +185,24 @@ class LLMPlanner:
             rule_plan["planner"] = "interaction_rule"
             return rule_plan
 
-        is_voice = normalized_input_mode == "voice"
+        plan = self.plan_interaction_step(message, project, map_context, normalized_input_mode)
+        return plan
+
+    def plan_interaction_step(self, message: str, project: ProjectRecord,
+                              map_context: Dict[str, Any], input_mode: str = "voice") -> Dict[str, Any]:
+        is_voice = input_mode == "voice"
+        normalized_target = "webgis"
+        rule_plan = {"actions": [], "assistant_message": "暂未执行操作，请补充目标或数据。"}
+        run = current_run()
+        if run:
+            run.route = "agent"
         try:
             messages = (
                 self._voice_interaction_messages(message, project, map_context)
                 if is_voice
                 else self._interaction_messages(message, project, map_context)
             )
-            raw_content = self.minimax_client.chat_completion(
+            raw_content = complete(self.minimax_client,
                 messages,
                 temperature=0.15,
                 timeout=VOICE_LLM_TIMEOUT_SECONDS,
@@ -196,11 +211,18 @@ class LLMPlanner:
             plan = self._validate_plan(parsed, planner="interaction_minimax", allowed_tools={item["name"] for item in _tools_for_mode("interaction")})
             plan["target"] = normalized_target
             return plan
+        except RunStopped:
+            raise
         except Exception as exc:
             fallback = dict(rule_plan)
             fallback["target"] = normalized_target
             fallback["planner"] = "voice_clarification" if is_voice else "interaction_clarification"
             fallback["llm_fallback_reason"] = str(exc)
+            fallback["retryable_plan_error"] = isinstance(exc, (ValueError, json.JSONDecodeError))
+            reason = str(exc)
+            if not fallback["retryable_plan_error"]:
+                detail = "模型接口返回 404，请检查供应商接口地址。" if "404" in reason else "模型请求失败或服务未配置，请检查连接与模型配置。"
+                fallback["assistant_message"] = detail + "未执行本次操作；无需改写这条指令。"
             return fallback
 
     # ------------------------------------------------------------------
@@ -283,6 +305,14 @@ class LLMPlanner:
             "map_context": map_context,
             "webgis_tools": _tools_for_mode("interaction"),
             "workflow_templates": allowed_templates,
+            "template_parameters": {
+                "population_choropleth": ["dataset", "population_field", "area_field", "classes", "method"],
+                "facility_buffer": ["dataset", "distance_m", "dissolve", "label_field"],
+                "hu_line_compare": ["province_dataset", "population_field", "area_field"],
+                "clip_to_region": ["input_dataset", "region_dataset"],
+                "overlay_intersection": ["input_dataset", "overlay_dataset"],
+                "spatial_join_attributes": ["input_dataset", "join_dataset", "predicate"],
+                "classify_field": ["dataset", "field", "classes", "method", "output_field"]},
             "basemaps": [{"id": item["id"], "title": item["title"]} for item in self.fallback_planner.config.basemap_catalog()["items"]],
         }
 
@@ -293,9 +323,49 @@ class LLMPlanner:
         map_context: Dict[str, Any],
     ) -> List[Dict[str, str]]:
         context = self._interaction_context(project, map_context)
+        selected, groups = select_catalog(message, context["webgis_tools"], map_context)
+        requested_groups = map_context.get("requested_capabilities", [])
+        if requested_groups:
+            from .agent_capabilities import GROUPS
+            names = set().union(*(GROUPS[name][2] for name in requested_groups if name in GROUPS))
+            selected = list({tool["name"]: tool for tool in selected + [tool for tool in context["webgis_tools"] if tool["name"] in names]}.values())
+        context["webgis_tools"] = selected
+        if not any(item["name"] in {"run_workflow", "build_workflow"} for item in selected):
+            context.pop("workflow_templates", None)
+            context.pop("template_parameters", None)
+        context["capability_groups"] = groups
+        context["datasets"] = layer_catalog(project)
+        context["recent_executions"] = map_context.get("interaction_memory", [])
+        context["observations"] = map_context.get("agent_observations", [])
+        context["model_requests_remaining"] = max(0, 3 - current_run().calls) if current_run() else 3
+        if any(item["name"] == "build_workflow" for item in selected):
+            context["workflow_operations"] = OP_PARAMS
+            context["workflow_contract"] = {"steps": [{"id": "load", "op": "load_layer", "params": {"source": "layer:<actual layer_id>"}}, {"id": "stats", "op": "aggregate_stats", "params": {"input": "${load.layer}", "fields": ["actual_field"]}}]}
+            context["workflow_outputs"] = {"load_layer": ["layer", "path"], "inspect_layer": ["layer", "fields", "feature_count"], "aggregate_stats": ["stats"], "choropleth": ["layer", "style"], "export_geojson": ["geojson"], "export_map_png": ["png"], "export_style_json": ["style"], "other_analysis_ops": ["layer", "path"]}
         system = (
-            "You are the voice-control brain of a classroom WebGIS platform (智能交互模式). "
-            "The teacher issues spoken-style commands; you translate them into tool calls. "
+            "You are the Operate agent of a classroom WebGIS platform. Input may be typed or spoken. "
+            "The teacher gives goals. Use direct tools for simple tasks, existing templates for known workflows, "
+            "or compose a NEW declarative workflow for open goals. Never emit Python, SQL or nested workflows. "
+            "A generated workflow has 1..8 steps with unique ids, op and params; references use ${stepId.outputKey}. "
+            "load_layer.source must be a source from datasets; do not invent data, absolute paths or fields. "
+            "All layer-consuming inputs must reference an earlier output. Export a GeoJSON to display a new analysis layer. "
+            "JSON may add continue_after_observation:boolean. Set it true when later work needs actual results; "
+            "only emit the executable prefix, then observe and plan the remainder. Do not repeat completed steps. "
+            "After observation, an empty actions list is a clarification unless goal_completed:true explicitly indicates the observed goal is done. "
+            "On a failed observation, correct the issue or ask for missing inputs. Limit model requests to 3 total. "
+            "Never generate images or lesson designs; these belong to Chat and the independent lesson-design module. "
+            "For a measured population/terrain comparison: create_measurement(locations), generate_profile(kind=population), "
+            "generate_profile(kind=terrain), compare_profiles(). Omitted ids refer to the current successful measurement/profiles. "
+            "All four profile tools can be submitted in ONE ordered actions array: the executor resolves omitted ids "
+            "after each preceding tool succeeds. Do not split this chain merely to obtain result ids. "
+            "continue_after_observation is a TOP-LEVEL plan field, NEVER a tool_params field. "
+            "Example structure: {\"actions\":[{\"tool_name\":\"create_measurement\",\"tool_params\":{\"locations\":[\"北京\",\"上海\"]}},"
+            "{\"tool_name\":\"generate_profile\",\"tool_params\":{\"kind\":\"population\"}},"
+            "{\"tool_name\":\"generate_profile\",\"tool_params\":{\"kind\":\"terrain\"}},"
+            "{\"tool_name\":\"compare_profiles\",\"tool_params\":{}}],\"continue_after_observation\":true}. "
+            "Then explain the ACTUAL returned comparison summary with actions:[] and goal_completed:true. "
+            "Population means spatial density along the line, not historical population. Never invent coordinates or values. "
+            "If details of another capability group are needed, return request_capabilities:[group_id] and no actions. "
             "Return only valid JSON: {\"assistant_message\": string, \"actions\": "
             "[{\"tool_name\": string, \"tool_params\": object}]}. "
             "Use only tools listed in webgis_tools; layer ids must come from all_layers "
@@ -309,6 +379,7 @@ class LLMPlanner:
             " Respect negated instructions: never execute an operation the teacher forbids. "
             "Plan every requested operation in order, not just the first matching keyword. "
             "For an unsupported or ambiguous request, return no actions and ask a concise clarification. "
+            "If a pronoun refers to multiple recent results, ask which one before acting. "
             "Do not invent results or layer identifiers. If a later action depends on a query result "
             "you have not observed, do not guess that result or claim the dependent task is complete."
         )
@@ -376,6 +447,8 @@ class LLMPlanner:
         configured_limit = int(getattr(self.fallback_planner.config, "assistant_harness_max_actions", 8))
         action_limit = max(1, min(configured_limit, 32))
         if len(actions) > action_limit:
+            if planner == "interaction_minimax":
+                raise ValueError(f"计划动作超过上限 {action_limit}，请缩小范围。")
             actions = actions[:action_limit]
 
         return {
@@ -383,6 +456,9 @@ class LLMPlanner:
             "target": "webgis",
             "actions": actions,
             "planner": planner,
+            "continue_after_observation": payload.get("continue_after_observation") is True,
+            "goal_completed": payload.get("goal_completed") is True,
+            "request_capabilities": [item for item in payload.get("request_capabilities", []) if isinstance(item, str)] if isinstance(payload.get("request_capabilities", []), list) else [],
         }
 
     @staticmethod
@@ -403,7 +479,7 @@ class LLMPlanner:
             if active_session and any(hint in lowered for hint in CLASSROOM_TOOL_HINTS):
                 visible_names.update({"record_observation", "launch_question"})
 
-        return [item for item in ASSISTANT_TOOL_SCHEMA if item["name"] in visible_names]
+        return [item for item in ASSISTANT_TOOL_SCHEMA if item["name"] in visible_names and tool_allowed(item["name"])]
 
     @staticmethod
     def _extract_json_object(content: str) -> str:

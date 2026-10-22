@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from "react";
 import { DENSITY_SCALE, SHANGHAI_DENSITY_SCALE, SHANGHAI_AGE_SCALE } from "../lib/populationVisual";
+import { hasThematicScale, rankLegend, thematicColor } from "../lib/thematicPalette";
 import { GLOBE_THEMES } from "../lib/globeThemes";
 import { hasPopulationOverlayStyle, populationOverlayLegend } from "../lib/populationRaster";
 import type { LayerRecord } from "../types";
@@ -20,9 +21,11 @@ export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onSho
   const populationGrid = basemapId === "nasa_population_2020";
   const visible = layers.filter(layer => layer.visible && layer.opacity !== 0 && (!globe ||
     (layer.kind === "vector" && ["upload", "output_artifact"].includes(layer.source))));
+  const customFills=visible.filter(layer=>!hasThematicScale(layer) && typeof (layer.metadata?.style_overrides as Record<string,unknown> | undefined)?.fillColor === "string");
+  const thematic=visible.filter(layer=>!customFills.includes(layer));
   const geographicRasters = visible.filter(layer => layer.kind === "raster" && layer.metadata?.registration === "georeferenced_raster");
-  const workflowLegends = visible.filter(layer => layer.metadata?.workflow_style).map(layer => ({
-    id: layer.layer_id, name: layer.name,
+  const workflowLegends = thematic.filter(layer => layer.metadata?.workflow_style).map(layer => ({
+    id: layer.layer_id, name: layer.name, record: layer,
     style: layer.metadata.workflow_style as { title?: string; legend?: { title?: string; items?: Array<{ label: string; color: string }> } }
   }));
   // Match the actual paint order, including equal-z layers from older sessions.
@@ -34,16 +37,18 @@ export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onSho
     legendUrl:String(layer.metadata.legend_url || ""),
     legend:populationOverlayLegend(layer), balancedPopulation:hasPopulationOverlayStyle(layer)
   }));
-  const hasDensity = globe ? themeIds.some(id => ["density_fill","density_3d","population_columns"].includes(id)) : visible.some(layer => ["builtin_population_regions","builtin_population_density"].includes(layer.layer_id));
-  const shanghai = !globe && visible.find(layer => layer.metadata?.catalog_id === "shanghai_population_density");
+  const hasDensity = globe ? themeIds.some(id => ["density_fill","density_3d","population_columns"].includes(id)) : thematic.some(layer => ["builtin_population_regions","builtin_population_density"].includes(layer.layer_id));
+  const shanghai = !globe && thematic.find(layer => layer.metadata?.catalog_id === "shanghai_population_density");
   const finland = !globe && visible.some(layer => layer.metadata?.catalog_id === "finland_population_density_2015" || layer.metadata?.teacher_topic === "finland_population_2015");
-  const shanghaiAge = !globe && visible.some(layer => layer.metadata?.catalog_id === "shanghai_age_60_plus_2020");
+  const shanghaiAge = !globe && thematic.some(layer => layer.metadata?.catalog_id === "shanghai_age_60_plus_2020");
   const precipitation = !globe && visible.some(layer => layer.metadata?.catalog_id === "china_precipitation_400mm");
   const line = visible.find(layer => layer.layer_id === "generated_hu_line");
   const hasLine = globe ? themeIds.includes("hu_line") : Boolean(line);
   const otherThemes = globe ? GLOBE_THEMES.filter(theme => themeIds.includes(theme.id) && !["density_fill","density_3d","population_columns","hu_line"].includes(theme.id)) : [];
-  const ranked = !globe && visible.some(layer => Boolean(layer.metadata?.visualization));
-  if (!geographicRasters.length && !finland && !teacherMaps.length && !shanghaiAge && !precipitation && !night && !populationGrid && !shanghai && !hasDensity && !hasLine && !otherThemes.length && !ranked && !workflowLegends.length) return null;
+  const ranked = !globe ? thematic.filter(layer => Boolean(layer.metadata?.visualization)) : [];
+  const densityLayer = thematic.find(layer => ["builtin_population_regions", "builtin_population_density"].includes(layer.layer_id));
+  const ageLayer = thematic.find(layer => layer.metadata?.catalog_id === "shanghai_age_60_plus_2020");
+  if (!customFills.length && !geographicRasters.length && !finland && !teacherMaps.length && !shanghaiAge && !precipitation && !night && !populationGrid && !shanghai && !hasDensity && !hasLine && !otherThemes.length && !ranked.length && !workflowLegends.length) return null;
   const share = line?.metadata?.classic_share;
   return <section className={`map-evidence-legend${expanded ? "" : " is-collapsed"}`} aria-label="地图图例与依据">
     <button className="map-legend-toggle" aria-expanded={expanded} aria-controls={contentId} onClick={() => setExpanded(value => !value)}>
@@ -68,7 +73,7 @@ export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onSho
         : <div key={m.id}>{legend}</div>;
     })}
     {workflowLegends.map(layer => <div key={layer.id}><strong>{layer.style.legend?.title || layer.style.title || layer.name}</strong>
-      {layer.style.legend?.items?.map((item, index) => <span className="map-other-key" key={index}><i style={{ background: item.color }} />{item.label}</span>)}
+      {layer.style.legend?.items?.map((item, index) => <span className="map-other-key" key={index}><i style={{ background: thematicColor(layer.record, item.color) }} />{item.label}</span>)}
     </div>)}
     {!globe && (hasLine || precipitation) && onTogglePrecipitation && <label>
       <input type="checkbox" checked={precipitation} disabled={busy || changingPrecipitation} onChange={async event => {
@@ -91,7 +96,7 @@ export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onSho
     {populationGrid && <><strong>全球人口密度 <small>2020 · 人/km²</small></strong><img src="https://gibs.earthdata.nasa.gov/legends/GPW_Population_Density_2020_H.svg" alt="NASA GPW官方图例，浅黄低于1，深红大于等于1000人每平方千米" style={{width:"100%",height:"auto"}}/><p>透明处为缺失数据。</p><details><summary>资料说明</summary><p>GPW 人口栅格估计，用于比较空间格局；非逐户测量，瓦片不提供点击数值查询。</p><a href="https://gibs.earthdata.nasa.gov/colormaps/v1.3/GPW_Population_Density_2020.xml" target="_blank" rel="noreferrer">NASA 官方色标与单位 ↗</a></details></>}
     {hasDensity && <>
       <strong>人口密度 <small>人/km²</small></strong>
-      <div className="map-density-key">{DENSITY_SCALE.map(item => <span key={item.label}><i style={{background:item.color}}/><small>{item.label}</small></span>)}</div>
+      <div className="map-density-key">{DENSITY_SCALE.map(item => <span key={item.label}><i style={{background:thematicColor(globe ? undefined : densityLayer,item.color)}}/><small>{item.label}</small></span>)}</div>
       <p>2020/2021 · 省级平均 · 灰色为缺失</p>
       {!globe && visible.some(layer => layer.layer_id === "builtin_population_density") && <p>圆点表示省级密度，非城市位置。</p>}
       {globe && themeIds.includes("density_3d") && <p>高度按 √密度 夸张，不代表真实地形。</p>}
@@ -99,7 +104,7 @@ export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onSho
     </>}
     {shanghai && <>
       <strong>上海 · 人口密度 <small>人/km²</small></strong>
-      <div className="map-density-key">{SHANGHAI_DENSITY_SCALE.map(item => <span key={item.label}><i style={{background:item.color}}/><small>{item.label}</small></span>)}</div>
+      <div className="map-density-key">{SHANGHAI_DENSITY_SCALE.map(item => <span key={item.label}><i style={{background:thematicColor(shanghai,item.color)}}/><small>{item.label}</small></span>)}</div>
       <p>2020 · 区级平均 · 灰色为缺失</p>
       <details><summary>数据来源与口径</summary>
         <p>2020 年常住人口 ÷ 区域面积。区级平均值，不能代表街镇或居住用地密度。人口：上海市第七次全国人口普查。面积：《上海统计年鉴2021》表2.2（2020年）。密度由七普时点人口计算，与年末人口密度不同。</p>
@@ -110,7 +115,7 @@ export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onSho
     </>}
     {shanghaiAge && <>
       <strong>上海 · 60岁及以上人口占比 <small>%</small></strong>
-      <div className="map-density-key">{SHANGHAI_AGE_SCALE.map(item => <span key={item.label}><i style={{background:item.color}}/><small>{item.label}</small></span>)}</div>
+      <div className="map-density-key">{SHANGHAI_AGE_SCALE.map(item => <span key={item.label}><i style={{background:thematicColor(ageLayer,item.color)}}/><small>{item.label}</small></span>)}</div>
       <p>2020 七普 · 区级常住人口 · 灰色为缺失</p>
       <details><summary>年龄数据来源与口径</summary>
         <p>60岁及以上人数 ÷ 本区常住人口合计 × 100。原始人数以万人保留两位，比例由同表计算至一位小数。</p>
@@ -118,7 +123,17 @@ export function MapEvidenceLegend({basemapId,layers,globe,themeIds,showFit,onSho
         <a href="https://tjj.sh.gov.cn/tjnj/2025tjnj/C0212.htm" target="_blank" rel="noreferrer">上海统计局 · 七普各区年龄构成 ↗</a>
       </details>
     </>}
-    {ranked && <><strong>人口排名图层</strong><p>深蓝→浅蓝：排名由前到后。总量不等于密度。</p></>}
+    {customFills.map(layer=><div key={layer.layer_id}><strong>{layer.name}</strong><p><span style={{display:"inline-block",width:12,height:12,marginRight:6,background:String((layer.metadata.style_overrides as Record<string,unknown>).fillColor)}}/>图层颜色</p></div>)}
+    {ranked.map(layer => {
+      const items = rankLegend(layer);
+      const ticks = items.filter((_, index) => index === 0 || index === items.length - 1 || index % Math.max(1, Math.ceil(items.length / 4)) === 0);
+      return <div key={layer.layer_id}><strong>{layer.name}</strong>
+        <p>按名次逐级着色；颜色越深，人口越多。总量不等于密度。</p>
+        <div style={{display:"flex",height:12,marginBottom:6}} aria-label="排名分级色带">{items.map(item => <i key={item.rank} style={{flex:1,background:item.color}} title={`第${item.rank}名 · ${item.label}`}/>)}</div>
+        {ticks.map(item => <span className="map-other-key" key={item.rank}><i style={{background:item.color}}/>第{item.rank}名 · {item.label}</span>)}
+        <details><summary>查看全部 {items.length} 级数值</summary>{items.map(item => <span className="map-other-key" key={item.rank}><i style={{background:item.color}}/>{item.name} · {item.label}</span>)}</details>
+      </div>;
+    })}
     {hasLine && <>
       <strong><i className="map-line-key"/>胡焕庸线 <small>黑河—腾冲参考连线</small></strong>
       <details><summary>查看依据与算法</summary>

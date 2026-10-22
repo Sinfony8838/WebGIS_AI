@@ -39,6 +39,15 @@ function expectColorAgreement(css: string, color: Cesium.Color, opacity = 1) {
 }
 
 describe("shared vector display contract", () => {
+  it("recolors the rank scale in both renderers without flattening its values",()=>{
+    const record=layer({metadata:{visualization:{items:[{},{}]},style_overrides:{fillColor:"#ff0000",fillOpacity:.5}},data:{features:[]}});
+    const rendered=engines(record,{rank:1});
+    expect(rendered.polygonColor.red).toBeGreaterThan(rendered.polygonColor.green);
+    const lighter=engines(record,{rank:2});
+    expect(lighter.polygonColor.red).toBeGreaterThan(rendered.polygonColor.red);
+    expect(lighter.polygonColor.green).toBeGreaterThan(rendered.polygonColor.green);
+    expectColorAgreement(rendered.polygonStyle.getFill()!.getColor() as string,rendered.polygonColor);
+  });
   it("layer overrides win in both engines without modifying decorated feature values", () => {
     const properties = Object.freeze({ __fillColor: "#123456", __fillOpacity: .8, __strokeColor: "#abcdef", __strokeWidth: 6, __radius: 9 });
     const record = layer({ style: Object.freeze({ fillColor: "#ff0000", fillOpacity: .4, strokeColor: "#00ff00", strokeWidth: 3, radius: 5 }) });

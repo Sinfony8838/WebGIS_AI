@@ -62,9 +62,11 @@ export class VoiceStreamError extends Error {
 
 export type VoiceStreamCloseInfo = { code: number; reason: string };
 
+export type VoiceFinalMetadata = {segment_id?: string; utterance_id?: string; end_reason?: "silence" | "segment" | "stop"};
+
 export type VoiceStreamEvents = {
   onPartial?: (text: string) => void;
-  onFinal?: (text: string) => void;
+  onFinal?: (text: string, metadata?: VoiceFinalMetadata) => void;
   onOpen?: () => void;
   /** Fatal setup/transport failure (typed, with an actionable message). */
   onError?: (error: VoiceStreamError) => void;
@@ -104,7 +106,10 @@ function mapMediaError(exc: unknown): VoiceStreamError {
   return new VoiceStreamError("unknown", exc instanceof Error ? exc.message : String(exc));
 }
 
-export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): Promise<VoiceStreamHandle> {
+export function createVoiceStream(apiBase: string, events: VoiceStreamEvents, signal?: AbortSignal): Promise<VoiceStreamHandle> {
+  if (signal?.aborted) {
+    return Promise.reject(new DOMException("Voice capture cancelled", "AbortError"));
+  }
   return new Promise<VoiceStreamHandle>((resolve, reject) => {
     let state: VoiceStreamState = "connecting";
     let stream: MediaStream | null = null;
@@ -117,6 +122,7 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
     let connectTimer: number | null = null;
     let stopPromise: Promise<string | null> | null = null;
     let closeInfo: VoiceStreamCloseInfo = { code: 0, reason: "" };
+    let abortHandler: (() => void) | null = null;
 
     const teardown = () => {
       try {
@@ -147,6 +153,7 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
     const finish = () => {
       if (state === "closed") return;
       state = "closed";
+      if (abortHandler) signal?.removeEventListener("abort", abortHandler);
       if (connectTimer !== null) {
         window.clearTimeout(connectTimer);
         connectTimer = null;
@@ -162,9 +169,9 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
     };
 
     const handleEvent = (data: string) => {
-      let parsed: { type?: string; text?: string; reason?: string; detail?: string } | null = null;
+      let parsed: { type?: string; text?: string; reason?: string; detail?: string; segment_id?: string; utterance_id?: string; end_reason?: string } | null = null;
       try {
-        parsed = JSON.parse(data) as { type?: string; text?: string; reason?: string; detail?: string };
+        parsed = JSON.parse(data) as { type?: string; text?: string; reason?: string; detail?: string; segment_id?: string; utterance_id?: string; end_reason?: string };
       } catch {
         return;
       }
@@ -172,12 +179,13 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
       const text = String(parsed.text || "");
       if (parsed.type === "final") {
         if (flushResolver) {
-          flushResolver(text || null);
+          flushResolver(text);
           flushResolver = null;
           finish();
           closeSocket();
         } else {
-          events.onFinal?.(text);
+          if (parsed.segment_id || parsed.utterance_id || parsed.end_reason) events.onFinal?.(text, parsed as VoiceFinalMetadata);
+          else events.onFinal?.(text);
         }
       } else if (parsed.type === "partial") {
         events.onPartial?.(text);
@@ -193,6 +201,19 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
       closeSocket();
       reject(error);
     };
+
+    // The owner can leave or pause while permission/worklet setup is pending,
+    // before a public handle exists. Close the transport now; a late media
+    // grant is stopped by the closed-state guard below.
+    abortHandler = () => {
+      if (state === "closed") return;
+      const connecting = state === "connecting";
+      closeInfo = { code: 0, reason: "cancelled" };
+      finish();
+      closeSocket();
+      if (connecting) reject(new DOMException("Voice capture cancelled", "AbortError"));
+    };
+    signal?.addEventListener("abort", abortHandler, { once: true });
 
     let wsUrl = `${apiBase.replace(/^http/, "ws")}/assistant/voice/stream`;
     const accessToken = new URLSearchParams(typeof location !== "undefined" ? location.search : "").get("access_token");
@@ -210,6 +231,7 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
     }, CONNECT_TIMEOUT_MS);
 
     socket.onopen = () => {
+      if (state === "closed") return;
       if (connectTimer !== null) {
         window.clearTimeout(connectTimer);
         connectTimer = null;
@@ -227,7 +249,7 @@ export function createVoiceStream(apiBase: string, events: VoiceStreamEvents): P
             },
           });
           // The socket can close while the permission prompt is still open.
-          if (state === "closed") {
+          if ((state as VoiceStreamState) === "closed") {
             teardown();
             return;
           }

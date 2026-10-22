@@ -18,7 +18,7 @@ describe("AgentControlOverlay（智能交互操控光晕层）", () => {
       <AgentControlOverlay active listening={false} partialTranscript="" capturedCommand="" workingDetail="正在执行 1 项操作" pulseSignal={0} />
     );
     expect(screen.getByTestId("agent-control-overlay").className).toContain("working");
-    expect(screen.getByText("智能交互中")).toBeInTheDocument();
+    expect(screen.queryByText("智能交互中")).not.toBeInTheDocument();
     expect(screen.getByText("正在执行 1 项操作")).toBeInTheDocument();
   });
 

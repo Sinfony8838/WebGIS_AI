@@ -292,6 +292,9 @@ def _require_job_access(request: Request, job_id: str) -> Any:
     if job is None:
         raise HTTPException(status_code=404, detail="Unknown job")
     _require_project_access(request, job.project_id)
+    owner = str(job.request.get("actor_user_id") or "")
+    if job.job_type in {"assistant", "assistant_confirmation"} and owner and owner != str(_current_auth(request).user["user_id"]):
+        raise HTTPException(status_code=403, detail="Assistant job belongs to another user")
     return job
 
 
@@ -319,11 +322,13 @@ def _require_session_access(request: Request, session_id: str) -> Any:
     return session
 
 
-def _require_conversation_access(request: Request, conversation_id: str) -> Any:
+def _require_conversation_access(request: Request, conversation_id: str, *, allow_deleted: bool = False) -> Any:
     conversation = runtime.store.get_conversation(conversation_id)
-    if conversation is None:
+    if conversation is None or (conversation.deleted_at and not allow_deleted):
         raise HTTPException(status_code=404, detail="Unknown conversation")
     _require_project_access(request, conversation.project_id)
+    if conversation.owner_user_id and conversation.owner_user_id != str(_current_auth(request).user["user_id"]):
+        raise HTTPException(status_code=403, detail="Conversation belongs to another user")
     return conversation
 
 
@@ -332,6 +337,7 @@ def _require_confirmation_access(request: Request, confirmation_id: str) -> Any:
     if confirmation is None:
         raise HTTPException(status_code=404, detail="Unknown confirmation")
     _require_project_access(request, confirmation.project_id)
+    _require_conversation_access(request, confirmation.conversation_id)
     return confirmation
 
 
@@ -482,6 +488,7 @@ class AssistantMessageRequest(BaseModel):
     history: list[Dict[str, Any]] = Field(default_factory=list)
     target: str = "webgis"
     input_mode: str = "text"
+    ui_observation_protocol: int = 0
     screen_snapshot: Dict[str, Any] = Field(default_factory=dict)
     teaching_context: Dict[str, Any] = Field(default_factory=dict)
     image_attachments: list[Dict[str, Any]] = Field(default_factory=list)
@@ -1451,6 +1458,23 @@ def get_project(project_id: str, request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+class MapProfileComparisonRequest(BaseModel):
+    coordinates: list[list[float]]
+    population_source_id: str = "gpw_2020"
+    terrain_source_id: str = "mapzen_terrain"
+
+
+@app.post("/projects/{project_id}/profiles/compare")
+async def compare_project_profiles(project_id: str, request: Request, payload: MapProfileComparisonRequest):
+    from .services.map_profiles import compare
+    project = _require_project_access(request, project_id)
+    try:
+        return await asyncio.to_thread(compare, project, payload.coordinates, config.data_dir / "cache" / "map_profiles",
+            payload.population_source_id, payload.terrain_source_id)
+    except ProfileError as exc:
+        raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
+
+
 @app.post("/projects/{project_id}/profiles/preview")
 async def preview_project_profile(project_id: str, request: Request, payload: MapProfileRequest) -> Dict[str, Any]:
     project = _require_project_access(request, project_id)
@@ -1550,13 +1574,6 @@ def submit_assistant_message(
 ) -> Dict[str, Any]:
     _require_project_access(request, payload.project_id)
     try:
-        assistant_message = str(payload.message or "")
-        wants_lesson_design = any(hint in assistant_message for hint in LESSON_DESIGN_REQUEST_HINTS) or (
-            "教案" in assistant_message and any(token in assistant_message for token in ("共创", "设计", "生成", "备课", "规划"))
-        )
-        base_lesson_id = str((payload.teaching_context or {}).get("lesson_id") or "")
-        if wants_lesson_design and not assistant_message.lstrip().startswith("GeoBot 头脑风暴：") and base_lesson_id:
-            _require_lesson_access(request, base_lesson_id)
         response = runtime.submit_assistant_message(
             payload.project_id,
             payload.message,
@@ -1570,15 +1587,9 @@ def submit_assistant_message(
             payload.teaching_context,
             payload.image_attachments,
             actor_role=str(_current_auth(request).user.get("role") or ""),
+            actor_user_id=str(_current_auth(request).user.get("user_id") or ""),
+            ui_observation_protocol=payload.ui_observation_protocol,
         )
-        if wants_lesson_design and not assistant_message.lstrip().startswith("GeoBot 头脑风暴："):
-            context = _current_auth(request)
-            response["lesson_design"] = runtime.classroom.create_lesson_design(
-                payload.project_id,
-                str(context.user["user_id"]),
-                base_lesson_id,
-                {"trigger": "assistant", "initial_request": payload.message},
-            )
         return response
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1647,6 +1658,9 @@ def image_generation_capabilities(request: Request) -> Dict[str, Any]:
         "configured": runtime.config.image_generation_enabled(),
         "provider": "minimax",
         "default_model": runtime.config.minimax_image_model,
+        "image_editing": False,
+        "reference_redraw": True,
+        "geography_review": "preflight_and_visual_check",
         "models": sorted(ALLOWED_IMAGE_MODELS),
         "aspect_ratios": {model: sorted(ALLOWED_ASPECT_RATIOS - ({"21:9"} if model == "image-01-live" else set())) for model in sorted(ALLOWED_IMAGE_MODELS)},
         "max_prompt_characters": 1500,
@@ -1701,11 +1715,85 @@ def confirm_assistant_action(
         return runtime.confirm_assistant_action(
             payload.confirmation_id, decision=payload.decision,
             actor_role=str(_current_auth(request).user.get("role") or ""),
+            actor_user_id=str(_current_auth(request).user.get("user_id") or ""),
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/projects/{project_id}/assistant/conversations")
+def list_assistant_conversations(project_id: str, request: Request, mode: str = "chat", deleted: bool = False) -> Dict[str, Any]:
+    from .services.assistant_profiles import normalize_mode
+    _require_project_access(request, project_id)
+    try:
+        mode = normalize_mode(mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    owner = str(_current_auth(request).user["user_id"])
+    return {"items": runtime.store.list_assistant_conversations(project_id, owner, mode, deleted),
+            "folders": runtime.store.list_assistant_folders(project_id, owner)}
+
+
+class AssistantHistoryPatch(BaseModel):
+    pinned: Optional[bool] = None
+    folder_id: Optional[str] = None
+    deleted: Optional[bool] = None
+
+
+class AssistantFolderPatch(BaseModel):
+    name: Optional[str] = None
+    pinned: Optional[bool] = None
+
+
+@app.patch("/assistant/conversations/{conversation_id}")
+def update_assistant_history(conversation_id: str, payload: AssistantHistoryPatch, request: Request):
+    _require_conversation_access(request, conversation_id, allow_deleted=True)
+    try:
+        return runtime.store.update_assistant_conversation(conversation_id, str(_current_auth(request).user["user_id"]), payload.model_dump(exclude_none=True))
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/projects/{project_id}/assistant/folders")
+def create_assistant_folder(project_id: str, payload: AssistantFolderPatch, request: Request):
+    _require_project_access(request, project_id)
+    try:
+        return runtime.store.create_assistant_folder(project_id, str(_current_auth(request).user["user_id"]), payload.name or "").to_dict()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/projects/{project_id}/assistant/folders/{folder_id}")
+def update_assistant_folder(project_id: str, folder_id: str, payload: AssistantFolderPatch, request: Request):
+    _require_project_access(request, project_id)
+    try:
+        return runtime.store.update_assistant_folder(project_id, str(_current_auth(request).user["user_id"]), folder_id, payload.model_dump(exclude_none=True))
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/projects/{project_id}/assistant/folders/{folder_id}")
+def remove_assistant_folder(project_id: str, folder_id: str, request: Request):
+    _require_project_access(request, project_id)
+    try:
+        return runtime.store.update_assistant_folder(project_id, str(_current_auth(request).user["user_id"]), folder_id, {}, delete=True)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/artifacts/{artifact_id}/save-image")
+def save_assistant_image(artifact_id: str, request: Request) -> Dict[str, Any]:
+    _require_artifact_access(request, artifact_id)
+    try:
+        return {"artifact": runtime.store.save_assistant_image(artifact_id, str(_current_auth(request).user["user_id"])).to_dict()}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/assistant/conversations/{conversation_id}")
@@ -1896,8 +1984,7 @@ async def assistant_voice_stream(websocket: "WebSocket") -> None:
             text = message.get("text")
             if text == "flush":
                 final = session.flush()
-                if final:
-                    await websocket.send_text(json.dumps(final, ensure_ascii=False))
+                await websocket.send_text(json.dumps(final or {"type": "final", "text": "", "end_reason": "stop"}, ensure_ascii=False))
                 break
     except WebSocketDisconnect:
         pass
@@ -3077,6 +3164,39 @@ def get_job(job_id: str, request: Request) -> Dict[str, Any]:
     _require_job_access(request, job_id)
     try:
         return runtime.get_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+class UiObservationRequest(BaseModel):
+    action_id: str
+    project_id: str
+    session_id: str = ""
+    status: str
+    detail: str = ""
+
+
+@app.post("/jobs/{job_id}/ui-observations")
+def observe_job_ui(job_id: str, payload: UiObservationRequest, request: Request) -> Dict[str, Any]:
+    _require_job_access(request, job_id)
+    try:
+        return runtime.interaction_operations.acknowledge(job_id, payload.model_dump(), str(_current_auth(request).user["user_id"]))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/jobs/{job_id}/cancel")
+def cancel_assistant_job(job_id: str, request: Request) -> Dict[str, Any]:
+    job = _require_job_access(request, job_id)
+    owner = str(job.request.get("actor_user_id") or "")
+    if owner and owner != str(_current_auth(request).user["user_id"]):
+        raise HTTPException(status_code=403, detail="只能停止自己发起的任务。")
+    try:
+        return runtime.interaction_operations.cancel(job_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

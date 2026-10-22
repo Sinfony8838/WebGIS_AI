@@ -54,15 +54,19 @@ class InteractionToolsTest(unittest.TestCase):
         config.state_dir = config.data_dir / "state"
         config.uploads_dir = config.data_dir / "uploads"
         config.outputs_dir = config.data_dir / "outputs"
+        config.workflows_dir = config.data_dir / "workflows"
         config.state_file = config.state_dir / "runtime.json"
         config.assistant_v2_enabled = False
         config.ensure_dirs()
+        config.voice_asr_enabled = False
         runtime = WebGISRuntime(config=config, store=RuntimeStore(config.state_file))
         # Hermetic: two independent LLM references must both be neutralised,
         # otherwise a dev machine with a real key hits the network.
         runtime.session_engine.knowledge.minimax_client = None
         runtime.session_engine.knowledge.resource_search = None
         runtime.session_engine.tool_planner.llm_planner.minimax_client = None
+        from functools import partial
+        runtime.submit_assistant_message = partial(runtime.submit_assistant_message, ui_observation_protocol=1)
         project = runtime.create_project()
         return runtime, runtime.store, project["project_id"]
 
@@ -80,6 +84,11 @@ class InteractionToolsTest(unittest.TestCase):
     def wait_for_job(self, runtime: WebGISRuntime, job_id: str) -> dict:
         for _ in range(300):
             payload = runtime.get_job(job_id)
+            for action in payload.get("ui_actions", []):
+                if action["status"] == "pending":
+                    runtime.interaction_operations.acknowledge(job_id, {
+                        "action_id": action["action_id"], "project_id": payload["project_id"],
+                        "session_id": action["session_id"], "status": "applied", "detail": "stub UI applied"}, "")
             if payload["status"] in {"completed", "failed"}:
                 return payload
             time.sleep(0.05)
@@ -133,7 +142,7 @@ class InteractionToolsTest(unittest.TestCase):
         runtime, _store, _project_id = self.build_runtime()
         assessment = runtime.session_engine.tool_executor.assess(
             "webgis",
-            [{"tool_name": "run_workflow", "tool_params": {"template_id": "facility_buffer"}}],
+            [{"tool_name": "run_workflow", "tool_params": {"template_id": "arbitrary_python"}}],
             assistant_mode="interaction",
         )
         self.assertEqual(assessment["risk_level"], "blocked")
@@ -337,7 +346,7 @@ class InteractionToolsTest(unittest.TestCase):
         result = job["result"]
         self.assertEqual(job["status"], "completed")
         self.assertEqual(result["planner"], "voice_clarification")
-        self.assertIn("没有直接听懂", result["assistant_message"])
+        self.assertIn("模型请求失败或服务未配置", result["assistant_message"])
 
     def test_interaction_e2e_end_class_session_requires_confirmation_flow(self) -> None:
         runtime, _store, project_id = self.build_runtime()

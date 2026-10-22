@@ -75,9 +75,9 @@ export function AgentControlOverlay({
   }
 
   const state: AgentOverlayState = active ? "working" : listening ? (capturedCommand ? "captured" : "listening") : "idle";
-  const badgeText = STATE_LABEL[state] || "智能交互中";
+  const badgeText = active ? workingDetail || "正在处理请求" : STATE_LABEL[state] || "智能交互中";
   const detail = active
-    ? workingDetail || "正在执行指令…"
+    ? ""
     : state === "captured"
       ? `“${capturedCommand}”`
       : state === "listening"
