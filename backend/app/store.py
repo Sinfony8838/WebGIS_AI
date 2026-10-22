@@ -1094,6 +1094,9 @@ class RuntimeStore:
                 raise KeyError("Unknown assistant image")
             if artifact.metadata.get("owner_user_id", owner) != owner:
                 raise PermissionError("Image belongs to another user")
+            review = artifact.metadata.get("geography_review")
+            if isinstance(review, dict) and review.get("status") != "pass":
+                raise ValueError("图片地理检查未通过或未完成，暂不能保存到素材库。")
             artifact.artifact_type = "generated_image"
             artifact.metadata["saved_to_library"] = True
             self._save()

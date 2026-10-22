@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..config import AppConfig
+from .interaction_run import current_run, model_request_scope
 
 
 class MiniMaxMcpError(RuntimeError):
@@ -35,6 +36,10 @@ class MiniMaxMcpClient:
         if not self.config.vision_status().get("configured"):
             raise MiniMaxMcpError("MiniMax Token Plan MCP is not configured")
         image_source = self._compatible_image_source(image_url)
+        with model_request_scope():
+            return self._understand_image_metered(prompt, image_source)
+
+    def _understand_image_metered(self, prompt: str, image_source: str) -> Dict[str, Any]:
         response = self._call_tool(
             "understand_image",
             {
@@ -182,6 +187,9 @@ class MiniMaxMcpClient:
         deadline = time.monotonic() + self.timeout_seconds
         last_message: Optional[Dict[str, Any]] = None
         while time.monotonic() < deadline:
+            run = current_run()
+            if run is not None:
+                run.check()
             if process.poll() is not None and stdout_queue.empty():
                 stderr = "\n".join(stderr_lines[-8:]).strip()
                 raise MiniMaxMcpError(f"MiniMax MCP exited before response {request_id}. {stderr}".strip())

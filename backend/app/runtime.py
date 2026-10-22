@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import csv
+import hashlib
 import json
 import math
 import os
@@ -21,9 +22,10 @@ from .services.agent_harness import HARNESS_ID, HARNESS_VERSION, HarnessExecutio
 from .services.classroom_workflow import ClassroomWorkflowRuntime
 from .services.classroom_binding import require_classroom_context, require_confirmation_classroom, require_project_session
 from .services.classroom_binding import require_context_lesson, require_project_lesson, require_confirmation_lessons
+from .services.geography_image_policy import GeographyImagePolicy
 from .services.image_references import (
     SUPPORTED_IMAGE_MIME_BY_SUFFIX, detect_image_mime as _detect_image_mime,
-    resolve_image_list, resolve_image_context, require_confirmation_images,
+    resolve_image_list, resolve_image_context, require_confirmation_images, resolve_project_image,
 )
 from .services.datasets import DatasetService
 from .services.knowledge import KnowledgeService
@@ -43,7 +45,7 @@ from .services.workflow_executor import WorkflowExecutor
 from .services.interaction_operations import InteractionOperations
 from .services.assistant_profiles import normalize_mode, bind_conversation, require_tool
 from .services.chat_assistant import ChatAssistant
-from .services.interaction_run import current_run, interaction_scope, RunStopped
+from .services.interaction_run import current_run, interaction_scope, RunStopped, InteractionRun
 from .services.workflow_templates import INTERACTION_ALLOWED_TEMPLATES, detect_template, expand_template, list_templates
 from .services.templates import DISABLED_TEMPLATE_IDS, TemplateService
 from .services.vision import MapVisionService
@@ -1294,8 +1296,12 @@ class WebGISRuntime:
         model: str = "",
         aspect_ratio: str = "16:9",
         prompt_optimizer: bool = True,
+        reference_image_id: str = "",
     ) -> Dict[str, Any]:
         job = self._create_image_generation_job(project_id, prompt, title, model, aspect_ratio, prompt_optimizer)
+        if reference_image_id:
+            resolve_project_image(self.config, self.store, project_id, {"artifact_id": reference_image_id})
+            job.request["reference_image_id"] = reference_image_id
         return self._run_image_generation_job(job.job_id)
 
     def submit_image_generation(
@@ -1335,6 +1341,9 @@ class WebGISRuntime:
             pass
 
     def _run_image_generation_job(self, job_id: str) -> Dict[str, Any]:
+        if current_run() is None:
+            with interaction_scope(InteractionRun(job_id, mode="image_generation", publish=lambda activity, usage: self.store.update_job_activity(job_id, activity, usage))):
+                return self._run_image_generation_job(job_id)
         job = self.store.get_job(job_id)
         if job is None:
             raise KeyError(f"Unknown image generation job: {job_id}")
@@ -1346,11 +1355,14 @@ class WebGISRuntime:
         try:
             self.store.set_job_status(job.job_id, "running")
             self.store.update_job_stage(job.job_id, "artifacts", "running", "正在调用 MiniMax 生成图片。")
+            policy = GeographyImagePolicy(self)
+            brief = policy.prepare(project_id, normalized_prompt, params.get("reference_image_id", ""))
+            current_run().emit("tool_running", "正在生成地理示意图", tool="generate_image")
             generated = self.image_generation_service.generate(
-                normalized_prompt,
+                brief["prompt"] + "\n概念示意，非真实地图。遵守上述地理关系；不添加未要求的数字、边界、徽标。标注AI生成概念示意。",
                 model=params["model"],
                 aspect_ratio=params["aspect_ratio"],
-                prompt_optimizer=params["prompt_optimizer"],
+                prompt_optimizer=False,
             )
             raw_bytes = generated["raw_bytes"]
             if not raw_bytes or len(raw_bytes) > MAX_IMAGE_LIBRARY_BYTES:
@@ -1360,10 +1372,17 @@ class WebGISRuntime:
             output_dir.mkdir(parents=True, exist_ok=True)
             output_path = output_dir / f"ai_image_{job.job_id}{generated['suffix']}"
             output_path.write_bytes(raw_bytes)
+            review_stopped = None
+            try:
+                review = policy.review(output_path, brief)
+            except RunStopped as exc:
+                review_stopped = exc
+                review = {"status": "unknown", "summary": "核查因任务取消、时限或预算停止；生成文件已保留，不能直接用于教学。", "human_review_required": True}
+            preview_only = "assistant_preview" in params or review["status"] != "pass"
             artifact = self.store.register_artifact(
                 project_id=project_id,
                 job_id=job.job_id,
-                artifact_type="assistant_image_preview" if "assistant_preview" in params else "generated_image",
+                artifact_type="assistant_image_preview" if preview_only else "generated_image",
                 title=job.title,
                 path=str(output_path),
                 metadata={
@@ -1377,22 +1396,27 @@ class WebGISRuntime:
                     "request_id": generated["request_id"],
                     "ai_generated": True,
                     "aigc_watermark": True,
-                    "prompt_optimizer": params["prompt_optimizer"],
+                    "prompt_optimizer": False,
                     "teaching_review": "required",
-                    "saved_to_library": "assistant_preview" not in params,
+                    "geography_brief": brief,
+                    "geography_review": review,
+                    "sha256": hashlib.sha256(raw_bytes).hexdigest(),
+                    "saved_to_library": not preview_only,
                     **params.get("assistant_preview", {}),
                 },
             )
             artifact_registered = True
-            if "assistant_preview" not in params:
+            if review_stopped is not None:
+                raise review_stopped
+            if not preview_only:
                 self.store.add_recent_action(project_id, "AI生成图片", artifact.title, status="success")
-            self.store.update_job_stage(job.job_id, "artifacts", "success", "图片已生成，可预览并选择保存。" if "assistant_preview" in params else "图片已保存到项目图片库。")
+            self.store.update_job_stage(job.job_id, "artifacts", "success", "图片已生成，但地理核查未通过或未完成。" if review["status"] != "pass" else "图片已生成，可预览并选择保存。" if preview_only else "图片已保存到项目图片库。")
             self.store.set_job_status(
                 job.job_id,
                 "completed",
-                result={"status": "success", "artifact": artifact.to_dict()},
+                result={"status": "success" if review["status"] == "pass" else "partial", "artifact": artifact.to_dict()},
             )
-            return {"status": "success", "job_id": job.job_id, "artifact": artifact.to_dict()}
+            return {"status": "success" if review["status"] == "pass" else "partial", "job_id": job.job_id, "artifact": artifact.to_dict()}
         except Exception as exc:
             if output_path is not None and not artifact_registered and output_path.exists():
                 try:
@@ -2671,11 +2695,17 @@ class WebGISRuntime:
                 title=str(params.get("title") or ""),
                 model=str(params.get("model") or ""),
                 aspect_ratio=str(params.get("aspect_ratio") or "16:9"),
-                prompt_optimizer=bool(params.get("prompt_optimizer", True)),
+                prompt_optimizer=False,
+                reference_image_id=str((map_context.get("image_attachment") or {}).get("artifact_id") or ""),
             )
             artifact = generated["artifact"]
+            review = artifact["metadata"]["geography_review"]
+            message = ("图片已生成，自动检查未发现明显地理错误，使用前仍需教师审阅。可选择保存或仅留在会话中。" if review["status"] == "pass" else "图片已生成，但地理检查未通过或未完成，暂不允许保存到素材库。")
+            if artifact["metadata"]["geography_brief"].get("generation_method") == "reference_redraw":
+                message = "这是根据读图结果重新绘制的示意图，不是原图局部修改。" + message
             return {
-                "assistant_message": "图片已生成。你可以保存到素材库，也可以仅留在本次会话中。" if artifact["artifact_type"] == "assistant_image_preview" else "图片已生成并保存到项目图片库。",
+                "assistant_message": message,
+                "outcome": "completed" if review["status"] == "pass" else "partial",
                 "generated_artifact": artifact,
                 "artifacts": [],
             }

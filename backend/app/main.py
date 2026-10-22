@@ -1658,6 +1658,9 @@ def image_generation_capabilities(request: Request) -> Dict[str, Any]:
         "configured": runtime.config.image_generation_enabled(),
         "provider": "minimax",
         "default_model": runtime.config.minimax_image_model,
+        "image_editing": False,
+        "reference_redraw": True,
+        "geography_review": "preflight_and_visual_check",
         "models": sorted(ALLOWED_IMAGE_MODELS),
         "aspect_ratios": {model: sorted(ALLOWED_ASPECT_RATIOS - ({"21:9"} if model == "image-01-live" else set())) for model in sorted(ALLOWED_IMAGE_MODELS)},
         "max_prompt_characters": 1500,
@@ -1789,6 +1792,8 @@ def save_assistant_image(artifact_id: str, request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/assistant/conversations/{conversation_id}")

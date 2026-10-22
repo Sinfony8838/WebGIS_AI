@@ -107,6 +107,9 @@ class ImageGenerationRuntimeTest(unittest.TestCase):
         config.assistant_v2_enabled = True
         config.ensure_dirs()
         runtime = WebGISRuntime(config=config, store=RuntimeStore(config.state_file))
+        self.addCleanup(patch.stopall)
+        patch("backend.app.services.geography_image_policy.GeographyImagePolicy.prepare", return_value={"prompt":"水循环概念示意图", "checks":["径流向下"], "generation_method":"text_to_image"}).start()
+        patch("backend.app.services.geography_image_policy.GeographyImagePolicy.review", return_value={"status":"pass", "summary":"fixture visual review"}).start()
         project_id = runtime.create_project()["project_id"]
         return runtime, project_id
 

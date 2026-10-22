@@ -43,7 +43,7 @@ class AssistantProfilesTests(unittest.TestCase):
         runtime,store,pid=self.setup()
         parent=store.create_job(project_id=pid,job_type="assistant",title="preview",request={"actor_user_id":"alice","conversation_id":"conversation"})
         runtime.image_generation_service.generate=lambda *args,**kwargs:{"raw_bytes":TRANSPARENT_PNG,"mime_type":"image/png","suffix":".png","model":"image-01","aspect_ratio":"16:9","request_id":"fixture"}
-        with interaction_scope(InteractionRun(parent.job_id,mode="chat")):
+        with interaction_scope(InteractionRun(parent.job_id,mode="chat")), patch("backend.app.services.geography_image_policy.GeographyImagePolicy.prepare",return_value={"prompt":"地形示意图","checks":["坡向"],"generation_method":"text_to_image"}), patch("backend.app.services.geography_image_policy.GeographyImagePolicy.review",return_value={"status":"pass"}):
             artifact=runtime.generate_image_asset(pid,"地形示意图")["artifact"]
         aid=artifact["artifact_id"]
         self.assertEqual(artifact["artifact_type"],"assistant_image_preview")

@@ -2,7 +2,8 @@
 from __future__ import annotations
 import re
 import time
-from .interaction_run import current_run, complete
+from .geography_image_policy import GeographyImagePolicy, EDIT_UNSUPPORTED, image_edit_request, is_redraw
+from .interaction_run import current_run, complete, RunStopped
 from .agent_harness import AgentRun, HarnessPolicy
 from .classroom_binding import assistant_actor_scope, require_context_lesson, require_project_lesson, require_confirmation_lessons
 
@@ -21,9 +22,21 @@ class ChatAssistant:
         outcome = "completed"
         citations = []
         lesson_request = bool(re.search(r"(?:创建|生成|发布|制作|编写|设计).*(?:教案|教学设计)|教案.*(?:发布|保存|创建)", message))
-        image_request = bool(re.search(r"(?:生成|画|绘制|制作|创作).*(?:图片|图像|插画|海报|示意图|绘画)", message))
+        image_request = bool(re.search(r"(?:生成|画|绘制|制作|创作).*(?:图片|图像|插画|海报|示意图|绘画|地图|分级图|剖面图|等值线图)", message))
         map_request = bool(re.search(r"(?:切换|隐藏|缩放|放大|缩小|操作|测距|叠加).*(?:图层|地图|地球|曲线|视图)|(?:打开|结束|开始)课堂", message))
-        if re.fullmatch(r"(?:请问)?(?:你是谁|你叫什么|介绍一下你自己)[？?。]*", message.strip()):
+        attachment = map_context.get("image_attachment") or {}
+        edit_request = image_edit_request(message, bool(attachment))
+        if (edit_request or (image_request and attachment)) and not is_redraw(message):
+            answer, executed, outcome = EDIT_UNSUPPORTED, [], "partial"
+            if attachment.get("artifact_id"):
+                try:
+                    observed = GeographyImagePolicy(self.runtime).inspect_for_edit(project.project_id, attachment["artifact_id"], message)
+                    answer = "读图结果：" + observed + "\n\n" + EDIT_UNSUPPORTED
+                except RunStopped:
+                    raise
+                except Exception:
+                    answer = "本次原图识别未完成。" + EDIT_UNSUPPORTED
+        elif re.fullmatch(r"(?:请问)?(?:你是谁|你叫什么|介绍一下你自己)[？?。]*", message.strip()):
             answer, executed = "我是 GeoBot。Chat 可以回答知识问题、理解图片和生成图片；项目操作请使用 Operate，教案设计有独立入口。", []
         elif image_request and not map_request:
             actions = [{"tool_name": "generate_image", "tool_params": {"prompt": message}}]
@@ -40,10 +53,12 @@ class ChatAssistant:
                         plan={"assistant_message": "准备生成图片供会话预览，生成后可自行选择是否保存到素材库。", "planner": "chat_image"}, actions=actions,
                         assessment=assessment, route={"intent": "teaching_action"}, prompt_parts={"context_fingerprint": run.run_id},
                         context=context, run_context=run, job_id=job_id, stage_callback=stage_callback)
-                control.emit("tool_running", "正在生成图片", tool="generate_image")
+                control.emit("tool_running", "正在核对地理要求", tool="generate_image")
                 executed = engine.tool_executor.execute(project.project_id, "webgis", actions, map_context,
                     assistant_mode="teaching_action", run_context=run, allow_image_generation=actor_role == "admin")
             answer = "\n".join(str(item["result"].get("assistant_message") or "") for item in executed)
+            if any(item["result"].get("outcome") == "partial" for item in executed):
+                outcome = "partial"
         elif lesson_request:
             answer, executed = "教案的创建与发布请使用主界面顶部独立的“教案设计”入口。Chat 和 Operate 都不会代替该模块创建或发布教案。", []
         elif re.search(r"今天|实时|最新|截至今日", message) and re.search(r"人口|统计", message) and re.search(r"给出|是多少|多少|精确|查询|最新", message):
