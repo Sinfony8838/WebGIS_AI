@@ -135,3 +135,37 @@ it("keeps a job pending on service errors rather than treating an outage as disa
   await vi.advanceTimersByTimeAsync(6000);
   expect(onJob).toHaveBeenCalledWith(expect.objectContaining({ status: "completed" }));
 });
+
+
+it("discovers a pending UI action before its expiry when SSE stays silent", async () => {
+  const source = new Source();
+  const action = {action_id:"a", project_id:"project-1", session_id:"", status:"pending", type:"switch_view", mode:"globe", expires_at:Date.now()/1000+8};
+  const fetchJob = vi.fn().mockResolvedValueOnce(job("running")).mockResolvedValueOnce(job("running",{ui_actions:[action]})).mockResolvedValueOnce(job("completed"));
+  const onJob = vi.fn();
+  subscribeJob("job-1", {createSource:()=>source, fetchJob, onJob, onRecovering:vi.fn(), reconcileImmediately:true, reconcileIntervalMs:1000});
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(onJob).toHaveBeenLastCalledWith(expect.objectContaining({ui_actions:[action]}));
+  expect(Date.now()/1000).toBeLessThan(action.expires_at);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(source.close).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(15000);
+  expect(fetchJob).toHaveBeenCalledTimes(3);
+});
+
+it("retains version fencing and prevents overlapping GETs at the fast interval", async () => {
+  const source = new Source();
+  let resolve!: (value:JobRecord)=>void;
+  const fetchJob = vi.fn(()=>new Promise<JobRecord>(done=>{resolve=done;}));
+  const onJob=vi.fn();
+  const handle=subscribeJob("job-1",{createSource:()=>source,fetchJob,onJob,onRecovering:vi.fn(),reconcileImmediately:true,reconcileIntervalMs:1000});
+  await vi.advanceTimersByTimeAsync(4000);
+  expect(fetchJob).toHaveBeenCalledOnce();
+  source.emit("job",job("running",{title:"new action"}));
+  resolve(job("queued",{title:"old state"}));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(onJob).toHaveBeenCalledOnce();
+  expect(onJob).toHaveBeenLastCalledWith(expect.objectContaining({title:"new action"}));
+  handle.close();
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(fetchJob).toHaveBeenCalledOnce();
+});
