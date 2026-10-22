@@ -462,7 +462,7 @@ export type AssistantTab = "teaching" | "interaction";
  */
 export type AssistantUiAction =
   | { type: "open_material"; title?: string; materials?: TeachingMaterial[] }
-  | { type: "switch_view"; mode: "plane" | "globe" }
+  | { type: "switch_view"; mode: "plane" | "globe"; view?: "overview" | "default" | "preserve" }
   | { type: "open_panel"; panel: "layers" | "database" | "workflow"; open?: boolean }
   | { type: "sync_project"; project_updated_at?: string }
   | { type: "create_measurement"; record: MeasurementRecord }

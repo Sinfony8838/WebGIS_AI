@@ -184,7 +184,7 @@ class InteractionToolsTest(unittest.TestCase):
             {"tool_name": "switch_view_mode", "tool_params": {"mode": "globe"}},
             {},
         )
-        self.assertEqual(result["ui_actions"], [{"type": "switch_view", "mode": "globe"}])
+        self.assertEqual(result["ui_actions"], [{"type": "switch_view", "mode": "globe", "view": "overview"}])
 
     def test_open_panel_emits_ui_action(self) -> None:
         runtime, _store, project_id = self.build_runtime()
@@ -320,7 +320,7 @@ class InteractionToolsTest(unittest.TestCase):
         self.assertEqual(fake.calls, 0)
         executed = result["actions_executed"]
         self.assertEqual(executed[0]["action"]["tool_name"], "switch_view_mode")
-        self.assertEqual(executed[0]["result"]["ui_actions"], [{"type": "switch_view", "mode": "globe"}])
+        self.assertEqual(executed[0]["result"]["ui_actions"], [{"type": "switch_view", "mode": "globe", "view": "overview"}])
 
     def test_interaction_e2e_llm_fallback_when_rules_miss(self) -> None:
         runtime, _store, project_id = self.build_runtime()

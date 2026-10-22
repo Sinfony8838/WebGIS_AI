@@ -32,7 +32,7 @@ ASSISTANT_TOOL_SCHEMA = [
     {"name": "generate_image", "description": "使用 MiniMax 生成一张 AI 教学素材并保存到项目图片库。该操作会消耗 API 余额；管理员直接执行，其他账号需确认，权限由服务端判断。文字和地理机制需教师核对。", "parameters": {"prompt": "string", "model": "string?", "aspect_ratio": "string?"}, "modes": ["teaching", "interaction"]},
     {"name": "record_observation", "description": "记录课堂学情观察到正在进行的班课（verdict 取值 correct/partial/misconception），供课后报告统计。仅在进行中的班课可用。", "parameters": {"verdict": "string", "tag": "string?", "note": "string?", "question_id": "string?"}, "modes": ["teaching"]},
     {"name": "launch_question", "description": "在教师课堂工作台呈现一道口头提问并记录为课堂证据（question_id 指教案题目，或用 text/options 现场出题）。不进入投屏。仅在进行中的班课可用。", "parameters": {"question_id": "string?", "text": "string?", "options": "string[]?", "answer_index": "number?"}, "modes": ["teaching"]},
-    {"name": "switch_view_mode", "description": "在二维平面地图与三维地球之间切换投影模式。", "parameters": {"mode": "plane|globe"}, "modes": ["interaction"]},
+    {"name": "switch_view_mode", "description": "在二维平面地图与三维地球之间切换投影模式。", "parameters": {"mode": "plane|globe", "view": "overview|default|preserve (globe only; default overview)"}, "modes": ["interaction"]},
     {"name": "open_panel", "description": "打开或关闭界面面板。panel 取值：layers（图层管理器）、database（数据库/资源/图片库）、workflow（分析工作流坞）。", "parameters": {"panel": "layers|database|workflow", "open": "boolean?"}, "modes": ["interaction"]},
     {"name": "focus_layer", "description": "定位并缩放到指定图层范围（layer_id 精确或 layer_name 模糊匹配）。", "parameters": {"layer_id": "string?", "layer_name": "string?"}, "modes": ["interaction"]},
     {"name": "set_layer_opacity", "description": "调整图层不透明度（0 全透明 - 1 不透明），适合“调到半透明”这类口语指令。", "parameters": {"layer_id": "string?", "layer_name": "string?", "opacity": "number"}, "modes": ["interaction"]},
@@ -208,7 +208,7 @@ ASSISTANT_TOOL_INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
 }
 
 ASSISTANT_TOOL_INPUT_SCHEMAS.update({
-    "switch_view_mode": {"type": "object", "properties": {"mode": {"type": "string", "enum": ["plane", "globe"]}}, "required": ["mode"], "additionalProperties": False},
+    "switch_view_mode": {"type": "object", "properties": {"mode": {"type": "string", "enum": ["plane", "globe"]}, "view": {"type": "string", "enum": ["overview", "default", "preserve"]}}, "required": ["mode"], "additionalProperties": False},
     "open_panel": {"type": "object", "properties": {"panel": {"type": "string", "enum": ["layers", "database", "workflow"]}, "open": {"type": "boolean"}}, "required": ["panel"], "additionalProperties": False},
     "focus_layer": {"type": "object", "properties": {"layer_id": {"type": "string"}, "layer_name": {"type": "string"}}, "additionalProperties": False},
     "set_layer_opacity": {"type": "object", "properties": {"layer_id": {"type": "string"}, "layer_name": {"type": "string"}, "opacity": {"type": "number", "minimum": 0, "maximum": 1}}, "required": ["opacity"], "additionalProperties": False},
@@ -697,6 +697,13 @@ class AssistantService:
         normalized = self._normalize_voice_text(message)
         lowered = normalized.lower()
 
+        # A complaint describes observed state, not authorization to switch it.
+        view_feedback = re.search(r"还是|仍然|仍是|没切换|没有切换|未切换|看起来|为什么|怎么|不对|没变化|没有变化|不生效", normalized)
+        mentions_view = any(word in lowered for word in INTERACTION_GLOBE_KEYWORDS + INTERACTION_PLANE_KEYWORDS)
+        explicit_clause = any(self._view_command(part.strip()) for part in re.split(r"[，,；;。！？!?\n]+", message))
+        if view_feedback and mentions_view and not explicit_clause:
+            return self._clarification("收到，你是在反馈视图未达到预期；本次保持当前视图，不执行切换。若要看到完整地球，可说“显示地球全景”；若要恢复初始相机，可说“恢复三维地球原始视图”。")
+
         # A keyword match cannot resolve negation, conditions or multiple
         # instructions. Let the existing planner see the complete request.
         complex_request = bool(re.search(r"然后|接着|同时|并且|并|再|如果|假如|要是|否则|而是|只|(?:和|及|、).*(?:底图|图层|地图|面板)", normalized))
@@ -753,19 +760,12 @@ class AssistantService:
                 "actions": [{"tool_name": "start_class_session", "tool_params": {}}],
             }
 
-        # --- 2D/3D 投影切换 ---
-        wants_globe = any(keyword in lowered for keyword in INTERACTION_GLOBE_KEYWORDS)
-        wants_plane = any(keyword in lowered for keyword in INTERACTION_PLANE_KEYWORDS)
-        if wants_globe and not wants_plane:
-            return {
-                "assistant_message": "好的，切换到三维地球。",
-                "actions": [{"tool_name": "switch_view_mode", "tool_params": {"mode": "globe"}}],
-            }
-        if wants_plane and not wants_globe:
-            return {
-                "assistant_message": "好的，切换到二维平面地图。",
-                "actions": [{"tool_name": "switch_view_mode", "tool_params": {"mode": "plane"}}],
-            }
+        # Exact whole-utterance recognition preserves constraints and feedback.
+        view_action = self._view_command(normalized)
+        if view_action:
+            return {"assistant_message": "正在切换视图。", "actions": [view_action]}
+        if mentions_view:
+            return {"assistant_message": "需要理解完整的视图要求，暂未执行操作。", "actions": []}
 
         # --- 面板开关 ---
         has_open_verb = any(keyword in normalized for keyword in INTERACTION_PANEL_OPEN_KEYWORDS)
@@ -997,17 +997,38 @@ class AssistantService:
             "actions": actions,
         }
 
+    @staticmethod
+    def _view_command(message: str) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"[\s。！!]+$", "", message.strip().lower())
+        match = re.fullmatch(
+            r"(?:请|帮我|麻烦)?(?:(?:保持|保留)当前位置(?:和缩放)?(?:，|,)?(?:再)?)?"
+            r"(?:把地图)?(?:(?:切换|切回|切|转|回|进入|打开|显示|恢复|重置)(?:到|成|为)?)?"
+            r"(三维(?:地球|地图|球)?|3d(?:地球|地图)?|立体地球|地球模式|卫星球|地球全景|二维(?:平面(?:地图)?|地图)?|2d(?:地图)?|平面(?:地图|模式)?)"
+            r"(原始视图|初始视图|默认视图|全景)?"
+            r"(?:(?:，|,)?(?:并)?(?:保持|保留)当前位置(?:和缩放)?)?", text)
+        if not match:
+            return None
+        mode = "plane" if match[1].startswith(("二维", "2d", "平面")) else "globe"
+        params: Dict[str, Any] = {"mode": mode}
+        if mode == "globe":
+            # Retain the legacy parameter shape for the default overview.
+            if match[2] in {"原始视图", "初始视图", "默认视图"} or re.search(r"恢复|重置", text):
+                params["view"] = "default"
+            elif re.search(r"保持|保留", text):
+                params["view"] = "preserve"
+        elif match[2]:
+            return None
+        return {"tool_name": "switch_view_mode", "tool_params": params}
+
     def _resolve_interaction_clause(self, clause: str, project: ProjectRecord) -> Optional[Tuple[Dict[str, Any], str]]:
         """解析单个操控子句为 (action, narrative)；无法确定时返回 None。"""
         if re.search(r"不要|别|不用|无需|设计|制作|构建|出题|探究|做成|编写|创作|另做", clause):
             return None
-        # 1) 2D/3D 投影
-        wants_globe = any(keyword in clause for keyword in INTERACTION_GLOBE_KEYWORDS)
-        wants_plane = any(keyword in clause for keyword in INTERACTION_PLANE_KEYWORDS)
-        if wants_globe and not wants_plane:
-            return {"tool_name": "switch_view_mode", "tool_params": {"mode": "globe"}}, "切换到三维地球"
-        if wants_plane and not wants_globe:
-            return {"tool_name": "switch_view_mode", "tool_params": {"mode": "plane"}}, "切换到二维平面地图"
+        view_action = self._view_command(clause)
+        if view_action:
+            return view_action, "切换视图"
+        if any(word in clause for word in INTERACTION_GLOBE_KEYWORDS + INTERACTION_PLANE_KEYWORDS):
+            return None
         # 2) 底图
         basemap_id = self._extract_basemap_id(clause)
         if basemap_id:

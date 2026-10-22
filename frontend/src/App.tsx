@@ -1,3 +1,4 @@
+import { applyGlobeView, globeViewTarget, type GlobeViewPreset } from "./lib/globeViewCommand";
 import { fetchConversation } from "./api";
 import { applyMeasurement } from "./lib/measurementCommands";
 import { ProfileComparison } from "./components/ProfileComparison";
@@ -533,7 +534,7 @@ export default function App({
   const [overlayCaptured, setOverlayCaptured] = useState("");
   const [overlayPulse, setOverlayPulse] = useState(0);
   const transitionToPlaneRef = useRef<((opts: { lon: number; lat: number; zoom?: number; reason: "manual" | "altitude" | "dblclick" }) => void) | null>(null);
-  const transitionToGlobeRef = useRef<((opts: { lon?: number; lat?: number; zoom?: number; reason: "manual" | "zoom" }) => void) | null>(null);
+  const transitionToGlobeRef = useRef<((opts: { lon?: number; lat?: number; zoom?: number; view?: GlobeViewPreset; reason: "manual" | "zoom" }) => void) | null>(null);
   const [assistantDrafts, setAssistantDrafts] = useState<Record<AssistantTab, string>>({teaching:"",interaction:""});
   const assistantInput = assistantDrafts[assistantTab];
   const setAssistantInput = useCallback((value: string | ((old: string) => string)) => {
@@ -1601,7 +1602,7 @@ export default function App({
             const center = project?.view?.center || [104, 35];
             transitionToPlaneRef.current?.({ lon: Number(center[0]), lat: Number(center[1]), reason: "manual" });
           } else {
-            transitionToGlobeRef.current?.({ reason: "manual" });
+            transitionToGlobeRef.current?.({ reason: "manual", view: action.view });
           }
           continue;
         }
@@ -1660,6 +1661,27 @@ export default function App({
               acknowledge: acknowledgeUiAction,
               apply: async (action) => {
                 if (submittedSessionId !== (teachingContextRef.current?.session_id || "")) throw new Error("课堂已变化，未应用旧动作");
+                if (action.type === "switch_view" && action.mode === "globe") {
+                  const view = mapRef.current?.getView();
+                  const center = view?.getCenter();
+                  const camera = observedUiStateRef.current.viewMode === "globe" ? globeRef.current?.getCameraState() : null;
+                  const [lon, lat] = camera ? [camera.lon, camera.lat] : center ? toLonLat(center) : [104, 35];
+                  const target = globeViewTarget(action.view ?? "overview", lon, lat,
+                    camera ? altitudeToZoom(camera.altitudeMeters) : view?.getZoom());
+                  lessonGlobePinnedRef.current = false;
+                  lessonGlobeRestoreRef.current = null;
+                  setViewMode("globe");
+                  await applyGlobeView({
+                    target,
+                    read: () => globeRef.current?.getRenderEvidence() ?? null,
+                    fly: () => globeRef.current?.flyTo(target.lon, target.lat, target.altitudeMeters, 1, target.pitchDeg),
+                    cancel: () => globeRef.current?.cancelFlight(),
+                    isCurrent: () => scopeEpoch === jobScopeEpochRef.current && !cancelledUiJobsRef.current.has(payload.job_id)
+                      && submittedSessionId === (teachingContextRef.current?.session_id || "")
+                  });
+                  if (observedUiStateRef.current.viewMode !== "globe") throw new Error("三维视图已被关闭，未确认成功");
+                  return;
+                }
                 if (action.type === "sync_project") {
                   await refreshProjectState(projectId);
                 } else {
@@ -2781,8 +2803,8 @@ export default function App({
   );
 
   const transitionToGlobe = useCallback(
-    (opts: { lon?: number; lat?: number; zoom?: number; reason: "manual" | "zoom" }) => {
-      if (viewMode === "globe") {
+    (opts: { lon?: number; lat?: number; zoom?: number; view?: GlobeViewPreset; reason: "manual" | "zoom" }) => {
+      if (viewMode === "globe" && opts.reason === "zoom") {
         return;
       }
       const map = mapRef.current;
@@ -2800,10 +2822,10 @@ export default function App({
       if (z === undefined && map) {
         z = map.getView().getZoom() ?? 4;
       }
-      const altitude = zoomToAltitude(typeof z === "number" ? z : 3);
+      const target = globeViewTarget(opts.view ?? (opts.reason === "manual" ? "overview" : "preserve"), lon, lat, z);
       setViewMode("globe");
       window.setTimeout(() => {
-        globeRef.current?.flyTo(lon ?? 104, lat ?? 35, Math.max(altitude, 1_000_000), 1.0);
+        globeRef.current?.flyTo(target.lon, target.lat, target.altitudeMeters, 1.0, target.pitchDeg);
       }, 30);
       if (opts.reason !== "manual") {
         pushToast("info", "已切换到 3D 数字地球", "拖拽旋转，滚轮缩放或双击地球进入 2D。");

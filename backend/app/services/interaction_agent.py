@@ -122,6 +122,12 @@ def run_goal(engine: Any, *, project: Any, conversation: Any, message: str,
                                 result["status"] = "unconfirmed"
                                 result["assistant_message"] = "操作已下发，界面尚未确认生效。"
                         success = result.get("status", "success") == "success" and not result.get("error")
+                        if tool == "switch_view_mode":
+                            # Only the UI can attest a client camera change; do not
+                            # feed speculative success back into future context.
+                            engine.store.add_recent_action(project.project_id, "切换视图模式",
+                                str(result.get("assistant_message") or "界面状态未确认"),
+                                status="success" if success and result.get("ui_observations") else "unconfirmed")
                         current_project = engine.store.get_project(project.project_id) or project
                         binding = {layer.layer_id: layer.data_rev for layer in current_project.layers}
                         observation = {"observation_id": "obs_" + uuid4().hex, "status": "success" if success else result.get("status", "error"),
