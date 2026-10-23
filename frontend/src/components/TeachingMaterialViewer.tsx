@@ -13,7 +13,32 @@ function materialUrl(url: string): string {
   if (!url) {
     return "";
   }
-  return url.startsWith("/files/") ? `${getApiBase()}${url}` : url;
+  return isFilePath(url) ? `${getApiBase().replace(/\/$/, "")}${url}` : url;
+}
+
+function isFilePath(path: string): boolean {
+  return path.startsWith("/files/") || path.startsWith("/workflow-files/");
+}
+
+function isLocalHtml(url: string): boolean {
+  try {
+    const api = new URL(getApiBase(), window.location.href);
+    const parsed = new URL(url, window.location.href);
+    const apiPath = api.pathname.replace(/\/$/, "");
+    return parsed.origin === api.origin && parsed.pathname.startsWith(`${apiPath}/`)
+      && isFilePath(parsed.pathname.slice(apiPath.length))
+      && /\.html?$/i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isHtmlUrl(url: string): boolean {
+  try {
+    return /\.html?$/i.test(new URL(url, window.location.href).pathname);
+  } catch {
+    return false;
+  }
 }
 
 function bilibiliPlayerUrl(url: string): string {
@@ -26,6 +51,12 @@ function bilibiliPlayerUrl(url: string): string {
 
 function renderMaterial(material: TeachingMaterial) {
   const url = materialUrl(material.url);
+  if (isLocalHtml(url)) {
+    return <iframe src={url} title={material.title} sandbox="allow-scripts" />;
+  }
+  if (isHtmlUrl(url)) {
+    return <a href={url} target="_blank" rel="noreferrer">打开资料</a>;
+  }
   if (material.type === "image" || material.type === "animation") {
     return <img src={url} alt={material.title} />;
   }

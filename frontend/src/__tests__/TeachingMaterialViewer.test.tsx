@@ -1,13 +1,66 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { TeachingMaterialViewer } from "../components/TeachingMaterialViewer";
+import { getApiBase } from "../api";
+import type { TeachingMaterial } from "../types";
+
+vi.mock("../api", () => ({ getApiBase: vi.fn(() => "http://127.0.0.1:18999") }));
+
+function material(url: string, type: TeachingMaterial["type"] = "animation"): TeachingMaterial {
+  return {
+    id: "fixture", title: "教学素材", type, source: "teacher_upload", url,
+    thumbnail_url: "", description: "", region_binding: {}, sort_order: 1, created_at: "",
+  };
+}
 
 describe("TeachingMaterialViewer", () => {
   const originals = ["showModal", "close"].map(key => [key, Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, key)] as const);
   beforeEach(() => {
+    vi.mocked(getApiBase).mockReturnValue("http://127.0.0.1:18999");
     // jsdom has no top layer; browser acceptance checks stacking and focus.
     Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: vi.fn(function (this: HTMLDialogElement) { this.setAttribute("open", ""); }) });
     Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: vi.fn(function (this: HTMLDialogElement) { this.removeAttribute("open"); }) });
+  });
+
+  it.each([
+    "/files/uploads/interactive.html",
+    "/workflow-files/workflow_fixture/interactive.HTM?version=1#activity",
+    "http://127.0.0.1:18999/files/uploads/interactive.html",
+  ])("previews local HTML with scripts but without app-origin access: %s", (url) => {
+    render(<TeachingMaterialViewer open title="资料" onClose={() => undefined} materials={[material(url)]} />);
+    const frame = screen.getByTitle("教学素材");
+    expect(frame.tagName).toBe("IFRAME");
+    expect(frame).toHaveAttribute("sandbox", "allow-scripts");
+    expect(frame).toHaveAttribute("src", url.startsWith("/") ? `http://127.0.0.1:18999${url}` : url);
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  });
+
+  it.each(["/", "/api", "http://127.0.0.1:18999/api/"])("supports API base %s for file previews", (base) => {
+    vi.mocked(getApiBase).mockReturnValue(base);
+    render(<TeachingMaterialViewer open title="资料" onClose={() => undefined}
+      materials={[material("/files/uploads/interactive.html", "document")]} />);
+    expect(screen.getByTitle("教学素材")).toHaveAttribute("sandbox", "allow-scripts");
+  });
+
+  it.each([
+    ["/files/uploads/animation.gif", "animation"],
+    ["/files/uploads/map.svg", "image"],
+  ] as const)("keeps %s as an image", (url, type) => {
+    render(<TeachingMaterialViewer open title="资料" onClose={() => undefined} materials={[material(url, type)]} />);
+    expect(screen.getByRole("img", { name: "教学素材" })).toHaveAttribute("src", `http://127.0.0.1:18999${url}`);
+    expect(screen.queryByTitle("教学素材")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    "https://example.com/files/uploads/interactive.html",
+    "//example.com/workflow-files/workflow_fixture/interactive.html",
+    "http://127.0.0.1:18999/other/interactive.html",
+    "/files/../../other/interactive.html",
+  ])("opens HTML outside authorized file routes as a link: %s", (url) => {
+    render(<TeachingMaterialViewer open title="资料" onClose={() => undefined} materials={[material(url)]} />);
+    expect(screen.getByRole("link", { name: "打开资料" })).toHaveAttribute("target", "_blank");
+    expect(screen.queryByTitle("教学素材")).not.toBeInTheDocument();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
   afterEach(() => {
     cleanup();

@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from .config import AppConfig
+from .active_content import apply_file_policy
 from .logging_filters import install_request_log_filters
 from .private_file_cache import PrivateFileCacheMiddleware
 from .runtime import WebGISRuntime
@@ -1216,7 +1217,7 @@ def get_public_file(file_path: str, request: Request) -> FileResponse:
         )
         if not shared_public and not project_owned and not explicitly_owned:
             raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(resolved)
+    return apply_file_policy(FileResponse(resolved), resolved)
 
 
 @app.get("/teaching-maps")
@@ -3421,7 +3422,7 @@ def serve_workflow_file(workflow_id: str, relative_path: str, request: Request):
         media_type = "image/png"
     elif suffix == ".md":
         media_type = "text/markdown; charset=utf-8"
-    return FileResponse(path, media_type=media_type)
+    return apply_file_policy(FileResponse(path, media_type=media_type), path)
 
 
 # ---------------------------------------------------------------------------

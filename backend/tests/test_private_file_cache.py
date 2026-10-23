@@ -44,9 +44,21 @@ class PrivateFileCacheTest(unittest.IsolatedAsyncioTestCase):
         messages = await self.response("/files", 307)
         self.assertIn("no-store", Headers(raw=messages[0]["headers"])["cache-control"])
 
+    async def test_workflow_files_success_denial_and_partial_responses_are_private(self):
+        for path in ("/workflow-files", "/workflow-files/workflow_fixture/map.svg"):
+            for status in (200, 206, 304, 401, 403, 404):
+                with self.subTest(path=path, status=status):
+                    messages = await self.response(path, status)
+                    headers = Headers(raw=messages[0]["headers"])
+                    self.assertEqual(headers["cache-control"], "private, no-store, max-age=0")
+                    self.assertEqual(headers["cloudflare-cdn-cache-control"], "no-store")
+                    self.assertEqual(headers["content-range"], "bytes 0-3/10")
+                    self.assertIn("Cookie", headers["vary"])
+
     async def test_other_routes_and_non_http_scopes_keep_their_cache_policy(self):
         for path, scope_type in (("/assets/index.js", "http"), ("/tiles/weather/x.png", "http"),
-                                 ("/files-extra/map.png", "http"), ("/files/x", "websocket")):
+                                 ("/files-extra/map.png", "http"), ("/workflow-files-extra/map.png", "http"),
+                                 ("/files/x", "websocket"), ("/workflow-files/x/map.svg", "websocket")):
             with self.subTest(path=path, scope_type=scope_type):
                 messages = await self.response(path, scope_type=scope_type)
                 headers = Headers(raw=messages[0]["headers"])
