@@ -7,11 +7,13 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ..config import AppConfig, WEATHER_BASEMAP_ID
 from ..models import ProjectRecord
+from .layer_commands import plan_layer_command
 from .workflow_templates import INTERACTION_ALLOWED_TEMPLATES, detect_template, list_templates
 
 
 ASSISTANT_TOOL_SCHEMA = [
     {"name": "set_view", "description": "调整课堂地图视角。", "parameters": {"center": "number[2]", "zoom": "number", "extent": "number[4]?"}, "modes": ["teaching", "tool", "interaction"]},
+    {"name": "delete_layers", "description": "删除当前项目中的指定图层；必须提供真实 layer_ids，先展示冻结清单并由用户确认。删除可见图层时只选择 visible=true 的条目。保留数据库源数据、素材与底图。", "parameters": {"layer_ids": "string[]"}, "modes": ["tool", "interaction"]},
     {"name": "toggle_layer", "description": "显示或隐藏指定图层。", "parameters": {"layer_id": "string", "visible": "boolean"}, "modes": ["teaching", "tool", "interaction"]},
     {"name": "reorder_layer", "description": "调整图层前后顺序。", "parameters": {"layer_id": "string", "z_index": "number"}, "modes": ["teaching", "tool", "interaction"]},
     {"name": "style_layer", "description": "修改图层颜色、透明度、标注等样式。", "parameters": {"layer_id": "string", "style": "object"}, "modes": ["teaching", "tool", "interaction"]},
@@ -62,6 +64,7 @@ ASSISTANT_TOOL_INPUT_SCHEMAS: Dict[str, Dict[str, Any]] = {
         "minProperties": 1,
         "additionalProperties": False,
     },
+    "delete_layers": {"type": "object", "properties": {"layer_ids": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "maxItems": 1000, "uniqueItems": True}, "layer_versions": {"type": "object"}}, "required": ["layer_ids"], "additionalProperties": False},
     "toggle_layer": {
         "type": "object",
         "properties": {"layer_id": {"type": "string", "minLength": 1}, "visible": {"type": "boolean"}},
@@ -724,7 +727,7 @@ class AssistantService:
             clauses = re.split(r"[，,；;。]|然后|接着|同时|并且|而是|只|再", message)
             has_positive_action = any(
                 not re.search(negation, clause)
-                and re.search(r"打开|关闭|切换|显示|隐藏|开始|结束|进入|调到|调成|设置|定位|转到|设计|制作|生成|构建|另做|出题|探究", clause)
+                and re.search(r"删除|删掉|移除|清空|置顶|改成|打开|关闭|切换|显示|隐藏|开始|结束|进入|调到|调成|设置|定位|转到|设计|制作|生成|构建|另做|出题|探究", clause)
                 for clause in clauses
             )
             if not has_positive_action:
@@ -767,6 +770,10 @@ class AssistantService:
         if mentions_view:
             return {"assistant_message": "需要理解完整的视图要求，暂未执行操作。", "actions": []}
 
+        layer_plan = plan_layer_command(normalized, project, self._extract_requested_color, self._parse_opacity_phrase)
+        if layer_plan is not None:
+            return layer_plan
+
         # --- 面板开关 ---
         has_open_verb = any(keyword in normalized for keyword in INTERACTION_PANEL_OPEN_KEYWORDS)
         has_close_verb = any(keyword in normalized for keyword in INTERACTION_PANEL_CLOSE_KEYWORDS)
@@ -785,109 +792,6 @@ class AssistantService:
             # 明确说了“面板”但没说哪个：给一次具体的澄清，而不是笼统的没听懂。
             if "面板" in normalized:
                 return self._clarification("请问要打开或关闭哪个面板？可以说“图层”“数据库”或“工作流”。")
-
-        # --- 图层透明度 ---
-        if any(keyword in normalized for keyword in INTERACTION_OPACITY_KEYWORDS):
-            opacity = self._parse_opacity_phrase(normalized)
-            if opacity is None:
-                # 有调整语义但没给数值：问一次具体数值，不猜、不装作已执行。
-                if re.search(r"调|设置|设为|改成|变成|变为", normalized):
-                    return self._clarification("请问要把图层透明度调到多少？可以说“半透明”或“80%”。")
-            else:
-                target_layer = self._resolve_target_layer(normalized, project, include_active_fallback=False)
-                named_target = re.match(r"(?:请)?(?:帮我)?(?:把|将)?(.*?)图层", normalized)
-                if not target_layer and named_target and named_target.group(1) not in ("", "当前", "选中", "这个", "该", "活动"):
-                    return {"assistant_message": "未匹配到指定图层，需要进一步确认目标。", "actions": []}
-                active_layer = next((layer for layer in project.layers if layer.layer_id == project.active_layer_id), None)
-                resolved = target_layer or (active_layer.to_dict() if active_layer else None)
-                if resolved:
-                    return {
-                        "assistant_message": f"好的，我把图层“{resolved['name']}”的透明度调整为 {opacity:g}。",
-                        "actions": [
-                            {
-                                "tool_name": "set_layer_opacity",
-                                "tool_params": {"layer_id": resolved["layer_id"], "opacity": opacity},
-                            }
-                        ],
-                    }
-
-        # --- 图层显隐（含胡焕庸线 / 400毫米等降水量线别名）---
-        if not re.search(r"面板|管理器|工作流|分析|对比|模板|底图", normalized):
-            toggle_eligible = bool(re.search(r"图层|胡焕庸|黑河腾冲|胡线|等降水量线|降水量线|400毫米|四百毫米", normalized))
-            if toggle_eligible and re.search(r"显示|打开|叠加|隐藏|关闭|取消叠加", normalized):
-                target = self._resolve_target_layer(normalized, project, include_active_fallback=False)
-                if target:
-                    hide = bool(re.search(r"隐藏|关闭|取消", normalized))
-                    state_text = "隐藏" if hide else "显示"
-                    return {
-                        "assistant_message": f"好的，{state_text}图层“{target['name']}”。",
-                        "actions": [
-                            {"tool_name": "toggle_layer", "tool_params": {"layer_id": target["layer_id"], "visible": not hide}}
-                        ],
-                    }
-                if re.search(r"胡焕庸|黑河腾冲|胡线", normalized):
-                    return self._clarification("当前项目里还没有胡焕庸线图层，可以先在数据库面板导入，或者直接说“做一个胡焕庸线对比分析”，要哪一个？")
-                if re.search(r"降水量线|400毫米|四百毫米", normalized):
-                    return self._clarification("当前项目里还没有400毫米等降水量线图层，请先在数据库面板导入后再试，好吗？")
-                return self._clarification("请问要显示或隐藏哪个图层？可以说出图层名称，例如“显示胡焕庸线”。")
-
-        # --- 定位到图层（区别于地名定位）---
-        if not re.search(r"管理器|面板", normalized):
-            focus_match = re.search(r"(?:定位|聚焦|缩放|放大)(?:到|至)?(.*?)图层", normalized)
-            if focus_match:
-                target_name = focus_match.group(1).strip("的")
-                if target_name in ("", "当前", "该", "这个", "选中", "活动"):
-                    active_layer = next((layer for layer in project.layers if layer.layer_id == project.active_layer_id), None)
-                    if active_layer is None:
-                        return self._clarification("当前没有激活图层，请说出要定位的图层名称。")
-                    resolved = active_layer.to_dict()
-                else:
-                    resolved = self._resolve_target_layer(f"定位到{target_name}图层", project, include_active_fallback=False)
-                    if resolved is None:
-                        return self._clarification(f"没有找到名为“{target_name}”的图层，请问要定位哪个图层？")
-                return {
-                    "assistant_message": f"好的，定位到图层“{resolved['name']}”。",
-                    "actions": [{"tool_name": "focus_layer", "tool_params": {"layer_id": resolved["layer_id"]}}],
-                }
-
-        # --- 图层顺序 ---
-        if re.search(r"图层", normalized) and re.search(r"置顶|最上面|最上层|顶层|最下面|最底层|最下层|底层", normalized):
-            named_target = re.search(r"(?:把|将)(.{1,16}?)图层", normalized)
-            explicit_name = named_target.group(1).strip() if named_target else ""
-            explicit_and_unknown = explicit_name not in ("", "当前", "该", "这个", "选中", "活动")
-            target = self._resolve_target_layer(normalized, project, include_active_fallback=not explicit_and_unknown)
-            if target is None:
-                if explicit_and_unknown:
-                    return self._clarification(f"没有找到名为“{explicit_name}”的图层，请问要移动哪个图层？")
-                return self._clarification("请问要移动哪个图层？可以说出图层名称，例如“把人口分布图层置顶”。")
-            to_top = bool(re.search(r"置顶|最上面|最上层|顶层", normalized))
-            z_values = [layer.z_index for layer in project.layers] or [0]
-            new_z = max(z_values) + 10 if to_top else min(z_values) - 10
-            direction = "最上层" if to_top else "最下层"
-            return {
-                "assistant_message": f"好的，我把图层“{target['name']}”移到{direction}。",
-                "actions": [{"tool_name": "reorder_layer", "tool_params": {"layer_id": target["layer_id"], "z_index": new_z}}],
-            }
-
-        # --- 图层颜色样式 ---
-        if re.search(r"改成|换成|调成|设为|涂成|变成|变为", normalized):
-            requested_color = self._extract_requested_color(normalized)
-            if requested_color:
-                style_target = self._resolve_target_layer(normalized, project, include_active_fallback=True)
-                if style_target:
-                    return {
-                        "assistant_message": f"好的，我把图层“{style_target['name']}”改成你要求的颜色。",
-                        "actions": [
-                            {
-                                "tool_name": "style_layer",
-                                "tool_params": {
-                                    "layer_id": style_target["layer_id"],
-                                    "style": {"fillColor": requested_color, "strokeColor": "#ffffff"},
-                                },
-                            }
-                        ],
-                    }
-                return self._clarification("请问要给哪个图层换颜色？可以说出图层名称，例如“把人口分布图层改成红色”。")
 
         # --- 教学环节推进 ---
         if any(keyword in normalized for keyword in INTERACTION_STAGE_NEXT_KEYWORDS):
@@ -1029,33 +933,16 @@ class AssistantService:
             return view_action, "切换视图"
         if any(word in clause for word in INTERACTION_GLOBE_KEYWORDS + INTERACTION_PLANE_KEYWORDS):
             return None
+        layer_plan = plan_layer_command(clause, project, self._extract_requested_color, self._parse_opacity_phrase)
+        if layer_plan is not None:
+            actions = layer_plan.get("actions") or []
+            if len(actions) == 1:
+                return actions[0], layer_plan["assistant_message"]
+            return None
         # 2) 底图
         basemap_id = self._extract_basemap_id(clause)
         if basemap_id:
             return {"tool_name": "switch_basemap", "tool_params": {"basemap_id": basemap_id}}, "切换课堂底图"
-        # 3) 图层显隐（含线要素别名）
-        if not re.search(r"面板|管理器|工作流|分析|对比|模板", clause):
-            toggle_eligible = bool(re.search(r"图层|胡焕庸|黑河腾冲|胡线|等降水量线|降水量线|400毫米|四百毫米", clause))
-            if toggle_eligible and re.search(r"显示|打开|叠加|隐藏|关闭|取消叠加", clause):
-                target = self._resolve_target_layer(clause, project, include_active_fallback=False)
-                if target is None:
-                    return None
-                hide = bool(re.search(r"隐藏|关闭|取消", clause))
-                state_text = "隐藏" if hide else "显示"
-                return (
-                    {"tool_name": "toggle_layer", "tool_params": {"layer_id": target["layer_id"], "visible": not hide}},
-                    f'{state_text}图层“{target["name"]}”',
-                )
-        # 4) 透明度
-        if any(keyword in clause for keyword in INTERACTION_OPACITY_KEYWORDS):
-            opacity = self._parse_opacity_phrase(clause)
-            target = self._resolve_target_layer(clause, project, include_active_fallback=True) if opacity is not None else None
-            if opacity is None or target is None:
-                return None
-            return (
-                {"tool_name": "set_layer_opacity", "tool_params": {"layer_id": target["layer_id"], "opacity": opacity}},
-                f'把图层“{target["name"]}”透明度调整为 {opacity:g}',
-            )
         # 5) 教学模板
         template_action = self._resolve_voice_template_action(clause)
         if template_action:

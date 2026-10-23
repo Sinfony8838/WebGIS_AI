@@ -2444,7 +2444,7 @@ class WebGISRuntime:
                                     entry["result"]["ui_observations"] = receipts
                                     if any(receipt.get("status") != "applied" for receipt in receipts):
                                         result["outcome"] = "partial"
-                                        result["assistant_message"] = "操作已下发，界面尚未确认生效。"
+                                        result["assistant_message"] = "后端操作已完成，但界面尚未确认同步；不会自动重复执行。"
                     if control:
                         result["usage"] = control.usage()
                         result["route"] = control.route
@@ -2459,6 +2459,9 @@ class WebGISRuntime:
                     str(confirmation_payload.get("message") or ""),
                     result,
                 )
+            if decision != "reject":
+                self.store.reconcile_confirmation_message(result.get("conversation_id", ""), confirmation_id,
+                    result.get("assistant_message", ""), result.get("outcome", "completed"))
             registered_artifacts: Dict[str, Any] = {}
             for item in list(result.get("completed_actions", [])) + list(result.get("actions_executed", [])):
                 action_result = item.get("result", {})
@@ -2521,6 +2524,17 @@ class WebGISRuntime:
             view = self.store.set_view(project_id, params)
             self.store.add_recent_action(project_id, "调整视角", "已更新课堂视图。", status="success")
             return {"assistant_message": "课堂视角已更新。", "view": view, "artifacts": []}
+        if tool_name == "delete_layers":
+            if control:
+                control.emit("tool_running", "正在调用工具 · 删除图层", tool="delete_layers")
+            removed = self.store.delete_layers(project_id, params["layer_ids"], params.get("layer_versions"))
+            names = "、".join(f"“{layer.name}”" for layer in removed)
+            self.store.add_recent_action(project_id, "删除图层", f"已删除 {len(removed)} 个图层：{names}", status="success")
+            project = self.store.get_project(project_id)
+            return {"assistant_message": f"已从项目删除 {len(removed)} 个图层：{names}。数据库源数据和素材保留。",
+                    "removed_layer_ids": [layer.layer_id for layer in removed], "artifacts": [],
+                    "ui_actions": [{"type": "sync_project", "project_updated_at": project.updated_at,
+                                    "removed_layer_ids": [layer.layer_id for layer in removed]}]}
         if tool_name == "toggle_layer":
             layer = self.store.patch_layer(project_id, params["layer_id"], {"visible": params["visible"]})
             state_text = "显示" if params["visible"] else "隐藏"
@@ -2935,19 +2949,15 @@ class WebGISRuntime:
         params: Dict[str, Any],
         map_context: Dict[str, Any],
     ) -> Optional[LayerRecord]:
-        """layer_id 精确 → layer_name 子串 → 当前激活图层。"""
+        """Resolve IDs or one exact name; ambiguous/named misses never use active state."""
+        from .services.layer_commands import resolve_layers
         layer_id = str(params.get("layer_id") or "").strip()
         if layer_id:
             return next((layer for layer in project.layers if layer.layer_id == layer_id), None)
-        layer_name = str(params.get("layer_name") or "").strip().lower()
+        layer_name = str(params.get("layer_name") or "").strip()
         if layer_name:
-            for layer in project.layers:
-                if layer_name in layer.name.lower():
-                    return layer
-            for layer in project.layers:
-                if layer.name.lower() in layer_name:
-                    return layer
-            return None
+            layers, error = resolve_layers(layer_name, project)
+            return layers[0] if not error and len(layers) == 1 else None
         active_id = str(map_context.get("active_layer_id") or project.active_layer_id or "").strip()
         if active_id:
             return next((layer for layer in project.layers if layer.layer_id == active_id), None)

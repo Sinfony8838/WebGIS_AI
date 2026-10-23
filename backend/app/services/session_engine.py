@@ -2077,6 +2077,12 @@ class ToolExecutor:
                     "requires_confirmation": False,
                     "permission_context": permission_context.to_dict(),
                 }
+        deletion_error = self._deletion_plan_error(actions, project_state or {}, map_context or {})
+        if deletion_error:
+            return {"actions_planned": [{"name": "delete_layers", "risk_level": "blocked",
+                "requires_confirmation": False, "validation_error": deletion_error,
+                "permission_decision": "deny"}], "risk_level": "blocked", "requires_confirmation": False,
+                "permission_context": permission_context.to_dict()}
         descriptors = []
         highest = "low"
         requires_confirmation = False
@@ -2084,6 +2090,14 @@ class ToolExecutor:
             control = current_run()
             if control is not None:
                 control.check()
+            if isinstance(action, dict) and action.get("tool_name") == "delete_layers":
+                params = action.get("tool_params")
+                if isinstance(params, dict) and "layer_versions" not in params:
+                    try:
+                        layers = self.store.validate_layer_deletion(str((project_state or {}).get("project_id") or ""), params.get("layer_ids"))
+                        params["layer_versions"] = {layer.layer_id: self.store.layer_deletion_version(layer) for layer in layers}
+                    except (KeyError, ValueError, TypeError):
+                        pass  # The normal descriptor emits the validation failure.
             descriptor = self._describe_tool(target, action, assistant_mode, project_state or {}, map_context or {})
             descriptor["permission_decision"] = permission_context.decision_for(descriptor["risk_level"], descriptor["name"])
             if allow_image_generation and descriptor["name"] == "generate_image" and descriptor["permission_decision"] != "deny":
@@ -2109,6 +2123,46 @@ class ToolExecutor:
             "requires_confirmation": requires_confirmation,
             "permission_context": permission_context.to_dict(),
         }
+
+    def _deletion_plan_error(self, actions, project_state, map_context):
+        """Do not approve a batch that invalidates its own frozen deletion targets."""
+        deleted = set()
+        for action in actions:
+            if not isinstance(action, dict) or action.get("tool_name") != "delete_layers":
+                continue
+            params = action.get("tool_params") or {}
+            keys = params.get("layer_ids") if isinstance(params, dict) else None
+            if not isinstance(keys, list) or any(not isinstance(key, str) for key in keys):
+                continue  # Let the per-tool schema report malformed input.
+            if deleted.intersection(keys):
+                return "同一计划重复删除了同一图层。请合并为一份删除清单后重新确认。"
+            deleted.update(keys)
+        if not deleted:
+            return ""
+        project = self.store.get_project(str(project_state.get("project_id") or ""))
+        from .layer_commands import resolve_layers
+        for action in actions:
+            if not isinstance(action, dict):
+                continue
+            name = action.get("tool_name")
+            if name in {"apply_template", "run_workflow", "build_workflow", "run_visual_query", "search_poi", "draw_annotation"}:
+                return "请先完成图层生成或分析，再单独确认删除清单，避免删除范围在同一计划中变化。"
+            if name not in {"toggle_layer", "style_layer", "reorder_layer", "set_layer_opacity", "focus_layer", "query_features"}:
+                continue
+            params = action.get("tool_params") or {}
+            if not isinstance(params, dict):
+                continue
+            key = params.get("layer_id")
+            if not key and project:
+                ref = str(params.get("layer_name") or "")
+                if ref:
+                    layers, error = resolve_layers(ref, project)
+                    key = layers[0].layer_id if not error and len(layers) == 1 else None
+                else:
+                    key = map_context.get("active_layer_id") or project.active_layer_id
+            if key in deleted:
+                return "同一计划包含删除及继续操作同一图层，请拆分执行并重新核对删除清单。"
+        return ""
 
     def execute(
         self,
@@ -2160,6 +2214,7 @@ class ToolExecutor:
     def _build_registry(self) -> Dict[str, Dict[str, Any]]:
         registry = {
             "set_view": {"target": "webgis", "category": "view", "risk_level": "low", "reversible": True, "requires_confirmation": False, "requires_map_context": False},
+            "delete_layers": {"target": "webgis", "category": "layer", "risk_level": "high", "reversible": False, "requires_confirmation": True, "validator": self._require_delete_layers},
             "toggle_layer": {"target": "webgis", "category": "layer", "risk_level": "low", "reversible": True, "requires_confirmation": False, "validator": self._require_layer_id},
             "reorder_layer": {"target": "webgis", "category": "layer", "risk_level": "medium", "reversible": True, "requires_confirmation": False, "validator": self._require_layer_id},
             "style_layer": {"target": "webgis", "category": "layer", "risk_level": "medium", "reversible": True, "requires_confirmation": False, "validator": self._require_layer_id},
@@ -2275,6 +2330,15 @@ class ToolExecutor:
             "tool_params": tool_params if isinstance(tool_params, dict) else {},
             "validation_error": validation_error,
         }
+
+    def _require_delete_layers(self, params, project_state, map_context) -> str:
+        try:
+            if "layer_versions" not in params:
+                return "删除计划尚未冻结，请重新发起操作"
+            self.store.validate_layer_deletion(str(project_state.get("project_id") or ""), params.get("layer_ids"), params["layer_versions"])
+        except (KeyError, ValueError, TypeError) as exc:
+            return str(exc)
+        return ""
 
     def _require_layer_id(self, params: Dict[str, Any], project_state: Dict[str, Any], map_context: Dict[str, Any]) -> str:
         if str(params.get("layer_id") or "").strip():
@@ -2798,7 +2862,15 @@ class AssistantSessionEngine:
         if previous_confirmation:
             previous = self.store.get_confirmation(previous_confirmation)
             if previous and previous.status == "pending":
-                self.store.resolve_confirmation(previous_confirmation, "orphaned")
+                try:
+                    self.store.resolve_confirmation(previous_confirmation, "orphaned", expected_status="pending")
+                except ValueError:
+                    pass  # An approval/rejection already claimed this plan.
+        delete_ids = [key for action in actions if action.get("tool_name") == "delete_layers" for key in action.get("tool_params", {}).get("layer_ids", [])]
+        if delete_ids:
+            labels = {layer.layer_id: layer.name for layer in project.layers}
+            names = "、".join(f"“{labels[key]}”" for key in dict.fromkeys(delete_ids))
+            plan = {**plan, "assistant_message": f"将从当前项目删除 {len(set(delete_ids))} 个图层：{names}。数据库源数据、素材和底图保留。"}
         frozen_plan = {
             "target": effective_target,
             "actions": actions,
@@ -2982,7 +3054,7 @@ class AssistantSessionEngine:
         if confirmation.expires_at:
             expires_at = _parse_timestamp(confirmation.expires_at)
             if expires_at and expires_at <= datetime.now(timezone.utc):
-                self.store.resolve_confirmation(confirmation_id, "expired")
+                self.store.resolve_confirmation(confirmation_id, "expired", expected_status="pending")
                 if conversation:
                     self.memory.update_task_memory(
                         conversation,
@@ -2995,13 +3067,13 @@ class AssistantSessionEngine:
         expected_fingerprint = str(payload.get("plan_fingerprint") or confirmation.plan_fingerprint or "")
         actual_fingerprint = _fingerprint(frozen_plan or payload)
         if expected_fingerprint and actual_fingerprint != expected_fingerprint:
-            self.store.resolve_confirmation(confirmation_id, "invalidated")
+            self.store.resolve_confirmation(confirmation_id, "invalidated", expected_status="pending")
             raise ValueError("Confirmation plan fingerprint mismatch")
         if conversation:
             current_pending = conversation.pinned_state.get("last_pending_confirmation", {})
             current_confirmation_id = str(current_pending.get("confirmation_id") or "")
             if current_confirmation_id and current_confirmation_id != confirmation_id:
-                self.store.resolve_confirmation(confirmation_id, "orphaned")
+                self.store.resolve_confirmation(confirmation_id, "orphaned", expected_status="pending")
                 raise ValueError("Confirmation is no longer the active plan for this conversation")
         actions = list((frozen_plan or payload).get("actions") or payload.get("actions") or [])
         target = str((frozen_plan or payload).get("target") or payload.get("target") or "webgis")
@@ -3018,7 +3090,7 @@ class AssistantSessionEngine:
             run_context=run_context,
         )
         if revalidation["risk_level"] == "blocked":
-            self.store.resolve_confirmation(confirmation_id, "invalidated")
+            self.store.resolve_confirmation(confirmation_id, "invalidated", expected_status="pending")
             if conversation:
                 self.memory.update_task_memory(
                     conversation,
@@ -3028,7 +3100,7 @@ class AssistantSessionEngine:
                 )
             blocked = next((item for item in revalidation["actions_planned"] if item.get("risk_level") == "blocked"), {})
             raise ValueError(str(blocked.get("validation_error") or "计划已失效，无法执行"))
-        self.store.resolve_confirmation(confirmation_id, "approved")
+        self.store.resolve_confirmation(confirmation_id, "approved", expected_status="pending")
         run_context.event("approval", "human_decision", "approved")
         stage_callback("execution", "running", "Executing confirmed action", "")
         executed = self.tool_executor.execute(
@@ -3171,7 +3243,7 @@ class AssistantSessionEngine:
         require_confirmation_lessons(self.store, confirmation.project_id, payload)
         require_confirmation_images(self.config, self.store, confirmation.project_id, payload)
         target = str((frozen_plan or payload).get("target") or payload.get("target") or "webgis")
-        self.store.resolve_confirmation(confirmation_id, "rejected")
+        self.store.resolve_confirmation(confirmation_id, "rejected", expected_status="pending")
         permission_context = ToolPermissionContext.from_pinned_state(conversation.pinned_state if conversation else {})
         for action in actions:
             permission_context.remember_denial(str(action.get("tool_name") or ""), "user_rejected_confirmation")

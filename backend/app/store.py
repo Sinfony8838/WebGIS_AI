@@ -636,6 +636,23 @@ class RuntimeStore:
             self._save()
             return message
 
+    @_requires_writer
+    def reconcile_confirmation_message(self, conversation_id: str, confirmation_id: str, text: str, outcome: str) -> None:
+        with self._lock:
+            conversation = self.conversations.get(conversation_id)
+            if conversation is None:
+                return
+            for key in reversed(conversation.message_ids):
+                message = self.messages.get(key)
+                if message and message.role == "assistant" and message.metadata.get("confirmation_id") == confirmation_id and message.metadata.get("executed"):
+                    message.text = text
+                    message.metadata["outcome"] = outcome
+                    for raw in conversation.raw_messages:
+                        if raw.get("message_id") == key:
+                            raw.update(message.to_dict())
+                    self._save()
+                    return
+
     def list_conversation_messages(self, conversation_id: str) -> List[MessageRecord]:
         with self._lock:
             conversation = self.conversations.get(conversation_id)
@@ -677,9 +694,11 @@ class RuntimeStore:
             return self.confirmations.get(confirmation_id)
 
     @_requires_writer
-    def resolve_confirmation(self, confirmation_id: str, status: str) -> ConfirmationRecord:
+    def resolve_confirmation(self, confirmation_id: str, status: str, expected_status: Optional[str] = None) -> ConfirmationRecord:
         with self._lock:
             confirmation = self.confirmations[confirmation_id]
+            if expected_status is not None and confirmation.status != expected_status:
+                raise ValueError(f"Confirmation is already {confirmation.status}")
             confirmation.status = status
             confirmation.updated_at = utc_now()
             confirmation.resolved_at = utc_now()
@@ -744,23 +763,44 @@ class RuntimeStore:
                 return layer
             raise KeyError(f"Unknown layer: {layer_id}")
 
+    @staticmethod
+    def layer_deletion_version(layer: LayerRecord) -> str:
+        return json.dumps([layer.created_at, layer.updated_at, layer.data_rev, layer.name, layer.source], ensure_ascii=False)
+
+    def validate_layer_deletion(self, project_id: str, layer_ids: List[str], versions=None) -> List[LayerRecord]:
+        with self._lock:
+            if not isinstance(layer_ids, list) or not layer_ids or len(layer_ids) > 1000 or any(not isinstance(key, str) or not key for key in layer_ids) or len(set(layer_ids)) != len(layer_ids):
+                raise ValueError("删除图层需要1至1000个不重复的图层ID")
+            project = self.projects[project_id]
+            by_id = {layer.layer_id: layer for layer in project.layers}
+            if any(key not in by_id for key in layer_ids):
+                raise ValueError("删除目标已不存在或不属于当前项目，请重新选择图层")
+            if versions is not None and (not isinstance(versions, dict) or set(versions) != set(layer_ids) or any(versions[key] != self.layer_deletion_version(by_id[key]) for key in layer_ids)):
+                raise ValueError("待删除图层在确认期间已变化，请重新发起并核对清单")
+            return [by_id[key] for key in layer_ids]
+
+    @_requires_writer
+    def delete_layers(self, project_id: str, layer_ids: List[str], versions=None) -> List[LayerRecord]:
+        with self._lock:
+            removed = self.validate_layer_deletion(project_id, layer_ids, versions)
+            project = self.projects[project_id]
+            targets = set(layer_ids)
+            project.layers = [layer for layer in project.layers if layer.layer_id not in targets]
+            self._layer_data_files = {key: value for key, value in self._layer_data_files.items()
+                                      if not (key[0] == project_id and key[1] in targets)}
+            if project.active_layer_id in targets:
+                project.active_layer_id = project.layers[-1].layer_id if project.layers else ""
+            project.updated_at = utc_now()
+            self._save()
+            return removed
+
     @_requires_writer
     def delete_layer(self, project_id: str, layer_id: str) -> LayerRecord:
+        # Manual UI and assistant deletion share one atomic storage operation.
         with self._lock:
-            project = self.projects[project_id]
-            for index, layer in enumerate(project.layers):
-                if layer.layer_id == layer_id:
-                    removed = project.layers.pop(index)
-                    self._layer_data_files = {
-                        key: value for key, value in self._layer_data_files.items()
-                        if key[:2] != (project_id, layer_id)
-                    }
-                    if project.active_layer_id == layer_id:
-                        project.active_layer_id = project.layers[-1].layer_id if project.layers else ""
-                    project.updated_at = utc_now()
-                    self._save()
-                    return removed
-            raise KeyError(f"Unknown layer: {layer_id}")
+            if not any(layer.layer_id == layer_id for layer in self.projects[project_id].layers):
+                raise KeyError(f"Unknown layer: {layer_id}")
+            return self.delete_layers(project_id, [layer_id])[0]
 
     @_requires_writer
     def remove_layer(self, project_id: str, layer_id: str) -> bool:

@@ -4,7 +4,7 @@ import re
 from typing import Any, Dict, List
 
 GROUPS = {
-    "map": ("地图、底图、视角、图层与标注", "地图|地球|三维|二维|底图|图层|透明|放大|缩小|定位|标注|视角|颜色|面板", {"set_view", "switch_view_mode", "switch_basemap", "toggle_layer", "focus_layer", "set_layer_opacity", "style_layer", "reorder_layer", "draw_annotation", "open_panel", "apply_template", "measure"}),
+    "map": ("地图、底图、视角、图层与标注", "地图|地球|三维|二维|底图|图层|透明|放大|缩小|定位|标注|视角|颜色|面板", {"set_view", "switch_view_mode", "switch_basemap", "toggle_layer", "delete_layers", "focus_layer", "set_layer_opacity", "style_layer", "reorder_layer", "draw_annotation", "open_panel", "apply_template", "measure"}),
     "profiles": ("测距与沿线人口地形双曲线", "测距|测线|连线|剖面|曲线|地形|北京|上海", {"create_measurement", "generate_profile", "compare_profiles"}),
     "analysis": ("空间分析与结构化查询", "分析|统计|缓冲|分级|覆盖|空间|人口|密度|设施|对比|比较|查询|搜索|筛选|结果|工作流|top", {"run_workflow", "build_workflow", "run_visual_query", "query_features", "search_poi", "explain_current_view"}),
     "teaching": ("创建独立教学草稿与探究题", "教案|教学|设计|题|探究|课|草稿|生成|编写|做成", {"draft_teaching", "explain_current_view"}),

@@ -59,6 +59,7 @@ def _tools_for_mode(assistant_mode: str) -> List[Dict[str, Any]]:
 CORE_TOOL_NAMES = {
     "set_view",
     "toggle_layer",
+    "delete_layers",
     "reorder_layer",
     "style_layer",
     "query_features",
