@@ -432,6 +432,7 @@ class PlannerRuleCoverageMatrixTest(unittest.TestCase):
     """矩阵完整性：interaction 可见工具必须全部落在“规则覆盖”或“明确清单”之一。"""
 
     RULE_REACHABLE_TOOLS = {
+        "delete_layers",  # Scoped confirmation flow: test_assistant_layer_commands.
         "set_view", "toggle_layer", "reorder_layer", "style_layer",
         "apply_template", "explain_current_view", "switch_basemap",
         "run_visual_query", "switch_view_mode", "open_panel", "focus_layer",

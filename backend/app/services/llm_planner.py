@@ -59,7 +59,6 @@ def _tools_for_mode(assistant_mode: str) -> List[Dict[str, Any]]:
 CORE_TOOL_NAMES = {
     "set_view",
     "toggle_layer",
-    "delete_layers",
     "reorder_layer",
     "style_layer",
     "query_features",
@@ -73,6 +72,7 @@ CORE_TOOL_NAMES = {
 }
 
 CONDITIONAL_TOOL_HINTS = {
+    "delete_layers": ("删除", "删掉", "移除", "清空", "清除", "delete", "remove"),
     "run_visual_query": ("人口", "统计", "排行", "排名", "top", "指标", "visual query", "population", "ranking"),
     "toggle_teaching_map": ("教学地图", "课本", "教材", "胡焕庸", "降水", "气温", "地形图", "teaching map", "textbook"),
     "open_material": ("素材", "材料", "资料", "视频", "bilibili", "material", "video"),
@@ -377,6 +377,9 @@ class LLMPlanner:
             "run_visual_query can load the built-in 2020 city population data even when no city layer is loaded: "
             "dataset=prefecture_population, year=2020, geo_level=prefecture, metric=population, operation=top, "
             "order=desc or asc, limit=1..200. Other years and datasets are not supported by this query tool. "
+            " For deletion requests with clear targets, emit delete_layers(layer_ids) in actions now. "
+            "This is a PLAN, not permission to execute: the server freezes the targets and requires a user confirmation button. "
+            "Do not replace that plan with a verbal confirmation question or actions:[]. Never invent layer_versions; the server supplies them. "
             " Respect negated instructions: never execute an operation the teacher forbids. "
             "Plan every requested operation in order, not just the first matching keyword. "
             "For an unsupported or ambiguous request, return no actions and ask a concise clarification. "

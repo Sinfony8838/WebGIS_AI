@@ -13,7 +13,7 @@ from .workflow_templates import INTERACTION_ALLOWED_TEMPLATES, detect_template, 
 
 ASSISTANT_TOOL_SCHEMA = [
     {"name": "set_view", "description": "调整课堂地图视角。", "parameters": {"center": "number[2]", "zoom": "number", "extent": "number[4]?"}, "modes": ["teaching", "tool", "interaction"]},
-    {"name": "delete_layers", "description": "删除当前项目中的指定图层；必须提供真实 layer_ids，先展示冻结清单并由用户确认。删除可见图层时只选择 visible=true 的条目。保留数据库源数据、素材与底图。", "parameters": {"layer_ids": "string[]"}, "modes": ["tool", "interaction"]},
+    {"name": "delete_layers", "description": "提交当前项目图层的删除计划；必须提供真实 layer_ids。服务端会展示冻结清单，用户点击确认后才执行。不要仅口头询问确认而省略工具计划。删除可见图层时只选择 visible=true 的条目。保留数据库源数据、素材与底图。", "parameters": {"layer_ids": "string[]"}, "modes": ["tool", "interaction"]},
     {"name": "toggle_layer", "description": "显示或隐藏指定图层。", "parameters": {"layer_id": "string", "visible": "boolean"}, "modes": ["teaching", "tool", "interaction"]},
     {"name": "reorder_layer", "description": "调整图层前后顺序。", "parameters": {"layer_id": "string", "z_index": "number"}, "modes": ["teaching", "tool", "interaction"]},
     {"name": "style_layer", "description": "修改图层颜色、透明度、标注等样式。", "parameters": {"layer_id": "string", "style": "object"}, "modes": ["teaching", "tool", "interaction"]},

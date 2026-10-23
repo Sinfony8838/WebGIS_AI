@@ -1,4 +1,4 @@
-import json
+import time
 import threading
 import unittest
 from unittest.mock import patch
@@ -124,7 +124,14 @@ class DeleteLayerFlowTest(unittest.TestCase):
     def test_missing_ui_receipt_is_partial_in_job_and_history(self):
         runtime,store,pid=self.setup_project();job=self.request(runtime,pid)
         store.get_job(job['job_id']).request['ui_observation_protocol']=0
-        result=self.wait_for_job(runtime,runtime.confirm_assistant_action(job['result']['confirmation_id'])['job_id'])
+        job_id = runtime.confirm_assistant_action(job['result']['confirmation_id'])['job_id']
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            result = runtime.get_job(job_id)
+            if result['status'] in {'completed', 'failed'}:
+                break
+            time.sleep(0.02)
+        assert result['status'] == 'completed'
         assert result['result']['outcome']=='partial'
         assert len(store.get_project(pid).layers)==1
         messages=store.list_conversation_messages(job['result']['conversation_id'])

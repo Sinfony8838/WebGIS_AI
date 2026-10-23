@@ -23,7 +23,7 @@ def resolve_layers(target, project, *, allow_all=False):
     target = re.sub(r"^(?:当前)?(?:已)?(?:打开|显示|可见|隐藏|关闭)的", "", target)
     target = re.sub(r"^(?:名为|名称为)", "", target)
     if not target or target == "图层":
-        return [], "请明确要操作的图层名称，或说“当前图层”“所有可见图层”。"
+        return [], "要操作哪个图层？请说出完整名称，或说“当前图层”“所有可见图层”。"
     variants = {target, target.removesuffix("图层"), target.removeprefix("图层"), target.removesuffix("图")}
     variants = {_clean_name(value) for value in variants if value}
     matches = [layer for layer in project.layers if _clean_name(layer.name) in variants or layer.layer_id in variants]
@@ -31,7 +31,7 @@ def resolve_layers(target, project, *, allow_all=False):
         return matches, ""
     if len(matches) > 1:
         return [], f"图层名称“{target}”不唯一，请使用图层 ID 区分。"
-    aliases = (("胡线", "黑河腾冲线", "胡焕庸线"), ("400毫米等降水量线", "四百毫米等降水量线"))
+    aliases = (("胡线", "黑河腾冲线", "胡焕庸线"), ("400毫米等降水量线", "四百毫米等降水量线", "400毫米年降水量线", "四百毫米年降水量线"))
     for names in aliases:
         if variants.intersection(names):
             matches = [layer for layer in project.layers if any(name in layer.name for name in names)]
@@ -48,7 +48,9 @@ def resolve_layers(target, project, *, allow_all=False):
                 return [], error
             layers.extend(found)
         return list({layer.layer_id: layer for layer in layers}.values()), ""
-    return [], f"没有找到图层“{target}”，未改动其他图层。请提供完整名称。"
+    if any(variants.intersection(names) for names in aliases):
+        return [], f"当前未加载{target}图层，是否先导入或加载该图层？"
+    return [], f"没有找到图层“{target}”，未改动其他图层。请提供完整名称，具体指哪个图层？"
 
 
 def plan_layer_command(message, project, color_for, opacity_for):
@@ -57,6 +59,12 @@ def plan_layer_command(message, project, color_for, opacity_for):
     relevant = any(layer.name and layer.name in text for layer in project.layers) or bool(re.search(r"图层|胡线|胡焕庸|黑河腾冲|降水量线|透明度", text))
     if not relevant:
         return None
+    if re.fullmatch(r"(?:调整|设置|修改)?(?:当前)?(?:图层)?透明度", text):
+        return {"actions": [], "stop_planning": True, "assistant_message": "图层透明度需要调到多少？例如一半或30%。"}
+    if re.fullmatch(r"(?:运行|执行|做).*(?:对比|分析)", text):
+        return None
+    text = re.sub(r"置底移到(?:最下面|最底层|最下层)$", "置底", text)
+    text = re.sub(r"置顶移到(?:最上面|最上层|顶层)$", "置顶", text)
     if re.fullmatch(r"(?:打开|显示|叠加)(?:.+对比图|人口分布图|人口密度分布图|人口密度图)", text):
         return None
     if re.search(r"底图|面板|管理器|工作流|模板|缓冲|分级|对比分析", text):
