@@ -26,6 +26,7 @@ from .services.bounded_executor import BoundedExecutor, ExecutorBusy
 from .services.project_presentations import ProjectPresentations
 from .services.map_profiles import ProfileError, preview as preview_map_profile
 from .services.auth import AuthContext, AuthError, AuthService
+from .services.knowledge_base import KnowledgeBaseStorageError
 
 
 install_request_log_filters()
@@ -62,6 +63,16 @@ async def _lifespan(application: FastAPI):
 
 
 app = FastAPI(title="WebGIS-AI Runtime", version="1.1.0", lifespan=_lifespan)
+
+
+@app.exception_handler(KnowledgeBaseStorageError)
+async def knowledge_storage_error(request: Request, error: KnowledgeBaseStorageError) -> JSONResponse:
+    return JSONResponse(
+        {"detail": {"code": "KB_STORAGE_UNAVAILABLE", "message": "知识库暂不可用，请稍后重试。"}},
+        status_code=503,
+    )
+
+
 # Also supports direct route/TestClient use without a lifespan. No thread is
 # created until a conversion is admitted; real ASGI startup owns a fresh pool.
 app.state.ppt_executor = BoundedExecutor()

@@ -297,14 +297,11 @@ class QuestionBankService:
         # 重复上传：同项目同指纹直接复用现有题库，不重复入库。
         with self._lock, self._connect() as connection:
             row = connection.execute(
-                "SELECT * FROM banks WHERE project_id = ? AND fingerprint = ?",
+                "SELECT * FROM banks WHERE project_id = ? AND fingerprint = ? ORDER BY created_at, bank_id LIMIT 1",
                 (project_id, fingerprint),
             ).fetchone()
         if row is not None:
-            summary = self.get_bank(str(row["bank_id"]))
-            summary["duplicate"] = True
-            summary["import_note"] = "题库内容与现有记录完全一致，已复用现有题库，未重复导入。"
-            return summary
+            return self._duplicate_import_summary(row)
 
         if original is not None and analysis is not None:
             import_mode = "paired"
@@ -321,6 +318,7 @@ class QuestionBankService:
         bank_id = f"qb_{secrets.token_hex(6)}"
         image_dir = self.config.uploads_dir / "question_banks" / bank_id / "images"
         written_hashes: Dict[str, str] = {}  # content_hash -> filename
+        pending_images: Dict[str, bytes] = {}
 
         def persist_image(image: Dict[str, Any]) -> Tuple[str, str]:
             content_hash = str(image.get("content_hash") or "")
@@ -330,8 +328,7 @@ class QuestionBankService:
             ext = _CONTENT_EXT.get(str(image.get("content_type") or ""), "bin")
             filename = f"{content_hash}.{ext}"
             if blob:
-                image_dir.mkdir(parents=True, exist_ok=True)
-                (image_dir / filename).write_bytes(blob)
+                pending_images[filename] = blob
             written_hashes[content_hash] = filename
             return content_hash, filename
 
@@ -451,58 +448,100 @@ class QuestionBankService:
             ),
         }
         now = _utc_now()
-        with self._lock, self._connect() as connection:
-            with connection:
-                connection.execute("BEGIN IMMEDIATE")
-                connection.execute(
-                    """
-                    INSERT INTO banks (
-                        bank_id, project_id, owner_user_id, title, base_name, fingerprint,
-                        import_mode, answer_missing, section_count, group_count, question_count,
-                        answer_complete_count, answer_coverage, image_count, pairing_note_count,
-                        stats, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        bank_id,
-                        project_id,
-                        owner_user_id,
-                        title,
-                        base_name,
-                        fingerprint,
-                        import_mode,
-                        1 if import_mode == "original_only" else 0,
-                        len(sections),
-                        len(groups),
-                        question_count,
-                        answer_complete_count,
-                        coverage,
-                        len(image_rows),
-                        len(stats["pairing_notes"]),
-                        json.dumps(stats, ensure_ascii=False),
-                        now,
-                        now,
-                    ),
-                )
-                connection.executemany(
-                    "INSERT INTO groups VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", group_rows
-                )
-                connection.executemany(
-                    "INSERT INTO questions ("
-                    "question_id, bank_id, group_id, group_key, group_index, question_index, number, type,"
-                    "is_composite, section_index, section_title, knowledge_points, year, region, source_paper,"
-                    "material, stem, task_text, options, answer, answer_letter, answer_index, explanation,"
-                    "sub_questions, answer_complete) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    question_rows,
-                )
-                connection.executemany(
-                    "INSERT INTO images ("
-                    "bank_id, group_key, question_id, content_hash, filename, width, height, content_type,"
-                    "anchor, order_idx) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    image_rows,
-                )
+        created_images: List[Path] = []
+        created_bank_directory = False
+        database_committed = False
+        try:
+            with self._lock, self._connect() as connection:
+                with connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    # This check and the insert share SQLite's write transaction,
+                    # including imports through another service instance/process.
+                    existing = connection.execute(
+                        "SELECT * FROM banks WHERE project_id = ? AND fingerprint = ? ORDER BY created_at, bank_id LIMIT 1",
+                        (project_id, fingerprint),
+                    ).fetchone()
+                    if existing is not None:
+                        return self._duplicate_import_summary(existing)
+                    if pending_images:
+                        image_dir.parent.mkdir(parents=True, exist_ok=False)
+                        created_bank_directory = True
+                        image_dir.mkdir()
+                        for filename, blob in pending_images.items():
+                            path = image_dir / filename
+                            created_images.append(path)
+                            path.write_bytes(blob)
+                    connection.execute(
+                        """
+                        INSERT INTO banks (
+                            bank_id, project_id, owner_user_id, title, base_name, fingerprint,
+                            import_mode, answer_missing, section_count, group_count, question_count,
+                            answer_complete_count, answer_coverage, image_count, pairing_note_count,
+                            stats, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            bank_id,
+                            project_id,
+                            owner_user_id,
+                            title,
+                            base_name,
+                            fingerprint,
+                            import_mode,
+                            1 if import_mode == "original_only" else 0,
+                            len(sections),
+                            len(groups),
+                            question_count,
+                            answer_complete_count,
+                            coverage,
+                            len(image_rows),
+                            len(stats["pairing_notes"]),
+                            json.dumps(stats, ensure_ascii=False),
+                            now,
+                            now,
+                        ),
+                    )
+                    connection.executemany(
+                        "INSERT INTO groups VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", group_rows
+                    )
+                    connection.executemany(
+                        "INSERT INTO questions ("
+                        "question_id, bank_id, group_id, group_key, group_index, question_index, number, type,"
+                        "is_composite, section_index, section_title, knowledge_points, year, region, source_paper,"
+                        "material, stem, task_text, options, answer, answer_letter, answer_index, explanation,"
+                        "sub_questions, answer_complete) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        question_rows,
+                    )
+                    connection.executemany(
+                        "INSERT INTO images ("
+                        "bank_id, group_key, question_id, content_hash, filename, width, height, content_type,"
+                        "anchor, order_idx) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        image_rows,
+                    )
+                database_committed = True
+        except BaseException:
+            # Only this request's newly allocated directory is eligible for
+            # cleanup. Never recurse through an existing/historical bank.
+            if created_bank_directory and not database_committed:
+                for path in created_images:
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                for directory in (image_dir, image_dir.parent):
+                    try:
+                        directory.rmdir()
+                    except OSError:
+                        pass
+            raise
 
         return self.get_bank(bank_id)
+
+    def _duplicate_import_summary(self, row: sqlite3.Row) -> Dict[str, Any]:
+        summary = self._bank_summary(row)
+        summary["duplicate"] = True
+        summary["import_note"] = "题库内容与现有记录完全一致，已复用现有题库，未重复导入。"
+        return summary
 
     # ------------------------------------------------------------------
     # 查询
