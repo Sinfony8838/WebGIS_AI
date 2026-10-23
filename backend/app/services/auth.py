@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import math
 import secrets
 import sqlite3
 import string
@@ -17,6 +18,9 @@ from uuid import uuid4
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
 from argon2.low_level import Type
+
+from .login_limits import LoginLimited, LoginLimits
+from .password_work import PASSWORD_WORK, SessionReadPool, WorkBusy
 
 
 ALLOWED_ROLES = {"admin", "teacher"}
@@ -42,11 +46,16 @@ def token_hash(value: str) -> str:
 
 
 class AuthError(Exception):
-    def __init__(self, code: str, message: str, status_code: int = 400):
+    def __init__(self, code: str, message: str, status_code: int = 400, *, retry_after: int | None = None):
         super().__init__(message)
         self.code = code
         self.message = message
         self.status_code = status_code
+        self.retry_after = max(1, int(retry_after)) if retry_after is not None else None
+
+    @property
+    def headers(self) -> Dict[str, str]:
+        return {"Retry-After": str(self.retry_after)} if self.retry_after is not None else {}
 
     def detail(self) -> Dict[str, str]:
         return {"code": self.code, "message": self.message}
@@ -71,6 +80,11 @@ class AuthService:
         registration_ip_limit: int = 5,
         registration_email_limit: int = 3,
         registration_window_seconds: int = 3600,
+        login_account_limit: int = 10,
+        login_ip_limit: int = 1200,
+        login_global_limit: int = 2400,
+        login_window_seconds: int = 300,
+        login_max_buckets: int = 8192,
     ) -> None:
         self.db_path = Path(db_path)
         self.idle_minutes = max(5, int(idle_minutes))
@@ -81,6 +95,13 @@ class AuthService:
         self._lock = threading.RLock()
         self._registration_rate_lock = threading.Lock()
         self._registration_attempts: Dict[str, deque] = {}
+        self._password_work = PASSWORD_WORK
+        self._session_reads = SessionReadPool()
+        self._login_limits = LoginLimits(
+            account_limit=login_account_limit, ip_limit=login_ip_limit,
+            global_limit=login_global_limit, window_seconds=login_window_seconds,
+            max_buckets=login_max_buckets,
+        )
         self._password_hasher = PasswordHasher(
             time_cost=2,
             memory_cost=19_456,
@@ -89,7 +110,7 @@ class AuthService:
             salt_len=16,
             type=Type.ID,
         )
-        self._dummy_password_hash = self._password_hasher.hash(
+        self._dummy_password_hash = self._hash_password(
             "GeoBot-dummy-password-2026"
         )
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -200,6 +221,64 @@ class AuthService:
                 connection.execute(
                     "ALTER TABLE users ADD COLUMN organization TEXT NOT NULL DEFAULT ''"
                 )
+            if "auth_version" not in user_columns:
+                connection.execute(
+                    "ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0"
+                )
+
+    @staticmethod
+    def _busy_error() -> AuthError:
+        return AuthError("AUTH_BUSY", "认证服务繁忙，请稍后重试。", 429, retry_after=1)
+
+    def _hash_password(self, password: str) -> str:
+        try:
+            return self._password_work.run(self._password_hasher.hash, password)
+        except WorkBusy:
+            raise self._busy_error() from None
+
+    def _verify_password(self, password_hash: str, password: str) -> bool:
+        try:
+            return bool(self._password_work.run(self._password_hasher.verify, password_hash, password))
+        except (VerifyMismatchError, InvalidHashError):
+            return False
+        except WorkBusy:
+            raise self._busy_error() from None
+
+    async def authenticate_async(self, session_token: str) -> Optional[AuthContext]:
+        """HTTP/WS async callers use this dedicated, bounded DB-read channel."""
+        try:
+            return await self._session_reads.run(self.authenticate, session_token)
+        except WorkBusy:
+            raise self._busy_error() from None
+
+    def close(self) -> None:
+        self._session_reads.close()
+
+    async def aclose(self) -> None:
+        await self._session_reads.aclose()
+
+    def _user_snapshot(self, user_id: str) -> Dict[str, Any]:
+        with self._connect() as connection:
+            return dict(self._get_user_row(connection, user_id))
+
+    @staticmethod
+    def _same_auth_state(snapshot: Dict[str, Any], current: sqlite3.Row) -> bool:
+        return all(snapshot[key] == current[key] for key in (
+            "user_id", "username", "password_hash", "auth_version", "status", "role", "must_change_password",
+        ))
+
+    @staticmethod
+    def _locked_seconds(user: Any, now: datetime) -> int:
+        locked_until = str(user["locked_until"] or "") if user else ""
+        return max(0, math.ceil((parse_iso(locked_until) - now).total_seconds())) if locked_until else 0
+
+    def _reject_login(self, connection: sqlite3.Connection, user: Any, outcome: str, ip_address: str, retry_after: int = 0) -> None:
+        self._audit(connection, "", "login", str(user["user_id"]) if user else "", outcome, ip_address=ip_address)
+        # The rejection must not roll back its failure count or audit record.
+        connection.commit()
+        if outcome == "locked":
+            raise AuthError("ACCOUNT_LOCKED", "登录尝试过多，请稍后再试。", 429, retry_after=retry_after)
+        raise AuthError("INVALID_CREDENTIALS", "邮箱或密码错误。", 401)
 
     def has_users(self) -> bool:
         with self._connect() as connection:
@@ -224,6 +303,9 @@ class AuthService:
     ) -> Dict[str, Any]:
         normalized_email = self._validate_email(email)
         self._validate_password(password)
+        if self.has_users():
+            raise AuthError("BOOTSTRAP_COMPLETE", "系统管理员已经初始化。", 409)
+        password_hash = self._hash_password(password)
         now = iso(utc_now())
         user_id = f"user_{uuid4().hex}"
         with self._lock, self._connect() as connection:
@@ -243,7 +325,7 @@ class AuthService:
                     normalized_email,
                     self._clean_nickname(nickname, normalized_email),
                     normalized_email,
-                    self._password_hasher.hash(password),
+                    password_hash,
                     now,
                     now,
                 ),
@@ -278,77 +360,49 @@ class AuthService:
         user_agent: str = "",
     ) -> Dict[str, Any]:
         normalized = str(email or "").strip().lower()
-        now_dt = utc_now()
+        try:
+            self._login_limits.check(normalized, str(ip_address or "")[:128])
+        except LoginLimited as exc:
+            raise AuthError("RATE_LIMITED", "登录尝试过于频繁，请稍后再试。", 429, retry_after=exc.retry_after) from None
+        # Snapshot and close the read connection before waiting for/hash work.
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM users WHERE username = ? COLLATE NOCASE", (normalized,),
+            ).fetchone()
+            snapshot = dict(row) if row else None
+        locked_seconds = self._locked_seconds(snapshot, utc_now())
+        if locked_seconds:
+            with self._lock, self._connect() as connection:
+                self._reject_login(connection, snapshot, "locked", ip_address, locked_seconds)
+        password_hash = str(snapshot["password_hash"]) if snapshot else self._dummy_password_hash
+        verified = self._verify_password(password_hash, password or "")
         with self._lock, self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            now_dt = utc_now()
+            if snapshot is None:
+                # An account created during dummy verification cannot turn
+                # this already-started unknown-account attempt into a login.
+                self._reject_login(connection, None, "failed", ip_address)
             user = connection.execute(
-                "SELECT * FROM users WHERE username = ? COLLATE NOCASE",
-                (normalized,),
+                "SELECT * FROM users WHERE user_id = ?", (snapshot["user_id"],),
             ).fetchone()
-            password_hash = str(user["password_hash"]) if user else self._dummy_password_hash
-            verified = False
-            try:
-                verified = self._password_hasher.verify(password_hash, password or "")
-            except (VerifyMismatchError, InvalidHashError):
-                verified = False
-
-            if user:
-                locked_until = str(user["locked_until"] or "")
-                if locked_until and parse_iso(locked_until) > now_dt:
-                    self._audit(
-                        connection,
-                        "",
-                        "login",
-                        str(user["user_id"]),
-                        "locked",
-                        ip_address=ip_address,
-                    )
-                    connection.commit()
-                    raise AuthError(
-                        "ACCOUNT_LOCKED",
-                        "登录尝试过多，请稍后再试。",
-                        429,
-                    )
-
-            if not user or not verified:
-                if user:
-                    failures = int(user["failed_attempts"]) + 1
-                    locked = iso(now_dt + timedelta(minutes=15)) if failures >= 5 else ""
-                    connection.execute(
-                        "UPDATE users SET failed_attempts = ?, locked_until = ?, updated_at = ? WHERE user_id = ?",
-                        (failures, locked, iso(now_dt), user["user_id"]),
-                    )
-                self._audit(
-                    connection,
-                    "",
-                    "login",
-                    str(user["user_id"]) if user else "",
-                    "failed",
-                    ip_address=ip_address,
-                )
-                connection.commit()
-                raise AuthError(
-                    "INVALID_CREDENTIALS",
-                    "邮箱或密码错误。",
-                    401,
-                )
-
+            if user is None or not self._same_auth_state(snapshot, user):
+                self._reject_login(connection, user, "stale_credentials", ip_address)
+            locked_seconds = self._locked_seconds(user, now_dt)
+            if locked_seconds:
+                self._reject_login(connection, user, "locked", ip_address, locked_seconds)
             if str(user["status"]) != "active":
-                self._audit(
-                    connection,
-                    str(user["user_id"]),
-                    "login",
-                    str(user["user_id"]),
-                    "disabled",
-                    ip_address=ip_address,
+                self._reject_login(connection, user, "disabled", ip_address)
+            if not verified:
+                # Read the latest counter under the write transaction. A
+                # completed lockout starts a fresh five-failure window.
+                failures = (0 if user["locked_until"] else int(user["failed_attempts"])) + 1
+                locked = iso(now_dt + timedelta(minutes=15)) if failures >= 5 else ""
+                connection.execute(
+                    "UPDATE users SET failed_attempts = ?, locked_until = ?, updated_at = ? WHERE user_id = ?",
+                    (failures, locked, iso(now_dt), user["user_id"]),
                 )
-                connection.commit()
-                raise AuthError(
-                    "INVALID_CREDENTIALS",
-                    "邮箱或密码错误。",
-                    401,
-                )
-
+                self._reject_login(connection, user, "failed", ip_address)
             now = iso(now_dt)
             connection.execute(
                 """
@@ -487,6 +541,11 @@ class AuthService:
     ) -> int:
         now = iso(utc_now())
         with self._lock, self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "UPDATE users SET auth_version = auth_version + 1, updated_at = ? WHERE user_id = ?",
+                (now, user_id),
+            )
             if keep_session_id:
                 cursor = connection.execute(
                     """
@@ -520,32 +579,35 @@ class AuthService:
         current_session_id: str,
         ip_address: str = "",
     ) -> Dict[str, Any]:
+        snapshot = self._user_snapshot(user_id)
+        if not self._verify_password(str(snapshot["password_hash"]), current_password or ""):
+            raise AuthError("INVALID_CURRENT_PASSWORD", "当前密码不正确。", 400)
+        self._validate_password(new_password)
+        password_hash = self._hash_password(new_password)
         with self._lock, self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             user = self._get_user_row(connection, user_id)
-            try:
-                valid = self._password_hasher.verify(
-                    str(user["password_hash"]),
-                    current_password or "",
-                )
-            except (VerifyMismatchError, InvalidHashError):
-                valid = False
-            if not valid:
-                raise AuthError(
-                    "INVALID_CURRENT_PASSWORD",
-                    "当前密码不正确。",
-                    400,
-                )
-            self._validate_password(new_password)
-            now = iso(utc_now())
+            if not self._same_auth_state(snapshot, user):
+                raise AuthError("AUTH_STATE_CHANGED", "账号状态已更新，请刷新后重试。", 409)
+            now_dt = utc_now()
+            session = connection.execute(
+                "SELECT * FROM sessions WHERE session_id = ? AND user_id = ?",
+                (current_session_id, user_id),
+            ).fetchone()
+            if (str(user["status"]) != "active" or session is None or session["revoked_at"]
+                    or parse_iso(session["idle_expires_at"]) <= now_dt
+                    or parse_iso(session["absolute_expires_at"]) <= now_dt):
+                raise AuthError("AUTH_REQUIRED", "登录已失效，请重新登录。", 401)
+            now = iso(now_dt)
             connection.execute(
                 """
                 UPDATE users
                 SET password_hash = ?, must_change_password = 0,
-                    failed_attempts = 0, locked_until = '', updated_at = ?
+                    failed_attempts = 0, locked_until = '', updated_at = ?,
+                    auth_version = auth_version + 1
                 WHERE user_id = ?
                 """,
-                (self._password_hasher.hash(new_password), now, user_id),
+                (password_hash, now, user_id),
             )
             connection.execute(
                 """
@@ -606,6 +668,7 @@ class AuthService:
         normalized_email = self._validate_email(email)
         self._validate_role(role)
         temporary_password = self._generate_temporary_password()
+        password_hash = self._hash_password(temporary_password)
         now = iso(utc_now())
         user_id = f"user_{uuid4().hex}"
         try:
@@ -623,7 +686,7 @@ class AuthService:
                         self._clean_nickname(nickname, normalized_email),
                         normalized_email,
                         role,
-                        self._password_hasher.hash(temporary_password),
+                        password_hash,
                         now,
                         now,
                     ),
@@ -676,6 +739,7 @@ class AuthService:
         )
         normalized, display_name, clean_organization, clean_note = outcome
         self._check_registration_rate_limit(ip_address, normalized)
+        password_hash = self._hash_password(password)
         now = iso(utc_now())
         with self._lock, self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -723,7 +787,7 @@ class AuthService:
                     display_name,
                     clean_organization,
                     clean_note,
-                    self._password_hasher.hash(password),
+                    password_hash,
                     ip_address[:128],
                     user_agent[:512],
                     now,
@@ -766,6 +830,7 @@ class AuthService:
         )
         normalized, display_name, clean_organization, _note = outcome
         self._check_registration_rate_limit(ip_address, normalized)
+        password_hash = self._hash_password(password)
         now_dt = utc_now()
         now = iso(now_dt)
         with self._lock, self._connect() as connection:
@@ -792,7 +857,7 @@ class AuthService:
                 email=normalized,
                 display_name=display_name,
                 role="teacher",
-                password_hash=self._password_hasher.hash(password),
+                password_hash=password_hash,
                 must_change_password=False,
                 organization=clean_organization,
                 now=now,
@@ -1064,14 +1129,20 @@ class AuthService:
                     str(current["email"]),
                 )
                 email = self._validate_email(str(patch.get("email", current["email"])))
+                security_changed = (
+                    next_status != str(current["status"])
+                    or next_role != str(current["role"])
+                    or email != str(current["email"])
+                )
                 now = iso(utc_now())
                 connection.execute(
                     """
                     UPDATE users
-                    SET username = ?, display_name = ?, email = ?, role = ?, status = ?, organization = ?, updated_at = ?
+                    SET username = ?, display_name = ?, email = ?, role = ?, status = ?, organization = ?, updated_at = ?,
+                        auth_version = auth_version + ?
                     WHERE user_id = ?
                     """,
-                    (email, nickname, email, next_role, next_status, organization, now, user_id),
+                    (email, nickname, email, next_role, next_status, organization, now, int(security_changed), user_id),
                 )
                 if (
                     next_status != "active"
@@ -1102,19 +1173,24 @@ class AuthService:
         actor_user_id: str,
         ip_address: str = "",
     ) -> Dict[str, Any]:
+        snapshot = self._user_snapshot(user_id)
         temporary_password = self._generate_temporary_password()
+        password_hash = self._hash_password(temporary_password)
         now = iso(utc_now())
         with self._lock, self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            self._get_user_row(connection, user_id)
+            current = self._get_user_row(connection, user_id)
+            if not self._same_auth_state(snapshot, current):
+                raise AuthError("AUTH_STATE_CHANGED", "账号状态已更新，请刷新后重试。", 409)
             connection.execute(
                 """
                 UPDATE users
                 SET password_hash = ?, must_change_password = 1,
-                    failed_attempts = 0, locked_until = '', updated_at = ?
+                    failed_attempts = 0, locked_until = '', updated_at = ?,
+                    auth_version = auth_version + 1
                 WHERE user_id = ?
                 """,
-                (self._password_hasher.hash(temporary_password), now, user_id),
+                (password_hash, now, user_id),
             )
             connection.execute(
                 "UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at = ''",
