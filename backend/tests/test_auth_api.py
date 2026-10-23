@@ -11,6 +11,7 @@ from backend.app import main as app_main
 from backend.app.config import AppConfig
 from backend.app.runtime import WebGISRuntime
 from backend.app.services.auth import AuthService
+from backend.app.services.knowledge_base import KnowledgeBaseStorageError
 
 
 class AuthApiTest(unittest.TestCase):
@@ -35,6 +36,14 @@ class AuthApiTest(unittest.TestCase):
         self.assertEqual(result.status_code, 200, result.text)
         self.assertNotIn("lesson_design", result.json())
         create_design.assert_not_called()
+
+    def test_knowledge_storage_failure_is_a_sanitized_503(self) -> None:
+        self.bootstrap_admin()
+        with patch.object(app_main.runtime, "kb_manifest", side_effect=KnowledgeBaseStorageError("private fixture path")):
+            response = self.client.get("/kb/manifest")
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["detail"]["code"], "KB_STORAGE_UNAVAILABLE")
+        self.assertNotIn("private fixture path", response.text)
 
     def tearDown(self) -> None:
         self.client.close()
