@@ -37,6 +37,8 @@ class InteractionRun:
     input_tokens: int = 0
     output_tokens: int = 0
     unknown_usage: bool = False
+    search_calls: int = 0
+    search_ms: float = 0.0
     model_ms: float = 0.0
     activity: Dict[str, Any] = field(default_factory=dict)
     observations: list = field(default_factory=list)
@@ -60,6 +62,7 @@ class InteractionRun:
                 "input_tokens": None if self.unknown_usage else self.input_tokens,
                 "output_tokens": None if self.unknown_usage else self.output_tokens,
                 "model_ms": round(self.model_ms, 2),
+                "search_calls": self.search_calls, "search_ms": round(self.search_ms, 2),
                 "elapsed_ms": round((time.monotonic() - self.started) * 1000, 2),
                 "route": self.route, "mode": self.mode, "asr_tts": "accounted_separately"}
 

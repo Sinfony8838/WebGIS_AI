@@ -59,6 +59,7 @@ class InteractionToolsTest(unittest.TestCase):
         config.assistant_v2_enabled = False
         config.ensure_dirs()
         config.voice_asr_enabled = False
+        config.web_search_enabled = False
         runtime = WebGISRuntime(config=config, store=RuntimeStore(config.state_file))
         # Hermetic: two independent LLM references must both be neutralised,
         # otherwise a dev machine with a real key hits the network.

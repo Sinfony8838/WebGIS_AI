@@ -17,9 +17,9 @@ def active_mode() -> str:
 def tool_allowed(name: str, mode: str = "") -> bool:
     mode = mode or active_mode()
     if mode == "chat":
-        return name == "generate_image"
+        return name in {"generate_image", "web_search"}
     if mode == "operate":
-        return name not in {"generate_image", "draft_teaching"}
+        return name not in {"generate_image", "draft_teaching", "web_search"}
     return True  # internal legacy services are not public profile entry points
 
 def require_tool(name: str) -> None:
