@@ -13,6 +13,7 @@ from typing import Any, Dict, List
 from uuid import uuid4
 
 from .minimax_client import LLMClient
+from .archive_safety import validate_office_bytes
 
 
 TIMELINE_SYSTEM_PROMPT = """你是一个教学设计助手。用户会给你一份教案或教学设计文档的内容。
@@ -111,6 +112,7 @@ class TimelineService:
 
     @staticmethod
     def _extract_from_pptx(raw_bytes: bytes) -> str:
+        validate_office_bytes(raw_bytes, "pptx")
         try:
             from pptx import Presentation
         except ImportError:
@@ -137,6 +139,7 @@ class TimelineService:
 
     @staticmethod
     def _extract_from_docx(raw_bytes: bytes) -> str:
+        validate_office_bytes(raw_bytes, "docx")
         try:
             from docx import Document
         except ImportError:

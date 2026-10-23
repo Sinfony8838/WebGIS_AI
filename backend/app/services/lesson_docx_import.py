@@ -18,6 +18,8 @@ from docx.oxml.ns import qn
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 
+from .archive_safety import ArchiveLimitError, ArchiveValidationError, validate_office_bytes
+
 FIELD_LABELS: Dict[str, str] = {
     "title": "课题", "subject": "学科", "grade": "年级", "duration_minutes": "课时",
     "objectives": "教学目标", "key_difficulties": "教学重难点", "methods": "教学方法",
@@ -286,6 +288,12 @@ def parse_lesson_docx(data: bytes) -> Dict[str, Any]:
 
     unclassified 图片项带 ``data`` 字节，由调用方落盘后替换为 ``url``。
     """
+    try:
+        validate_office_bytes(data, "docx")
+    except ArchiveLimitError:
+        raise
+    except ArchiveValidationError as exc:
+        raise ValueError("无法解析该 Word 文档，请确认文件为 .docx 格式且未损坏。") from exc
     try:
         document = Document(BytesIO(data))
     except Exception as exc:  # noqa: BLE001 - 任何解析失败都按无法识别处理

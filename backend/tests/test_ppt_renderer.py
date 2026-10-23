@@ -16,6 +16,9 @@ class PptRendererTest(unittest.TestCase):
         import io
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as package:
+            package.writestr("[Content_Types].xml", "<Types/>")
+            package.writestr("_rels/.rels", "<Relationships/>")
+            package.writestr("ppt/presentation.xml", "<presentation/>")
             for i in range(1, 4):
                 package.writestr(f"ppt/slides/slide{i}.xml", "<slide/>")
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict("os.environ", {"WEBGIS_AI_DATA_DIR": directory}), mock.patch.object(

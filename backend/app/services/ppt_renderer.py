@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Sequence
 from uuid import uuid4
 
 from ..config import AppConfig
+from .archive_safety import ArchiveLimitError, ArchiveValidationError, validate_office_bytes
 
 EMU_PER_PX = 914400 / 96
 DEFAULT_EXPORT_WIDTH = 1920
@@ -44,6 +45,14 @@ def render_pptx_to_images(config: AppConfig, filename: str, raw_bytes: bytes, *,
     suffix = Path(safe_name).suffix.lower()
     if suffix not in {".pptx", ".ppt"}:
         raise PptRenderError("UNSUPPORTED_PPT_FORMAT", "Only .pptx and .ppt files can be rendered.", status_code=400)
+
+    if suffix == ".pptx":
+        try:
+            validate_office_bytes(raw_bytes, "pptx")
+        except ArchiveLimitError as exc:
+            raise PptRenderError("PPT_ARCHIVE_TOO_LARGE", str(exc), status_code=413) from exc
+        except ArchiveValidationError as exc:
+            raise PptRenderError("INVALID_PPTX", str(exc), status_code=400) from exc
 
     config.ensure_dirs()
     render_id = f"ppt_{uuid4().hex}"
