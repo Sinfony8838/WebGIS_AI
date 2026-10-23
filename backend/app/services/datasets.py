@@ -497,7 +497,8 @@ class DatasetService:
     # Shapefile ZIP
     # ------------------------------------------------------------------
 
-    def _build_shapefile_zip_import(self, raw_bytes: bytes, display_name: str) -> _ImportOutcome:
+    def validate_archive(self, raw_bytes: bytes) -> None:
+        """Check a ZIP before the caller creates a persistent import task."""
         # Validate the archive with stdlib only.  Security and structural
         # checks must still run when the optional pyshp parser is unavailable.
         try:
@@ -506,6 +507,9 @@ class DatasetService:
                 self._validate_shapefile_members(members)
         except zipfile.BadZipFile as exc:
             raise ValueError("ZIP 文件损坏或格式无效，无法读取 Shapefile。") from exc
+
+    def _build_shapefile_zip_import(self, raw_bytes: bytes, display_name: str) -> _ImportOutcome:
+        self.validate_archive(raw_bytes)
 
         if importlib.util.find_spec("shapefile") is None:
             # Same "stored only" fallback as before, with CRS undetected.
