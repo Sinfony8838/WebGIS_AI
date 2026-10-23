@@ -7,7 +7,6 @@ import io
 import json
 import math
 import re
-import stat
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
@@ -19,6 +18,7 @@ from ..config import AppConfig
 from ..models import LayerRecord
 from ..store import RuntimeStore
 from . import crs_detector, crs_reprojector
+from .archive_safety import ZipLimits, validate_zip
 
 
 # Project-wide working CRS. All vector geometry stored in LayerRecord.data
@@ -497,7 +497,8 @@ class DatasetService:
     # Shapefile ZIP
     # ------------------------------------------------------------------
 
-    def _build_shapefile_zip_import(self, raw_bytes: bytes, display_name: str) -> _ImportOutcome:
+    def validate_archive(self, raw_bytes: bytes) -> None:
+        """Check a ZIP before the caller creates a persistent import task."""
         # Validate the archive with stdlib only.  Security and structural
         # checks must still run when the optional pyshp parser is unavailable.
         try:
@@ -506,6 +507,9 @@ class DatasetService:
                 self._validate_shapefile_members(members)
         except zipfile.BadZipFile as exc:
             raise ValueError("ZIP 文件损坏或格式无效，无法读取 Shapefile。") from exc
+
+    def _build_shapefile_zip_import(self, raw_bytes: bytes, display_name: str) -> _ImportOutcome:
+        self.validate_archive(raw_bytes)
 
         if importlib.util.find_spec("shapefile") is None:
             # Same "stored only" fallback as before, with CRS undetected.
@@ -875,42 +879,7 @@ class DatasetService:
             archive.extract(member, resolved_target)
 
     def _validated_zip_members(self, archive: zipfile.ZipFile) -> List[zipfile.ZipInfo]:
-        members = archive.infolist()
-        if len(members) > MAX_ZIP_ENTRIES:
-            raise ValueError(
-                f"ZIP 内条目数超过安全上限（{len(members)} > {MAX_ZIP_ENTRIES}），已拒绝解压。"
-            )
-        total_uncompressed = sum(member.file_size for member in members)
-        if total_uncompressed > MAX_ZIP_UNCOMPRESSED_BYTES:
-            raise ValueError(
-                f"ZIP 解压后总大小超过安全上限"
-                f"（{total_uncompressed // (1024 * 1024)} MB > {MAX_ZIP_UNCOMPRESSED_BYTES // (1024 * 1024)} MB），已拒绝解压。"
-            )
-        seen_targets: set[str] = set()
-        for member in members:
-            if member.file_size > MAX_SINGLE_ENTRY_BYTES:
-                raise ValueError(
-                    f"ZIP 条目解压后过大（{member.filename}），已拒绝解压。"
-                )
-            normalized_name = member.filename.replace("\\", "/")
-            normalized_path = PurePosixPath(normalized_name)
-            if (
-                not normalized_name
-                or "\x00" in normalized_name
-                or normalized_name.startswith(("/", "//"))
-                or ":" in normalized_name
-                or re.match(r"^[A-Za-z]:", normalized_name)
-                or ".." in normalized_path.parts
-            ):
-                raise ValueError(f"Unsafe ZIP entry: {member.filename}")
-            unix_mode = (member.external_attr >> 16) & 0o170000
-            if unix_mode == stat.S_IFLNK:
-                raise ValueError(f"Unsafe ZIP entry: {member.filename}")
-            target_key = "/".join(part.casefold() for part in normalized_path.parts)
-            if not member.is_dir() and target_key in seen_targets:
-                raise ValueError(f"ZIP 包含重复路径：{member.filename}")
-            seen_targets.add(target_key)
-        return members
+        return validate_zip(archive, ZipLimits(MAX_ZIP_UNCOMPRESSED_BYTES, MAX_SINGLE_ENTRY_BYTES, MAX_ZIP_ENTRIES))
 
     def _validate_shapefile_members(self, members: List[zipfile.ZipInfo]) -> None:
         paths = [

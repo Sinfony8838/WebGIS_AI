@@ -22,6 +22,7 @@ from .private_file_cache import PrivateFileCacheMiddleware
 from .runtime import WebGISRuntime
 from .services.minimax_image_client import ALLOWED_ASPECT_RATIOS, ALLOWED_IMAGE_MODELS, MiniMaxImageError
 from .services import request_limits, resource_access
+from .services.archive_safety import ArchiveLimitError, ArchiveValidationError, validate_office_bytes
 from .services.ppt_renderer import PptRenderError, render_pptx_to_images
 from .services.bounded_executor import BoundedExecutor, ExecutorBusy
 from .services.project_presentations import ProjectPresentations
@@ -64,6 +65,17 @@ async def _lifespan(application: FastAPI):
 
 
 app = FastAPI(title="WebGIS-AI Runtime", version="1.1.0", lifespan=_lifespan)
+app.router.route_class = request_limits.BudgetedUploadRoute
+
+
+@app.exception_handler(ArchiveLimitError)
+async def archive_limit_error(request: Request, error: ArchiveLimitError) -> JSONResponse:
+    return JSONResponse({"detail": str(error)}, status_code=413)
+
+
+@app.exception_handler(ArchiveValidationError)
+async def archive_validation_error(request: Request, error: ArchiveValidationError) -> JSONResponse:
+    return JSONResponse({"detail": str(error)}, status_code=400)
 
 
 @app.exception_handler(KnowledgeBaseStorageError)
@@ -79,9 +91,9 @@ async def knowledge_storage_error(request: Request, error: KnowledgeBaseStorageE
 app.state.ppt_executor = BoundedExecutor()
 _presentation_library_lock = RLock()
 
-# Outermost byte budget for JSON bodies: rejects oversized payloads while the
-# bytes are still being received, before any request-model deserialization.
-app.add_middleware(request_limits.BodySizeLimitMiddleware, max_json_body_bytes=config.max_json_body_bytes)
+# Count actual received bytes before request parsing; route budgets retain
+# the larger capacities of existing file uploads.
+app.add_middleware(request_limits.BodySizeLimitMiddleware, config=config)
 
 
 SESSION_COOKIE = "webgis_ai_session"
@@ -2053,6 +2065,8 @@ async def upload_dataset(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except request_limits.PayloadTooLarge as exc:
         raise HTTPException(status_code=413, detail="数据集文件超过大小限制") from exc
+    except ArchiveLimitError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2158,6 +2172,8 @@ async def import_project_presentation(project_id: str, request: Request, file: U
     _require_project_access(request, project_id)
     try:
         raw = await request_limits.read_upload_limited(file, config.max_ppt_upload_bytes)
+        if Path(file.filename or "课件.pptx").suffix.lower() == ".pptx":
+            validate_office_bytes(raw, "pptx")
         library = _presentation_library()
         presentation_id = library.import_file(project_id, file.filename or "课件.pptx", raw, request_id)
         try:
@@ -2167,6 +2183,8 @@ async def import_project_presentation(project_id: str, request: Request, file: U
         return _presentation_response(request, project_id, library.get(project_id, presentation_id))
     except request_limits.PayloadTooLarge:
         raise HTTPException(413, "演示文稿超过大小限制") from None
+    except ArchiveLimitError as exc:
+        raise HTTPException(413, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -2484,6 +2502,7 @@ async def import_question_banks(
                 status_code=413,
                 detail=f"题库文件 {upload.filename or ''} 超过大小限制（单文件上限 {config.max_question_bank_upload_bytes // (1024 * 1024)} MB）",
             ) from exc
+        validate_office_bytes(raw, "docx")
         payload.append({"filename": upload.filename or "题库.docx", "raw": raw})
     context = _current_auth(request)
     return runtime.classroom.submit_question_bank_import(
@@ -2787,6 +2806,8 @@ async def import_lesson_design_docx(
         design = _require_lesson_design_access(request, result["design"]["design_id"])
         _grant_response_files(request, result, allowed_roots=_lesson_design_grant_roots(design))
         return result
+    except ArchiveLimitError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -3452,6 +3473,8 @@ async def generate_timeline(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except request_limits.PayloadTooLarge as exc:
         raise HTTPException(status_code=413, detail="教学时间线素材文件超过大小限制") from exc
+    except ArchiveLimitError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

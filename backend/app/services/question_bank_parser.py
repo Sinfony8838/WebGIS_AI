@@ -32,9 +32,10 @@ import hashlib
 import io
 import re
 import struct
-import zipfile
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+
+from .archive_safety import ArchiveLimitError, ArchiveValidationError, ZipLimits, validate_office_bytes
 
 # ---------------------------------------------------------------------------
 # 常量与正则
@@ -76,29 +77,24 @@ class DocxValidationError(ValueError):
     """上传的文件不是安全的 DOCX 题库文件。"""
 
 
+class DocxBudgetError(DocxValidationError, ArchiveLimitError):
+    """Preserve existing validation catches while exposing HTTP 413 semantics."""
+
+
 def validate_docx_bytes(raw: bytes, filename: str) -> None:
     """文件签名、体积与压缩包安全性检查。"""
     if not raw:
         raise DocxValidationError(f"文件 {filename} 为空。")
     if len(raw) > MAX_FILE_BYTES:
-        raise DocxValidationError(f"文件 {filename} 超过单文件 50MB 上限。")
+        raise DocxBudgetError(f"文件 {filename} 超过单文件 50MB 上限。")
     if not raw.startswith(DOCX_MAGIC):
         raise DocxValidationError(f"文件 {filename} 不是有效的 DOCX（ZIP）文件。")
     try:
-        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-            names = set(archive.namelist())
-            total = 0
-            for info in archive.infolist():
-                total += max(info.file_size, 0)
-                name = info.filename.replace("\\", "/")
-                if name.startswith("/") or ".." in name.split("/") or re.match(r"^[A-Za-z]:", name):
-                    raise DocxValidationError(f"文件 {filename} 包含异常压缩路径：{info.filename}")
-            if total > MAX_UNCOMPRESSED_BYTES:
-                raise DocxValidationError(f"文件 {filename} 解压后超过 200MB 上限。")
-            if "[Content_Types].xml" not in names or not any(n.startswith("word/") for n in names):
-                raise DocxValidationError(f"文件 {filename} 缺少 DOCX 必需结构，可能已损坏。")
-    except zipfile.BadZipFile as exc:
-        raise DocxValidationError(f"文件 {filename} 无法作为压缩包打开：{exc}") from exc
+        validate_office_bytes(raw, "docx", limits=ZipLimits(MAX_UNCOMPRESSED_BYTES, MAX_UNCOMPRESSED_BYTES))
+    except ArchiveLimitError as exc:
+        raise DocxBudgetError(f"文件 {filename}：{exc}") from exc
+    except ArchiveValidationError as exc:
+        raise DocxValidationError(f"文件 {filename}：{exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +242,7 @@ class QuestionBankDocxParser:
         self.raw = raw
 
     def parse(self) -> ParsedBank:
+        validate_docx_bytes(self.raw, self.filename)
         from docx import Document as DocxDocument
         from docx.oxml.ns import qn
         from docx.table import Table as DocxTable
