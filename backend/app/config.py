@@ -236,6 +236,9 @@ class AppConfig:
     minimax_api_host: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_MINIMAX_API_HOST", "https://api.minimaxi.com"))
     minimax_mcp_base_path: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_MINIMAX_MCP_BASE_PATH", ""))
     minimax_mcp_resource_mode: str = field(default_factory=lambda: os.getenv("WEBGIS_AI_MINIMAX_MCP_RESOURCE_MODE", "local"))
+    web_search_enabled: bool = field(
+        default_factory=lambda: os.getenv("WEBGIS_AI_WEB_SEARCH_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+    )
     vision_enabled: bool = field(
         default_factory=lambda: os.getenv("WEBGIS_AI_VISION_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
     )

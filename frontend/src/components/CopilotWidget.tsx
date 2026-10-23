@@ -159,7 +159,7 @@ export function CopilotWidget(props: Props) {
           <button type="button" aria-label="语音选项" onClick={()=>setMicMenu(!micMenu)}>⌄</button>
           {micMenu && <div className="assistant-mic-menu"><button type="button" disabled={!props.voiceStreamAvailable} onClick={()=>{voice.current?.startContinuous();setMicMenu(false);}}>开始长时通话</button><button type="button" onClick={()=>{props.onTtsToggle?.(!props.ttsEnabled);cancelSpeech();}}>{props.ttsEnabled?"关闭播报":"开启播报"}</button></div>}
           <span className="assistant-control-spacer"/>
-          {props.busy?<button type="button" aria-label="停止任务" onClick={()=>{voice.current?.hangup();props.onCancelTask?.();}}>■</button>:<button type="submit" aria-label="发送" disabled={switching || (!props.inputValue.trim() && !props.pendingImage)}>↑</button>}
+          {props.busy?<button type="button" aria-label="停止任务" onClick={()=>{voice.current?.hangup();props.onCancelTask?.();}}>■</button>:<button type="submit" className="assistant-send" aria-label="发送" disabled={switching || (!props.inputValue.trim() && !props.pendingImage)}><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button>}
         </div>
       </form>
       <div className="assistant-status" aria-live="polite"><span>{voiceState.partial || (switching?"正在停止当前任务":voiceState.phase)}</span></div>

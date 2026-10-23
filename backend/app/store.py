@@ -150,6 +150,13 @@ class RuntimeStore:
             for name, collection in records.items():
                 setattr(self, name, collection)
             self._layer_data_files = layer_files
+            if not self._read_only:
+                # Previously deleted conversations migrate to the permanent-delete
+                # contract. Never purge an active worker's conversation.
+                for conversation in list(self.conversations.values()):
+                    if conversation.deleted_at and not self._conversation_has_active_jobs(conversation.conversation_id):
+                        self._purge_assistant_conversation(conversation.conversation_id)
+                        migrated = True
             # Saving migration is deliberately outside the parse error
             # boundary. A write failure leaves loaded records intact and
             # propagates; the atomic writer retains the previous disk bytes.
@@ -486,6 +493,8 @@ class RuntimeStore:
 
     def list_assistant_conversations(self, project_id: str, owner: str, mode: str, deleted: bool = False) -> List[Dict[str, Any]]:
         with self._lock:
+            if deleted:
+                return []  # Trash/restore is retired; old clients cannot recover deleted chats.
             rows = []
             for conversation in self.conversations.values():
                 if (conversation.project_id, conversation.owner_user_id, conversation.assistant_mode) != (project_id, owner, mode):
@@ -548,17 +557,45 @@ class RuntimeStore:
             if folder is None or (folder.project_id, folder.owner_user_id) != (conversation.project_id, owner):
                 raise ValueError("项目文件夹不属于当前用户或地图项目")
         if patch.get("deleted"):
-            if any(job.request.get("conversation_id") == conversation_id and job.status in {"queued", "running", "pending"} for job in self.jobs.values()):
+            if self._conversation_has_active_jobs(conversation_id):
                 raise ValueError("请先停止当前会话的任务，再删除会话")
-            conversation.deleted_at = utc_now()
-        elif patch.get("deleted") is False:
-            conversation.deleted_at = ""
+            self._purge_assistant_conversation(conversation_id)
+            self._save()
+            self._job_changed.notify_all()
+            return {"conversation_id": conversation_id, "deleted": True}
+        if patch.get("deleted") is False:
+            raise ValueError("会话删除后无法恢复")
         for field in ("folder_id", "pinned"):
             if field in patch:
                 setattr(conversation, field, patch[field])
         conversation.updated_at = utc_now()
         self._save()
         return conversation.to_dict()
+
+    def _conversation_job_ids(self, conversation_id: str) -> set:
+        confirmation_ids = {key for key, value in self.confirmations.items() if value.conversation_id == conversation_id}
+        return {key for key, job in self.jobs.items()
+                if job.request.get("conversation_id") == conversation_id
+                or job.result.get("conversation_id") == conversation_id
+                or job.request.get("confirmation_id") in confirmation_ids}
+
+    def _conversation_has_active_jobs(self, conversation_id: str) -> bool:
+        return any(self.jobs[key].status in {"queued", "running", "pending"}
+                   for key in self._conversation_job_ids(conversation_id))
+
+    def _purge_assistant_conversation(self, conversation_id: str) -> None:
+        """Caller holds writer lock. Remove chat copies; retain map/material products."""
+        conversation = self.conversations[conversation_id]
+        job_ids = self._conversation_job_ids(conversation_id)
+        self.messages = {key: value for key, value in self.messages.items() if value.conversation_id != conversation_id}
+        self.confirmations = {key: value for key, value in self.confirmations.items() if value.conversation_id != conversation_id}
+        for key in job_ids:
+            self.jobs.pop(key, None)
+        project = self.projects.get(conversation.project_id)
+        if project:
+            project.job_ids = [key for key in project.job_ids if key not in job_ids]
+            project.recent_actions = [item for item in project.recent_actions if item.get("job_id") not in job_ids]
+        del self.conversations[conversation_id]
 
     def get_conversation(self, conversation_id: str) -> Optional[ConversationRecord]:
         with self._lock:
@@ -567,6 +604,8 @@ class RuntimeStore:
     @_requires_writer
     def save_conversation(self, conversation: ConversationRecord) -> ConversationRecord:
         with self._lock:
+            if conversation.conversation_id not in self.conversations:
+                raise KeyError("Unknown or permanently deleted conversation")
             conversation.updated_at = utc_now()
             self.conversations[conversation.conversation_id] = conversation
             self._save()

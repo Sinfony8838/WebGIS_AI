@@ -4,6 +4,8 @@ import base64
 import json
 import os
 import queue
+import ipaddress
+from urllib.parse import urlsplit
 import shlex
 import subprocess
 import threading
@@ -38,6 +40,80 @@ class MiniMaxMcpClient:
         image_source = self._compatible_image_source(image_url)
         with model_request_scope():
             return self._understand_image_metered(prompt, image_source)
+
+    def web_search(self, query: str, limit: int = 5) -> List[Dict[str, str]]:
+        """Search is a read-only tool, separately metered from model generation."""
+        run = current_run()
+        if run and run.mode != "chat":
+            raise MiniMaxMcpError("只有 Chat 模式可以联网检索")
+        if not self.config.web_search_enabled or not self.config.minimax_token_plan_key.strip():
+            raise MiniMaxMcpError("联网检索尚未配置")
+        query = query.strip()
+        if not query or len(query) > 2000:
+            raise MiniMaxMcpError("搜索内容为空或过长，请缩短问题")
+        started = time.monotonic()
+        if run:
+            run.check()
+            if run.search_calls >= 1:
+                raise MiniMaxMcpError("本回合已完成一次联网检索")
+            run.search_calls += 1
+        try:
+            response = self._call_tool("web_search", {"query": query})
+            if run:
+                run.check()
+            text = self._extract_text(response.get("result", {}))
+            if len(text) > 512_000:
+                raise ValueError("oversized search response")
+            payload = json.loads(text)
+            if not isinstance(payload, dict):
+                raise ValueError("invalid search response")
+            status = payload.get("base_resp", {})
+            if not isinstance(status, dict) or status.get("status_code", 0) not in (0, "0"):
+                raise ValueError("search provider rejected request")
+            organic = payload.get("organic")
+            if not isinstance(organic, list):
+                raise ValueError("missing organic results")
+            results, seen = [], set()
+            for item in organic:
+                if not isinstance(item, dict):
+                    continue
+                url = str(item.get("link") or "").strip()
+                snippet = str(item.get("snippet") or "").strip()
+                if not self._public_search_url(url) or not snippet or url in seen:
+                    continue
+                seen.add(url)
+                results.append({"title": str(item.get("title") or url)[:200], "url": url,
+                                "snippet": snippet[:1500], "date": str(item.get("date") or "")[:80]})
+                if len(results) >= max(1, min(limit, 5)):
+                    break
+            return results
+        except Exception as exc:
+            from .interaction_run import RunStopped
+            if isinstance(exc, RunStopped):
+                raise
+            # Do not expose provider messages, credentials or subprocess stderr.
+            raise MiniMaxMcpError("联网检索失败，暂时无法核验外部资料") from exc
+        finally:
+            if run:
+                run.search_ms += (time.monotonic() - started) * 1000
+                run.publish(dict(run.activity), run.usage())
+
+    @staticmethod
+    def _public_search_url(url: str) -> bool:
+        try:
+            parsed = urlsplit(url)
+            host = parsed.hostname or ""
+            if (len(url) > 2048 or any(ord(c) < 33 for c in url) or "\\" in url
+                    or parsed.scheme not in {"https", "http"} or not host
+                    or parsed.username or parsed.password or host.lower().rstrip(".") == "localhost"
+                    or host.lower().endswith((".local", ".localhost"))):
+                return False
+            try:
+                return ipaddress.ip_address(host).is_global
+            except ValueError:
+                return "." in host
+        except ValueError:
+            return False
 
     def _understand_image_metered(self, prompt: str, image_source: str) -> Dict[str, Any]:
         response = self._call_tool(
