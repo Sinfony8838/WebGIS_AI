@@ -32,6 +32,7 @@ function eligible(layer: LayerRecord) {
 /** Own only project vectors. Camera, imagery, urban and thematic sources stay independent. */
 export class GlobeProjectLayers {
   private entries = new Map<string, Entry>();
+  private pendingAdds = new Map<string, number>();
   private wanted = new Map<string, LayerRecord>();
   private scope = "";
   private visible = false;
@@ -79,6 +80,11 @@ export class GlobeProjectLayers {
     this.host.scene.requestRender();
   }
 
+  /** Includes an in-flight Cesium add until its stale-source cleanup has finished. */
+  hasLayer(id: string): boolean {
+    return this.wanted.has(id) || this.entries.has(id) || (this.pendingAdds.get(id) || 0) > 0;
+  }
+
   private current(id: string, entry: Entry) {
     return !this.disposed && !this.host.isDestroyed() && this.entries.get(id) === entry;
   }
@@ -112,14 +118,19 @@ export class GlobeProjectLayers {
       if (entry.phase === "ready" && entry.layer.visible) {
         entry.phase = "adding";
         // Cesium add is asynchronous even for a fully loaded source.
-        void this.host.dataSources.add(source).then(() => {
+        const id = entry.layer.layer_id;
+        this.pendingAdds.set(id, (this.pendingAdds.get(id) || 0) + 1);
+        void Promise.resolve().then(() => this.host.dataSources.add(source)).then(() => {
           if (!this.current(entry.layer.layer_id, entry)) { this.release(source); return; }
           entry.phase = "attached";
           if (!this.visible) { source.show = false; return; }
           this.update(entry);
           this.sort(true);
           this.host.scene.requestRender();
-        }).catch(error => this.fail(entry.layer.layer_id, entry, error));
+        }).catch(error => this.fail(entry.layer.layer_id, entry, error)).finally(() => {
+          const remaining = (this.pendingAdds.get(id) || 1) - 1;
+          if (remaining) this.pendingAdds.set(id, remaining); else this.pendingAdds.delete(id);
+        });
       }
     } catch (error) { this.fail(entry.layer.layer_id, entry, error); }
   }

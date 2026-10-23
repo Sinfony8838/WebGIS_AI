@@ -464,7 +464,7 @@ export type AssistantUiAction =
   | { type: "open_material"; title?: string; materials?: TeachingMaterial[] }
   | { type: "switch_view"; mode: "plane" | "globe"; view?: "overview" | "default" | "preserve" }
   | { type: "open_panel"; panel: "layers" | "database" | "workflow"; open?: boolean }
-  | { type: "sync_project"; project_updated_at?: string }
+  | { type: "sync_project"; project_updated_at?: string; removed_layer_ids?: string[] }
   | { type: "create_measurement"; record: MeasurementRecord }
   | { type: "show_profile_comparison"; record: MeasurementRecord; comparison: MapProfileComparison };
 
