@@ -21,6 +21,7 @@ from starlette.requests import Request
 from backend.app import main as app_main
 from backend.app.config import AppConfig
 from backend.app.runtime import WebGISRuntime
+from backend.app.models import WorkflowRecord
 from backend.app.services import resource_access
 from backend.app.services.auth import AuthService
 from backend.app.services.workflow_executor import _resolve_dataset_for_preflight
@@ -232,6 +233,37 @@ class ResourceAuthorizationMatrixTest(unittest.TestCase):
         self.assertEqual(self.client.get(f"/files/outputs/{self.project_a}/map.png").status_code, 200)
 
     # ------------------------------------------------- scoped grant checks
+
+    def test_active_uploads_keep_authorization_and_receive_response_sandbox(self) -> None:
+        for suffix in ("html", "htm", "svg"):
+            with self.subTest(suffix=suffix):
+                path = app_main.config.uploads_dir / "kb_materials" / f"fixture.{suffix}"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"synthetic-active-content")
+                app_main.auth_service.grant_file(self.a_user["user_id"], path)
+                url = f"/files/uploads/kb_materials/{path.name}"
+                for client in (self.teacher_a_client, self.client):
+                    response = client.get(url)
+                    self.assertEqual(response.status_code, 200)
+                    self.assertIn("sandbox", response.headers["content-security-policy"])
+                    self.assertNotIn("allow-same-origin", response.headers["content-security-policy"])
+                    self.assertIn("no-store", response.headers["cache-control"])
+                    self.assertEqual(response.content, b"synthetic-active-content")
+                self.assertEqual(self.teacher_b_client.get(url).status_code, 404)
+
+    def test_active_workflow_files_keep_project_authorization_and_sandbox(self) -> None:
+        workflow = WorkflowRecord.create(project_id=self.project_a)
+        app_main.runtime.store.create_workflow(workflow)
+        path = app_main.config.workflows_dir / workflow.workflow_id / "fixture.html"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"synthetic workflow HTML")
+        url = f"/workflow-files/{workflow.workflow_id}/fixture.html"
+        with patch.object(app_main.runtime, "resolve_workflow_file", return_value=path):
+            response = self.teacher_a_client.get(url)
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("sandbox allow-scripts", response.headers["content-security-policy"])
+            self.assertIn("no-store", response.headers["cache-control"])
+            self.assertEqual(self.teacher_b_client.get(url).status_code, 404)
 
     def test_file_download_and_range_are_private_without_changing_bytes(self) -> None:
         path = Path(app_main.config.outputs_dir) / self.project_a / "cache-fixture.bin"
