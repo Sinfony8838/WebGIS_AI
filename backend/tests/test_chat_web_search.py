@@ -50,6 +50,16 @@ class ChatSearchTest(unittest.TestCase):
         self.assertIn(SOURCE["link"], json.dumps(saved))
         self.assertTrue(any(item.get("tool") == "web_search" for item in job["activity"]["timeline"]))
 
+    def test_search_answer_failure_retains_sources_without_provider_error(self):
+        runtime, _, pid, model = self.configured()
+        model.chat_completion = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("private SSL host"))
+        with patch.object(MiniMaxMcpClient, "_call_tool", return_value=response()):
+            job = self.wait(runtime, self.submit(runtime, pid, "联网查询人口资料")["job_id"])
+        self.assertEqual(job["result"]["outcome"], "partial")
+        self.assertEqual(job["result"]["citations"][0]["url"], SOURCE["link"])
+        self.assertNotIn("private SSL host", job["result"]["assistant_message"])
+        self.assertEqual(job["usage"]["model_calls"], 1)
+
     def test_empty_failure_and_unconfigured_never_invent_answer(self):
         for payload in (response([]), response(status=1004), {"result": {"content": [{"type": "text", "text": "Failed to perform search: private-key"}]}}):
             runtime, _, pid, model = self.configured()

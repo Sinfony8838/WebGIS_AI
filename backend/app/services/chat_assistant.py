@@ -104,20 +104,30 @@ class ChatAssistant:
                 client = engine.knowledge.minimax_client
                 if search and not search["items"]:
                     answer, outcome = search["message"], "partial"
-                elif callable(getattr(type(client), "stream_chat_completion", None)):
-                    chunks = []
-                    last_emit = [0.0]
-                    def delta(text):
-                        control.check()
-                        chunks.append(text)
-                        now = time.monotonic()
-                        if now - last_emit[0] >= 0.15:
-                            control.emit("answering", "正在回答", answer_text="".join(chunks))
-                            last_emit[0] = now
-                    answer = client.stream_chat_completion(messages, delta, temperature=0.3)
-                    control.emit("answering", "正在回答", answer_text=answer)
                 else:
-                    answer = complete(client, messages, temperature=0.3)
+                    try:
+                        if callable(getattr(type(client), "stream_chat_completion", None)):
+                            chunks = []
+                            last_emit = [0.0]
+                            def delta(text):
+                                control.check()
+                                chunks.append(text)
+                                now = time.monotonic()
+                                if now - last_emit[0] >= 0.15:
+                                    control.emit("answering", "正在回答", answer_text="".join(chunks))
+                                    last_emit[0] = now
+                            answer = client.stream_chat_completion(messages, delta, temperature=0.3)
+                            control.emit("answering", "正在回答", answer_text=answer)
+                        else:
+                            answer = complete(client, messages, temperature=0.3)
+                    except RunStopped:
+                        raise
+                    except Exception:
+                        if not search:
+                            raise
+                        answer = "已检索到参考资料，但本次回答生成失败。可先展开参考来源查看原文，或稍后重试；本次尚未完成综合回答。"
+                        outcome = "partial"
+
         control.check()
         if map_context.get("image_attachment"):
             engine.memory.update_task_memory(conversation, {}, {}, {"last_image_attachment": dict(map_context["image_attachment"])})

@@ -9,29 +9,52 @@ def store(tmp_path):
     yield instance
     instance.close()
 
-def test_folder_pin_move_delete_restore_and_persistence(store):
+def test_folder_pin_move_permanent_delete_and_persistence(store):
     pid=store.create_project("demo").project_id
     c=bind_conversation(store,pid,"chat","","alice")
     store.append_conversation_message(c.conversation_id,"user","Original content")
     folder=store.create_assistant_folder(pid,"alice","My topic")
     store.update_assistant_conversation(c.conversation_id,"alice",{"folder_id":folder.folder_id,"pinned":True})
-    store.update_assistant_folder(pid,"alice",folder.folder_id,{"pinned":True})
-    store.update_assistant_conversation(c.conversation_id,"alice",{"deleted":True})
-    assert store.list_assistant_conversations(pid,"alice","chat")==[]
-    assert len(store.list_assistant_conversations(pid,"alice","chat",True))==1
-    with pytest.raises(KeyError):bind_conversation(store,pid,"chat",c.conversation_id,"alice")
-    saved=RuntimeStore(store.state_file,read_only=True)
-    try:
-        assert saved.assistant_folders[folder.folder_id].pinned
-        assert saved.conversations[c.conversation_id].deleted_at
-    finally:saved.close()
-    store.update_assistant_conversation(c.conversation_id,"alice",{"deleted":False})
     row=store.list_assistant_conversations(pid,"alice","chat")[0]
     assert row["pinned"] and row["folder_id"]==folder.folder_id
-    assert row["title"]=="Original content"
     store.update_assistant_folder(pid,"alice",folder.folder_id,{},delete=True)
     assert store.list_assistant_conversations(pid,"alice","chat")[0]["folder_id"]==""
-    assert store.get_conversation(c.conversation_id).raw_messages
+    job=store.create_job(project_id=pid,job_type="assistant",title="content copy",request={"conversation_id":c.conversation_id,"message":"Original content"})
+    store.set_job_status(job.job_id,"completed",result={"assistant_message":"Original content"})
+    store.update_assistant_conversation(c.conversation_id,"alice",{"deleted":True})
+    assert store.list_assistant_conversations(pid,"alice","chat")==[]
+    assert store.list_assistant_conversations(pid,"alice","chat",True)==[]
+    assert store.get_conversation(c.conversation_id) is None
+    assert store.get_job(job.job_id) is None
+    assert not store.messages
+    with pytest.raises(KeyError):store.update_assistant_conversation(c.conversation_id,"alice",{"deleted":False})
+    with pytest.raises(KeyError):store.save_conversation(c)
+    saved=RuntimeStore(store.state_file,read_only=True)
+    try:
+        assert c.conversation_id not in saved.conversations
+        assert job.job_id not in saved.jobs
+        assert "Original content" not in store.state_file.read_text(encoding="utf-8")
+    finally:saved.close()
+
+
+def test_legacy_deleted_conversations_are_purged_on_writable_open(store):
+    pid=store.create_project("legacy").project_id
+    deleted=bind_conversation(store,pid,"chat","","alice")
+    keep=bind_conversation(store,pid,"chat","","bob")
+    store.append_conversation_message(deleted.conversation_id,"user","deleted secret")
+    deleted.deleted_at="2026-10-22T00:00:00Z"
+    store.save_conversation(deleted)
+    store.close()
+    readonly=RuntimeStore(store.state_file,read_only=True)
+    assert deleted.conversation_id in readonly.conversations
+    readonly.close()
+    restored=RuntimeStore(store.state_file)
+    try:
+        assert deleted.conversation_id not in restored.conversations
+        assert keep.conversation_id in restored.conversations
+        assert "deleted secret" not in store.state_file.read_text(encoding="utf-8")
+    finally:restored.close()
+
 
 def test_history_scope_and_busy_delete(store):
     p=store.create_project("one").project_id
@@ -50,9 +73,9 @@ def test_history_scope_and_busy_delete(store):
     with pytest.raises(ValueError):store.update_assistant_conversation(c.conversation_id,"alice",{"deleted":True})
     store.set_job_status(job.job_id,"completed")
     store.update_assistant_conversation(c.conversation_id,"alice",{"deleted":True})
-    assert c.deleted_at
+    assert store.get_conversation(c.conversation_id) is None
 
-def test_history_endpoints_scope_and_soft_delete():
+def test_history_endpoints_scope_and_permanent_delete():
     env=auth_tests.AuthApiTest()
     env.setUp()
     try:
@@ -71,9 +94,9 @@ def test_history_endpoints_scope_and_soft_delete():
         assert listing["items"][0]["folder_id"]==fid and listing["items"][0]["pinned"]
         assert client.patch(url,json={"deleted":True},headers=headers).status_code==200
         assert client.get(url).status_code==404
-        assert len(client.get(f"/projects/{pid}/assistant/conversations?mode=chat&deleted=true").json()["items"])==1
-        assert client.patch(url,json={"deleted":False},headers=headers).status_code==200
-        assert client.get(url).status_code==200
+        assert client.get(f"/projects/{pid}/assistant/conversations?mode=chat&deleted=true").json()["items"]==[]
+        assert client.patch(url,json={"deleted":False},headers=headers).status_code==404
+        assert client.get(url).status_code==404
         foreign=bind_conversation(store,pid,"chat","","other")
         assert client.patch(f"/assistant/conversations/{foreign.conversation_id}",json={"deleted":True},headers=headers).status_code==403
     finally:

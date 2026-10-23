@@ -14,7 +14,7 @@ const props=()=>({projectId:"p1",mode:"operate" as const,conversationId:"c1",mes
 beforeEach(()=>{vi.clearAllMocks();state.items=[{conversation_id:"c1",title:"Test conversation",pinned:false,folder_id:""}];state.folders=[];});
 afterEach(cleanup);
 describe("assistant history management",()=>{
- it("creates a folder, moves and pins a conversation, deletes then restores it",async()=>{
+ it("creates a folder, moves and pins a conversation, permanently deletes it without a trash entry",async()=>{
   const p=props();render(<AssistantHistory {...p}/>);
   await screen.findByRole("button",{name:"Test conversation",exact:true});
   fireEvent.click(screen.getByRole("button",{name:"＋ 新建项目"}));
@@ -37,9 +37,8 @@ describe("assistant history management",()=>{
   await waitFor(()=>expect(api.updateAssistantConversation).toHaveBeenCalledWith("c1",{deleted:true}));
   expect(p.onNavigate).toHaveBeenCalledWith(undefined,true);
   await waitFor(()=>expect(screen.queryByRole("button",{name:"Test conversation",exact:true})).not.toBeInTheDocument());
-  fireEvent.click(screen.getByRole("button",{name:"已删除",exact:true}));
-  fireEvent.click(await screen.findByRole("button",{name:"恢复 Test conversation"}));
-  await waitFor(()=>expect(api.updateAssistantConversation).toHaveBeenCalledWith("c1",{deleted:false}));
+  expect(screen.queryByRole("button",{name:"已删除",exact:true})).not.toBeInTheDocument();
+  expect(screen.queryByText("恢复 Test conversation")).not.toBeInTheDocument();
  });
  it("does not delete when the active task could not be left",async()=>{
   render(<AssistantHistory {...props()} onNavigate={vi.fn(async()=>false)}/>);
