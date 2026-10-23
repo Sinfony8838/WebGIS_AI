@@ -47,6 +47,26 @@ def test_duplicate_aliases_and_file_directory_conflicts_rejected(names):
         validate(package([(name, b"x") for name in names]))
 
 
+@pytest.mark.parametrize("name", [
+    "/".join(["x"] * (archive_safety.MAX_MEMBER_PATH_DEPTH + 1)),
+    "x" * (archive_safety.MAX_MEMBER_PATH_BYTES + 1),
+    "深" * (archive_safety.MAX_MEMBER_PATH_BYTES // 3 + 1),
+    "/".join(["x"] * 16000),
+])
+def test_path_budgets_reject_tiny_content_before_decompression(name):
+    with zipfile.ZipFile(io.BytesIO(package([(name, b"x")]))) as archive:
+        archive.open = Mock(side_effect=AssertionError("path budget must precede decompression"))
+        with pytest.raises(ArchiveLimitError):
+            validate_zip(archive, ZipLimits(2048, 1024))
+        archive.open.assert_not_called()
+
+
+def test_path_budget_boundaries_remain_accepted():
+    names = ["/".join(["x"] * archive_safety.MAX_MEMBER_PATH_DEPTH),
+             "y" * archive_safety.MAX_MEMBER_PATH_BYTES]
+    assert len(validate(package([(name, b"x") for name in names]))) == 2
+
+
 def test_symlink_rejected():
     info = zipfile.ZipInfo("link")
     info.create_system = 3

@@ -16,6 +16,8 @@ from pathlib import PurePosixPath
 from typing import List
 
 READ_CHUNK_BYTES = 64 * 1024
+MAX_MEMBER_PATH_BYTES = 4096
+MAX_MEMBER_PATH_DEPTH = 64
 
 
 class ArchiveValidationError(ValueError):
@@ -43,7 +45,14 @@ _WINDOWS_RESERVED = re.compile(r"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)", 
 
 def _member_key(info: zipfile.ZipInfo) -> str:
     name = info.filename.replace("\\", "/")
+    # Bound path processing as well as expanded content. ZIP permits 64 KiB
+    # member names, which otherwise make ancestor checks costly even for tiny
+    # empty archives. Ordinary OOXML and geodata paths fit well below these.
+    if len(name.encode("utf-8")) > MAX_MEMBER_PATH_BYTES:
+        raise ArchiveLimitError("ZIP 条目路径过长")
     parts = PurePosixPath(name).parts
+    if len(parts) > MAX_MEMBER_PATH_DEPTH:
+        raise ArchiveLimitError("ZIP 条目路径层级过深")
     if (not name or "\x00" in info.orig_filename or name.startswith("/") or ":" in name
             or ".." in parts or not parts
             or any(part.rstrip(" .") != part or _WINDOWS_RESERVED.match(part)
