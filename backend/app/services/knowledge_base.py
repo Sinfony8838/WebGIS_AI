@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import time
+from copy import deepcopy
 from datetime import datetime, timezone
+from functools import wraps
 from pathlib import Path
+from threading import RLock
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from uuid import uuid4
 
@@ -167,8 +172,22 @@ TOPIC_LABELS = {
 }
 
 
+class KnowledgeBaseStorageError(RuntimeError):
+    """The persisted knowledge manifest could not be read or committed safely."""
+
+
+def _manifest_locked(method):
+    """Keep complete public operations and their derived caches serialized."""
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._manifest_lock:
+            return method(self, *args, **kwargs)
+    return locked
+
+
 class KnowledgeBaseService:
     def __init__(self, config: AppConfig):
+        self._manifest_lock = RLock()
         self.config = config
         self.knowledge_dir = Path(self.config.knowledge_dir)
         self.geo_path = self.knowledge_dir / "geo_knowledge.json"
@@ -183,16 +202,20 @@ class KnowledgeBaseService:
         try:
             stat = path.stat()
             return (stat.st_mtime_ns, stat.st_size)
-        except OSError:
+        except FileNotFoundError:
             return (0, 0)
+        except OSError as exc:
+            raise KnowledgeBaseStorageError("Knowledge manifest fingerprint failed") from exc
 
     def _fingerprint(self) -> Tuple[int, int]:
         return self._path_fingerprint(self.manifest_path)
 
+    @_manifest_locked
     def engine_units_fingerprint(self) -> Tuple[Tuple[int, int], Tuple[int, int]]:
         """Fingerprint every file that contributes public assistant evidence."""
         return (self._fingerprint(), self._path_fingerprint(self.geo_path))
 
+    @_manifest_locked
     def _invalidate_caches(self) -> None:
         self._manifest_fingerprint = None
         self._cached_manifest = None
@@ -244,8 +267,9 @@ class KnowledgeBaseService:
         ]
         return RetrievalDoc.from_mapping(item, material_texts=materials)
 
+    @_manifest_locked
     def get_manifest(self, owner_user_id: str = "", include_all: bool = False) -> Dict[str, Any]:
-        manifest = self._load_manifest(create_if_missing=True)
+        manifest = self._load_manifest()
         items = [
             item
             for item in self._manifest_items()
@@ -258,6 +282,7 @@ class KnowledgeBaseService:
             "items": items,
         }
 
+    @_manifest_locked
     def search(
         self,
         query: str = "",
@@ -282,7 +307,7 @@ class KnowledgeBaseService:
         if cached is not None:
             # Cache reuse re-applies nothing: the stored payload was already
             # permission-filtered under this exact owner/include_all key.
-            return {**cached, "from_cache": True}
+            return deepcopy({**cached, "from_cache": True})
 
         query_tokens = [token for token in _normalize_keywords(query) if token]
         topic_lower = _as_text(topic).lower()
@@ -352,10 +377,10 @@ class KnowledgeBaseService:
             "insufficient": insufficient,
             "message": message,
         }
-        self._result_cache[cache_key] = response
+        self._result_cache[cache_key] = deepcopy(response)
         while len(self._result_cache) > _RESULT_CACHE_LIMIT:
             self._result_cache.pop(next(iter(self._result_cache)))
-        return dict(response)
+        return deepcopy(response)
 
     @staticmethod
     def _passes_explicit_filters(item: Dict[str, Any], topic_lower: str, region_lower: str, tag_lower: str) -> bool:
@@ -370,6 +395,7 @@ class KnowledgeBaseService:
                 return False
         return True
 
+    @_manifest_locked
     def topics(self, owner_user_id: str = "", include_all: bool = False) -> Dict[str, Any]:
         groups: Dict[str, Dict[str, Any]] = {}
         for item in self._manifest_items():
@@ -404,6 +430,7 @@ class KnowledgeBaseService:
             "items": sorted(groups.values(), key=lambda row: (row["topic"] != "population_census", row["topic"])),
         }
 
+    @_manifest_locked
     def upsert_item(
         self,
         raw_item: Dict[str, Any],
@@ -411,8 +438,8 @@ class KnowledgeBaseService:
         owner_user_id: str = "",
         include_all: bool = False,
     ) -> Dict[str, Any]:
-        manifest = self._load_manifest(create_if_missing=True)
-        raw_item = {**raw_item, "owner_user_id": owner_user_id or raw_item.get("owner_user_id", "")}
+        manifest = self._load_manifest()
+        raw_item = {**raw_item, "owner_user_id": owner_user_id}
         item = self._normalize_manifest_item(raw_item)
         if not item["title"]:
             raise ValueError("Knowledge item requires title")
@@ -428,8 +455,8 @@ class KnowledgeBaseService:
                     raise ValueError(f"Unknown knowledge item: {item['id']}")
                 if not current.get("owner_user_id") and owner_user_id:
                     raise ValueError("Built-in knowledge items are read-only")
-                if current.get("owner_user_id") and not item.get("owner_user_id"):
-                    item["owner_user_id"] = current["owner_user_id"]
+                # Updating content never transfers ownership, including admin edits.
+                item["owner_user_id"] = current["owner_user_id"]
                 existing[index] = item
                 replaced = True
                 break
@@ -439,8 +466,9 @@ class KnowledgeBaseService:
         manifest["items"] = existing
         manifest["updated_at"] = _utc_now()
         self._write_manifest(manifest)
-        return item
+        return deepcopy(item)
 
+    @_manifest_locked
     def add_material_to_item(
         self,
         kb_item_id: str,
@@ -449,12 +477,12 @@ class KnowledgeBaseService:
         owner_user_id: str = "",
         include_all: bool = False,
     ) -> Dict[str, Any]:
-        manifest = self._load_manifest(create_if_missing=True)
+        manifest = self._load_manifest()
         target_id = _as_text(kb_item_id)
         if not target_id:
             raise ValueError("Knowledge material requires kb_item_id")
         material = _normalize_material(
-            {**raw_material, "owner_user_id": owner_user_id or raw_material.get("owner_user_id", "")}
+            {**raw_material, "owner_user_id": owner_user_id}
         )
         found = False
         items = _safe_list(manifest.get("items"))
@@ -477,8 +505,9 @@ class KnowledgeBaseService:
         manifest["items"] = items
         manifest["updated_at"] = _utc_now()
         self._write_manifest(manifest)
-        return material
+        return deepcopy(material)
 
+    @_manifest_locked
     def delete_item(
         self,
         item_id: str,
@@ -491,7 +520,7 @@ class KnowledgeBaseService:
         Built-in items (no owner) stay read-only, mirroring ``upsert_item``.
         The authenticated HTTP route delegates here through the runtime layer.
         """
-        manifest = self._load_manifest(create_if_missing=True)
+        manifest = self._load_manifest()
         target_id = _as_text(item_id)
         if not target_id:
             raise ValueError("Knowledge item deletion requires an item id")
@@ -514,7 +543,7 @@ class KnowledgeBaseService:
         manifest["items"] = items
         manifest["updated_at"] = _utc_now()
         self._write_manifest(manifest)
-        return found
+        return deepcopy(found)
 
     def build_item_from_layer(
         self,
@@ -562,6 +591,7 @@ class KnowledgeBaseService:
         }
         return self._normalize_manifest_item(item)
 
+    @_manifest_locked
     def build_engine_units(self) -> List[Dict[str, Any]]:
         geo_units = self._load_geo_units()
         manifest_units = []
@@ -624,7 +654,7 @@ class KnowledgeBaseService:
         return rows
 
     def _manifest_items(self) -> List[Dict[str, Any]]:
-        manifest = self._load_manifest(create_if_missing=True)
+        manifest = self._load_manifest()
         items = []
         for row in _safe_list(manifest.get("items")):
             if isinstance(row, dict):
@@ -682,44 +712,71 @@ class KnowledgeBaseService:
             return []
         return payload if isinstance(payload, list) else []
 
-    def _load_manifest(self, create_if_missing: bool = False) -> Dict[str, Any]:
+    @_manifest_locked
+    def _load_manifest(self) -> Dict[str, Any]:
         fingerprint = self._fingerprint()
         if fingerprint != self._manifest_fingerprint or self._cached_manifest is None:
-            self._cached_manifest = self._read_manifest(create_if_missing=create_if_missing)
+            # Publish only a completely read, validated snapshot. On any error,
+            # the prior cache stays intact and the caller receives no stale data.
+            manifest = self._read_manifest()
+            self._cached_manifest = manifest
             self._manifest_fingerprint = fingerprint
             self._engine_cache.clear()
             self._result_cache.clear()
-        return self._cached_manifest
+        # Mutation callers receive a private working copy, never the cache.
+        return deepcopy(self._cached_manifest)
 
-    def _read_manifest(self, create_if_missing: bool) -> Dict[str, Any]:
-        if not self.manifest_path.exists():
-            manifest = self._default_manifest()
-            if create_if_missing:
-                self._write_manifest(manifest)
-            return manifest
+    def _read_manifest(self) -> Dict[str, Any]:
         try:
             payload = json.loads(self.manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            payload = self._default_manifest()
-            if create_if_missing:
-                self._write_manifest(payload)
-            return payload
-        if not isinstance(payload, dict):
-            payload = self._default_manifest()
-            if create_if_missing:
-                self._write_manifest(payload)
+        except FileNotFoundError:
+            # Reads never create a file. A first successful mutation commits it.
+            return self._default_manifest()
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise KnowledgeBaseStorageError("Knowledge manifest read failed") from exc
+        if not isinstance(payload, dict) or not isinstance(payload.get("items", []), list):
+            raise KnowledgeBaseStorageError("Knowledge manifest schema invalid")
+        if any(not isinstance(item, dict) for item in payload.get("items", [])):
+            raise KnowledgeBaseStorageError("Knowledge manifest schema invalid")
         payload.setdefault("version", "1.0")
         payload.setdefault("updated_at", _utc_now())
-        payload["items"] = _safe_list(payload.get("items"))
+        payload.setdefault("items", [])
         return payload
 
+    @_manifest_locked
     def _write_manifest(self, manifest: Dict[str, Any]) -> None:
-        self.knowledge_dir.mkdir(parents=True, exist_ok=True)
-        self.manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-        # Any write (add/update/material/delete) must not leave stale rows
-        # in the fingerprint cache, per-owner indexes or result cache.
-        self._cached_manifest = None
-        self._manifest_fingerprint = None
+        snapshot = deepcopy(manifest)
+        temporary_path = self.manifest_path.with_name(f".{self.manifest_path.name}.{uuid4().hex}.tmp")
+        try:
+            serialized = json.dumps(snapshot, ensure_ascii=False, indent=2)
+            self.knowledge_dir.mkdir(parents=True, exist_ok=True)
+            # Keep the temporary file on the same filesystem for atomic replace.
+            with temporary_path.open("x", encoding="utf-8", newline="\n") as output:
+                output.write(serialized)
+                output.flush()
+                os.fsync(output.fileno())
+                stat = os.fstat(output.fileno())
+                fingerprint = (stat.st_mtime_ns, stat.st_size)
+            for attempt in range(3):
+                try:
+                    os.replace(temporary_path, self.manifest_path)
+                    break
+                except PermissionError:
+                    # Windows scanners/readers may briefly hold a sharing lock.
+                    if os.name != "nt" or attempt == 2:
+                        raise
+                    time.sleep(0.02 * (attempt + 1))
+        except (OSError, UnicodeError, TypeError, ValueError) as exc:
+            raise KnowledgeBaseStorageError("Knowledge manifest write failed") from exc
+        finally:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                # A failed cleanup must not hide the original storage failure.
+                pass
+        # Disk commit is the publication point. Failed writes change no cache.
+        self._cached_manifest = snapshot
+        self._manifest_fingerprint = fingerprint
         self._engine_cache.clear()
         self._result_cache.clear()
 

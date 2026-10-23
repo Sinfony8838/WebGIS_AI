@@ -21,11 +21,11 @@ class KnowledgeBaseServiceTest(unittest.TestCase):
         service = KnowledgeBaseService(config)
         return service, knowledge_dir
 
-    def test_manifest_is_created_when_missing(self) -> None:
+    def test_missing_manifest_read_is_side_effect_free(self) -> None:
         service, knowledge_dir = self.build_service()
         result = service.get_manifest()
         self.assertEqual(result["status"], "success")
-        self.assertTrue((knowledge_dir / "kb_manifest.json").exists())
+        self.assertFalse((knowledge_dir / "kb_manifest.json").exists())
         self.assertIn("items", result)
 
     def test_upsert_and_search_manifest_item(self) -> None:
