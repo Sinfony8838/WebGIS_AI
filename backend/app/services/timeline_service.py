@@ -41,18 +41,8 @@ class TimelineService:
         self.llm = llm_client
 
     def extract_text(self, filename: str, raw_bytes: bytes) -> str:
-        lower = filename.lower()
-        if lower.endswith(".pptx"):
-            return self._extract_from_pptx(raw_bytes)
-        if lower.endswith(".pdf"):
-            return self._extract_from_pdf(raw_bytes)
-        if lower.endswith(".docx"):
-            return self._extract_from_docx(raw_bytes)
-        if lower.endswith(".doc"):
-            raise ValueError("Legacy .doc files are not supported. Please save the lesson plan as .docx.")
-        if lower.endswith(".txt") or lower.endswith(".md"):
-            return raw_bytes.decode("utf-8", errors="replace")
-        raise ValueError(f"不支持的文件格式: {filename}")
+        from .document_processing import run_document
+        return run_document("timeline_text", raw_bytes, filename=filename)
 
     def generate_timeline(
         self, filename: str, raw_bytes: bytes, project_id: str

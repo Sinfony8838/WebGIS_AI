@@ -40,7 +40,7 @@ def test_message_rejects_foreign_before_attachment_job_thread(fixture, path):
         kwargs["map_context"] = context(foreign)
     if path in {"top", "both"}:
         kwargs["teaching_context"] = context(foreign)["teaching_context"]
-    with patch.object(runtime, "resolve_image_attachments") as attachments, patch("backend.app.runtime.threading.Thread") as thread:
+    with patch.object(runtime, "resolve_image_attachments") as attachments, patch.object(runtime, "_enqueue_background") as thread:
         with pytest.raises(ValueError, match="requested project"):
             runtime.submit_assistant_message(a, "统计课堂", **kwargs)
         attachments.assert_not_called()
@@ -83,7 +83,7 @@ def test_confirmation_rejects_bad_context_without_resolution(fixture, frozen, de
         payload = {"map_context": {}, "frozen_plan": payload}
     confirmation = runtime.store.create_confirmation(a, "", "", "tool", "fixture", "fixture", payload=payload)
     before = runtime.config.state_file.read_bytes()
-    with patch("backend.app.runtime.threading.Thread") as thread:
+    with patch.object(runtime, "_enqueue_background") as thread:
         with pytest.raises(ValueError):
             runtime.confirm_assistant_action(confirmation.confirmation_id, decision)
         thread.assert_not_called()

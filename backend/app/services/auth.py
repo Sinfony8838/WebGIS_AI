@@ -251,6 +251,11 @@ class AuthService:
         except WorkBusy:
             raise self._busy_error() from None
 
+    def startup(self) -> None:
+        with self._lock:
+            if self._session_reads.closed:
+                self._session_reads = SessionReadPool()
+
     def close(self) -> None:
         self._session_reads.close()
 

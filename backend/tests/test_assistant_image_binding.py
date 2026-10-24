@@ -59,7 +59,7 @@ def test_foreign_image_rejected_without_open_job_thread_or_provider(fixture, pat
     reference = {"artifact_id": foreign["artifact_id"], "path": foreign["path"]}
     kwargs = {"image_attachments": [reference]} if path == "top" else {"map_context": context(reference, path == "plural")}
     before = runtime.config.state_file.read_bytes()
-    with patch.object(Path, "open", side_effect=AssertionError("No file reads")), patch("backend.app.runtime.threading.Thread") as worker:
+    with patch.object(Path, "open", side_effect=AssertionError("No file reads")), patch.object(runtime, "_enqueue_background") as worker:
         with pytest.raises(ValueError, match="其他项目"):
             runtime.submit_assistant_message(a, "识图", **kwargs)
         worker.assert_not_called()

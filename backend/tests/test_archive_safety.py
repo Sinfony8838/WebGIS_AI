@@ -158,6 +158,14 @@ def test_all_public_office_parsers_reject_before_heavy_parsing(entry, monkeypatc
     monkeypatch.setattr(question_bank_parser, "MAX_UNCOMPRESSED_BYTES", 128)
     kind = "pptx" if entry in {"ppt", "timeline_pptx"} else "docx"
     raw = office(kind, [("unused.bin", b"x" * 129)])
+    if entry.startswith("timeline_"):
+        # The service parses in a clean process. Encode an actual default-limit
+        # violation in the central directory instead of relying on parent mocks.
+        import struct
+        declared = bytearray(raw)
+        member = declared.rfind(b"PK\x01\x02")
+        struct.pack_into("<I", declared, member + 24, 200 * 1024 * 1024 + 1)
+        raw = bytes(declared)
     forbidden = Mock(side_effect=AssertionError("heavy parser must not run"))
     monkeypatch.setattr("backend.app.services.lesson_docx_import.Document", forbidden)
     monkeypatch.setattr("docx.Document", forbidden)

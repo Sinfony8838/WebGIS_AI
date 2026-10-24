@@ -114,7 +114,7 @@ def test_runtime_rejects_before_job_thread_or_attachment_resolution(runtime, ref
     before = state_bytes(runtime)
     with patch.object(runtime.store, "create_job") as create_job, \
          patch.object(runtime, "resolve_image_attachments") as resolve, \
-         patch("backend.app.runtime.threading.Thread") as thread:
+         patch.object(runtime, "_enqueue_background") as thread:
         with pytest.raises((ValueError, KeyError)):
             runtime.submit_assistant_message(
                 a, "fixture", conversation_id=reference_id,
@@ -154,7 +154,7 @@ def test_runtime_confirmation_rejects_foreign_before_job(runtime, decision):
     pending = confirmation(runtime, a, foreign.conversation_id)
     before = state_bytes(runtime)
     with patch.object(runtime.store, "create_job") as create_job, \
-         patch("backend.app.runtime.threading.Thread") as thread:
+         patch.object(runtime, "_enqueue_background") as thread:
         with pytest.raises(ValueError, match="requested project"):
             runtime.confirm_assistant_action(pending.confirmation_id, decision)
         create_job.assert_not_called()

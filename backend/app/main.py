@@ -5,7 +5,8 @@ import json
 import os
 import secrets
 import time
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
+from functools import partial
 from pathlib import Path
 from threading import RLock
 from typing import Any, Dict, List, Optional
@@ -22,12 +23,18 @@ from .private_file_cache import PrivateFileCacheMiddleware
 from .runtime import WebGISRuntime
 from .services.minimax_image_client import ALLOWED_ASPECT_RATIOS, ALLOWED_IMAGE_MODELS, MiniMaxImageError
 from .services import request_limits, resource_access
-from .services.archive_safety import ArchiveLimitError, ArchiveValidationError, validate_office_bytes
+from .services.archive_safety import ArchiveLimitError, ArchiveValidationError
 from .services.ppt_renderer import PptRenderError, render_pptx_to_images
 from .services.bounded_executor import BoundedExecutor, ExecutorBusy
 from .services.project_presentations import ProjectPresentations
 from .services.map_profiles import ProfileError, preview as preview_map_profile
 from .services.auth import AuthContext, AuthError, AuthService
+from .services.blocking_work import BlockingWorkPool
+from .services.password_work import WorkBusy
+from .services.background_tasks import BackgroundBusy
+from .services import document_processing
+from .services.document_executor import (DocumentBusyError, DocumentTimeoutError, DocumentCancelledError,
+    DocumentMemoryError, DocumentWorkerError, DocumentResultLimitError)
 from .services.knowledge_base import KnowledgeBaseStorageError
 
 
@@ -49,23 +56,105 @@ LESSON_DESIGN_REQUEST_HINTS = (
     "逐步设计教案", "教案助手", "完整教案",
 )
 
+async def _finish_cleanup(coroutine):
+    task = asyncio.create_task(coroutine)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if task.done() and not task.cancelled():
+            task.exception()
+        raise
+
+
+async def _shutdown_background(instance):
+    pools = [instance.background_tasks, instance.classroom.background_tasks,
+             instance.classroom.question_bank_tasks, instance.classroom.population_lesson_prep.tasks,
+             instance.workflow_executor.tasks]
+    for pool in pools:
+        pool.shutdown(wait=False)
+    manager = getattr(instance.workflow_executor, "worker_manager", None)
+    native_running = manager is not None and manager.is_alive()
+    if instance.workflow_executor.tasks.outstanding or native_running:
+        await asyncio.to_thread(instance.workflow_executor.shutdown)
+    else:
+        instance.workflow_executor.shutdown()
+    for pool in pools:
+        if pool.outstanding:
+            await asyncio.to_thread(pool.shutdown)
+        else:
+            pool.shutdown()
+
+
 @asynccontextmanager
 async def _lifespan(application: FastAPI):
+    instance, identity_service = runtime, auth_service
     executor = BoundedExecutor()
     application.state.ppt_executor = executor
+    previous_request_work = application.state.request_work
+    request_work = BlockingWorkPool()
+    application.state.request_work = request_work
+    previous_documents = document_processing.startup()
+
+    async def cleanup():
+        try:
+            # All independent facilities close even if one cleanup fails.
+            async with AsyncExitStack() as stack:
+                if identity_service is not None:
+                    stack.push_async_callback(identity_service.aclose)
+                stack.push_async_callback(document_processing.aclose)
+                stack.push_async_callback(request_work.aclose)
+                stack.push_async_callback(_shutdown_background, instance)
+                stack.push_async_callback(executor.aclose)
+                library = getattr(application.state, "presentation_library", None)
+                if library is not None:
+                    stack.push_async_callback(library.close)
+        finally:
+            application.state.request_work = previous_request_work
+            document_processing.restore(previous_documents)
+
     try:
+        if identity_service is not None:
+            identity_service.startup()
+        instance.background_tasks.startup()
+        instance.workflow_executor.startup()
+        instance.classroom.startup()
+        instance.classroom.population_lesson_prep.tasks.startup()
         yield
     finally:
-        # Join outside the event loop; existing converter subprocess deadlines
-        # and cleanup still own running native work. Queued work is cancelled.
-        library = getattr(application.state, "presentation_library", None)
-        if library is not None:
-            await library.close()
-        await executor.aclose()
+        await _finish_cleanup(cleanup())
 
 
 app = FastAPI(title="WebGIS-AI Runtime", version="1.1.0", lifespan=_lifespan)
 app.router.route_class = request_limits.BudgetedUploadRoute
+
+
+@app.exception_handler(BackgroundBusy)
+@app.exception_handler(DocumentBusyError)
+@app.exception_handler(WorkBusy)
+async def request_work_busy(request: Request, error: WorkBusy) -> JSONResponse:
+    return JSONResponse({"detail": {"code": "SERVER_BUSY", "message": "服务繁忙，请稍后重试。"}},
+                        status_code=503, headers={"Retry-After": "2"})
+
+
+@app.exception_handler(DocumentTimeoutError)
+@app.exception_handler(DocumentCancelledError)
+@app.exception_handler(DocumentMemoryError)
+@app.exception_handler(DocumentWorkerError)
+async def document_execution_error(request: Request, error: Exception) -> JSONResponse:
+    return JSONResponse({"detail": {"code": "DOCUMENT_UNAVAILABLE", "message": "文档处理未完成，请稍后重试。"}},
+                        status_code=503, headers={"Retry-After": "2"})
+
+
+@app.exception_handler(DocumentResultLimitError)
+async def document_result_limit(request: Request, error: Exception) -> JSONResponse:
+    return JSONResponse({"detail": "文档内容超过处理限制。"}, status_code=413)
 
 
 @app.exception_handler(ArchiveLimitError)
@@ -89,7 +178,29 @@ async def knowledge_storage_error(request: Request, error: KnowledgeBaseStorageE
 # Also supports direct route/TestClient use without a lifespan. No thread is
 # created until a conversion is admitted; real ASGI startup owns a fresh pool.
 app.state.ppt_executor = BoundedExecutor()
+app.state.request_work = BlockingWorkPool()
 _presentation_library_lock = RLock()
+
+
+async def _run_blocking(function, *args, **kwargs):
+    return await app.state.request_work.run(partial(function, *args, **kwargs))
+
+async def _run_voice_work(function, *args):
+    # A recognizer stream cannot be closed while its native decoder is active.
+    task = asyncio.create_task(_run_blocking(function, *args))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if task.done() and not task.cancelled():
+            task.exception()
+        raise
 
 # Count actual received bytes before request parsing; route budgets retain
 # the larger capacities of existing file uploads.
@@ -154,7 +265,7 @@ def _local_user() -> Dict[str, Any]:
 
 
 def _auth_error_response(error: AuthError) -> JSONResponse:
-    return JSONResponse({"detail": error.detail()}, status_code=error.status_code)
+    return JSONResponse({"detail": error.detail()}, status_code=error.status_code, headers=error.headers)
 
 
 @app.middleware("http")
@@ -198,7 +309,10 @@ async def require_access_token(request: Request, call_next):
             status_code=503,
         )
 
-    context = service.authenticate(request.cookies.get(SESSION_COOKIE, ""))
+    try:
+        context = await service.authenticate_async(request.cookies.get(SESSION_COOKIE, ""))
+    except AuthError as exc:
+        return _auth_error_response(exc)
     if context is None:
         return JSONResponse(
             {"detail": {"code": "AUTH_REQUIRED", "message": "登录已失效，请重新登录。"}},
@@ -902,7 +1016,7 @@ def auth_register(request: Request, payload: AuthRegisterRequest) -> Response:
             message = "注册申请已提交，管理员审核通过后方可登录。"
             status = "submitted"
     except AuthError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail(), headers=exc.headers) from exc
     # Same body for fresh submissions and duplicates: the specific outcome is
     # recorded in the audit log, never on the public wire.
     return JSONResponse({"status": status, "message": message})
@@ -939,7 +1053,7 @@ def auth_bootstrap(request: Request, payload: AuthBootstrapRequest) -> Response:
             user_agent=request.headers.get("User-Agent", ""),
         )
     except AuthError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail(), headers=exc.headers) from exc
     try:
         migration = runtime.store.assign_unowned_records(result["user"]["user_id"])
     except Exception as exc:
@@ -973,11 +1087,11 @@ def auth_login(request: Request, payload: AuthLoginRequest) -> Response:
         result = auth_service.login(
             payload.email,
             payload.password,
-            ip_address=_client_ip(request),
+            ip_address=_registration_client_ip(request),
             user_agent=request.headers.get("User-Agent", ""),
         )
     except AuthError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail(), headers=exc.headers) from exc
     try:
         migration = runtime.store.assign_unowned_records(
             auth_service.bootstrap_owner_user_id()
@@ -1056,7 +1170,7 @@ def auth_change_password(request: Request, payload: PasswordChangeRequest) -> Di
             ip_address=_client_ip(request),
         )
     except AuthError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail(), headers=exc.headers) from exc
     return {"status": "success", "user": user}
 
 
@@ -1090,7 +1204,7 @@ def admin_create_user(request: Request, payload: AdminUserCreateRequest) -> Dict
             ip_address=_client_ip(request),
         )
     except AuthError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail(), headers=exc.headers) from exc
     return {"status": "success", **result}
 
 
@@ -1112,7 +1226,7 @@ def admin_update_user(
             ip_address=_client_ip(request),
         )
     except AuthError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail(), headers=exc.headers) from exc
     return {"status": "success", "user": user}
 
 
@@ -1149,7 +1263,7 @@ def admin_review_registration_request(
             ip_address=_client_ip(request),
         )
     except AuthError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail(), headers=exc.headers) from exc
     return {"status": "success", "request": reviewed}
 
 
@@ -1165,7 +1279,7 @@ def admin_reset_password(user_id: str, request: Request) -> Dict[str, Any]:
             ip_address=_client_ip(request),
         )
     except AuthError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail(), headers=exc.headers) from exc
     return {"status": "success", **result}
 
 
@@ -1182,7 +1296,7 @@ def admin_revoke_sessions(user_id: str, request: Request) -> Dict[str, Any]:
             ip_address=_client_ip(request),
         )
     except AuthError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail(), headers=exc.headers) from exc
     return {"status": "success", "revoked": count}
 
 
@@ -1361,7 +1475,7 @@ async def upload_kb_material(
         if not isinstance(raw_binding, dict):
             raise ValueError("region_binding must be an object")
         raw = await request_limits.read_upload_limited(file, config.max_kb_upload_bytes)
-        result = runtime.kb_upload_material(
+        result = await _run_blocking(runtime.kb_upload_material,
             kb_item_id=kb_item_id,
             filename=file.filename or "material.dat",
             raw_bytes=raw,
@@ -1493,7 +1607,7 @@ async def compare_project_profiles(project_id: str, request: Request, payload: M
     from .services.map_profiles import compare
     project = _require_project_access(request, project_id)
     try:
-        return await asyncio.to_thread(compare, project, payload.coordinates, config.data_dir / "cache" / "map_profiles",
+        return await _run_blocking(compare, project, payload.coordinates, config.data_dir / "cache" / "map_profiles",
             payload.population_source_id, payload.terrain_source_id)
     except ProfileError as exc:
         raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
@@ -1503,7 +1617,7 @@ async def compare_project_profiles(project_id: str, request: Request, payload: M
 async def preview_project_profile(project_id: str, request: Request, payload: MapProfileRequest) -> Dict[str, Any]:
     project = _require_project_access(request, project_id)
     try:
-        return await asyncio.to_thread(
+        return await _run_blocking(
             preview_map_profile, project, payload.coordinates, payload.kind,
             payload.source_id, config.data_dir / "cache" / "map_profiles",
         )
@@ -1631,7 +1745,7 @@ async def upload_video_library_asset(
     _require_project_access(request, project_id)
     try:
         raw = await request_limits.read_upload_limited(file, config.max_video_upload_bytes)
-        return runtime.upload_video_asset(
+        return await _run_blocking(runtime.upload_video_asset,
             project_id=project_id,
             filename=file.filename or "uploaded_video",
             raw_bytes=raw,
@@ -1655,7 +1769,7 @@ async def upload_image_library_asset(
     _require_project_access(request, project_id)
     try:
         raw = await request_limits.read_upload_limited(file, config.max_image_upload_bytes)
-        return runtime.upload_image_asset(
+        return await _run_blocking(runtime.upload_image_asset,
             project_id=project_id,
             filename=file.filename or "uploaded_image",
             raw_bytes=raw,
@@ -1857,7 +1971,7 @@ def _voice_origin_allowed(websocket: "WebSocket") -> bool:
     return origin in extra
 
 
-def _websocket_user(websocket: "WebSocket") -> tuple[Dict[str, Any] | None, int]:
+async def _websocket_user(websocket: "WebSocket") -> tuple[Dict[str, Any] | None, int]:
     """Mirror of the HTTP auth middleware for the voice WebSocket.
 
     Returns ``(user_dict, close_code)``: ``(user, 0)`` on success, or
@@ -1873,7 +1987,10 @@ def _websocket_user(websocket: "WebSocket") -> tuple[Dict[str, Any] | None, int]
         return None, WS_CLOSE_UNAUTHORIZED
     if auth_service is None:
         return None, WS_CLOSE_UNAUTHORIZED
-    context = auth_service.authenticate(websocket.cookies.get(SESSION_COOKIE, ""))
+    try:
+        context = await auth_service.authenticate_async(websocket.cookies.get(SESSION_COOKIE, ""))
+    except AuthError:
+        return None, 4429
     if context is None:
         return None, WS_CLOSE_UNAUTHORIZED
     if context.user.get("must_change_password"):
@@ -1923,7 +2040,7 @@ async def assistant_voice_stream(websocket: "WebSocket") -> None:
     # forced password change) so the frontend can fall back to browser
     # speech recognition or route to the password screen instead of
     # retrying forever.
-    user, ws_reject_code = _websocket_user(websocket)
+    user, ws_reject_code = await _websocket_user(websocket)
     if user is None:
         await websocket.close(code=ws_reject_code)
         return
@@ -1949,11 +2066,13 @@ async def assistant_voice_stream(websocket: "WebSocket") -> None:
             code=WS_CLOSE_SESSION_LIMIT,
         )
         return
-    await websocket.accept()
     session = None
     try:
+        await websocket.accept()
         try:
-            session = engine.create_session()
+            session = await _run_voice_work(engine.create_session)
+        except WorkBusy:
+            raise
         except Exception:  # lazy recognizer load failed between checks
             await _reject_voice_stream(websocket, "load_failed", "语音识别模型加载失败", accepted=True)
             return
@@ -2002,14 +2121,16 @@ async def assistant_voice_stream(websocket: "WebSocket") -> None:
                     )
                     await websocket.close(code=WS_CLOSE_FRAME_TOO_LARGE)
                     break
-                for event in session.feed(pcm):
+                for event in await _run_voice_work(session.feed, pcm):
                     await websocket.send_text(json.dumps(event, ensure_ascii=False))
                 continue
             text = message.get("text")
             if text == "flush":
-                final = session.flush()
+                final = await _run_voice_work(session.flush)
                 await websocket.send_text(json.dumps(final or {"type": "final", "text": "", "end_reason": "stop"}, ensure_ascii=False))
                 break
+    except WorkBusy:
+        await _reject_voice_stream(websocket, "server_busy", "语音处理繁忙，请稍后重试。", accepted=True, code=WS_CLOSE_SESSION_LIMIT)
     except WebSocketDisconnect:
         pass
     finally:
@@ -2050,7 +2171,7 @@ async def upload_dataset(
     try:
         bounds = [float(value) for value in (west, south, east, north) if str(value).strip()]
         raw = await request_limits.read_upload_limited(file, config.max_dataset_upload_bytes)
-        result = runtime.upload_dataset(
+        result = await _run_blocking(runtime.upload_dataset,
             project_id=project_id,
             filename=file.filename or "upload.dat",
             raw_bytes=raw,
@@ -2173,9 +2294,9 @@ async def import_project_presentation(project_id: str, request: Request, file: U
     try:
         raw = await request_limits.read_upload_limited(file, config.max_ppt_upload_bytes)
         if Path(file.filename or "课件.pptx").suffix.lower() == ".pptx":
-            validate_office_bytes(raw, "pptx")
+            await document_processing.arun_document("office_validate", raw, kind="pptx")
         library = _presentation_library()
-        presentation_id = library.import_file(project_id, file.filename or "课件.pptx", raw, request_id)
+        presentation_id = await _run_blocking(library.import_file, project_id, file.filename or "课件.pptx", raw, request_id)
         try:
             library.start(project_id, presentation_id, app.state.ppt_executor)
         except ExecutorBusy:
@@ -2185,6 +2306,8 @@ async def import_project_presentation(project_id: str, request: Request, file: U
         raise HTTPException(413, "演示文稿超过大小限制") from None
     except ArchiveLimitError as exc:
         raise HTTPException(413, str(exc)) from exc
+    except DocumentResultLimitError:
+        raise
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -2493,23 +2616,25 @@ async def import_question_banks(
         raise HTTPException(status_code=400, detail="未选择任何文件。")
     if len(files) > 4:
         raise HTTPException(status_code=400, detail="单次导入最多 4 个文件。")
-    payload = []
-    for upload in files:
-        try:
-            raw = await request_limits.read_upload_limited(upload, config.max_question_bank_upload_bytes)
-        except request_limits.PayloadTooLarge as exc:
-            raise HTTPException(
-                status_code=413,
-                detail=f"题库文件 {upload.filename or ''} 超过大小限制（单文件上限 {config.max_question_bank_upload_bytes // (1024 * 1024)} MB）",
-            ) from exc
-        validate_office_bytes(raw, "docx")
-        payload.append({"filename": upload.filename or "题库.docx", "raw": raw})
-    context = _current_auth(request)
-    return runtime.classroom.submit_question_bank_import(
-        project_id,
-        payload,
-        owner_user_id=str(context.user.get("user_id") or ""),
-    )
+    with runtime.classroom.reserve_question_bank_import() as admission:
+        payload = []
+        for upload in files:
+            try:
+                raw = await request_limits.read_upload_limited(upload, config.max_question_bank_upload_bytes)
+            except request_limits.PayloadTooLarge as exc:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"题库文件 {upload.filename or ''} 超过大小限制（单文件上限 {config.max_question_bank_upload_bytes // (1024 * 1024)} MB）",
+                ) from exc
+            await document_processing.arun_document("office_validate", raw, kind="docx")
+            payload.append({"filename": upload.filename or "题库.docx", "raw": raw})
+        context = _current_auth(request)
+        return await _run_blocking(runtime.classroom.submit_question_bank_import,
+            project_id,
+            payload,
+            owner_user_id=str(context.user.get("user_id") or ""),
+            reservation=admission,
+        )
 
 
 @app.get("/question-banks")
@@ -2800,7 +2925,7 @@ async def import_lesson_design_docx(
         ) from exc
     context = _current_auth(request)
     try:
-        result = runtime.classroom.import_lesson_design_docx(
+        result = await _run_blocking(runtime.classroom.import_lesson_design_docx,
             project_id, str(context.user.get("user_id") or ""), raw, filename
         )
         design = _require_lesson_design_access(request, result["design"]["design_id"])
@@ -2808,6 +2933,8 @@ async def import_lesson_design_docx(
         return result
     except ArchiveLimitError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except DocumentResultLimitError:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -3031,24 +3158,25 @@ class PopulationZoneRequest(BaseModel):
 
 
 @app.post("/projects/{project_id}/population/zonal-summary")
-async def population_zonal_summary(project_id: str, payload: PopulationZoneRequest, request: Request) -> Dict[str, Any]:
+def population_zonal_summary(project_id: str, payload: PopulationZoneRequest, request: Request) -> Dict[str, Any]:
     _require_project_access(request, project_id)
     if payload.source_id != "worldpop_global_2015":
         raise HTTPException(status_code=400, detail="当前教学统计仅支持已核验的2015年全球人口数据包。")
     from .services.population_zonal import PopulationCountPackage, PopulationDataError
     # Validate the geometry and package in the worker. Never sum display colours.
-    job = runtime.store.create_job(project_id, "population_zonal", "圈内外人口统计", request={"source_id": payload.source_id})
-    async def run():
-        runtime.store.set_job_status(job.job_id, "running")
-        try:
-            result = await asyncio.to_thread(PopulationCountPackage(config.data_dir / "population" / payload.source_id).summarize, payload.geometry)
-            runtime.store.set_job_status(job.job_id, "completed", result=result)
-        except (PopulationDataError, ValueError, OSError) as exc:
-            runtime.store.set_job_status(job.job_id, "failed", error=str(exc))
-        except Exception:
-            runtime.store.set_job_status(job.job_id, "failed", error="统计数据不可用，请检查数据包后重试。")
-    asyncio.create_task(run())
-    return {"status": "success", "job_id": job.job_id}
+    with runtime.background_tasks.reserve() as admission, runtime.background_tasks.preparing(admission):
+        job = runtime.store.create_job(project_id, "population_zonal", "圈内外人口统计", request={"source_id": payload.source_id})
+        def run():
+            runtime.store.set_job_status(job.job_id, "running")
+            try:
+                result = PopulationCountPackage(config.data_dir / "population" / payload.source_id).summarize(payload.geometry)
+                runtime.store.set_job_status(job.job_id, "completed", result=result)
+            except (PopulationDataError, ValueError, OSError) as exc:
+                runtime.store.set_job_status(job.job_id, "failed", error=str(exc))
+            except Exception:
+                runtime.store.set_job_status(job.job_id, "failed", error="统计数据不可用，请检查数据包后重试。")
+        runtime._enqueue_background(admission, job.job_id, run)
+        return {"status": "success", "job_id": job.job_id}
 
 
 @app.post("/class-sessions/{session_id}/presentation")
@@ -3464,7 +3592,7 @@ async def generate_timeline(
     _require_project_access(request, project_id)
     try:
         raw = await request_limits.read_upload_limited(file, config.max_timeline_upload_bytes)
-        return runtime.generate_timeline(
+        return await _run_blocking(runtime.generate_timeline,
             project_id=project_id,
             filename=file.filename or "lesson.txt",
             raw_bytes=raw,
@@ -3475,8 +3603,12 @@ async def generate_timeline(
         raise HTTPException(status_code=413, detail="教学时间线素材文件超过大小限制") from exc
     except ArchiveLimitError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except DocumentResultLimitError:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (DocumentBusyError, DocumentTimeoutError, DocumentCancelledError, DocumentMemoryError, DocumentWorkerError):
+        raise
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=f"LLM 服务不可用: {exc}") from exc
 

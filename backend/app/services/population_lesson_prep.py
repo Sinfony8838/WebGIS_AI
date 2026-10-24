@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 
 from ..models import LessonRecord, build_dynamic_stages, utc_now
 from ..store import RuntimeStore
+from .background_tasks import BoundedTaskPool
 from .lessons import LessonService
 from .population_sources import PopulationSourceRegistryService
 
@@ -102,30 +103,37 @@ class PopulationLessonPrepService:
         self.store = store
         self.lessons = lessons
         self.sources = sources
+        self.tasks = BoundedTaskPool(name="population-prep")
 
     def submit(self, project_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        if self.store.get_project(project_id) is None:
-            raise KeyError(f"Unknown project: {project_id}")
-        lesson_id = str(payload.get("lesson_id") or "").strip()
-        lesson = self.lessons.get_lesson(lesson_id)
-        request = self._normalize_request(lesson, payload)
-        self._require_population_scope(lesson, request)
-        job = self.store.create_job(
-            project_id=project_id,
-            job_type="population_lesson_prep",
-            title=f"人口专题智能备课：{lesson.title}",
-            workflow_type="population_lesson_prep",
-            request=request,
-            stages=build_dynamic_stages(list(PREP_STAGE_KEYS)),
-        )
-        threading.Thread(target=self._run, args=(job.job_id,), daemon=True).start()
-        return {
-            "status": "accepted",
-            "capability": "population_lesson_prep",
-            "job_id": job.job_id,
-            "project_id": project_id,
-            "lesson_id": lesson_id,
-        }
+        with self.tasks.reserve() as admission, self.tasks.preparing(admission):
+            if self.store.get_project(project_id) is None:
+                raise KeyError(f"Unknown project: {project_id}")
+            lesson_id = str(payload.get("lesson_id") or "").strip()
+            lesson = self.lessons.get_lesson(lesson_id)
+            request = self._normalize_request(lesson, payload)
+            self._require_population_scope(lesson, request)
+            job = self.store.create_job(
+                project_id=project_id,
+                job_type="population_lesson_prep",
+                title=f"人口专题智能备课：{lesson.title}",
+                workflow_type="population_lesson_prep",
+                request=request,
+                stages=build_dynamic_stages(list(PREP_STAGE_KEYS)),
+            )
+            try:
+                admission.submit(self._run, job.job_id, on_expire=lambda: self.store.set_job_status(
+                    job.job_id, "failed", error="备课任务排队超时或服务关闭，请重新提交。"))
+            except BaseException:
+                self.store.set_job_status(job.job_id, "failed", error="备课任务无法启动，请重新提交。")
+                raise
+            return {
+                "status": "accepted",
+                "capability": "population_lesson_prep",
+                "job_id": job.job_id,
+                "project_id": project_id,
+                "lesson_id": lesson_id,
+            }
 
     def resolve_change_set(
         self,

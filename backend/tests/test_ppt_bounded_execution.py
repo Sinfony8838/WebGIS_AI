@@ -13,6 +13,7 @@ from fastapi import HTTPException, Request, UploadFile
 
 from backend.app import main
 from backend.app.services.auth import AuthContext
+from backend.app.services.background_tasks import BoundedTaskPool
 from backend.app.services.bounded_executor import BoundedExecutor, ExecutorBusy
 from backend.app.services.ppt_renderer import PptRenderError
 
@@ -31,7 +32,13 @@ class PptBoundedExecutionTest(unittest.IsolatedAsyncioTestCase):
                 outputs_dir=Path(self.directory.name),
             )),
             patch.object(main, "auth_service", None),
-            patch.object(main, "runtime", SimpleNamespace(health=lambda: {"status": "ok"})),
+            patch.object(main, "runtime", SimpleNamespace(
+                health=lambda: {"status": "ok"}, background_tasks=BoundedTaskPool(),
+                workflow_executor=SimpleNamespace(startup=lambda: None, shutdown=lambda: None, tasks=BoundedTaskPool()),
+                classroom=SimpleNamespace(startup=lambda: None, background_tasks=BoundedTaskPool(),
+                    question_bank_tasks=BoundedTaskPool(),
+                    population_lesson_prep=SimpleNamespace(tasks=BoundedTaskPool())),
+            )),
         ]
         for item in self.patches:
             item.start()

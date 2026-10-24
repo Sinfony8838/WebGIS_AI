@@ -58,13 +58,14 @@ PASSWORD_WORK = PasswordWork()
 class SessionReadPool:
     """Bound submissions before enqueueing; never share password-work slots."""
 
-    def __init__(self, workers: int = 4, max_waiting: int = 32) -> None:
+    def __init__(self, workers: int = 4, max_waiting: int = 32, *, name: str = "webgis-auth-read") -> None:
         self._slots = BoundedSemaphore(workers + max_waiting)
         self._lock = Lock()
         self._closed = False
+        self._pending = 0
         # ThreadPoolExecutor starts threads lazily, so synchronous-only callers
         # and legacy service fixtures do not acquire persistent threads.
-        self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="webgis-auth-read")
+        self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix=name)
 
     async def run(self, function: Callable, *args: Any) -> Any:
         with self._lock:
@@ -72,15 +73,25 @@ class SessionReadPool:
                 raise WorkBusy()
             try:
                 future = self._executor.submit(function, *args)
+                self._pending += 1
             except BaseException:
                 self._slots.release()
                 raise
-        future.add_done_callback(lambda _: self._slots.release())
+        def finished(_):
+            with self._lock:
+                self._pending -= 1
+            self._slots.release()
+        future.add_done_callback(finished)
         waiter = asyncio.wrap_future(future)
         # A cancelled caller must not cancel queued work and prematurely free
         # admission, leaving unlimited cancelled items in the executor queue.
         waiter.add_done_callback(lambda done: None if done.cancelled() else done.exception())
         return await asyncio.shield(waiter)
+
+    @property
+    def closed(self) -> bool:
+        with self._lock:
+            return self._closed
 
     def close(self) -> None:
         with self._lock:
@@ -88,4 +99,10 @@ class SessionReadPool:
         self._executor.shutdown(wait=True, cancel_futures=False)
 
     async def aclose(self) -> None:
-        await asyncio.to_thread(self.close)
+        with self._lock:
+            self._closed = True
+            busy = self._pending > 0
+        if busy:
+            await asyncio.to_thread(self.close)
+        else:
+            self.close()

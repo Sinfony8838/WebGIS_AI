@@ -320,14 +320,21 @@ class AdmissionGate:
     queueing without bound.
     """
 
-    def __init__(self, max_concurrent: int, timeout: float = 120.0) -> None:
+    def __init__(self, max_concurrent: int, timeout: float = 120.0, max_waiting: int = 8) -> None:
         self._semaphore = threading.BoundedSemaphore(max(1, int(max_concurrent)))
         self.timeout = float(timeout)
+        self.max_waiting = max(0, int(max_waiting))
         self._lock = threading.Lock()
         self._waiting = 0
 
     def acquire(self, timeout: float | None = None, *, cancel_event: threading.Event | None = None) -> bool:
+        if cancel_event is not None and cancel_event.is_set():
+            return False
+        if self._semaphore.acquire(blocking=False):
+            return True
         with self._lock:
+            if self._waiting >= self.max_waiting:
+                return False
             self._waiting += 1
         try:
             budget = self.timeout if timeout is None else timeout
@@ -364,15 +371,16 @@ class AdmissionGate:
 class VoiceSessionGate:
     """Per-user cap on concurrent voice WebSocket sessions."""
 
-    def __init__(self, max_per_user: int) -> None:
+    def __init__(self, max_per_user: int, max_total: int = 32) -> None:
         self.max_per_user = max(1, int(max_per_user))
+        self.max_total = max(1, int(max_total))
         self._counts: Dict[str, int] = {}
         self._lock = threading.Lock()
 
     def enter(self, user_key: str) -> bool:
         with self._lock:
             current = self._counts.get(user_key, 0)
-            if current >= self.max_per_user:
+            if current >= self.max_per_user or sum(self._counts.values()) >= self.max_total:
                 return False
             self._counts[user_key] = current + 1
             return True

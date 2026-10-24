@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from .config import AppConfig
 from .models import LayerRecord, ProjectRecord, WorkflowRecord, build_assistant_v2_stages, build_workflow_stages, utc_now
+from .services.background_tasks import BoundedTaskPool
 from .services.assistant import AssistantService
 from .services.agent_harness import HARNESS_ID, HARNESS_VERSION, HarnessExecutionError
 from .services.classroom_workflow import ClassroomWorkflowRuntime
@@ -331,6 +332,7 @@ class WebGISRuntime:
         self.config = config or AppConfig()
         self.config.ensure_dirs()
         self.store = store if store is not None else RuntimeStore(self.config.state_file)
+        self.background_tasks = BoundedTaskPool(name="webgis-runtime")
         interrupted = {"jobs": [], "workflows": []}
         if store is None:
             try:
@@ -365,6 +367,14 @@ class WebGISRuntime:
         )
         self.interaction_operations = InteractionOperations(self)
         self._normalize_loaded_projects()
+
+    def _enqueue_background(self, admission, job_id, function, *args):
+        try:
+            admission.submit(function, *args, on_expire=lambda: self.store.set_job_status(
+                job_id, "failed", error="后台任务排队超时或服务关闭，请重新提交。"))
+        except BaseException:
+            self.store.set_job_status(job_id, "failed", error="后台任务无法启动，请重新提交。")
+            raise
 
     # Compatibility entry points retained for callers built against the
     # pre-merge classroom runtime API.
@@ -975,19 +985,17 @@ class WebGISRuntime:
             raise
 
     def submit_template(self, project_id: str, template_id: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        job = self.store.create_job(
-            project_id=project_id,
-            job_type="template",
-            title=f"应用模板 {template_id}",
-            workflow_type="template_run",
-            request={"template_id": template_id, "payload": payload or {}},
-        )
-        threading.Thread(
-            target=self._run_template_job,
-            args=(job.job_id, project_id, template_id, payload or {}),
-            daemon=True,
-        ).start()
-        return {"status": "accepted", "job_id": job.job_id, "project_id": project_id}
+        with self.background_tasks.reserve() as admission, self.background_tasks.preparing(admission):
+            job = self.store.create_job(
+                project_id=project_id,
+                job_type="template",
+                title=f"应用模板 {template_id}",
+                workflow_type="template_run",
+                request={"template_id": template_id, "payload": payload or {}},
+            )
+            self._enqueue_background(admission, job.job_id, self._run_template_job,
+                                     job.job_id, project_id, template_id, payload or {})
+            return {"status": "accepted", "job_id": job.job_id, "project_id": project_id}
 
     def submit_assistant_message(
         self,
@@ -1004,118 +1012,116 @@ class WebGISRuntime:
         image_attachments: Optional[List[Dict[str, Any]]] = None,
         *, actor_role: str = "", actor_user_id: str = "", ui_observation_protocol: int = 0,
     ) -> Dict[str, Any]:
-        # Heavy GIS work moved to /workflow/*; assistant actions are WebGIS-only.
-        self._require_project(project_id)
-        self.session_engine.memory.require_project_conversation(project_id, conversation_id)
-        require_classroom_context(self.store, project_id, map_context)
-        require_classroom_context(self.store, project_id, {"teaching_context": teaching_context})
-        require_context_lesson(self.store, project_id, map_context, actor_role=actor_role)
-        require_context_lesson(self.store, project_id, {"teaching_context": teaching_context}, actor_role=actor_role)
-        normalized_target = "webgis"
-        normalized_input_mode = input_mode if input_mode in {"text", "voice"} else "text"
-        normalized_mode = normalize_mode(assistant_mode)
-        if conversation_id:
-            bind_conversation(self.store, project_id, normalized_mode, conversation_id, actor_user_id)
-        history = []
-        if normalized_mode == "chat":
-            map_context = {key: value for key, value in (map_context or {}).items() if key in {"image_attachment", "image_attachments", "screen_snapshot"}}
-            teaching_context = {}
-        elif image_attachments or (map_context or {}).get("image_attachment") or (map_context or {}).get("image_attachments"):
-            raise ValueError("图片问答请使用 Chat 模式")
-        resolved_attachments = self.resolve_image_attachments(project_id, image_attachments or [])
-        map_context = resolve_image_context(self.config, self.store, project_id, map_context)
-        if resolved_attachments:
-            map_context = {**map_context, "image_attachments": resolved_attachments, "image_attachment": resolved_attachments[0]}
-        map_context = self.session_engine.prepare_image_context(project_id, message, conversation_id, map_context)
-        conversation = bind_conversation(self.store, project_id, normalized_mode, conversation_id, actor_user_id)
-        conversation_id = conversation.conversation_id
-        # One assistant entry point, one safety boundary.  The v2 feature flag
-        # remains readable for deployment compatibility, but no request may
-        # bypass the session harness through the former legacy worker.
-        job = self.store.create_job(
-            project_id=project_id,
-            job_type="assistant",
-            title="课堂助教请求",
-            workflow_type="assistant_message",
-            request={
-                "message": message,
-                "map_context": map_context or {},
-                "assistant_mode": normalized_mode,
+        with self.background_tasks.reserve() as admission, self.background_tasks.preparing(admission):
+            # Heavy GIS work moved to /workflow/*; assistant actions are WebGIS-only.
+            self._require_project(project_id)
+            self.session_engine.memory.require_project_conversation(project_id, conversation_id)
+            require_classroom_context(self.store, project_id, map_context)
+            require_classroom_context(self.store, project_id, {"teaching_context": teaching_context})
+            require_context_lesson(self.store, project_id, map_context, actor_role=actor_role)
+            require_context_lesson(self.store, project_id, {"teaching_context": teaching_context}, actor_role=actor_role)
+            normalized_target = "webgis"
+            normalized_input_mode = input_mode if input_mode in {"text", "voice"} else "text"
+            normalized_mode = normalize_mode(assistant_mode)
+            if conversation_id:
+                bind_conversation(self.store, project_id, normalized_mode, conversation_id, actor_user_id)
+            history = []
+            if normalized_mode == "chat":
+                map_context = {key: value for key, value in (map_context or {}).items() if key in {"image_attachment", "image_attachments", "screen_snapshot"}}
+                teaching_context = {}
+            elif image_attachments or (map_context or {}).get("image_attachment") or (map_context or {}).get("image_attachments"):
+                raise ValueError("图片问答请使用 Chat 模式")
+            resolved_attachments = self.resolve_image_attachments(project_id, image_attachments or [])
+            map_context = resolve_image_context(self.config, self.store, project_id, map_context)
+            if resolved_attachments:
+                map_context = {**map_context, "image_attachments": resolved_attachments, "image_attachment": resolved_attachments[0]}
+            map_context = self.session_engine.prepare_image_context(project_id, message, conversation_id, map_context)
+            conversation = bind_conversation(self.store, project_id, normalized_mode, conversation_id, actor_user_id)
+            conversation_id = conversation.conversation_id
+            # One assistant entry point, one safety boundary.  The v2 feature flag
+            # remains readable for deployment compatibility, but no request may
+            # bypass the session harness through the former legacy worker.
+            job = self.store.create_job(
+                project_id=project_id,
+                job_type="assistant",
+                title="课堂助教请求",
+                workflow_type="assistant_message",
+                request={
+                    "message": message,
+                    "map_context": map_context or {},
+                    "assistant_mode": normalized_mode,
+                    "conversation_id": conversation_id,
+                    "history": history or [],
+                    "target": normalized_target,
+                    "input_mode": normalized_input_mode,
+                    "actor_user_id": actor_user_id,
+                    "ui_observation_protocol": 1 if ui_observation_protocol == 1 else 0,
+                    "screen_snapshot": screen_snapshot or {},
+                    "teaching_context": teaching_context or {},
+                    "image_attachments": image_attachments or [],
+                },
+                stages=build_assistant_v2_stages(),
+            )
+            self._enqueue_background(admission, job.job_id, self._run_assistant_v2_job,
+                    job.job_id,
+                    project_id,
+                    message,
+                    map_context or {},
+                    normalized_mode,
+                    conversation_id,
+                    history or [],
+                    normalized_target,
+                    normalized_input_mode,
+                    screen_snapshot or {},
+                    teaching_context or {},
+                    resolved_attachments,
+                    actor_role,
+            )
+            return {
+                "status": "accepted",
+                "job_id": job.job_id,
+                "project_id": project_id,
                 "conversation_id": conversation_id,
-                "history": history or [],
-                "target": normalized_target,
-                "input_mode": normalized_input_mode,
-                "actor_user_id": actor_user_id,
-                "ui_observation_protocol": 1 if ui_observation_protocol == 1 else 0,
-                "screen_snapshot": screen_snapshot or {},
-                "teaching_context": teaching_context or {},
-                "image_attachments": image_attachments or [],
-            },
-            stages=build_assistant_v2_stages(),
-        )
-        threading.Thread(
-            target=self._run_assistant_v2_job,
-            args=(
-                job.job_id,
-                project_id,
-                message,
-                map_context or {},
-                normalized_mode,
-                conversation_id,
-                history or [],
-                normalized_target,
-                normalized_input_mode,
-                screen_snapshot or {},
-                teaching_context or {},
-                resolved_attachments,
-                actor_role,
-            ),
-            daemon=True,
-        ).start()
-        return {
-            "status": "accepted",
-            "job_id": job.job_id,
-            "project_id": project_id,
-            "conversation_id": conversation_id,
-            "assistant_mode": normalized_mode,
-            "read_only": normalized_mode == "chat",
-        }
+                "assistant_mode": normalized_mode,
+                "read_only": normalized_mode == "chat",
+            }
 
     def confirm_assistant_action(self, confirmation_id: str, decision: str = "approve", *, actor_role: str = "", actor_user_id: str = "") -> Dict[str, Any]:
-        confirmation = self.store.get_confirmation(confirmation_id)
-        if confirmation is None:
-            raise KeyError(f"Unknown confirmation: {confirmation_id}")
-        self._require_project(confirmation.project_id)
-        self.session_engine.memory.require_project_conversation(
-            confirmation.project_id, confirmation.conversation_id
-        )
-        conversation = self.store.get_conversation(confirmation.conversation_id)
-        if conversation and conversation.assistant_mode in {"chat", "operate"}:
-            bind_conversation(self.store, confirmation.project_id, conversation.assistant_mode, conversation.conversation_id, actor_user_id)
-        normalized_decision = "reject" if str(decision).strip().lower() == "reject" else "approve"
-        require_confirmation_classroom(self.store, confirmation.project_id, confirmation.payload or {})
-        require_confirmation_lessons(self.store, confirmation.project_id, confirmation.payload or {}, actor_role=actor_role)
-        require_confirmation_images(self.config, self.store, confirmation.project_id, confirmation.payload or {})
-        job = self.store.create_job(
-            project_id=confirmation.project_id,
-            job_type="assistant_confirmation",
-            title=confirmation.title or ("Reject assistant action" if normalized_decision == "reject" else "Confirm assistant action"),
-            workflow_type="assistant_confirmation",
-            request={"confirmation_id": confirmation_id, "conversation_id": confirmation.conversation_id, "decision": normalized_decision,
-                     "assistant_mode": conversation.assistant_mode if conversation else "",
-                     "actor_user_id": actor_user_id, "teaching_context": confirmation.payload.get("map_context", {}).get("teaching_context", {}),
-                     "ui_observation_protocol": (self.store.get_job(confirmation.job_id).request.get("ui_observation_protocol", 0) if self.store.get_job(confirmation.job_id) else 0)},
-            stages=build_assistant_v2_stages(),
-        )
-        threading.Thread(target=self._run_confirmation_job, args=(job.job_id, confirmation_id, normalized_decision, actor_role), daemon=True).start()
-        return {
-            "status": "accepted",
-            "job_id": job.job_id,
-            "project_id": confirmation.project_id,
-            "conversation_id": confirmation.conversation_id,
-            "confirmation_id": confirmation_id,
-            "decision": normalized_decision,
-        }
+        with self.background_tasks.reserve() as admission, self.background_tasks.preparing(admission):
+            confirmation = self.store.get_confirmation(confirmation_id)
+            if confirmation is None:
+                raise KeyError(f"Unknown confirmation: {confirmation_id}")
+            self._require_project(confirmation.project_id)
+            self.session_engine.memory.require_project_conversation(
+                confirmation.project_id, confirmation.conversation_id
+            )
+            conversation = self.store.get_conversation(confirmation.conversation_id)
+            if conversation and conversation.assistant_mode in {"chat", "operate"}:
+                bind_conversation(self.store, confirmation.project_id, conversation.assistant_mode, conversation.conversation_id, actor_user_id)
+            normalized_decision = "reject" if str(decision).strip().lower() == "reject" else "approve"
+            require_confirmation_classroom(self.store, confirmation.project_id, confirmation.payload or {})
+            require_confirmation_lessons(self.store, confirmation.project_id, confirmation.payload or {}, actor_role=actor_role)
+            require_confirmation_images(self.config, self.store, confirmation.project_id, confirmation.payload or {})
+            job = self.store.create_job(
+                project_id=confirmation.project_id,
+                job_type="assistant_confirmation",
+                title=confirmation.title or ("Reject assistant action" if normalized_decision == "reject" else "Confirm assistant action"),
+                workflow_type="assistant_confirmation",
+                request={"confirmation_id": confirmation_id, "conversation_id": confirmation.conversation_id, "decision": normalized_decision,
+                         "assistant_mode": conversation.assistant_mode if conversation else "",
+                         "actor_user_id": actor_user_id, "teaching_context": confirmation.payload.get("map_context", {}).get("teaching_context", {}),
+                         "ui_observation_protocol": (self.store.get_job(confirmation.job_id).request.get("ui_observation_protocol", 0) if self.store.get_job(confirmation.job_id) else 0)},
+                stages=build_assistant_v2_stages(),
+            )
+            self._enqueue_background(admission, job.job_id, self._run_confirmation_job, job.job_id, confirmation_id, normalized_decision, actor_role)
+            return {
+                "status": "accepted",
+                "job_id": job.job_id,
+                "project_id": confirmation.project_id,
+                "conversation_id": confirmation.conversation_id,
+                "confirmation_id": confirmation_id,
+                "decision": normalized_decision,
+            }
 
     def get_conversation(self, conversation_id: str) -> Dict[str, Any]:
         conversation = self.store.get_conversation(conversation_id)
@@ -1310,9 +1316,10 @@ class WebGISRuntime:
         self, project_id: str, prompt: str, title: str = "", model: str = "",
         aspect_ratio: str = "16:9", prompt_optimizer: bool = True,
     ) -> Dict[str, Any]:
-        job = self._create_image_generation_job(project_id, prompt, title, model, aspect_ratio, prompt_optimizer)
-        threading.Thread(target=self._run_image_generation_background, args=(job.job_id,), daemon=True).start()
-        return {"status": "accepted", "job_id": job.job_id, "project_id": project_id, "status_url": f"/jobs/{job.job_id}"}
+        with self.background_tasks.reserve() as admission, self.background_tasks.preparing(admission):
+            job = self._create_image_generation_job(project_id, prompt, title, model, aspect_ratio, prompt_optimizer)
+            self._enqueue_background(admission, job.job_id, self._run_image_generation_background, job.job_id)
+            return {"status": "accepted", "job_id": job.job_id, "project_id": project_id, "status_url": f"/jobs/{job.job_id}"}
 
     def _create_image_generation_job(
         self, project_id: str, prompt: str, title: str, model: str,
@@ -2016,24 +2023,25 @@ class WebGISRuntime:
         except KeyError as exc:
             raise KeyError(f"Unknown workflow template: {chosen_template}") from exc
 
-        workflow_record = WorkflowRecord.create(
-            project_id=project_id,
-            user_message=message,
-            intent=match.intent,
-            template_id=match.template_id,
-            mode=mode,
-            workflow_json=match.workflow,
-        )
-        workflow_record, _validation = self.workflow_executor.submit(workflow_record)
-        return {
-            "status": "success" if workflow_record.status != "error" else "error",
-            "workflow_id": workflow_record.workflow_id,
-            "workflow_status": workflow_record.status,
-            "intent": workflow_record.intent,
-            "template_id": match.template_id,
-            "parameters": match.parameters,
-            "error": workflow_record.error,
-        }
+        with self.workflow_executor.reserve_submission() as admission:
+            workflow_record = WorkflowRecord.create(
+                project_id=project_id,
+                user_message=message,
+                intent=match.intent,
+                template_id=match.template_id,
+                mode=mode,
+                workflow_json=match.workflow,
+            )
+            workflow_record, _validation = self.workflow_executor.submit(workflow_record, reservation=admission)
+            return {
+                "status": "success" if workflow_record.status != "error" else "error",
+                "workflow_id": workflow_record.workflow_id,
+                "workflow_status": workflow_record.status,
+                "intent": workflow_record.intent,
+                "template_id": match.template_id,
+                "parameters": match.parameters,
+                "error": workflow_record.error,
+            }
 
     def get_workflow(self, workflow_id: str) -> Dict[str, Any]:
         snapshot = self.workflow_executor.get_workflow_snapshot(workflow_id)
