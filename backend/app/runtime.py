@@ -922,6 +922,8 @@ class WebGISRuntime:
         lon_field: str = "",
         image_bounds: Optional[List[float]] = None,
     ) -> Dict[str, Any]:
+        if Path(filename).suffix.lower() == ".zip":
+            self.dataset_service.validate_archive(raw_bytes)
         job = self.store.create_job(
             project_id=project_id,
             job_type="dataset_upload",

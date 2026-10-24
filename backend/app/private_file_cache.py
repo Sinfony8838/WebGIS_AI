@@ -9,7 +9,8 @@ class PrivateFileCacheMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         path = scope.get("path", "")
-        if scope["type"] != "http" or not (path == "/files" or path.startswith("/files/")):
+        private_file_path = any(path == root or path.startswith(root + "/") for root in ("/files", "/workflow-files"))
+        if scope["type"] != "http" or not private_file_path:
             await self.app(scope, receive, send)
             return
 

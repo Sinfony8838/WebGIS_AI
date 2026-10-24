@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import io
 import sys
+import zipfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -86,8 +88,14 @@ class TimelineServiceExtractTextTest(unittest.TestCase):
                 ],
             )
 
+        # A structurally valid package reaches the mocked text extractor.
+        package = io.BytesIO()
+        with zipfile.ZipFile(package, "w") as archive:
+            archive.writestr("[Content_Types].xml", "<Types/>")
+            archive.writestr("_rels/.rels", "<Relationships/>")
+            archive.writestr("word/document.xml", "<document/>")
         with patch.dict(sys.modules, {"docx": SimpleNamespace(Document=fake_document)}):
-            text = svc.extract_text("lesson.docx", b"fake-docx")
+            text = svc.extract_text("lesson.docx", package.getvalue())
 
         self.assertIn("导入活动", text)
         self.assertIn("新授内容", text)

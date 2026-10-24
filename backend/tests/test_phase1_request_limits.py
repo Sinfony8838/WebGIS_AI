@@ -96,14 +96,14 @@ class BodySizeMiddlewareTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["received"], len(response.request.content))
 
-    def test_non_json_and_get_requests_pass_through(self) -> None:
+    def test_non_json_requests_obey_the_absolute_budget(self) -> None:
         client = TestClient(self._build_app(64))
         response = client.post(
             "/echo",
             content=b"z" * 512,
             headers={"content-type": "application/octet-stream"},
         )
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 413)
 
 
 class PptUploadCeilingTest(unittest.TestCase):
