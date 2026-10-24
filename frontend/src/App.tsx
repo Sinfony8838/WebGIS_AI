@@ -1,5 +1,6 @@
 import { applyGlobeView, globeViewTarget, type GlobeViewPreset } from "./lib/globeViewCommand";
 import { fetchConversation } from "./api";
+import { removedLayersApplied, submitAssistantConfirmation } from "./lib/assistantConfirmation";
 import { applyMeasurement } from "./lib/measurementCommands";
 import { ProfileComparison } from "./components/ProfileComparison";
 import type { MapProfileComparison } from "./types";
@@ -525,6 +526,8 @@ export default function App({
     }
   ]);
   const [interactionConversationId, setInteractionConversationId] = useState("");
+  const assistantConversationIdsRef = useRef({teaching: conversationId, interaction: interactionConversationId});
+  assistantConversationIdsRef.current = {teaching: conversationId, interaction: interactionConversationId};
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const lastInputModeRef = useRef<AssistantInputMode>("text");
   const lastSubmittedTabRef = useRef<AssistantTab>("teaching");
@@ -1564,8 +1567,8 @@ export default function App({
   const uiActionReceiverRef = useRef(new UiActionReceiver());
   const cancelledUiJobsRef = useRef(new Set<string>());
   const pendingInteractionStopRef = useRef(false);
-  const observedUiStateRef = useRef({ viewMode, layerManagerOpen, databaseViewerOpen, workflowDockOpen, materialViewerOpen, project });
-  observedUiStateRef.current = { viewMode, layerManagerOpen, databaseViewerOpen, workflowDockOpen, materialViewerOpen, project };
+  const observedUiStateRef = useRef({ viewMode, layerManagerOpen, databaseViewerOpen, workflowDockOpen, materialViewerOpen, project, layerState });
+  observedUiStateRef.current = { viewMode, layerManagerOpen, databaseViewerOpen, workflowDockOpen, materialViewerOpen, project, layerState };
 
   const handleAssistantUiActions = useCallback(
     (payload: JobRecord) => {
@@ -1624,13 +1627,15 @@ export default function App({
   );
 
   const subscribeToJob = useCallback(
-    (jobId: string, readOnly = false, recovered?: PendingJob) => {
+    (jobId: string, readOnly = false, recovered?: PendingJob, submittedTabOverride?: AssistantTab, confirmedConversationId?: string) => {
       if (!project || subscribedJobIdsRef.current.has(jobId)) return;
       const projectId = project.project_id;
       const userId = currentUser.user_id;
       const scopeEpoch = jobScopeEpochRef.current;
       const submittedSessionId = teachingContextRef.current?.session_id || "";
-      const submittedTab = recovered?.tab || lastSubmittedTabRef.current;
+      const submittedTab = submittedTabOverride || recovered?.tab || lastSubmittedTabRef.current;
+      const isScopeCurrent = () => scopeEpoch === jobScopeEpochRef.current && (confirmedConversationId === undefined
+        || (assistantTabRef.current === submittedTab && assistantConversationIdsRef.current[submittedTab] === confirmedConversationId));
       // A recovered voice result must not start speaking during a new lesson.
       const submittedInputMode = recovered ? "text" : lastInputModeRef.current;
       subscribedJobIdsRef.current.add(jobId);
@@ -1651,13 +1656,13 @@ export default function App({
         onRecovering: () => pushToast("info", "正在恢复任务结果", "连接中断，正在按原任务编号续查。无需重复提交，任务完成后会显示结果。"),
         onJob: async (payload) => {
           if (!jobStreamsRef.current.has(source)) return;
-          if (scopeEpoch !== jobScopeEpochRef.current || payload.project_id !== projectId) return;
+          if (!isScopeCurrent() || payload.project_id !== projectId) return;
           setCurrentJob(payload);
           setAssistantJobs(old => ({...old, [submittedTab]: payload}));
           if (payload.activity?.cancel_requested) cancelledUiJobsRef.current.add(payload.job_id);
           if (payload.ui_actions?.some((action) => action.status === "pending")) {
             await uiActionReceiverRef.current.receive(payload, {
-              isCurrent: () => scopeEpoch === jobScopeEpochRef.current && !cancelledUiJobsRef.current.has(payload.job_id),
+              isCurrent: () => isScopeCurrent() && !cancelledUiJobsRef.current.has(payload.job_id),
               recovered: Boolean(recovered), sessionId: teachingContextRef.current?.session_id || "",
               acknowledge: acknowledgeUiAction,
               apply: async (action) => {
@@ -1677,7 +1682,7 @@ export default function App({
                     read: () => globeRef.current?.getRenderEvidence() ?? null,
                     fly: () => globeRef.current?.flyTo(target.lon, target.lat, target.altitudeMeters, 1, target.pitchDeg),
                     cancel: () => globeRef.current?.cancelFlight(),
-                    isCurrent: () => scopeEpoch === jobScopeEpochRef.current && !cancelledUiJobsRef.current.has(payload.job_id)
+                    isCurrent: () => isScopeCurrent() && !cancelledUiJobsRef.current.has(payload.job_id)
                       && submittedSessionId === (teachingContextRef.current?.session_id || "")
                   });
                   if (observedUiStateRef.current.viewMode !== "globe") throw new Error("三维视图已被关闭，未确认成功");
@@ -1691,14 +1696,20 @@ export default function App({
                 await new Promise<void>((resolve, reject) => {
                   const deadline = Date.now() + 2500;
                   const check = () => {
-                    if (scopeEpoch !== jobScopeEpochRef.current || cancelledUiJobsRef.current.has(payload.job_id) || submittedSessionId !== (teachingContextRef.current?.session_id || "")) return reject(new Error("项目或课堂已变化"));
+                    if (!isScopeCurrent() || cancelledUiJobsRef.current.has(payload.job_id) || submittedSessionId !== (teachingContextRef.current?.session_id || "")) return reject(new Error("项目或课堂已变化"));
                     const state = observedUiStateRef.current;
-                    const applied = action.type === "create_measurement" ? state.viewMode === "plane" && Boolean(measureSourceRef.current?.getFeatures().some(f => f.get("measure_record_id") === action.record.id))
+                    const removalsApplied = action.type !== "sync_project" || removedLayersApplied({
+                      removedIds: action.removed_layer_ids,
+                      currentLayerIds: state.layerState?.items.map(layer => layer.layer_id),
+                      hasPlaneLayer: id => businessLayerCacheRef.current.has(id) || vectorLayerByIdRef.current.has(id),
+                      hasGlobeLayer: id => globeRef.current?.hasProjectLayer(id) ?? (state.viewMode === "globe" ? undefined : false)
+                    });
+                    const applied = removalsApplied && (action.type === "create_measurement" ? state.viewMode === "plane" && Boolean(measureSourceRef.current?.getFeatures().some(f => f.get("measure_record_id") === action.record.id))
                       : action.type === "show_profile_comparison" ? profileComparisonRef.current?.result.result_id === action.comparison.result_id
                       : action.type === "switch_view" ? state.viewMode === action.mode
                       : action.type === "open_panel" ? (action.panel === "layers" ? state.layerManagerOpen : action.panel === "database" ? state.databaseViewerOpen : state.workflowDockOpen) === (action.open !== false)
                       : action.type === "open_material" ? state.materialViewerOpen
-                      : state.project?.project_id === projectId && (!action.project_updated_at || Boolean(state.project.updated_at && state.project.updated_at >= action.project_updated_at));
+                      : state.project?.project_id === projectId && (!action.project_updated_at || Boolean(state.project.updated_at && state.project.updated_at >= action.project_updated_at)));
                     if (applied) return resolve();
                     if (Date.now() >= deadline) return reject(new Error("界面状态尚未完成应用"));
                     window.requestAnimationFrame(check);
@@ -1725,7 +1736,7 @@ export default function App({
               }
             }
             // Keep the saved ID if navigation interrupted result delivery.
-            if (scopeEpoch !== jobScopeEpochRef.current) return;
+            if (!isScopeCurrent()) return;
             if (!readOnly && !payload.ui_actions?.length && !payload.result?.route && !payload.activity?.cancel_requested) handleAssistantUiActions(payload);
             const message = payload.result?.assistant_message || payload.result?.summary || payload.error || "";
             const nextConversationId = String(payload.result?.conversation_id || "");
@@ -4582,8 +4593,33 @@ export default function App({
           }}
           onOpenDesign={openLessonDesignWorkspace}
           onCancelTask={() => {void cancelAssistantTurn().catch(error => pushToast("error","停止失败",String(error)));}}
-          onConfirm={(confirmationId, decision = "approve") => {
-            void confirmAssistantAction(confirmationId, decision).then((response) => subscribeToJob(response.job_id));
+          onConfirm={async (confirmationId, decision = "approve") => {
+            const tab = assistantTabRef.current;
+            const frozenConversation = assistantConversationIdsRef.current[tab];
+            const epoch = jobScopeEpochRef.current;
+            const isProjectCurrent = captureProjectScope(project.project_id);
+            await submitAssistantConfirmation({
+              blocked: () => switchingAssistantRef.current || assistantSubmittingRef.current || jobStreamsRef.current.busy
+                || assistantJobs[tab]?.result?.confirmation_id !== confirmationId,
+              setSubmitting: value => {assistantSubmittingRef.current = value;},
+              request: () => confirmAssistantAction(confirmationId, decision),
+              isCurrent: () => isProjectCurrent() && epoch === jobScopeEpochRef.current && assistantTabRef.current === tab
+                && assistantConversationIdsRef.current[tab] === frozenConversation,
+              cancelStale: async jobId => {cancelledUiJobsRef.current.add(jobId);await cancelAssistantJob(jobId);},
+              accept: jobId => {
+                activeAssistantJobRef.current = jobId;
+                lastSubmittedTabRef.current = tab;
+                lastInputModeRef.current = "text";
+                cancelSpeech();
+                if (tab === "interaction") setInteractionBusy(true);
+                if (pendingInteractionStopRef.current) {
+                  pendingInteractionStopRef.current = false;
+                  cancelledUiJobsRef.current.add(jobId);
+                  void cancelAssistantJob(jobId).catch(() => pushToast("error", "停止失败", "请使用停止任务按钮重试。"));
+                }
+                subscribeToJob(jobId, false, undefined, tab, frozenConversation);
+              }
+            });
           }}
           onVoiceSubmit={(message) => {
             const transcript = message.trim();

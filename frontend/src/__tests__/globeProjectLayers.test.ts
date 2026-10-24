@@ -159,6 +159,22 @@ describe("project vector revision reconciliation", () => {
     } else expect(t.dataSources.length).toBe(0);
     expect(t.loader).toHaveBeenCalledTimes(1);
   });
+  it("does not attest deletion until an in-flight Cesium add has been cleaned up", async () => {
+    const t = setup(); const add = t.dataSources.add.bind(t.dataSources); const wait = deferred<void>();
+    vi.spyOn(t.dataSources, "add").mockImplementation(async data => { await wait.promise; return add(data); });
+    t.manager.sync("A", [layer()], true); await flush();
+    expect(t.manager.hasLayer("one")).toBe(true);
+    t.manager.sync("A", [], true);
+    expect(t.manager.hasLayer("one")).toBe(true);
+    wait.resolve(); await flush();
+    expect(t.manager.hasLayer("one")).toBe(false); expect(t.dataSources.length).toBe(0);
+  });
+  it("reports hidden project records until a removal snapshot has been applied", async () => {
+    const t = setup(); t.manager.sync("A", [layer({visible:false})], false);
+    expect(t.manager.hasLayer("one")).toBe(true);
+    t.manager.sync("A", [], false);
+    expect(t.manager.hasLayer("one")).toBe(false); expect(t.loader).not.toHaveBeenCalled();
+  });
   it("preserves urban/thematic sources on removal and teardown", async () => {
     const t = setup(); const external = source("external"); await t.dataSources.add(external);
     t.manager.sync("A", [layer()], true); await flush(); t.manager.sync("A", [], true);

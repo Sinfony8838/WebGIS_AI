@@ -55,6 +55,7 @@ export type Map3DGlobeHandle = {
   subscribeInkRender: (render: () => void) => (() => void) | undefined;
   getCameraState: () => CameraState | null;
   getRenderEvidence: () => GlobeRenderEvidence | null;
+  hasProjectLayer: (id: string) => boolean | undefined;
   cancelFlight: () => void;
   captureImage: () => string;
   getCanvasRect: () => { left: number; top: number; width: number; height: number } | null;
@@ -670,6 +671,7 @@ export const Map3DGlobe = forwardRef<Map3DGlobeHandle, Props>(function Map3DGlob
       },
       getCameraState: () => lastCameraStateRef.current,
       getRenderEvidence: () => renderEvidenceRef.current,
+      hasProjectLayer: id => projectLayerManagerRef.current?.hasLayer(id),
       cancelFlight: () => viewerRef.current?.camera.cancelFlight(),
       captureImage: () => {
         const viewer = viewerRef.current;

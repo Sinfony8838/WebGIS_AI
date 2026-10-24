@@ -135,6 +135,9 @@ class InteractionOperations:
                 run.output_tokens = int(usage.get("output_tokens") or 0)
                 run.unknown_usage = usage.get("input_tokens") is None or usage.get("output_tokens") is None
                 run.model_ms = float(usage.get("model_ms") or 0)
+                run.route = str(usage.get("route") or "direct")
+                run.search_calls = int(usage.get("search_calls") or 0)
+                run.search_ms = float(usage.get("search_ms") or 0)
                 run.started -= float(usage.get("elapsed_ms") or 0) / 1000
         run.observe_ui = lambda actions: self.observe_ui(run, actions)
         with self._lock:

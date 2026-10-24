@@ -19,3 +19,31 @@ describe("Chat and Operate panel",()=>{
  it("shows actual generated image rather than speculative output",()=>{render(<CopilotWidget {...props()} chatLog={[{role:"assistant",text:"已生成",timestamp:"now",actions_executed:[{action:{tool_name:"generate_image",tool_params:{}},result:{generated_artifact:{title:"示意图",metadata:{public_url:"/files/image.png"}}}}]}]}/>);expect(screen.getByRole("img",{name:"示意图"})).toHaveAttribute("src","http://localhost:3000/files/image.png");});
  it("renders source URLs safely",()=>{render(<CopilotWidget {...props()} chatLog={[{role:"assistant",text:"**知识回答**",timestamp:"now",citations:[{title:"不可信链接",url:"javascript:alert(1)"}]}]}/>);expect(screen.queryByRole("link")).not.toBeInTheDocument();expect(screen.getByText("知识回答")).toBeInTheDocument();});
 });
+
+function confirmationJob(): NonNullable<ComponentProps<typeof CopilotWidget>["currentJob"]> {
+ return {job_id:"pending",project_id:"p",job_type:"assistant",title:"删除图层",workflow_type:"assistant",status:"completed",updated_at:"now",steps:[],stages:{},
+  result:{requires_confirmation:true,confirmation_id:"confirm-1",assistant_message:"将删除 2 个图层：人口密度、地形。新增图层不在本次范围内。"}};
+}
+describe("confirmation controls",()=>{
+ it("shows frozen targets and blocks duplicate clicks during submission",async()=>{
+  const p=props();let finish!:()=>void;p.onConfirm=vi.fn(()=>new Promise<void>(resolve=>{finish=resolve;}));
+  render(<CopilotWidget {...p} currentJob={confirmationJob()}/>);
+  expect(screen.getByText(/将删除 2 个图层/)).toBeVisible();
+  fireEvent.click(screen.getByRole("button",{name:"确认",exact:true}));
+  fireEvent.click(screen.getByRole("button",{name:"正在提交确认"}));
+  expect(p.onConfirm).toHaveBeenCalledTimes(1);expect(p.onConfirm).toHaveBeenCalledWith("confirm-1","approve");
+  expect(screen.getByRole("button",{name:"取消",exact:true})).toBeDisabled();
+  finish();await waitFor(()=>expect(screen.getByRole("button",{name:"确认",exact:true})).toBeEnabled());
+ });
+ it("reports API rejection and leaves a usable confirmation",async()=>{
+  const p=props();p.onConfirm=vi.fn(async()=>{throw new Error("确认已过期");});
+  render(<CopilotWidget {...p} currentJob={confirmationJob()}/>);fireEvent.click(screen.getByRole("button",{name:"确认",exact:true}));
+  await waitFor(()=>expect(p.onVoiceNotice).toHaveBeenCalledWith("error","确认操作失败","确认已过期"));
+  expect(screen.getByRole("button",{name:"确认",exact:true})).toBeEnabled();
+ });
+ it("disables approval and rejection while the accepted job runs",()=>{
+  render(<CopilotWidget {...props()} busy currentJob={confirmationJob()}/>);
+  expect(screen.getByRole("button",{name:"确认",exact:true})).toBeDisabled();
+  expect(screen.getByRole("button",{name:"取消",exact:true})).toBeDisabled();
+ });
+});

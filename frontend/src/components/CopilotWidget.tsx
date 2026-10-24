@@ -22,7 +22,7 @@ type Props = {
   onSubmit: () => void;
   onQuickPrompt?: (prompt: string) => void;
   /** 打开全屏教案设计工作台（教案设计快捷入口；不发送聊天消息）。 */
-  onConfirm: (confirmationId: string, decision?: "approve" | "reject") => void;
+  onConfirm: (confirmationId: string, decision?: "approve" | "reject") => void | Promise<void>;
   onVoiceSubmit: (transcript: string) => void | Promise<boolean | void>;
   onCancelTask?: () => void;
   onOpenDesign?: (designId: string) => void;
@@ -85,6 +85,15 @@ export function CopilotWidget(props: Props) {
   };
   const [minimized,setMinimized]=useState(false);
   const [switching,setSwitching]=useState(false);
+  const [confirming,setConfirming]=useState(false);
+  const confirmingRef=useRef(false);
+  const confirm=async (id:string,decision:"approve"|"reject")=>{
+    if(confirmingRef.current || props.busy || switching)return;
+    confirmingRef.current=true;setConfirming(true);
+    try {await props.onConfirm(id,decision);}
+    catch(error){props.onVoiceNotice("error","确认操作失败",error instanceof Error?error.message:String(error));}
+    finally {confirmingRef.current=false;setConfirming(false);}
+  };
   const [micMenu,setMicMenu]=useState(false);
   const [voiceState,setVoiceState]=useState<AssistantVoiceSnapshot>(EMPTY);
   const voice=useRef<AssistantVoice | null>(null);
@@ -142,7 +151,11 @@ export function CopilotWidget(props: Props) {
       </article>)}
       {props.busy && <AssistantActivity job={props.currentJob} busy/>}
       {props.busy && props.currentJob?.activity?.answer_text && <article className="assistant-message"><MessageText text={props.currentJob.activity.answer_text}/></article>}
-      {confirmation && <div className="assistant-confirmation"><span>此操作需要确认</span><button onClick={()=>props.onConfirm(confirmation,"approve")}>确认</button><button onClick={()=>props.onConfirm(confirmation,"reject")}>取消</button></div>}
+      {confirmation && <div className="assistant-confirmation"><div role="group" aria-label="确认操作" aria-busy={confirming || props.busy}>
+        <MessageText text={props.currentJob?.result?.assistant_message || "请核对以上操作后确认执行。"}/>
+        <button disabled={confirming || props.busy || switching} onClick={()=>void confirm(confirmation,"approve")}>{confirming?"正在提交确认":"确认"}</button>
+        <button disabled={confirming || props.busy || switching} onClick={()=>void confirm(confirmation,"reject")}>取消</button>
+      </div></div>}
       <div ref={bottom}/>
     </main>
     <footer>
