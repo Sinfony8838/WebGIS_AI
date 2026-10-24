@@ -85,4 +85,6 @@ Operate 输入“删除当前所有打开的图层”，核对数量和名称，
 
 ## 集成后与发布状态
 
-待追加最新 main 集成检查、PR 和实际生产版本证据。当前文件不能作为已发布声明。
+已合入 main 的 PR #95、#96、#97。集成提交 2e36726 上定向后端 120 passed / 39 subtests passed（68.27 秒）；前端 105 文件、818 测试通过（74.46 秒），构建通过（7.75 秒），git diff --check 通过。独立只读审查未发现阻塞项。
+
+修复 PR：https://github.com/Sinfony8838/WebGIS_AI/pull/98 。本文件记录源码与验收范围；合并状态以该 PR 为准，实际部署版本以生产 backend/data/public-runtime/release.json 以及公网健康检查为准。
