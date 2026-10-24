@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from ..models import ClassSessionRecord, LessonRecord
+from .background_tasks import BoundedTaskPool, TaskReservation
 from .lessons import LessonService
 from .lesson_design import LessonDesignService
 from .lesson_rehearsal import LessonRehearsalService
@@ -34,6 +35,19 @@ class ClassroomWorkflowRuntime:
         self.runtime = runtime
         self.config = runtime.config
         self.store = runtime.store
+        self.background_tasks = BoundedTaskPool(
+            max_workers=getattr(self.config, "classroom_max_running", 2),
+            max_queued=getattr(self.config, "classroom_queue_max", 8),
+            queue_timeout=getattr(self.config, "classroom_queue_timeout_seconds", 120.0),
+            name="webgis-classroom",
+        )
+        # Imports retain uploaded buffers: isolate their smaller queue budget.
+        self.question_bank_tasks = BoundedTaskPool(
+            max_workers=getattr(self.config, "question_bank_max_running", 1),
+            max_queued=getattr(self.config, "question_bank_queue_max", 2),
+            queue_timeout=getattr(self.config, "classroom_queue_timeout_seconds", 120.0),
+            name="webgis-question-bank",
+        )
         self.store.fail_interrupted_practice_exports(_PRACTICE_WORKER_RUN_ID)
         self.visual_query_service = VisualQueryService(self.config)
         self.lesson_service = LessonService(
@@ -128,19 +142,38 @@ class ClassroomWorkflowRuntime:
     def capture_lesson_scene(self, lesson_id: str, stage_id: str, snapshot: Dict[str, Any]) -> Dict[str, Any]:
         return self.lesson_service.capture_stage_scene(lesson_id, stage_id, snapshot)
 
+    def _submit_background_job(self, pool: BoundedTaskPool, function: Any, args: tuple,
+                               *, reservation: Optional[TaskReservation] = None, **job_fields: Any):
+        with reservation or pool.reserve() as admission, pool.preparing(admission):
+            job = self.store.create_job(**job_fields)
+            try:
+                admission.submit(
+                    function, job.job_id, *args,
+                    on_expire=lambda: self.store.set_job_status(
+                        job.job_id, "failed", error="后台任务排队超时，请重新提交。"),
+                )
+            except Exception:
+                self.store.set_job_status(job.job_id, "failed", error="后台任务启动失败，请重试。")
+                raise
+            return job
+
+    def startup(self) -> None:
+        self.background_tasks.startup()
+        self.question_bank_tasks.startup()
+
+    def shutdown(self) -> None:
+        # Stop both admissions before waiting, then drain accepted store writes.
+        self.background_tasks.shutdown(wait=False)
+        self.question_bank_tasks.shutdown(wait=False)
+        self.background_tasks.shutdown()
+        self.question_bank_tasks.shutdown()
+
     def submit_lesson_import(self, project_id: str, text: str, owner_user_id: str = "") -> Dict[str, Any]:
-        job = self.store.create_job(
-            project_id=project_id,
-            job_type="lesson_import",
-            title="Import lesson plan",
-            workflow_type="lesson_import",
-            request={"text_length": len(text or "")},
+        job = self._submit_background_job(
+            self.background_tasks, self._run_lesson_import_job, (text, owner_user_id),
+            project_id=project_id, job_type="lesson_import", title="Import lesson plan",
+            workflow_type="lesson_import", request={"text_length": len(text or "")},
         )
-        threading.Thread(
-            target=self._run_lesson_import_job,
-            args=(job.job_id, text, owner_user_id),
-            daemon=True,
-        ).start()
         return {"status": "accepted", "job_id": job.job_id, "project_id": project_id}
 
     def submit_population_lesson_prep(self, project_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -224,25 +257,22 @@ class ClassroomWorkflowRuntime:
     # Question banks（题库导入/检索）
     # ------------------------------------------------------------------
 
+    def reserve_question_bank_import(self) -> TaskReservation:
+        """Reserve before receiving upload buffers or creating an import job."""
+        return self.question_bank_tasks.reserve()
+
     def submit_question_bank_import(
-        self,
-        project_id: str,
-        files: List[Dict[str, Any]],
-        owner_user_id: str = "",
+        self, project_id: str, files: List[Dict[str, Any]], owner_user_id: str = "", *,
+        reservation: Optional[TaskReservation] = None,
     ) -> Dict[str, Any]:
-        """``files`` 为 [{"filename": ..., "raw": bytes}]；导入在后台线程执行。"""
-        job = self.store.create_job(
-            project_id=project_id,
-            job_type="question_bank_import",
-            title="Import question bank",
+        """Admit before persistence; imports have a separate bounded queue."""
+        job = self._submit_background_job(
+            self.question_bank_tasks, self._run_question_bank_import_job,
+            (project_id, files, owner_user_id), reservation=reservation,
+            project_id=project_id, job_type="question_bank_import", title="Import question bank",
             workflow_type="question_bank_import",
             request={"file_count": len(files), "filenames": [str(item.get("filename") or "") for item in files]},
         )
-        threading.Thread(
-            target=self._run_question_bank_import_job,
-            args=(job.job_id, project_id, files, owner_user_id),
-            daemon=True,
-        ).start()
         return {"status": "accepted", "job_id": job.job_id, "project_id": project_id}
 
     def _run_question_bank_import_job(
@@ -1156,14 +1186,11 @@ class ClassroomWorkflowRuntime:
 
     def submit_session_report(self, session_id: str) -> Dict[str, Any]:
         session = self._require_session(session_id)
-        job = self.store.create_job(
-            project_id=session.project_id,
-            job_type="class_report",
-            title="Generate class report",
-            workflow_type="class_report",
-            request={"session_id": session_id},
+        job = self._submit_background_job(
+            self.background_tasks, self._run_session_report_job, (session_id,),
+            project_id=session.project_id, job_type="class_report", title="Generate class report",
+            workflow_type="class_report", request={"session_id": session_id},
         )
-        threading.Thread(target=self._run_session_report_job, args=(job.job_id, session_id), daemon=True).start()
         return {"status": "accepted", "job_id": job.job_id, "session_id": session_id}
 
     def submit_session_practice(self, session_id: str, selection: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -1174,9 +1201,12 @@ class ClassroomWorkflowRuntime:
                 if existing["request"].get("selection") != selection:
                     raise ValueError("该课堂正在导出另一组选题，请等待完成后再修改。")
                 return {"status": "accepted", "job_id": existing["job_id"], "session_id": session_id}
-            job = self.store.create_job(session.project_id, "practice_export", "生成课后练习双卷",
-                                        request={"session_id": session_id, "selection": selection, "execution_mode": "in_process", "worker_run_id": _PRACTICE_WORKER_RUN_ID}, workflow_type="practice_export")
-            threading.Thread(target=self._run_session_practice_job, args=(job.job_id, session_id, selection), daemon=True).start()
+            job = self._submit_background_job(
+                self.background_tasks, self._run_session_practice_job, (session_id, selection),
+                project_id=session.project_id, job_type="practice_export", title="生成课后练习双卷",
+                request={"session_id": session_id, "selection": selection, "execution_mode": "in_process", "worker_run_id": _PRACTICE_WORKER_RUN_ID},
+                workflow_type="practice_export",
+            )
             return {"status": "accepted", "job_id": job.job_id, "session_id": session_id}
 
     def _run_session_practice_job(self, job_id: str, session_id: str, selection: Optional[Dict[str, Any]]) -> None:

@@ -16,6 +16,8 @@ state directly.
 """
 from __future__ import annotations
 
+from collections import OrderedDict, deque
+from copy import deepcopy
 import json
 import logging
 import queue
@@ -32,6 +34,7 @@ from ..store import RuntimeStore
 from .pyqgis_worker import PyQgisWorkerManager
 from .pyqgis_worker.errors import make_error
 from .request_limits import AdmissionGate
+from .background_tasks import BoundedTaskPool, TaskReservation
 from .workflow_validator import ValidationError, ValidationResult, validate_workflow
 
 
@@ -431,44 +434,106 @@ class _WorkflowCancelled(Exception):
     """Internal control flow; public cancellation codes remain unchanged."""
 
 
-class _EventBus:
-    """In-memory pub-sub keyed by workflow_id; subscribers are queue.Queue."""
+class _Subscription(queue.Queue):
+    def __init__(self, capacity: int, *, requires_snapshot: bool = False) -> None:
+        super().__init__(maxsize=capacity)
+        self.requires_snapshot = requires_snapshot
 
-    def __init__(self) -> None:
+
+class _EventBus:
+    """Bounded replay and live queues; overflow closes transport, never work."""
+
+    def __init__(self, *, history_limit: int = 128, history_workflows: int = 128,
+                 subscriber_limit: int = 128, subscriber_queue: int = 128,
+                 retention_seconds: float = 600.0) -> None:
         self._lock = threading.RLock()
-        self._subscribers: Dict[str, List["queue.Queue[Optional[_Event]]"]] = {}
-        self._history: Dict[str, List[_Event]] = {}
+        self._history_limit = max(1, int(history_limit))
+        self._history_workflows = max(1, int(history_workflows))
+        self._subscriber_limit = max(1, int(subscriber_limit))
+        self._subscriber_queue = max(1, int(subscriber_queue))
+        self._retention_seconds = max(0.0, float(retention_seconds))
+        self._subscribers: Dict[str, List[_Subscription]] = {}
+        self._history: OrderedDict[str, tuple[deque, float, bool]] = OrderedDict()
+
+    def _prune(self) -> None:
+        cutoff = time.monotonic() - self._retention_seconds
+        while self._history:
+            _, (_, touched, _) = next(iter(self._history.items()))
+            if touched > cutoff and len(self._history) <= self._history_workflows:
+                break
+            self._history.popitem(last=False)
+
+    @staticmethod
+    def _close(q: _Subscription, event: Optional[_Event]) -> None:
+        # Remove stale queued deltas, then leave an explicit recovery signal.
+        # Consumers never block producers and a terminal slot is always free.
+        while True:
+            try:
+                q.get_nowait()
+            except queue.Empty:
+                break
+        q.put_nowait(event)
+
+    @staticmethod
+    def _recovery(workflow_id: str, reason: str) -> _Event:
+        # Existing clients already close/re-query on this transport event.
+        return _Event("stream_idle_timeout", {
+            "workflow_id": workflow_id, "reason": reason,
+            "recovery": "get_workflow_snapshot_then_reconnect", "retryable": True,
+        })
 
     def publish(self, workflow_id: str, event: _Event) -> None:
         with self._lock:
-            self._history.setdefault(workflow_id, []).append(event)
-            for q in self._subscribers.get(workflow_id, []):
+            self._prune()
+            events, _, truncated = self._history.pop(
+                workflow_id, (deque(maxlen=self._history_limit), 0, event.type != "workflow_created"))
+            truncated = truncated or len(events) == self._history_limit
+            # Replay must describe the original event, not later record mutations.
+            event = deepcopy(event)
+            events.append(event)
+            self._history[workflow_id] = (events, time.monotonic(), truncated)
+            self._prune()
+            subscribers = self._subscribers.get(workflow_id, [])
+            for q in list(subscribers):
                 try:
                     q.put_nowait(event)
-                except Exception:  # pragma: no cover
-                    pass
+                except queue.Full:
+                    subscribers.remove(q)
+                    self._close(q, self._recovery(workflow_id, "slow_consumer"))
+            if not subscribers:
+                self._subscribers.pop(workflow_id, None)
 
-    def subscribe(self, workflow_id: str) -> "queue.Queue[Optional[_Event]]":
-        q: "queue.Queue[Optional[_Event]]" = queue.Queue()
+    def subscribe(self, workflow_id: str) -> _Subscription:
         with self._lock:
-            for past in self._history.get(workflow_id, []):
-                q.put_nowait(past)
+            self._prune()
+            history = self._history.get(workflow_id)
+            replay = list(history[0]) if history else []
+            needs_snapshot = not history or history[2] or len(replay) > self._subscriber_queue
+            q = _Subscription(self._subscriber_queue, requires_snapshot=needs_snapshot)
+            if sum(map(len, self._subscribers.values())) >= self._subscriber_limit:
+                q.put_nowait(self._recovery(workflow_id, "subscriber_capacity"))
+                return q
+            if not needs_snapshot:
+                for event in replay:
+                    q.put_nowait(event)
             self._subscribers.setdefault(workflow_id, []).append(q)
-        return q
+            return q
 
     def unsubscribe(self, workflow_id: str, q: "queue.Queue[Optional[_Event]]") -> None:
         with self._lock:
             subs = self._subscribers.get(workflow_id, [])
             if q in subs:
                 subs.remove(q)
-            try:
-                q.put_nowait(None)
-            except Exception:  # pragma: no cover
-                pass
+            if not subs:
+                self._subscribers.pop(workflow_id, None)
+            if isinstance(q, _Subscription):
+                self._close(q, None)
 
     def history(self, workflow_id: str) -> List[_Event]:
         with self._lock:
-            return list(self._history.get(workflow_id, []))
+            self._prune()
+            history = self._history.get(workflow_id)
+            return list(history[0]) if history else []
 
 
 class WorkflowExecutor:
@@ -496,8 +561,21 @@ class WorkflowExecutor:
             qgis_python=getattr(config, "qgis_python", "") or "",
         )
         self.summary_callback = summary_callback
-        self.bus = _EventBus()
-        self._workers: Dict[str, threading.Thread] = {}
+        self.tasks = BoundedTaskPool(
+            max_workers=getattr(config, "workflow_max_running", 2),
+            max_queued=getattr(config, "workflow_queue_max", 8),
+            queue_timeout=getattr(config, "workflow_queue_timeout_seconds", 120.0),
+            name="webgis-workflow",
+        )
+        self.bus = _EventBus(
+            history_limit=getattr(config, "workflow_event_history_max", 128),
+            history_workflows=getattr(config, "workflow_event_workflows_max", 128),
+            subscriber_limit=getattr(config, "workflow_subscribers_max", 128),
+            subscriber_queue=getattr(config, "workflow_subscriber_queue_max", 128),
+            retention_seconds=getattr(config, "workflow_event_retention_seconds", 600.0),
+        )
+        self._admissions: Dict[str, TaskReservation] = {}
+        self._workers: Dict[str, Optional[threading.Thread]] = {}
         self._workers_lock = threading.RLock()
         self._cancel_events: Dict[str, threading.Event] = {}
 
@@ -511,8 +589,18 @@ class WorkflowExecutor:
     # Registration / submission
     # ------------------------------------------------------------------
 
-    def submit(self, workflow: WorkflowRecord, validate: bool = True) -> Tuple[WorkflowRecord, Optional[ValidationResult]]:
-        """Persist + start a workflow. Returns (record, validation result)."""
+    def reserve_submission(self) -> TaskReservation:
+        """Call at reception, before creating a workflow/job or reading uploads."""
+        return self.tasks.reserve()
+
+    def submit(self, workflow: WorkflowRecord, validate: bool = True, *,
+               reservation: Optional[TaskReservation] = None) -> Tuple[WorkflowRecord, Optional[ValidationResult]]:
+        with reservation or self.reserve_submission() as admission, self.tasks.preparing(admission):
+            return self._submit_reserved(workflow, validate, admission)
+
+    def _submit_reserved(self, workflow: WorkflowRecord, validate: bool,
+                         admission: TaskReservation) -> Tuple[WorkflowRecord, Optional[ValidationResult]]:
+        """Persist only after admission. Validation keeps its legacy error record."""
         validation: Optional[ValidationResult] = None
         if validate:
             validation = validate_workflow(workflow.workflow_json)
@@ -550,32 +638,28 @@ class WorkflowExecutor:
                 )
                 return self._reject_before_run(workflow), validation
         # Persist & emit creation event
-        thread = None
         try:
             # Register before initial persistence/events so cancellation also
             # covers preparation and the gap before the thread starts.
             with self._workers_lock:
                 self._cancel_events[workflow.workflow_id] = threading.Event()
+                self._workers[workflow.workflow_id] = None
+                self._admissions[workflow.workflow_id] = admission
             self.store.create_workflow(workflow)
             self._write_workflow_files(workflow)
             self.bus.publish(workflow.workflow_id, _Event(
                 "workflow_created", {"workflow": workflow.to_dict()},
             ))
-            thread = threading.Thread(
-                target=self._run_workflow,
-                args=(workflow.workflow_id,),
-                name=f"workflow-{workflow.workflow_id}",
-                daemon=True,
+            admission.submit(
+                self._run_workflow, workflow.workflow_id,
+                on_expire=lambda: self._run_workflow(workflow.workflow_id, expired=True),
             )
-            with self._workers_lock:
-                self._workers[workflow.workflow_id] = thread
-            thread.start()
         except Exception:
             logger.exception("failed to prepare workflow execution %s", workflow.workflow_id)
             try:
                 self._fail_unexpected_execution(workflow.workflow_id, workflow)
             finally:
-                self._release_execution(workflow.workflow_id, thread)
+                self._release_execution(workflow.workflow_id, None)
         return workflow, validation
 
     def _reject_before_run(self, workflow: WorkflowRecord) -> WorkflowRecord:
@@ -640,16 +724,26 @@ class WorkflowExecutor:
                 "error": make_error("INTERNAL_ERROR", "workflow not found", "找不到该工作流"),
             }}
             return
-        q = self.bus.subscribe(workflow_id)
+        with self._workers_lock:
+            # A recovered baseline and its live subscription share the same
+            # publication fence: no older delta may follow a newer snapshot.
+            q = self.bus.subscribe(workflow_id)
+            snapshot = self.get_workflow_snapshot(workflow_id)
         try:
             terminal = {"workflow_success", "workflow_error"}
             # Subscribe first, then inspect again: a terminal commit between
-            # lookup and subscription cannot be lost, including after restart
-            # when the in-memory event history is empty.
-            persisted_terminal = self._terminal_snapshot_event(self.get_workflow_snapshot(workflow_id))
+            # lookup and subscription cannot be lost, including after restart.
+            persisted_terminal = self._terminal_snapshot_event(snapshot)
             if persisted_terminal is not None:
                 yield persisted_terminal
                 return
+            if isinstance(q, _Subscription) and q.requires_snapshot:
+                # Subscribe before the read so subsequent deltas cannot be lost.
+                # Do not replay an incomplete tail over this current snapshot.
+                yield {"type": "workflow_created", "payload": {
+                    "workflow": snapshot,
+                    "recovery_reason": "history_unavailable",
+                }}
             last_seen = time.monotonic()
             while True:
                 try:
@@ -669,7 +763,7 @@ class WorkflowExecutor:
                     return
                 last_seen = time.monotonic()
                 yield event.to_dict()
-                if event.type in terminal:
+                if event.type in terminal or event.type == "stream_idle_timeout":
                     return
         finally:
             self.bus.unsubscribe(workflow_id, q)
@@ -678,14 +772,22 @@ class WorkflowExecutor:
     # Workflow execution thread
     # ------------------------------------------------------------------
 
-    def _run_workflow(self, workflow_id: str) -> None:
+    def _run_workflow(self, workflow_id: str, *, expired: bool = False) -> None:
         record = None
         try:
             with self._workers_lock:
                 self._cancel_events.setdefault(workflow_id, threading.Event())
+                if workflow_id in self._admissions:
+                    self._workers[workflow_id] = threading.current_thread()
             record = self.store.get_workflow(workflow_id)
             if record is not None:
-                self._execute_workflow(record)
+                if expired and not self._cancel_requested(workflow_id):
+                    record.status = "error"
+                    record.error = make_error("QGIS_BUSY", "workflow queue wait expired",
+                                              "工作流排队超时，请稍后重新提交。")
+                    self._fail_unexpected_execution(workflow_id, record)
+                else:
+                    self._execute_workflow(record)
         except _WorkflowCancelled:
             self._fail_unexpected_execution(workflow_id, record)
         except Exception:
@@ -759,6 +861,7 @@ class WorkflowExecutor:
                 if self._workers.get(workflow_id) is thread:
                     self._workers.pop(workflow_id, None)
                     self._cancel_events.pop(workflow_id, None)
+                    self._admissions.pop(workflow_id, None)
 
     def _cancel_requested(self, workflow_id: str) -> bool:
         with self._workers_lock:
@@ -828,12 +931,14 @@ class WorkflowExecutor:
                     f"地理处理排队已达上限，请稍后重试（排队上限 {self.qgis_gate_timeout_hint()}）。",
                     step_id=step_id,
                 )
-                state["status"] = "error"
-                state["error"] = error
-                self.store.save_workflow(record)
-                self.bus.publish(workflow_id, _Event(
-                    "step_error", {"workflow_id": workflow_id, "step": dict(state), "error": error},
-                ))
+                with self._workers_lock:
+                    self._check_cancel(workflow_id)
+                    state["status"] = "error"
+                    state["error"] = error
+                    self.store.save_workflow(record)
+                    self.bus.publish(workflow_id, _Event(
+                        "step_error", {"workflow_id": workflow_id, "step": dict(state), "error": error},
+                    ))
                 success = False
                 break
             try:
@@ -1110,6 +1215,9 @@ class WorkflowExecutor:
             if event is None or event.is_set():
                 return 0
             event.set()
+            admission = self._admissions.get(workflow_id)
+        if admission is not None and admission.cancel(lambda: self._run_workflow(workflow_id)):
+            return 1
         cancel = getattr(self.worker_manager, "cancel_workflow", None)
         if cancel is None:  # stub managers in tests
             return 1
@@ -1119,11 +1227,20 @@ class WorkflowExecutor:
             logger.exception("failed to cancel workflow %s", workflow_id)
             return 1
 
+    def startup(self) -> None:
+        self.tasks.startup()
+
     def shutdown(self) -> None:
+        self.tasks.shutdown(wait=False)
+        with self._workers_lock:
+            workflows = list(self._cancel_events)
+        for workflow_id in workflows:
+            self.cancel_workflow(workflow_id)
         try:
             self.worker_manager.shutdown(timeout=3.0)
         except Exception:  # pragma: no cover
             pass
+        self.tasks.shutdown()
 
     def init_warning(self) -> Optional[Dict[str, Any]]:
         return self.worker_manager.init_warning()

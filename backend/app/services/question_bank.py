@@ -28,12 +28,12 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from ..config import AppConfig
 from .minimax_client import LLMClient
+from .document_processing import run_document
+from .archive_safety import ArchiveLimitError, ArchiveValidationError
 from .question_bank_parser import (
-    DocxValidationError,
-    QuestionBankDocxParser,
+    DocxValidationError, DocxBudgetError, MAX_FILE_BYTES,
     normalize_bank_filename,
     pair_parsed_banks,
-    validate_docx_bytes,
     MAX_FILES_PER_IMPORT,
 )
 
@@ -245,7 +245,14 @@ class QuestionBankService:
 
         units: Dict[str, Dict[str, Tuple[str, bytes]]] = {}
         for filename, raw in files:
-            validate_docx_bytes(raw, filename)
+            if len(raw) > MAX_FILE_BYTES:
+                raise DocxBudgetError(f"文件 {filename} 超过单文件 50MB 上限。")
+            try:
+                run_document("office_validate", raw, kind="docx", filename=filename)
+            except ArchiveLimitError as exc:
+                raise DocxBudgetError(f"文件 {filename}：{exc}") from exc
+            except ArchiveValidationError as exc:
+                raise DocxValidationError(f"文件 {filename}：{exc}") from exc
             base, label = normalize_bank_filename(filename)
             if not base:
                 raise DocxValidationError(f"文件名无效：{filename}")
@@ -279,10 +286,10 @@ class QuestionBankService:
         analysis: Optional[Any] = None
         if "original" in bucket:
             filename, raw = bucket["original"]
-            original = QuestionBankDocxParser(filename, raw).parse()
+            original = run_document("question_bank_docx", raw, filename=filename)
         if "analysis" in bucket:
             filename, raw = bucket["analysis"]
-            analysis = QuestionBankDocxParser(filename, raw).parse()
+            analysis = run_document("question_bank_docx", raw, filename=filename)
 
         if original is None and analysis is None:
             raise DocxValidationError(f"题库「{base_name}」没有可解析的文件。")

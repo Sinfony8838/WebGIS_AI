@@ -67,35 +67,17 @@ class TimelineServiceExtractTextTest(unittest.TestCase):
     def test_docx_extracts_paragraphs_and_tables(self) -> None:
         svc = TimelineService(llm_client=None)  # type: ignore[arg-type]
 
-        def fake_document(_stream):  # type: ignore[no-untyped-def]
-            return SimpleNamespace(
-                paragraphs=[
-                    SimpleNamespace(text="导入活动"),
-                    SimpleNamespace(text=""),
-                    SimpleNamespace(text="新授内容"),
-                ],
-                tables=[
-                    SimpleNamespace(
-                        rows=[
-                            SimpleNamespace(
-                                cells=[
-                                    SimpleNamespace(text="阶段"),
-                                    SimpleNamespace(text="时长"),
-                                ]
-                            )
-                        ]
-                    )
-                ],
-            )
-
-        # A structurally valid package reaches the mocked text extractor.
+        from docx import Document
+        document = Document()
+        document.add_paragraph("导入活动")
+        document.add_paragraph("")
+        document.add_paragraph("新授内容")
+        row = document.add_table(rows=1, cols=2).rows[0]
+        row.cells[0].text = "阶段"
+        row.cells[1].text = "时长"
         package = io.BytesIO()
-        with zipfile.ZipFile(package, "w") as archive:
-            archive.writestr("[Content_Types].xml", "<Types/>")
-            archive.writestr("_rels/.rels", "<Relationships/>")
-            archive.writestr("word/document.xml", "<document/>")
-        with patch.dict(sys.modules, {"docx": SimpleNamespace(Document=fake_document)}):
-            text = svc.extract_text("lesson.docx", package.getvalue())
+        document.save(package)
+        text = svc.extract_text("lesson.docx", package.getvalue())
 
         self.assertIn("导入活动", text)
         self.assertIn("新授内容", text)

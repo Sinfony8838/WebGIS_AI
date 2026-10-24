@@ -111,19 +111,20 @@ def test_transport_idle_does_not_change_or_restart_running_workflow(execution):
 
 def test_client_close_releases_subscription(execution):
     executor, _, record, *_ = execution
-    executor.bus.publish(record.workflow_id, _Event("workflow_started", {"workflow_id": record.workflow_id}))
+    executor.bus.publish(record.workflow_id, _Event("workflow_created", {"workflow": record.to_dict()}))
     with patch.object(executor.bus, "unsubscribe", wraps=executor.bus.unsubscribe) as unsubscribe:
         stream = executor.stream(record.workflow_id)
-        assert next(stream)["type"] == "workflow_started"
+        assert next(stream)["type"] == "workflow_created"
         stream.close()
     unsubscribe.assert_called_once()
 
 
 def test_existing_live_history_still_replays_in_order(execution):
     executor, _, record, *_ = execution
+    executor.bus.publish(record.workflow_id, _Event("workflow_created", {"workflow": record.to_dict()}))
     executor.bus.publish(record.workflow_id, _Event("step_started", {"step": {"id": "s1"}}))
     executor.bus.publish(record.workflow_id, _Event("workflow_success", {"workflow": {"status": "success"}}))
-    assert [event["type"] for event in executor.stream(record.workflow_id)] == ["step_started", "workflow_success"]
+    assert [event["type"] for event in executor.stream(record.workflow_id)] == ["workflow_created", "step_started", "workflow_success"]
 
 
 @pytest.mark.parametrize("fail_commit", [False, True])
@@ -173,3 +174,42 @@ def test_public_query_waits_for_actual_terminal_commit(execution, fail_commit):
         assert reader_store.get_workflow(record.workflow_id).status == ("error" if fail_commit else "success")
     finally:
         reader_store.close()
+
+
+def test_recovered_snapshot_and_live_subscription_share_publication_fence(execution):
+    executor, store, record, *_ = execution
+    record.steps = [{"id": "s1", "status": "running"}]
+    store.save_workflow(record)
+    attempted, committed = threading.Event(), threading.Event()
+    subscribe = executor.bus.subscribe
+
+    def publish_step():
+        attempted.set()
+        with executor._workers_lock:
+            record.steps[0]["status"] = "success"
+            store.save_workflow(record)
+            executor.bus.publish(record.workflow_id, _Event("step_success", {"step": dict(record.steps[0])}))
+        committed.set()
+
+    publisher = threading.Thread(target=publish_step)
+
+    def subscribe_and_race(workflow_id):
+        result = subscribe(workflow_id)
+        publisher.start()
+        assert attempted.wait(2)
+        assert not committed.wait(0.05)
+        return result
+
+    stream = executor.stream(record.workflow_id)
+    try:
+        with patch.object(executor.bus, "subscribe", side_effect=subscribe_and_race):
+            snapshot = next(stream)
+        assert snapshot["payload"]["workflow"]["steps"][0]["status"] == "running"
+        assert committed.wait(2)
+        delta = next(stream)
+        assert delta["type"] == "step_success" and delta["payload"]["step"]["status"] == "success"
+    finally:
+        stream.close()
+        if publisher.ident is not None:
+            publisher.join(5)
+    assert not publisher.is_alive() and not executor.bus._subscribers

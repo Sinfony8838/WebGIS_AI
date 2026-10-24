@@ -698,11 +698,11 @@ class LessonDesignService:
     # ------------------------------------------------------------------
 
     def import_docx_draft(self, project_id: str, owner_user_id: str, data: bytes, filename: str) -> Dict[str, Any]:
-        from .lesson_docx_import import parse_lesson_docx
+        from .document_processing import run_document
         name = str(filename or "").strip()
         if not name.lower().endswith(".docx"):
             raise ValueError("仅支持 .docx 格式的 Word 教案，旧 .doc 请先另存为 .docx。")
-        parsed = parse_lesson_docx(data)
+        parsed = run_document("lesson_docx", data, filename=filename)
         draft = default_draft()
         for key, value in parsed["draft"].items():
             draft[key] = copy.deepcopy(value)

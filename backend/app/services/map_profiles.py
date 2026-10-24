@@ -99,7 +99,7 @@ def _parallel_values(function, samples):
             for future in done: future.result()  # fail fast; do not dispatch the remaining source requests
         return [f.result() for f in futures]
     finally:
-        pool.shutdown(wait=False, cancel_futures=True)
+        pool.shutdown(wait=True, cancel_futures=True)
 
 
 def _fetch(url: str, max_bytes: int = 600_000) -> bytes:

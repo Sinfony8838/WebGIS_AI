@@ -37,8 +37,7 @@ def run_import(service: QuestionBankService, project_id: str = "fixture_project"
 @pytest.fixture
 def parsed_document():
     parsed = SimpleNamespace(title="Fixture bank", unbound_images=[])
-    with patch("backend.app.services.question_bank.QuestionBankDocxParser") as parser:
-        parser.return_value.parse.return_value = parsed
+    with patch("backend.app.services.question_bank.run_document", return_value=parsed):
         yield
 
 
@@ -120,3 +119,13 @@ def test_image_write_failure_rolls_back_metadata_and_partial_file(tmp_path, pars
             run_import(service)
     assert service.list_banks("fixture_project") == []
     assert list((service.config.uploads_dir / "question_banks").iterdir()) == []
+
+
+def test_all_file_sizes_checked_before_any_bank_is_imported(tmp_path, monkeypatch):
+    from backend.app.services import question_bank
+    service = service_at(tmp_path)
+    monkeypatch.setattr(question_bank, "MAX_FILE_BYTES", 3)
+    with patch.object(question_bank, "run_document"), patch.object(service, "_import_unit") as import_unit:
+        with pytest.raises(question_bank.DocxBudgetError):
+            service.import_files("p", "teacher", [("first原卷版.docx", b"ok"), ("second解析版.docx", b"long")])
+    import_unit.assert_not_called()

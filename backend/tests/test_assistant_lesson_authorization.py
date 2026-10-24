@@ -43,7 +43,7 @@ def test_foreign_lesson_rejected_before_job_attachment_and_thread(fixture, path,
     ctx = context(foreign, actor_role="admin" if spoof else "", owner_user_id="teacher-A")
     kwargs = {"teaching_context": ctx["teaching_context"]} if path == "top" else {"map_context": ctx}
     before = runtime.config.state_file.read_bytes()
-    with patch.object(runtime, "resolve_image_attachments") as images, patch("backend.app.runtime.threading.Thread") as worker:
+    with patch.object(runtime, "resolve_image_attachments") as images, patch.object(runtime, "_enqueue_background") as worker:
         with pytest.raises(KeyError, match="Unknown lesson"):
             runtime.submit_assistant_message(a, "课堂", **kwargs)
         images.assert_not_called()
@@ -56,7 +56,7 @@ def test_legitimate_context_retained(fixture, kind):
     runtime, a, _, own, foreign, builtin = fixture
     lesson = {"own": own, "builtin": builtin, "admin": foreign}[kind]
     role = "admin" if kind == "admin" else "teacher"
-    with patch("backend.app.runtime.threading.Thread"):
+    with patch.object(runtime, "_enqueue_background"):
         result = runtime.submit_assistant_message(a, "课堂", map_context=context(lesson), actor_role=role)
     assert runtime.store.get_job(result["job_id"]).project_id == a
 
@@ -229,11 +229,11 @@ def test_http_confirmation_uses_current_server_role_not_stored_role(fixture, mon
     monkeypatch.setattr(main, "auth_service", None)
     monkeypatch.setattr(main, "_local_user", lambda: {"user_id": "teacher-A", "role": role})
     before = runtime.config.state_file.read_bytes()
-    with patch("backend.app.runtime.threading.Thread") as worker, TestClient(main.app) as client:
+    with patch.object(runtime, "_enqueue_background") as worker, TestClient(main.app) as client:
         response = client.post("/assistant/confirm", json={"confirmation_id": pending.confirmation_id, "decision": "approve"})
         if role == "admin":
             assert response.status_code == 200
-            assert worker.call_args.kwargs["args"][-1] == "admin"
+            assert worker.call_args.args[-1] == "admin"
         else:
             assert response.status_code == 404
             worker.assert_not_called()
