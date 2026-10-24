@@ -1,5 +1,6 @@
 """Authenticated HTTP boundary for task cancellation and UI observations."""
 from __future__ import annotations
+from contextlib import closing
 import time
 import unittest
 from fastapi.testclient import TestClient
@@ -27,7 +28,9 @@ class InteractionJobApiTest(unittest.TestCase):
     def test_observation_requires_authentication_csrf_and_matching_scope(self):
         job = self.create_job()
         route = f"/jobs/{job.job_id}/ui-observations"
-        with TestClient(app_main.app) as anonymous:
+        # This client shares the fixture application; closing it must not
+        # start/stop the application lifespan owned by the surrounding test.
+        with closing(TestClient(app_main.app)) as anonymous:
             self.assertEqual(anonymous.post(route, json=self.receipt()).status_code, 401)
         self.assertEqual(self.client.post(route, json=self.receipt()).status_code, 403)
         headers = {"X-WebGIS-CSRF": self.csrf}

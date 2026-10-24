@@ -331,6 +331,9 @@ class AdmissionGate:
         if cancel_event is not None and cancel_event.is_set():
             return False
         if self._semaphore.acquire(blocking=False):
+            if cancel_event is not None and cancel_event.is_set():
+                self._semaphore.release()
+                return False
             return True
         with self._lock:
             if self._waiting >= self.max_waiting:

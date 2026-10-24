@@ -7,6 +7,7 @@ server-side workflow project context, and the worker-side dataset boundary
 Every file involved is a tiny synthetic fixture inside the pytest sandbox.
 """
 from __future__ import annotations
+from contextlib import closing
 
 import os
 import tempfile
@@ -285,7 +286,9 @@ class ResourceAuthorizationMatrixTest(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"synthetic-private-bytes")
         url = f"/files/outputs/{self.project_a}/private-cache.png"
-        with TestClient(app_main.app) as anonymous:
+        # This client shares the fixture application; closing it must not
+        # start/stop the application lifespan owned by the surrounding test.
+        with closing(TestClient(app_main.app)) as anonymous:
             response = anonymous.get(url)
             self.assertEqual(response.status_code, 401)
             self.assertIn("no-store", response.headers["cache-control"])
